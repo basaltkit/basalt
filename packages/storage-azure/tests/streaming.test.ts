@@ -186,3 +186,28 @@ describe('AzureBlobStorageDriver streaming (BK-019)', () => {
     await expect(disk.stat('a')).rejects.toMatchObject({ code: 'STORAGE_STAT_UNSUPPORTED' })
   })
 })
+
+describe('AzureBlobStorageDriver behind the Disk contract (audit: files/storage item 7)', () => {
+  // The fake commits the block list only when the stream ends, like
+  // uploadStream: a body that errors first leaves no blob behind.
+  it('a body that contradicts its declared contentLength is never committed', async () => {
+    const { disk, client } = make()
+    await expect(
+      disk.putStream('short.bin', Readable.from([Buffer.from('abc')]), { contentType: 'text/plain', contentLength: 10 }),
+    ).rejects.toMatchObject({ code: 'STORAGE_CONTENT_LENGTH_MISMATCH' })
+    await expect(
+      disk.putStream('long.bin', Readable.from([Buffer.from('abc'), Buffer.from('def')]), { contentType: 'text/plain', contentLength: 4 }),
+    ).rejects.toMatchObject({ code: 'STORAGE_CONTENT_LENGTH_MISMATCH' })
+    expect(client.blobs.size).toBe(0)
+  })
+
+  it('list() keys are scope-relative and go straight back into get()', async () => {
+    const client = new FakeAzureContainer()
+    const disk = new Disk('blobs', new AzureBlobStorageDriver({ container: 'c', client }), { scope: () => 'tenants/acme' })
+    await disk.put('docs/1.txt', 'one')
+    const keys = await disk.list('docs')
+    expect(keys).toEqual(['docs/1.txt'])
+    expect((await disk.get(keys[0]!)).toString()).toBe('one')
+    expect([...client.blobs.keys()]).toEqual(['tenants/acme/docs/1.txt'])
+  })
+})

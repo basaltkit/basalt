@@ -5,8 +5,12 @@ import {
   MemoryTenantSource,
   TENANCY,
   headerResolver,
+  Tenancy,
+  assertTenantServing,
   isTenantReady,
   TenantNotReadyError,
+  TenantStatusUnknownError,
+  TenantSuspendedError,
   tenancyPlugin,
   type Tenant,
 } from '../src/index.js'
@@ -148,5 +152,77 @@ describe('tenant status', () => {
     expect(tenant['status']).toBeUndefined()
     expect((await call('acme')).statusCode).toBe(200)
     await app.shutdown()
+  })
+
+  it('answers 403 TENANT_SUSPENDED for a suspended tenant, not "still provisioning"', async () => {
+    // A suspension is not a storage problem: retrying will not help, and the
+    // old 503 "still being provisioned" sent clients into a retry loop.
+    const source = new MemoryTenantSource().add({ id: 'acme', status: 'suspended' })
+    const { app, call } = await boot({ source })
+
+    const response = await call('acme')
+    expect(response.statusCode).toBe(403)
+    expect(response.json().error.code).toBe('TENANT_SUSPENDED')
+    expect(isTenantReady({ id: 'acme', status: 'suspended' })).toBe(false)
+    expect(() => assertTenantServing({ id: 'acme', status: 'suspended' })).toThrow(TenantSuspendedError)
+    await app.shutdown()
+  })
+
+  it('fails closed on a status tenancy does not know, with an accurate message', async () => {
+    // `active` is a common app-side spelling of ready. Tenancy cannot tell
+    // whether the storage behind it is usable, so it refuses — but it says what
+    // it saw instead of claiming the tenant is still being provisioned.
+    const source = new MemoryTenantSource().add({ id: 'acme', status: 'active' })
+    const { app, call } = await boot({ source })
+
+    const response = await call('acme')
+    expect(response.statusCode).toBe(500)
+    expect(response.json().error.code).toBe('TENANT_STATUS_UNKNOWN')
+    expect(isTenantReady({ id: 'acme', status: 'active' })).toBe(false)
+    const error = (() => {
+      try {
+        assertTenantServing({ id: 'acme', status: 'active' })
+      } catch (e) {
+        return e
+      }
+    })()
+    expect(error).toBeInstanceOf(TenantStatusUnknownError)
+    expect((error as Error).message).toMatch(/status "active", which tenancy does not recognise/)
+    expect((error as Error).message).not.toMatch(/still being provisioned/)
+    await app.shutdown()
+  })
+
+  it('maps each known non-serving status to its own error', () => {
+    for (const status of ['provisioning', 'failed', 'deleting'] as const) {
+      expect(() => assertTenantServing({ id: 'acme', status })).toThrow(TenantNotReadyError)
+    }
+    expect(() => assertTenantServing({ id: 'acme', status: 'ready' })).not.toThrow()
+    expect(() => assertTenantServing({ id: 'acme' })).not.toThrow()
+    // A nullable status column holds `null` for "no status" — same as absent.
+    expect(isTenantReady({ id: 'acme', status: null })).toBe(true)
+    expect(() => assertTenantServing({ id: 'acme', status: 42 })).toThrow(TenantStatusUnknownError)
+  })
+})
+
+describe('new Tenancy()', () => {
+  it('takes an options object, equivalent to the positional form', async () => {
+    const provisioned: string[] = []
+    const source = new MemoryTenantSource()
+    const byName = new Tenancy({
+      source,
+      resolvers: [headerResolver()],
+      onProvision: (t) => void provisioned.push(t.id),
+      provisionMode: 'deferred',
+      validateTenantId: (id) => id.startsWith('t-'),
+    })
+
+    await expect(byName.create({ id: 'acme' })).rejects.toThrow(/Invalid tenant id/)
+    const created = await byName.create({ id: 't-acme' })
+    expect(created['status']).toBe('provisioning')
+    expect(provisioned).toEqual([])
+    expect((await byName.resolve({ headers: { 'x-tenant-id': 't-acme' } }))?.id).toBe('t-acme')
+
+    const positional = new Tenancy(new MemoryTenantSource(), [headerResolver()], undefined, undefined, 'deferred')
+    expect((await positional.create({ id: 'acme' }))['status']).toBeUndefined()
   })
 })

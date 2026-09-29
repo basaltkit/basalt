@@ -1,6 +1,7 @@
 import { nodeReader, type ProjectReader } from '@basaltkit/ai/analysis'
 import type { AIProvider } from '@basaltkit/ai/workflows'
 import { buildProvider } from './provider.js'
+import { resolveReadRoot } from './safety.js'
 
 export interface SessionOptions {
   /** Workspace root the tools/resources default to. Defaults to `process.cwd()`. */
@@ -24,6 +25,12 @@ export interface SessionOptions {
    * (fail closed). The bin's `--allow-unconfirmed-apply` flag sets it.
    */
   allowUnconfirmedApply?: boolean
+  /**
+   * Start even when `NODE_ENV` is `production`. Default `false`: the bridge is
+   * dev-only and refuses to start there (`AiMcpProductionError`). The bin's
+   * `--allow-production` flag (or `BASALT_AI_MCP_ALLOW_PRODUCTION=1`) sets it.
+   */
+  allowProduction?: boolean
 }
 
 /** Resolved per-server session: workspace root, env, and how to read/plan. */
@@ -52,10 +59,12 @@ export function createSession(options: SessionOptions = {}): Session {
 }
 
 /**
- * Resolve the effective workspace root for a tool call: an explicit per-call
- * `workspaceRoot` argument, else the session default. (Workspace confinement for
- * write tools is an M3 concern; the M1/M2 tools are read-only.)
+ * Resolve the effective workspace root for a read tool call: an explicit
+ * per-call `workspaceRoot` argument, else the session default. The argument is
+ * confined to the session root (the configured project, `--cwd` or the launch
+ * directory) — a path outside it, or a symlink that resolves outside it,
+ * throws {@link WorkspaceEscapeError}. Write tools use `resolveWriteRoot`.
  */
 export function resolveWorkspaceRoot(session: Session, arg: unknown): string {
-  return typeof arg === 'string' && arg.trim() !== '' ? arg : session.workspaceRoot
+  return resolveReadRoot(session.workspaceRoot, typeof arg === 'string' ? arg : undefined)
 }

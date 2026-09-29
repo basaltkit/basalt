@@ -29,6 +29,10 @@ interface PWebhookEndpoint {
   tenantId: string | null
   secret: string | null
   active: boolean | null
+  // Secret-rotation columns. Optional: a schema that predates them (and so a
+  // client generated from it) returns rows without these keys.
+  previousSecret?: string | null
+  previousSecretExpiresAt?: Date | null
 }
 
 /**
@@ -55,6 +59,8 @@ const toEndpoint = (r: PWebhookEndpoint): WebhookEndpoint => ({
   ...(r.tenantId !== null ? { tenantId: r.tenantId } : {}),
   ...(r.secret !== null ? { secret: r.secret } : {}),
   ...(r.active !== null ? { active: r.active } : {}),
+  ...(r.previousSecret != null ? { previousSecret: r.previousSecret } : {}),
+  ...(r.previousSecretExpiresAt != null ? { previousSecretExpiresAt: new Date(r.previousSecretExpiresAt) } : {}),
 })
 
 /**
@@ -67,7 +73,7 @@ const toEndpoint = (r: PWebhookEndpoint): WebhookEndpoint => ({
 export { WebhookEndpointIdInUseError }
 
 /** The `WebhookEndpoint` columns the store writes as strings. */
-export type WebhookEndpointColumn = 'id' | 'url' | 'events' | 'tenantId' | 'secret'
+export type WebhookEndpointColumn = 'id' | 'url' | 'events' | 'tenantId' | 'secret' | 'previousSecret'
 
 export type WebhooksColumnLimits = ColumnLimits<{ WebhookEndpoint: WebhookEndpointColumn }>
 
@@ -76,7 +82,7 @@ export type WebhooksColumnLimits = ColumnLimits<{ WebhookEndpoint: WebhookEndpoi
  * 'mysql'` selects. Spread it to override one column after widening it.
  */
 export const webhooksMysqlColumnLimits: WebhooksColumnLimits = {
-  WebhookEndpoint: { id: V, url: MYSQL_TEXT, events: MYSQL_TEXT, tenantId: V, secret: MYSQL_TEXT },
+  WebhookEndpoint: { id: V, url: MYSQL_TEXT, events: MYSQL_TEXT, tenantId: V, secret: MYSQL_TEXT, previousSecret: MYSQL_TEXT },
 }
 
 export interface PrismaWebhookStoreOptions {
@@ -123,6 +129,16 @@ export class PrismaWebhookStore implements WebhookStore {
       tenantId: record.tenantId ?? null,
       secret: record.secret ?? null,
       active: record.active === undefined ? null : record.active,
+      // The rotation columns are written only when the record carries the keys
+      // (`rotateSecret()`, or a re-register that ends a rotation — an explicit
+      // `undefined` clears). A plain register leaves them out, so a schema that
+      // predates them keeps working until rotation is used.
+      ...('previousSecret' in record || 'previousSecretExpiresAt' in record
+        ? {
+            previousSecret: record.previousSecret ?? null,
+            previousSecretExpiresAt: record.previousSecretExpiresAt ?? null,
+          }
+        : {}),
     }
     assertColumnLengths(PKG, this.limits, 'WebhookEndpoint', { id, ...data })
     // Re-adding an id replaces the endpoint — but only within its own scope

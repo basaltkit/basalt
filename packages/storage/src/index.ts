@@ -26,6 +26,7 @@ import {
   GetStreamUnsupportedError,
   PutStreamUnsupportedError,
   StatUnsupportedError,
+  StorageContentLengthInvalidError,
   StorageContentTypeError,
   StorageCrossTenantCopyError,
   StorageInvalidKeyError,
@@ -68,6 +69,8 @@ export {
   PutStreamUnsupportedError,
   StatUnsupportedError,
   StorageStreamLengthRequiredError,
+  StorageContentLengthInvalidError,
+  StorageContentLengthMismatchError,
   StorageContentTypeError,
   StorageCrossTenantCopyError,
   StorageFileNotFoundError,
@@ -454,8 +457,14 @@ export class Disk {
    * partial object may remain on backends that cannot roll back a half-written
    * upload; delete the key when that matters.
    *
-   * Pass `contentLength` whenever it is known — S3 needs it (see the
-   * `@basaltkit/storage-s3` README).
+   * Pass `contentLength` whenever it is known — S3 streams it straight into
+   * one `PutObject` (see the `@basaltkit/storage-s3` README). It is a promise
+   * about the body, and it is held to it: a value that is not a non-negative
+   * safe integer is refused before any byte is read
+   * ({@link StorageContentLengthInvalidError}), and a body that carries more or
+   * fewer bytes fails with {@link StorageContentLengthMismatchError} — before
+   * its end reaches the driver, so a backend that commits on end (S3, GCS,
+   * Azure) stores nothing and the local driver removes its partial file.
    *
    * Drivers without the capability throw {@link PutStreamUnsupportedError}.
    */
@@ -467,10 +476,14 @@ export class Disk {
     if (options.allowedContentTypes && !options.allowedContentTypes.includes(options.contentType)) {
       throw new StorageContentTypeError(options.contentType, options.allowedContentTypes)
     }
-    if (options.maxBytes !== undefined && options.contentLength !== undefined && options.contentLength > options.maxBytes) {
-      throw new StorageTooLargeError(options.contentLength, options.maxBytes)
+    const { contentLength } = options
+    if (contentLength !== undefined && !(Number.isSafeInteger(contentLength) && contentLength >= 0)) {
+      throw new StorageContentLengthInvalidError(contentLength)
     }
-    return this.driver.putStream(key, toLimitedReadable(source, options.maxBytes), options)
+    if (options.maxBytes !== undefined && contentLength !== undefined && contentLength > options.maxBytes) {
+      throw new StorageTooLargeError(contentLength, options.maxBytes)
+    }
+    return this.driver.putStream(key, toLimitedReadable(source, options.maxBytes, contentLength), options)
   }
 
   async get(path: string): Promise<Buffer> {
@@ -543,7 +556,9 @@ export class Disk {
       const contentType = options.contentType ?? stat?.contentType ?? 'application/octet-stream'
       const body = await this.driver.getStream(source)
       try {
-        await target.driver.putStream(destination, toLimitedReadable(body, options.maxBytes), {
+        // The size stat() reported is declared to the target AND verified: an
+        // object replaced mid-copy fails instead of landing truncated.
+        await target.driver.putStream(destination, toLimitedReadable(body, options.maxBytes, stat?.size), {
           contentType,
           ...(stat?.size !== undefined ? { contentLength: stat.size } : {}),
           ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
@@ -583,8 +598,25 @@ export class Disk {
     return this.driver.delete(this.path(path))
   }
 
+  /**
+   * Keys under `prefix`, recursive and sorted — RELATIVE to this disk's scope,
+   * exactly as `put`/`get`/`delete` take them: a key from `list()` goes back
+   * into `get()` as-is. (Before 5.0 a tenant-scoped disk returned
+   * `tenants/<id>/…`, which `get()` then prefixed a second time.)
+   *
+   * The prefix is a directory on every driver: `list('a')` is `list('a/')`,
+   * never `ab/…` — object stores match prefixes as plain strings, so without
+   * this `list('tenants/acme')` on a central S3 disk also listed `acme2`.
+   */
   async list(prefix = ''): Promise<string[]> {
-    return this.driver.list(this.path(prefix, 'prefix'))
+    assertValidKey(prefix, 'prefix')
+    const root = this.scopePrefix()
+    const directory = prefix === '' || prefix.endsWith('/') ? prefix : `${prefix}/`
+    const keys = await this.driver.list(root + prefix)
+    return keys
+      .filter((key) => key.startsWith(root + directory))
+      .map((key) => key.slice(root.length))
+      .sort()
   }
 
   /**
@@ -637,22 +669,27 @@ export class Disk {
     return { ...upload, key }
   }
 
-  private path(path: string, kind: 'key' | 'prefix' = 'key'): string {
+  private path(path: string): string {
     // Validate the caller key BEFORE scoping, so it can never `..` its way out
     // of the tenant prefix and every driver — not just the local one, which
     // guards only the disk root — gets the same key guarantee (L-3).
-    assertValidKey(path, kind)
-    if (this.scope === null) return path // deliberately central disk
+    assertValidKey(path)
+    return this.scopePrefix() + path
+  }
+
+  /** What this disk puts in front of every key: `'<scope>/'`, or `''` at the root. */
+  private scopePrefix(): string {
+    if (this.scope === null) return '' // deliberately central disk
     const scope = this.scope()
     if (!scope) {
       // Fail closed in a multi-tenant app: without a tenant the key would be
       // resolved against the bucket root, where `tenants/<victim>/…` is
       // reachable by name and `list('tenants')` enumerates every tenant.
       if (this.missingScopeMode() === 'error') throw new StorageTenantRequiredError(this.name)
-      return path
+      return ''
     }
     assertValidScope(scope)
-    return `${scope}/${path}`
+    return `${scope}/`
   }
 
   /**

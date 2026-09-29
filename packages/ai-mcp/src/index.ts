@@ -11,6 +11,8 @@ export {
   type StartOptions,
   type HttpStartOptions,
 } from './server.js'
+export { assertDevOnly, AiMcpProductionError, ALLOW_PRODUCTION_ENV } from './guard.js'
+export { WorkspaceEscapeError } from './safety.js'
 export {
   createSession,
   resolveWorkspaceRoot,

@@ -25,10 +25,17 @@ describe('basalt_analyze', () => {
     expect(analyze.outputSchema?.properties).toHaveProperty('diagnostics')
   })
 
-  it('honours a per-call workspaceRoot argument', async () => {
-    const res = await call('basalt_analyze', { workspaceRoot: '/elsewhere' })
+  it('honours a per-call workspaceRoot argument inside the project root', async () => {
+    const res = await call('basalt_analyze', { workspaceRoot: '/proj/packages/api' })
     // the injected reader ignores the root, but the report echoes it — proving the arg is threaded
-    expect((res?.result as { structuredContent: { root: string } }).structuredContent.root).toBe('/elsewhere')
+    expect((res?.result as { structuredContent: { root: string } }).structuredContent.root).toBe('/proj/packages/api')
+  })
+
+  it('refuses a workspaceRoot outside the project root', async () => {
+    const res = await call('basalt_analyze', { workspaceRoot: '/elsewhere' })
+    const result = res?.result as { isError?: boolean; content: Array<{ text: string }> }
+    expect(result.isError).toBe(true)
+    expect(result.content[0]!.text).toMatch(/outside the project root/)
   })
 })
 

@@ -74,7 +74,7 @@ All four optional capabilities are implemented:
 
 | Capability | Azure call | Notes |
 |---|---|---|
-| `putStream` | `uploadStream` | The SDK splits the readable into blocks, so a body of **unknown length** streams fine — no `contentLength` needed. |
+| `putStream` | `uploadStream` | The SDK splits the readable into blocks (8 MiB × 5 in flight by default — bounded memory), so a body of **unknown length** streams fine — no `contentLength` needed. A declared one is verified by the Disk; the block list is committed only when the body ends cleanly. |
 | `getStream` | `download()` | Returns `readableStreamBody` as a Node `Readable`; consume it or `destroy()` it. |
 | `copy` | `syncCopyFromURL` | The destination pulls the source through a **5-minute read-only SAS**, so the bytes never reach the process. Azure caps Copy Blob From URL at **256 MiB** — copy larger blobs with `beginCopyFromURL` on the SDK client, or stream them with `getStream`/`putStream`. |
 | `stat` | `getProperties()` | `{ size, contentType, etag, lastModified }`. |

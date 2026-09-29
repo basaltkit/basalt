@@ -34,12 +34,17 @@ model WebhookEndpoint {
   tenantId String?
   secret   String?
   active   Boolean?
+  // secret rotation (WebhookManager.rotateSecret())
+  previousSecret          String?
+  previousSecretExpiresAt DateTime?
   @@index([tenantId])
   @@map("webhook_endpoints")
 }
 ```
 
 Then `prisma generate` and go.
+
+> **Secret rotation columns.** `previousSecret` and `previousSecretExpiresAt` hold the replaced secret during a `rotateSecret()` grace window (both secrets sign until it ends). The store writes them only when an endpoint carries rotation state. A schema from an earlier version, without the two columns, keeps working for everything else. Add them (`basalt prisma:sync`, then migrate) before calling `rotateSecret()`.
 
 > **MySQL:** Prisma maps `String` to `VARCHAR(191)` there (to `text` on PostgreSQL). Endpoint URLs and event lists can be longer: annotate `url` and `events` with `@db.Text` in your schema, or long values are rejected (`P2000`) — or truncated, with a non-strict `sql_mode`. The reference schema stays provider-neutral so it can be copied into any datasource.
 

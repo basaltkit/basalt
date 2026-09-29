@@ -9,6 +9,16 @@ export interface WebhookEndpoint {
   tenantId?: string
   /** Per-endpoint signing secret (overrides the deliverer default). */
   secret?: string
+  /**
+   * The secret `secret` replaced, set by `WebhookManager.rotateSecret()`. While
+   * `previousSecretExpiresAt` is in the future, deliveries are signed with BOTH
+   * (`t=…,v1=<current>,v1=<previous>`), so the receiver can switch secrets at
+   * its own pace. Ignored without an expiry, or once it has passed. The key
+   * present with the value `undefined` means "clear it" to a store's `add()`.
+   */
+  previousSecret?: string | undefined
+  /** End of the rotation grace window for `previousSecret`. */
+  previousSecretExpiresAt?: Date | undefined
   /** Soft-disable without deleting. Default true. */
   active?: boolean
 }

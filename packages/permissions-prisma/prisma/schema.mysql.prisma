@@ -3,9 +3,12 @@
 // Same models as schema.prisma, sized for MySQL: a bare `String` becomes
 // VARCHAR(191) there, and outside strict mode MySQL truncates a longer value
 // silently — two role or permission names cut to the same prefix become one
-// grant. Every column here is part of a composite primary key, so all stay
-// VARCHAR(191): three of them (573 utf8mb4 characters, 2 292 bytes) fit
-// InnoDB's 3 072-byte index-key limit. Pair it with
+// grant. Every column of the three grant tables is part of a composite primary
+// key, so all stay VARCHAR(191): three of them (573 utf8mb4 characters, 2 292
+// bytes) fit InnoDB's 3 072-byte index-key limit. In the temporary-grant and
+// delegation tables the ids and indexed columns stay VARCHAR(191) too, the
+// free-text `reason` is TEXT, and `permissions` is `Json` (a JSON array of
+// strings — MySQL has no scalar lists; the stores read either form). Pair it with
 // `prismaAccessStore(prisma, { columnLimits: 'mysql' })`, which refuses a value
 // that would not fit instead of letting it be cut.
 
@@ -43,4 +46,33 @@ model PermRolePermission {
 
   @@id([scope, role, permission])
   @@map("perm_role_permissions")
+}
+
+model PermTemporaryGrant {
+  id          String   @id
+  scope       String
+  userId      String
+  permissions Json
+  expiresAt   DateTime
+  grantedBy   String?
+  reason      String?  @db.Text
+
+  @@index([scope, userId, expiresAt])
+  @@index([expiresAt])
+  @@map("perm_temporary_grants")
+}
+
+model PermDelegation {
+  id          String    @id
+  scope       String
+  fromUserId  String
+  toUserId    String
+  permissions Json
+  createdAt   DateTime
+  expiresAt   DateTime?
+
+  @@index([scope, toUserId])
+  @@index([scope, fromUserId])
+  @@index([expiresAt])
+  @@map("perm_delegations")
 }

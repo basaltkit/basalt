@@ -1,9 +1,24 @@
 import type { McpToolResult, ProgressUpdate, ToolInvokeContext } from '@basaltkit/mcp-core'
 import type { WorkflowProgress } from '@basaltkit/ai/workflows'
+import { WorkspaceEscapeError } from '../safety.js'
+import { resolveWorkspaceRoot, type Session } from '../session.js'
 
 /** A failed tool result — the error travels in `content`, not as a protocol error. */
 export function toolError(message: string): McpToolResult {
   return { content: [{ type: 'text', text: message }], isError: true }
+}
+
+/**
+ * Resolve a read tool's confined root, or the refusal to return when the
+ * requested `workspaceRoot` escapes the project root.
+ */
+export function readRoot(session: Session, arg: unknown): { root: string } | { refused: McpToolResult } {
+  try {
+    return { root: resolveWorkspaceRoot(session, arg) }
+  } catch (error) {
+    if (error instanceof WorkspaceEscapeError) return { refused: toolError(`Refused: ${error.message}`) }
+    throw error
+  }
 }
 
 /** True when an error came from a cancelled (aborted) operation. */

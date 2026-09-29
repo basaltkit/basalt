@@ -54,7 +54,9 @@ describe('Gate', () => {
   it('super admin short-circuits everything', async () => {
     const { gate } = await setupGate()
     expect(await gate.can({ id: 'nobody', owner: true }, 'anything:whatever')).toBe(true)
-    expect(await gate.hasRole({ id: 'nobody', owner: true }, 'any-role')).toBe(true)
+    // A bypass, not a membership: hasRole() answers what the user actually holds.
+    expect(await gate.hasRole({ id: 'nobody', owner: true }, 'any-role')).toBe(false)
+    expect(await gate.isSuperAdmin({ id: 'nobody', owner: true })).toBe(true)
   })
 
   it('policies decide when a resource is given', async () => {

@@ -177,7 +177,7 @@ On the client, `@basaltkit/sdk` exposes it as `error.errorDetails` (`BasaltClien
 
 | Rule | Behaviour |
 |---|---|
-| **Yours to keep clean** | No secrets, credentials, internal IDs, SQL or stack traces. The framework cannot tell those apart from data the UI needs — that part is on you. |
+| **Yours to keep clean** | No secrets, credentials, internal IDs, SQL or stack traces. The framework cannot tell those apart from data the UI needs — that part is on you. Operator-only data goes in `internalDetails` (below). |
 | **Plain JSON data only** | Strings, finite numbers, booleans, `null`, arrays, plain objects. A `Date` becomes its ISO string. |
 | **Everything else is stripped** | Functions, symbols, `undefined`, BigInt, `NaN`/`Infinity`, and exotic objects — `Error` (its stack is an internal), `Map`/`Set`/`RegExp`, typed arrays and **class instances** (an ORM row would otherwise walk out through an error body). A dropped array element becomes `null` so later indexes do not shift; a `__proto__` key is never copied. |
 | **Acyclic and shallow** | A cycle is dropped where it closes; nesting deeper than `MAX_ERROR_DETAILS_DEPTH` (8) is dropped. |
@@ -186,6 +186,23 @@ On the client, `@basaltkit/sdk` exposes it as `error.errorDetails` (`BasaltClien
 | **Validation is untouched** | A `RequestValidationError` body keeps exactly its `part` + `issues[]` shape and never gains a `details` key. |
 
 Because the whole payload is dropped when it is unsafe or oversized, treat `details` as best-effort enrichment: the client's fallback must always be `code` + `message`.
+
+#### Public vs internal — `internalDetails` and the details redactor
+
+`details` is public **by contract**; two tools help keep it that way.
+
+**The internal channel.** Data the operator needs but the caller must not see — the upstream reply, the conflicting row, an internal job id — goes in `internalDetails`. It is handed to the error reporter (the adapters' `onError`; the default reporter logs it as an `internalDetails` field, for 4xx and 5xx alike) and is **never** serialised into a response body or an MCP tool result. It is a non-enumerable property, so `{ ...error }` or `JSON.stringify(error)` leaves it behind too.
+
+```ts
+throw new HttpError(422, 'KYC_FAILED', 'Identity check failed.', {
+  details: { failed: ['document'] },                          // the client sees this
+  internalDetails: { provider: 'acme-kyc', reply: rawReply }, // the log sees this
+})
+```
+
+A custom reporter reads it with `internalDetailsOf(report.error)` (sanitised for shape like `details`); any error — not only `HttpError` — can define an `internalDetails` property.
+
+**The redactor.** `toErrorResponse(error, { redactDetails })` filters the (sanitised) public `details` before they enter the body. `redactSensitiveDetails` is the stock one: at any depth, the value of a key that names a secret (`password`, `resetToken`, `apiKey`, `clientSecret`, `privateKey`, `jwt`, `sessionId`, … — segment-aware, so `compass`, `sessionCount`, `author`, `keyId` are left alone) becomes `'[REDACTED]'`; a boolean or `null` under such a key is kept (`{ mfaRequired: true }` carries no secret). A custom redactor gets `(details, { error, status, code })`, its output is sanitised again, and one that throws sends no details (fails closed). The HTTP adapters do not pass a redactor — their output is unchanged; `@basaltkit/mcp` applies `redactSensitiveDetails` by default, because its client is a language model.
 
 ### The neutral 404 — `NOT_FOUND_RESPONSE`
 
@@ -792,7 +809,7 @@ Enrichers and guards need the container scope, so a pipeline that carries **guar
 | Error | Code | HTTP | When |
 |---|---|---|---|
 | `RequestValidationError` | `HTTP_VALIDATION` | 400 | `body`/`query`/`params` failed its Zod schema. The response carries `part` and `issues[]`. |
-| `HttpError(status, code, message, options?)` | *yours* | *yours* | You threw it deliberately from any layer; `status` and `code` are whatever you passed. `options` is `{ details?, cause? }` — `details` is serialized as `error.details` (see [Structured error details](#structured-error-details)). |
+| `HttpError(status, code, message, options?)` | *yours* | *yours* | You threw it deliberately from any layer; `status` and `code` are whatever you passed. `options` is `{ details?, internalDetails?, cause? }` — `details` is serialized as `error.details` (see [Structured error details](#structured-error-details)); `internalDetails` only reaches the error reporter. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | — (boot) | A route declares a guarded key (`auth`/`can`/`teamRole`/`scopes`/`subscribed`/`feature`) and no registered guard claimed that key. Thrown by the adapter at boot, before serving. |
 | `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A route-meta validator (`META_VALIDATORS_BUCKET`) refused one or more routes; `problems[]` lists each `{ route, problem }`. Thrown by the adapter at boot; never waived by `allowUnguardedMeta`. |
 | — (no class) | `NOT_FOUND` | 404 | No route matched. Body is `NOT_FOUND_RESPONSE`; adapters opt out with `notFound: false`. |
@@ -809,9 +826,13 @@ and safe to branch on. `ValidationIssue` is `{ path: string; message: string }`.
 
 | Export | Description |
 |---|---|
-| `HttpErrorOptions` | `{ details?: ErrorDetails; cause?: unknown }` — the fourth argument of `HttpError`. |
+| `HttpErrorOptions` | `{ details?: ErrorDetails; internalDetails?: ErrorDetails; cause?: unknown }` — the fourth argument of `HttpError`. |
 | `ErrorDetails` | `Record<string, unknown>` — a structured error payload. |
 | `sanitizeErrorDetails(value)` → `ErrorDetails \| undefined` | The client-safety filter the serializer applies: returns a plain, acyclic, bounded copy, or `undefined` when there is nothing safe to send. Never throws. |
+| `toErrorResponse(error, options?)` | The neutral error serializer every adapter shares. `options.redactDetails?: ErrorDetailsRedactor` filters the public `details` (default: none). |
+| `ErrorDetailsRedactor` | `(details, { error, status, code }) => ErrorDetails \| undefined` — output re-sanitised; a throwing redactor sends no details. |
+| `redactSensitiveDetails(details)` / `isSensitiveDetailsKey(key)` / `REDACTED_DETAIL` | The stock redactor (masks the values of secret-named keys, keeps booleans/`null`), its key test, and its `'[REDACTED]'` marker. |
+| `internalDetailsOf(error)` → `ErrorDetails \| undefined` | An error's log-only `internalDetails`, sanitised for shape — for custom reporters. |
 | `MAX_ERROR_DETAILS_BYTES` | `4096` — serialised JSON bytes above which the payload is dropped. |
 | `MAX_ERROR_DETAILS_DEPTH` | `8` — nesting below which values are dropped. |
 

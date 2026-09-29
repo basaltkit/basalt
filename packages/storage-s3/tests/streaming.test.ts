@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CopyObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { CopyObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { Disk, StorageFileNotFoundError, StorageTooLargeError } from '@basaltkit/storage'
 import { S3StorageDriver, type S3DriverOptions } from '../src/index.js'
 
@@ -61,17 +61,19 @@ describe('S3StorageDriver.putStream (BK-019)', () => {
     expect((sent[0] as PutObjectCommand).input.ContentType).toBe('text/plain')
   })
 
-  it('buffers up to maxBytes when the length is unknown, and sends the measured length', async () => {
+  it('does not buffer up to maxBytes when the length is unknown: a body under one part is one PutObject of that part', async () => {
     const sent = mockSend()
     const driver = new S3StorageDriver(base)
     await driver.putStream('a.txt', Readable.from([Buffer.from('ab'), Buffer.from('cd')]), {
       contentType: 'text/plain',
       maxBytes: 1024,
     })
+    // lib-storage reads at most one part (5 MiB) before it decides; `maxBytes`
+    // is a limit enforced by the Disk, never the size of a buffer here.
+    expect(sent).toHaveLength(1)
     const command = sent[0] as PutObjectCommand
-    expect(Buffer.isBuffer(command.input.Body)).toBe(true)
-    expect((command.input.Body as Buffer).toString()).toBe('abcd')
-    expect(command.input.ContentLength).toBe(4)
+    expect(command).toBeInstanceOf(PutObjectCommand)
+    expect(Buffer.from(command.input.Body as Uint8Array).toString()).toBe('abcd')
   })
 
   it('aborts mid-stream past maxBytes and sends nothing', async () => {
@@ -178,5 +180,22 @@ describe('S3StorageDriver.stat (BK-019)', () => {
     const disk = new Disk('uploads', new S3StorageDriver(base), { scope: () => 'tenants/acme' })
     expect((await disk.stat('a.pdf')).size).toBe(1)
     expect((sent[0] as GetObjectCommand).input.Key).toBe('tenants/acme/a.pdf')
+  })
+})
+
+describe('S3StorageDriver.list behind the Disk contract (audit: files/storage item 7)', () => {
+  it('returns scope-relative keys, and a prefix never matches a sibling that merely starts the same', async () => {
+    // ListObjectsV2 matches `Prefix` as a plain string and returns full keys.
+    const keys = ['tenants/acme/docs/1.txt', 'tenants/acme/docs2/x.txt', 'tenants/acme2/docs/1.txt']
+    const sent = mockSend((command) => {
+      const prefix = (command as ListObjectsV2Command).input.Prefix ?? ''
+      return { Contents: keys.filter((key) => key.startsWith(prefix)).map((Key) => ({ Key })) }
+    })
+    const disk = new Disk('uploads', new S3StorageDriver(base), { scope: () => 'tenants/acme' })
+    expect(await disk.list('docs')).toEqual(['docs/1.txt'])
+    expect(await disk.list()).toEqual(['docs/1.txt', 'docs2/x.txt'])
+    expect((sent[0] as ListObjectsV2Command).input.Prefix).toBe('tenants/acme/docs')
+    const central = new Disk('uploads', new S3StorageDriver(base), { scope: null })
+    expect(await central.list('tenants/acme')).toEqual(['tenants/acme/docs/1.txt', 'tenants/acme/docs2/x.txt'])
   })
 })

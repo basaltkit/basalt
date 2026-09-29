@@ -18,13 +18,17 @@ generator client {
 }
 
 model WebhookEndpoint {
-  id       String   @id
-  url      String   @db.Text
+  id                      String    @id
+  url                     String    @db.Text
   // Event patterns this endpoint receives, as a JSON array (e.g. ["invoice.*"]).
-  events   String   @db.Text
-  tenantId String?
-  secret   String?  @db.Text
-  active   Boolean?
+  events                  String    @db.Text
+  tenantId                String?
+  secret                  String?   @db.Text
+  active                  Boolean?
+  // Secret rotation (WebhookManager.rotateSecret()): the replaced secret keeps
+  // signing, next to the current one, until previousSecretExpiresAt.
+  previousSecret          String?   @db.Text
+  previousSecretExpiresAt DateTime?
 
   @@index([tenantId])
   @@map("webhook_endpoints")

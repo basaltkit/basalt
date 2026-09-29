@@ -4,7 +4,7 @@ import { STORAGE, type Disk } from '@basaltkit/storage'
 import { route, stream, upload, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { Files, type FileValidation, type FilesOptions } from './files.js'
-import type { FileRecord, FileStore } from './store.js'
+import type { FileMetadata, FileRecord, FileStore } from './store.js'
 
 declare module '@basaltkit/core' {
   interface BasaltHooks {
@@ -103,6 +103,64 @@ export interface FileRoutesOptions {
    * route only exists once you state them.
    */
   upload?: FileUploadRouteOptions
+  /**
+   * Shapes every record these routes answer with (`GET /files`,
+   * `GET /files/:id`, `POST /files`). Default {@link toPublicFile}: internal
+   * fields — the storage `path`, `checksum`, `tenantId`, `uploadedBy`, the
+   * scanner's `detail` — stay server-side. Return whatever the client should
+   * see; it runs after authorization, as the calling user.
+   */
+  present?: (record: FileRecord, user: FileRouteUser) => unknown
+}
+
+/**
+ * What {@link fileRoutes} answers with by default: the record minus what only
+ * the server needs. Left out: `path` (the storage key — the layout of your
+ * bucket), `checksum`, `tenantId` (the store key, `@single` without tenancy),
+ * `uploadedBy` (a user id, of someone else on a shared drive) and the scanner's
+ * `detail` (engine output: signature names, versions, temp paths). The scan
+ * verdict stays, as `scan.clean`, so a client can show why a file is not
+ * downloadable yet.
+ */
+export interface PublicFileRecord {
+  id: string
+  name: string
+  contentType: string
+  size: number
+  createdAt: number
+  /** When the last scan reported, if one has. */
+  scannedAt?: number
+  /** The last scan's verdict — never its `detail`. */
+  scan?: { clean: boolean }
+  /** The app's own metadata (`declaredType` included), without the internal `scan` entry. */
+  metadata?: FileMetadata
+}
+
+/**
+ * The default public projection of a {@link FileRecord} — see
+ * {@link PublicFileRecord}. Exported so an app that writes its own routes (or a
+ * `present` that adds one field) answers with the same shape.
+ *
+ * ```ts
+ * fileRoutes({ shared: true, present: (file) => ({ ...toPublicFile(file), uploadedBy: file.uploadedBy }) })
+ * ```
+ */
+export function toPublicFile(record: FileRecord): PublicFileRecord {
+  const { scan, ...metadata } = record.metadata ?? {}
+  const clean =
+    scan !== null && typeof scan === 'object' && !Array.isArray(scan) && typeof scan['clean'] === 'boolean'
+      ? scan['clean']
+      : undefined
+  return {
+    id: record.id,
+    name: record.name,
+    contentType: record.contentType,
+    size: record.size,
+    createdAt: record.createdAt,
+    ...(record.scannedAt !== undefined && record.scannedAt !== null ? { scannedAt: record.scannedAt } : {}),
+    ...(clean !== undefined ? { scan: { clean } } : {}),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  }
 }
 
 /** Limits for the opt-in `POST /files` upload route. */
@@ -143,12 +201,17 @@ const notFound = { error: { code: 'FILE_NOT_FOUND', message: 'File not found.' }
  * (the errors carry their status, so every adapter maps them the same way);
  * `GET /files` and `GET /files/:id` still list the record with its scan state.
  *
+ * Records are answered through `present` (default {@link toPublicFile}), so
+ * the storage path, checksum, uploader and scan detail stay server-side.
+ *
  * Secure by default: a user reaches only the files they uploaded. Pass
  * `authorize` for your own policy, or `shared: true` for a tenant-wide drive.
  * A file the caller may not reach answers 404, exactly like a missing one.
  */
 export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
   const maxTtlMs = parseDuration(options.maxUrlTtl ?? DEFAULT_MAX_URL_TTL)
+  const present = (record: FileRecord): unknown =>
+    options.present ? options.present(record, currentUser()) : toPublicFile(record)
   // The lifetime used when the client names none, never longer than the cap.
   const defaultTtlMs = Math.min(parseDuration(DEFAULT_URL_TTL), maxTtlMs)
   const allowed = async (action: FileAction, record: FileRecord): Promise<boolean> => {
@@ -181,8 +244,8 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
       meta: { auth: true },
       async handler() {
         currentUser()
-        const out: FileRecord[] = []
-        for (const record of await files().list()) if (await allowed('read', record)) out.push(record)
+        const out: unknown[] = []
+        for (const record of await files().list()) if (await allowed('read', record)) out.push(present(record))
         return out
       },
     }),
@@ -193,7 +256,7 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
       params: z.object({ id: z.string() }),
       async handler({ params, reply }) {
         const record = await reachable(params.id, 'read')
-        return record ?? reply.code(404).send(notFound)
+        return record ? present(record) : reply.code(404).send(notFound)
       },
     }),
     route({
@@ -279,7 +342,7 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
               }),
             )
           }
-          return reply.code(201).send(stored)
+          return reply.code(201).send(stored.map(present))
         },
       }),
     )

@@ -181,8 +181,8 @@ describe('BK-016 · roleCatalog', () => {
         (accessRoute!.handler as (a: unknown) => Promise<{ roles: string[]; permissions: string[] }>)({}),
       )
 
-    expect(await ask('acme')).toEqual({ roles: ['admin'], permissions: ['members:invite', 'projects:*'] })
-    expect(await ask('globex')).toEqual({ roles: [], permissions: [] })
+    expect(await ask('acme')).toMatchObject({ roles: ['admin'], permissions: ['members:invite', 'projects:*'] })
+    expect(await ask('globex')).toMatchObject({ roles: [], permissions: [], grants: [] })
     await app.shutdown()
   })
 })

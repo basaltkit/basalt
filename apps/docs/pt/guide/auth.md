@@ -509,8 +509,11 @@ await auth.login(email, password)            // → MfaRequiredError (401 AUTH_M
 await auth.login(email, password, '123456')  // → { user, tokens }
 ```
 
-Uma password correta com um código em falta **não** é uma tentativa falhada; um código
-errado lança `MfaInvalidCodeError` e conta para o throttle. Tanto um código TOTP como
+Uma password correta com um código em falta **conta** para o throttle de login (por
+conta e por IP): o `AUTH_MFA_REQUIRED` revela que a password estava certa, por isso é
+orçamentado como uma tentativa (vê [Bloqueio por força bruta](#bloqueio-por-forca-bruta));
+o login bem-sucedido com o código limpa o contador da conta. Um código errado lança
+`MfaInvalidCodeError` e também conta para o throttle. Tanto um código TOTP como
 um código de recovery são aceites (os códigos de recovery são consumidos ao usar). A
 implementação de TOTP não tem dependências e é verificada contra os vetores de teste
 da RFC 6238.
@@ -1007,7 +1010,16 @@ Ativo por padrão: 5 tentativas falhadas por email em 15 minutos → `AccountLoc
 *reservada* antes de a password (ou o código MFA) ser verificada, por isso uma rajada
 de pedidos em paralelo não consegue fazer mais tentativas do que o orçamento. O
 throttle guarda digests SHA-256 dos identificadores, nunca o email em bruto, e no
-máximo `maxEntries` (100 000) deles. Ajusta-o ou desativa-o:
+máximo `maxEntries` (100 000) deles.
+
+**O `AUTH_MFA_REQUIRED` também conta.** Numa conta com MFA essa resposta só
+aparece com a password *certa*, por isso é um oráculo de password — o mesmo que
+qualquer login MFA em dois passos tem. Por isso gasta os orçamentos por conta e
+por IP exatamente como uma password errada, e não pode ser usado para adivinhar
+sem limite. O fluxo legítimo não é afetado: entrar com o código limpa o contador
+da conta; a vaga de IP do primeiro passo simplesmente expira com a janela.
+
+Ajusta-o ou desativa-o:
 
 ```ts
 import { authPlugin, LoginThrottle } from '@basaltkit/auth'
@@ -1148,7 +1160,7 @@ autenticar os utilizadores.
 | `AuthTokenInvalidError` | `AUTH_TOKEN_INVALID` | 400 | Um token de **link** de verificação ou reposição é desconhecido, já usado ou expirado |
 | `RefreshInvalidError` | `AUTH_REFRESH_INVALID` | 401 | Refresh token desconhecido, revogado ou expirado |
 | `RefreshReusedError` | `AUTH_REFRESH_REUSED` | 401 | Um refresh token já **consumido** voltou — indicador de roubo; a família inteira é revogada |
-| `MfaRequiredError` | `AUTH_MFA_REQUIRED` | 401 | Password correta, MFA ativo, sem `mfaCode`. Não conta como tentativa falhada |
+| `MfaRequiredError` | `AUTH_MFA_REQUIRED` | 401 | Password correta, MFA ativo, sem `mfaCode`. Conta nos orçamentos de login e por IP como uma falha (revela que a password estava certa) |
 | `MfaStepUpRequiredError` | `AUTH_MFA_REQUIRED` | 403 | `requireMfa` / `meta.mfa: true`: o MFA está ativo, mas este token ou sessão foi obtido sem código — entra de novo com um |
 | `MfaEnrollmentRequiredError` | `AUTH_MFA_ENROLLMENT_REQUIRED` | 403 | `requireMfa` / `meta.mfa: true`: a conta não tem MFA — inscreve-a e entra de novo com um código |
 | `MfaInvalidCodeError` | `AUTH_MFA_INVALID` | 401 | Código TOTP ou de recuperação errado — este **conta** para o throttle |
@@ -1200,7 +1212,8 @@ autenticar os utilizadores.
 - **`AUTH_UPDATE_UNSUPPORTED` na verificação ou na reposição** — o teu `UserSource`
   personalizado omite o `update()`. É opcional para o login, obrigatório para estes.
 - **`AUTH_LOCKED` para um utilizador que escreveu a password certa** — o orçamento
-  por *IP* pode disparar primeiro com NAT partilhado ou num teste de carga. Ajusta o
+  por *IP* pode disparar primeiro com NAT partilhado ou num teste de carga (o primeiro
+  passo, sem código, de cada login MFA gasta uma vaga de IP). Ajusta o
   `ipLoginThrottle`, e lembra-te de que ambos os throttles são em processo: com
   várias réplicas, o orçamento efetivo é por réplica.
 - **`AUTH_WEAK_SECRET` só em produção** — o mínimo de comprimento é imposto salvo com

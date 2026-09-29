@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { Audit, AUDIT_CHAIN_GENESIS, AuditChainConflictError, type AuditEntry, computeAuditHash } from '@basaltkit/audit'
+import { Audit, AUDIT_CHAIN_GENESIS, AuditChainConflictError, type AuditEntry, computeAuditHash, computeAuditHashV2 } from '@basaltkit/audit'
 import { describe, expect, it } from 'vitest'
 import { migrate, openAuditDatabase, SqliteAuditStore } from '../src/index.js'
 
@@ -41,7 +41,7 @@ describe('SqliteAuditStore — hash chain', () => {
     const [row] = await new SqliteAuditStore(db).query({})
     expect(row).toMatchObject({ seq: 1, prevHash: a.prevHash, hash: a.hash, ip: '203.0.113.9', userAgent: 'curl/8' })
     // the hash recomputed from the persisted row matches
-    expect(computeAuditHash(row!)).toBe(a.hash)
+    expect(computeAuditHashV2(row!)).toBe(a.hash)
     expect(await audit.verify()).toMatchObject({ ok: true, checked: 1 })
     // tenant chains written through the store verify too
     for (const entry of chainOf('acme', 3)) await new SqliteAuditStore(db).append(entry)
@@ -128,5 +128,37 @@ describe('SqliteAuditStore — hash chain', () => {
     const old = (await new SqliteAuditStore(db).query({})).find((e) => e.id === 'old1')
     expect(old?.seq).toBeUndefined()
     expect(old?.hash).toBeUndefined()
+  })
+})
+
+describe('SqliteAuditStore — keyed chain across a key rotation', () => {
+  it('persists v2 hashes (algorithm + key id) and verifies legacy v1 rows, old-key rows and new-key rows', async () => {
+    const db = openAuditDatabase()
+    const keyA = 'a'.repeat(32)
+    const keyB = 'b'.repeat(32)
+    // Legacy rows written by the previous release: bare 64-hex HMACs under key A.
+    let prev = AUDIT_CHAIN_GENESIS
+    for (let seq = 1; seq <= 2; seq++) {
+      const linked: AuditEntry = { id: `v1-${seq}`, source: 'manual', event: 'old', payload: { seq }, at: seq, seq, prevHash: prev }
+      const entry = { ...linked, hash: computeAuditHash(linked, keyA) }
+      await new SqliteAuditStore(db).append(entry)
+      prev = entry.hash
+    }
+    await new Audit(new SqliteAuditStore(db), undefined, undefined, { integrity: { mode: 'hash-chain', key: keyA, keyId: 'a' } }).record('x')
+    const rotated = new Audit(new SqliteAuditStore(db), undefined, undefined, {
+      integrity: { mode: 'hash-chain', key: keyB, keyId: 'b', verifyKeys: [{ id: 'a', key: keyA }] },
+    })
+    await rotated.record('y')
+
+    const rows = await new SqliteAuditStore(db).query({})
+    const hashes = rows.map((r) => r.hash!)
+    expect(hashes.filter((h) => /^[0-9a-f]{64}$/.test(h))).toHaveLength(2)
+    expect(hashes.filter((h) => h.startsWith('v2:')).map((h) => h.split(':').slice(0, 3).join(':')).sort()).toEqual([
+      'v2:hmac-sha256:a',
+      'v2:hmac-sha256:b',
+    ])
+    expect(await rotated.verify()).toMatchObject({ ok: true, checked: 4 })
+    const withoutOld = new Audit(new SqliteAuditStore(db), undefined, undefined, { integrity: { mode: 'hash-chain', key: keyB, keyId: 'b' } })
+    expect(await withoutOld.verify()).toMatchObject({ ok: false, firstBrokenAt: 1, reason: 'hash-mismatch' })
   })
 })

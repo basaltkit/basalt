@@ -17,6 +17,8 @@ const cwd = flag('cwd') ?? process.cwd()
 // Opt-out of the fail-closed apply: only for clients that cannot elicit and a
 // user who reviews previews themselves.
 const allowUnconfirmedApply = has('allow-unconfirmed-apply')
+// Dev-only: the server refuses NODE_ENV=production unless this is passed.
+const allowProduction = has('allow-production')
 
 // Transport: stdio is the default (the local-dev path). `--http[=port]` opts into
 // the minimal HTTP transport for remote/CI. Provider keys come from the launching
@@ -32,6 +34,7 @@ if (has('http')) {
     cwd,
     port,
     allowUnconfirmedApply,
+    allowProduction,
     ...(hostFlag ? { host: hostFlag } : {}),
     // Hostnames clients use to reach a remote bind (the Host header they send).
     ...(allowedHosts ? { allowedHosts } : {}),
@@ -48,5 +51,10 @@ if (has('http')) {
     })
 } else {
   // The stdio server holds the stdin listener open until the client closes it.
-  createAiMcpServer({ cwd, allowUnconfirmedApply })
+  try {
+    createAiMcpServer({ cwd, allowUnconfirmedApply, allowProduction })
+  } catch (error) {
+    process.stderr.write(`basalt-ai-mcp: failed to start — ${(error as Error).message}\n`)
+    process.exitCode = 1
+  }
 }

@@ -506,14 +506,26 @@ uma fila, um cron, um `basalt tenant:run` à mão.
 
 | Estado | Serve pedidos | Como lá chega |
 | --- | :---: | --- |
-| *(nenhum)* | ✅ | Todos os tenants criados antes de existir provisionamento. **Tratados como prontos** — qualquer outra coisa poria uma frota em produção offline na atualização |
+| *(nenhum, ou `null`)* | ✅ | Todos os tenants criados antes de existir provisionamento. **Tratados como prontos** — qualquer outra coisa poria uma frota em produção offline na atualização |
 | `ready` | ✅ | O `onProvision` teve sucesso |
 | `provisioning` | ❌ 503 | O `create()` escreveu o registo; o trabalho ainda não acabou |
 | `failed` | ❌ 503 | O `onProvision` lançou. O registo é mantido, não apagado — é a evidência de que o tenant foi tentado |
 | `deleting` | ❌ 503 | O `destroy()` começou. Marcado **antes** de o storage ser tocado, para nenhum pedido chegar a um schema a ser apagado por baixo dele |
+| `suspended` | ❌ 403 `TENANT_SUSPENDED` | Foi **a tua app** que o escreveu — faturação em atraso, abuso. O tenancy nunca o define |
+| qualquer outro (`active`, `disabled`, …) | ❌ 500 `TENANT_STATUS_UNKNOWN` | Um valor que o tenancy não reconhece. Recusado em vez de adivinhado |
 
 **503, e não 404.** O tenant existe; apenas ainda não serve, e o 503 é o estado
 que um cliente pode voltar a tentar. Um 404 diria o contrário.
+
+**Uma suspensão é 403, e não 503.** O storage está bem e voltar a tentar não
+ajuda — a conta fica bloqueada até a app levantar a suspensão. Bloqueia um tenant
+com `source.save({ ...tenant, status: 'suspended' })`; repõe-no com `'ready'`.
+
+**Um estado desconhecido falha fechado.** Se os teus registos dizem `active` para
+um tenant a servir, o tenancy não pode saber que isso significa "o storage está
+utilizável", por isso o pedido é recusado com uma mensagem que nomeia o valor
+visto. Guarda `ready` (ou nenhum estado). O `assertTenantServing(tenant)` faz a
+mesma verificação fora do HTTP; o `isTenantReady(tenant)` é a sua forma booleana.
 
 ## Ler o tenant
 
@@ -973,7 +985,9 @@ consulta falhar — o claim mantém-se e o `add()` lança `DOMAIN_TAKEN`.
 | `TenantResolutionConflictError` | `TENANCY_CONFLICT` | 400 | `onConflict: 'error'` e dois resolvers carregaram tenants diferentes (p. ex. um `x-tenant-id` que contradiz o `Host`) |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` e nenhum resolver produziu uma referência que carregasse um tenant |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, ou `forEach()` sobre um `TenantSource` sem `list()` |
-| `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | Um pedido resolveu para um tenant com estado `provisioning` ou `failed`. 503, e não 404: o tenant existe e o cliente pode voltar a tentar |
+| `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | Um pedido resolveu para um tenant com estado `provisioning`, `failed` ou `deleting`. 503, e não 404: o tenant existe e o cliente pode voltar a tentar |
+| `TenantSuspendedError` | `TENANT_SUSPENDED` | 403 | Um pedido resolveu para um tenant com estado `suspended`. Voltar a tentar não ajuda |
+| `TenantStatusUnknownError` | `TENANT_STATUS_UNKNOWN` | 500 | Um pedido resolveu para um tenant com um estado que o tenancy não reconhece (`active`, um erro de escrita). Guarda `ready` ou nenhum estado para um tenant a servir |
 | `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` numa source que não implementa nem `create()` nem `save()` — por exemplo uma baseada num ficheiro de configuração estático |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (ou o `create()` de uma source) para um id que já existe. Nada é escrito. Um tenant `failed`/`provisioning` retoma-se com `tenancy.provision(id)`; uma atualização intencional é `source.save()` |
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` para um domínio que outro tenant registou — verificado (e com o registo TXT ainda publicado, ou sem um registo de `challenge()` teu), ou não verificado e mais recente que `claimTtlMs` |

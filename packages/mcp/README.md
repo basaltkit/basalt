@@ -64,6 +64,18 @@ await createApp({
   template) and the concrete `url` built from the arguments. Other headers
   (`x-request-id`, `if-none-match`, forwarding/hop-by-hop) are dropped.
 - **Status honoured**: a handler replying `reply.code(>= 400)` yields `isError: true`.
+- **Error details redacted for the model**: a thrown error becomes an
+  `isError: true` result carrying the same `{ code, message, details? }` an HTTP
+  client gets — but the client here is a language model, so `details` pass
+  through `redactErrorDetails` first (default `redactSensitiveDetails` from
+  `@basaltkit/http`: the value of any key naming a secret — `password`,
+  `token`, `apiKey`, `secret`, `sessionId`, … — becomes `'[REDACTED]'`).
+  Override it with `mcpPlugin({ redactErrorDetails })` or per route with
+  `meta.mcp: { redactErrorDetails }`; `false` sends them as HTTP would. An
+  error's log-only `internalDetails` never enter a tool result: they go to
+  `mcpPlugin({ reportError })` (default: the console reporter, same policy as
+  the HTTP adapters; `false` to silence). A body the handler sends itself
+  (`reply.code(4xx).send(body)`) is its response contract and is not redacted.
 - **Cancellation**: `notifications/cancelled` answers the call as cancelled at
   once; a handler can stop early by checking `toolSignal(request)?.aborted`.
 

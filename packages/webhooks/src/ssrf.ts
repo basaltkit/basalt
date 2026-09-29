@@ -137,11 +137,107 @@ export function isPrivateIp(ip: string): boolean {
   return true // not an IP literal — the caller must resolve first; unknown ⇒ unsafe
 }
 
+/**
+ * Destination ports the default port policy refuses even at or above 1024:
+ * ports registered to databases, caches, message brokers, cluster control
+ * planes, proxies and remote-administration services. None of them has any
+ * business receiving a webhook, and several speak line- or text-based protocols
+ * a crafted `POST` body can drive cross-protocol (Redis, memcached, SMTP-style
+ * brokers) — on a *public* host, too: the private-range guard does not help
+ * when the target is someone else's exposed Redis.
+ */
+export const DEFAULT_BLOCKED_PORTS: readonly number[] = Object.freeze([
+  1080, // SOCKS proxy
+  1433, 1434, // Microsoft SQL Server
+  1521, 2483, 2484, // Oracle
+  1883, 8883, // MQTT
+  2049, // NFS
+  2181, // ZooKeeper
+  2375, 2376, // Docker Engine API
+  2379, 2380, 4001, // etcd
+  3128, 8118, // HTTP proxies (Squid, Privoxy)
+  3306, 33060, // MySQL
+  3389, // RDP
+  4369, // Erlang port mapper
+  5432, // PostgreSQL
+  5672, 15672, // RabbitMQ (AMQP, management API)
+  5900, // VNC
+  5984, // CouchDB
+  5985, 5986, // WinRM
+  6379, 26379, // Redis, Redis Sentinel
+  6443, // Kubernetes API server
+  7000, 7001, 9042, // Cassandra
+  8086, // InfluxDB
+  8200, // Vault
+  8300, 8301, 8302, 8500, 8600, // Consul
+  9092, // Kafka
+  9200, 9300, // Elasticsearch / OpenSearch
+  10250, 10255, // kubelet
+  11211, // memcached
+  27017, 27018, 27019, // MongoDB
+])
+
+const blockedPortSet = new Set(DEFAULT_BLOCKED_PORTS)
+
+/**
+ * The destination port of a URL: the explicit one, or the scheme default
+ * (`http:` 80, `https:` 443). `undefined` for a scheme with no known default
+ * and no explicit port. WHATWG `URL` drops a port equal to the scheme default,
+ * so `https://h:443` and `https://h` both yield 443.
+ */
+export function effectivePort(url: URL): number | undefined {
+  if (url.port !== '') return Number(url.port)
+  if (url.protocol === 'https:') return 443
+  if (url.protocol === 'http:') return 80
+  return undefined
+}
+
+/**
+ * The port policy. With `allowedPorts` an array, exactly those ports are
+ * allowed; `'any'` allows every port. By default: `80` and `443`, plus any
+ * port from `1024` up that is not in {@link DEFAULT_BLOCKED_PORTS} — privileged
+ * ports other than HTTP(S) (`22`, `25`, `110`, `389`, `445`, …) belong to
+ * system services, never to a webhook receiver.
+ */
+export function isPortAllowed(port: number, allowedPorts?: readonly number[] | 'any'): boolean {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return false
+  if (allowedPorts === 'any') return true
+  if (allowedPorts !== undefined) return allowedPorts.includes(port)
+  if (port === 80 || port === 443) return true
+  return port >= 1024 && !blockedPortSet.has(port)
+}
+
+/**
+ * Validates an `allowedPorts` option up front (a typo such as `'443'` would
+ * otherwise block every delivery at run time).
+ */
+export function assertAllowedPortsOption(allowedPorts: unknown): void {
+  if (allowedPorts === undefined || allowedPorts === 'any') return
+  if (
+    !Array.isArray(allowedPorts) ||
+    allowedPorts.length === 0 ||
+    !allowedPorts.every((p) => Number.isInteger(p) && (p as number) >= 1 && (p as number) <= 65_535)
+  ) {
+    throw new TypeError("webhooks: `ssrf.allowedPorts` must be 'any' or a non-empty array of integer ports (1-65535).")
+  }
+}
+
 export interface SsrfGuardOptions {
-  /** Escape hatch for trusted self-hosted setups delivering to internal hosts. */
+  /**
+   * Escape hatch for trusted self-hosted setups delivering to internal hosts.
+   * Skips the address checks and pinning — not the port policy
+   * (`allowedPorts`), which applies to internal hosts all the more.
+   */
   allowPrivateHosts?: boolean
   /** Permitted URL schemes. Default `['https:', 'http:']`. */
   allowedSchemes?: string[]
+  /**
+   * Permitted destination ports. An array allows exactly those ports; `'any'`
+   * turns the port policy off. Default: `80`, `443`, and every port from
+   * `1024` up except {@link DEFAULT_BLOCKED_PORTS} (databases, caches, brokers,
+   * control planes, proxies). See {@link isPortAllowed}.
+   */
+  allowedPorts?: readonly number[] | 'any'
   /** Injected resolver (tests). Default `dns.lookup(host, { all: true })`. */
   lookup?: (host: string) => Promise<{ address: string; family?: number }[]>
 }
@@ -168,7 +264,7 @@ const familyOf = (address: string): number => (isIP(address) === 6 ? 6 : 4)
 
 /**
  * Resolves a delivery URL and validates it against SSRF: a disallowed scheme,
- * or a host that is — or resolves to — a private, loopback, link-local (incl.
+ * a port outside the port policy (see {@link isPortAllowed}), or a host that is — or resolves to — a private, loopback, link-local (incl.
  * `169.254.169.254`), CGNAT, ULA or reserved address is refused. Resolves the
  * hostname *once* and checks *every* returned address (so a name pointed at an
  * internal IP is caught), then returns the validated addresses and the single
@@ -189,6 +285,12 @@ export async function resolveAndValidate(rawUrl: string, options: SsrfGuardOptio
   const schemes = options.allowedSchemes ?? ['https:', 'http:']
   if (!schemes.includes(url.protocol)) {
     throw new WebhookUrlBlockedError(rawUrl, `scheme "${url.protocol}" is not allowed`)
+  }
+  // The port is on the URL, not in DNS: checking it first reveals nothing and
+  // costs no lookup. Applies with `allowPrivateHosts` too.
+  const port = effectivePort(url)
+  if (port !== undefined && !isPortAllowed(port, options.allowedPorts)) {
+    throw new WebhookUrlBlockedError(rawUrl, `port ${port} is not allowed`)
   }
   // Trusted self-hosted opt-out: skip validation *and* pinning so the operator's
   // own DNS (which may legitimately return private IPs) is honoured at connect.

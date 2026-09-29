@@ -107,7 +107,7 @@ tenant-scoped storage, the checksum and the `file:uploaded` hook:
 
 ```ts
 import { route, upload, HttpError } from '@basaltkit/http'
-import { FILES } from '@basaltkit/files'
+import { FILES, toPublicFile } from '@basaltkit/files'
 import { ctx } from '@basaltkit/core'
 import { app } from './app.js'
 
@@ -130,7 +130,7 @@ export const uploadFile = route({
         uploadedBy: ctx().user?.id,                       // tenantId comes from ctx().tenant
         metadata: { source: 'web', title: body.fields['title'] }, // text fields sent before the file
       })
-      return reply.code(201).send(record)                 // FileRecord
+      return reply.code(201).send(toPublicFile(record))   // never the raw FileRecord
     }
     throw new HttpError(400, 'FILE_REQUIRED', 'Attach a file.')
   },
@@ -141,18 +141,24 @@ The body is parsed while the handler reads it (it is never buffered), with every
 limit enforced on the bytes actually received. The [adapters guide](/guide/adapters#uploads)
 lists every option and error. You can still pass a `Buffer` to `FILES.upload`.
 
-Add `contentLength: file.declaredLength` when it is present and a backend that
-needs an exact size (S3) will stream instead of buffering. `declaredLength` is
+Add `contentLength: file.declaredLength` when it is present and S3 streams the
+file into a single `PutObject`. `declaredLength` is
 the part's **own** `Content-Length` header; RFC 7578 does not require one and no
 browser sends it, so it is usually `undefined` — and the request's
 `Content-Length` (`body.contentLength`) covers every part plus the multipart
-framing, so it is an upper bound for one file, never its size. Without a declared
-length the write is bounded by `validate.maxSize` instead.
+framing, so it is an upper bound for one file, never its size — never pass it as
+`contentLength`. A declared length is verified against the bytes (a mismatch is
+`400 STORAGE_CONTENT_LENGTH_MISMATCH` and stores nothing). Without one the write
+is bounded by `validate.maxSize` instead.
 
 The returned `FileRecord` is `{ id, tenantId, name, contentType, size, path,
 checksum, uploadedBy?, metadata?, scannedAt?, createdAt }`. `path` is the key
 **inside the disk** (`files/<uuid>`); the disk adds the tenant prefix on every
 operation, so the object really lands at `tenants/<tenantId>/files/<uuid>`.
+That is why a route answers with `toPublicFile(record)` — `{ id, name,
+contentType, size, createdAt, scannedAt?, scan?: { clean }, metadata? }` — and
+keeps `path`, `checksum`, `tenantId`, `uploadedBy` and the scanner's `detail`
+server-side, as `fileRoutes()` does (see [Routes](#routes)).
 
 ### Streaming uploads
 
@@ -179,17 +185,27 @@ const record = await files.upload(file.stream, { name: file.filename, contentTyp
 ::: info Straight to the backend when the driver can stream
 On a disk whose driver implements `putStream` — `local`, `s3`, `azure`, `gcs`
 (see [Large files](/guide/storage#large-files)) — the bytes go **straight to
-storage**: only the 64 KiB sniff window is ever held. Pass `contentLength` when
-the client declared one (`Content-Length`); S3 needs a known length to stream
-rather than buffer.
+storage**. This module holds only the 64 KiB sniff window; the driver holds
+what its upload protocol needs — one part at a time on S3 multipart
+(`partSizeBytes × queueSize`, 20 MiB by default), the SDK's block buffers on
+Azure — and never up to `maxSize`. Pass `contentLength` when the client
+declared the file's exact size; S3 then streams it into one `PutObject`.
 
 ```ts
-await files.upload(part.file, {
-  name: part.filename,
-  contentType: part.mimetype,
-  contentLength: Number(request.headers['content-length']), // optional hint
+// A raw PUT whose body IS the file: its Content-Length is the file's size.
+// (In a multipart request it is not — see declaredLength above.)
+const declared = request.headers['content-length']
+await files.upload(request.raw, {
+  name,
+  contentType: request.headers['content-type'] ?? 'application/octet-stream',
+  ...(declared !== undefined ? { contentLength: Number(declared) } : {}),
 })
 ```
+
+A declared `contentLength` is held to its word: not a non-negative integer →
+`400 STORAGE_CONTENT_LENGTH_INVALID` before anything is read; above `maxSize` →
+`413 FILE_TOO_LARGE`; a body with more or fewer bytes →
+`400 STORAGE_CONTENT_LENGTH_MISMATCH`, with no object and no record left.
 
 The buffered path — at most `maxSize` in memory, then `disk.put` — remains the
 fallback for a driver without `putStream`, an unbounded `validate.maxSize` with
@@ -365,8 +381,9 @@ throw `FileNotScannedError` (`423 FILE_NOT_SCANNED`) until a scan reports the
 file clean, and `FileInfectedError` (`403 FILE_INFECTED`) once one reports it
 not clean — forever, until a new clean scan. A scan timestamp without a clean
 verdict counts as not scanned (fail closed). `GET /files` and `GET /files/:id`
-still list the record, with `scannedAt` and `metadata.scan`, so a UI can show
-"scanning…" or "blocked". The errors carry their status, so Fastify, Express
+still list the file, with `scannedAt` and the verdict as `scan: { clean }` (the
+scanner's `detail` stays server-side), so a UI can show "scanning…" or
+"blocked". The errors carry their status, so Fastify, Express
 and Hono answer identically.
 
 The scanner itself has to read the quarantined bytes: pass
@@ -457,10 +474,10 @@ write that route yourself with the neutral `upload()` body kind shown in
 
 | Route | Body | Returns |
 | --- | --- | --- |
-| `GET /files` | — | `FileRecord[]` the caller may read |
-| `GET /files/:id` | — | one `FileRecord`, or `404 FILE_NOT_FOUND` |
+| `GET /files` | — | the files the caller may read, each through `present` |
+| `GET /files/:id` | — | one file through `present`, or `404 FILE_NOT_FOUND` |
 | `GET /files/:id/content` | — | the bytes, **streamed**, `Content-Disposition: attachment`; `404`, or `423`/`403` while quarantined |
-| `POST /files` *(opt-in)* | `multipart/form-data` | `201` with the created `FileRecord[]` |
+| `POST /files` *(opt-in)* | `multipart/form-data` | `201` with the created files, through `present` |
 | `POST /files/:id/url` | `{ expiresIn? }` (default `'15m'`, at most `maxUrlTtl`) | `{ url }` — signed, `attachment` |
 | `DELETE /files/:id` | — | `204`, or `404 FILE_NOT_FOUND` |
 
@@ -472,6 +489,29 @@ quarantine gate (423/403) and the 404 close **before the first byte**. A driver
 that cannot stream (no `getStream`) still serves it, buffered. Turn the route off
 with `fileRoutes({ download: false })` if your deployment only ever hands out
 signed URLs.
+
+**Public projection.** No route answers with the raw `FileRecord`. Every record
+goes through `present`, by default `toPublicFile(record)`:
+`{ id, name, contentType, size, createdAt, scannedAt?, scan?: { clean }, metadata? }`.
+Left server-side: `path` (your bucket layout), `checksum`, `tenantId`,
+`uploadedBy` (a user id — someone else's, on a shared drive) and the scanner's
+`detail` (engine output: signature names, versions, temp paths); `metadata`
+loses only its internal `scan` entry. Choose your own shape on purpose:
+
+```ts
+fileRoutes({
+  shared: true,
+  // runs after authorization, as the caller
+  present: (file, user) => ({ ...toPublicFile(file), mine: file.uploadedBy === user.id }),
+})
+```
+
+::: warning Upgrading from @basaltkit/files 5.x
+These routes used to return the whole record. A client that read `path`,
+`checksum`, `uploadedBy`, `tenantId` or `metadata.scan.detail` from them now
+needs a `present` that adds it back. `files.get()` / `files.list()` and the hooks
+still hand your server code the full record.
+:::
 
 `POST /files` is mounted only when you pass `upload`. It has no per-record
 `authorize` decision to make — there is no record yet — so it accepts any
@@ -571,6 +611,7 @@ container.
 | `maxUrlTtl` | `DurationInput` | `'1h'` | Longest `expiresIn` a client may request from `POST /files/:id/url` |
 | `download` | `boolean` | `true` | Mount `GET /files/:id/content`, the streamed download |
 | `upload` | `{ maxBytes, maxFiles?, allowedTypes? }` | — (off) | Mount `POST /files`, the streamed upload. `maxFiles` defaults to `1`; `allowedTypes` matches the **declared** type (`image/png`, `image/*`) |
+| `present` | `(record, user) => unknown` | `toPublicFile` | Shapes every record the routes answer with. The default keeps `path`, `checksum`, `tenantId`, `uploadedBy` and the scan `detail` server-side |
 
 Every route declares `meta: { auth: true }` — there is no
 `auth: false` escape hatch, unlike `billingRoutes`. If authentication genuinely
@@ -608,6 +649,8 @@ the `attachment` disposition.
 | `StorageQuotaExceededError` | `FILE_QUOTA_EXCEEDED` | 402 | `maxTotalBytes` would be exceeded by this upload |
 | `FileNotFoundError` | `FILE_NOT_FOUND` | 404 | `download` / `markScanned` / `GET /files/:id` for an id that isn't this tenant's |
 | `FileTenantRequiredError` | `FILE_TENANT_REQUIRED` | 400 | No `tenantId` argument **and** no `ctx().tenant` — typically a queue worker or CLI |
+| `StorageContentLengthInvalidError` | `STORAGE_CONTENT_LENGTH_INVALID` | 400 | `contentLength` is negative, fractional, not finite or past `MAX_SAFE_INTEGER` — nothing is read |
+| `StorageContentLengthMismatchError` | `STORAGE_CONTENT_LENGTH_MISMATCH` | 400 | The body carried more or fewer bytes than `contentLength` — no object, no record |
 | `FileTenantMismatchError` | `FILE_TENANT_MISMATCH` | 403 | A `tenantId` argument that differs from `ctx().tenant` — inside a tenant context the argument can only name that tenant, never widen to another |
 | `UnknownDiskError` | `STORAGE_UNKNOWN_DISK` | — | `disk: 'name'` doesn't match any disk in `storagePlugin({ disks })` |
 | `TemporaryUrlUnsupportedError` | `STORAGE_TEMPORARY_URL_UNSUPPORTED` | — | `temporaryUrl` on the `local` driver |
