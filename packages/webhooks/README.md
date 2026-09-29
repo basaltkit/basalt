@@ -93,7 +93,7 @@ if (!valid) {
 }
 ```
 
-The header may carry several `v1=` signatures (e.g. a sender rotating its secret signs with both the new and the old one); `verifySignature` returns `true` when **any** of them matches your secret.
+The header may carry several `v1=` signatures: during a secret rotation (`rotateSecret()`, below) the sender signs with both the new and the old secret. `verifySignature` returns `true` when **any** of them matches your secret.
 
 ## Usage guide
 
@@ -124,6 +124,26 @@ await webhooks.unregister(endpoint.id)
 
 To temporarily disable without deleting, save the endpoint with `active: false`.
 
+`register()` refuses a URL whose port the deliverer would never send to (see [Port policy](#port-policy)) with `WebhookEndpointInvalidError`.
+
+### Rotating a signing secret
+
+`rotateSecret()` replaces an endpoint's secret **without breaking its receiver**. For a grace window (default 24 h), every delivery is signed with both secrets, `t=…,v1=<new>,v1=<old>`. A receiver on either secret keeps verifying, so it can switch whenever it is ready:
+
+```ts
+const { secret } = await webhooks.rotateSecret(endpoint.id, { graceSeconds: 7 * 86_400 })
+// hand `secret` to the customer; the old one stops signing after 7 days
+```
+
+- `graceSeconds`: from 0 to 30 days. `0` is an immediate cut-over, e.g. after a leak.
+- `secret`: pass your own (min 16 chars); otherwise one is generated.
+- Scoping works like `unregister`. An endpoint outside the tenant throws `WebhookEndpointNotFoundError` (404).
+- An endpoint signing with the plugin-wide default secret has no own secret to rotate. Rotate the default in configuration instead.
+- Re-registering the endpoint (same `id`) ends a rotation in progress.
+- `list()` never returns either secret.
+
+Durable stores keep the previous secret in `previousSecret` / `previousSecretExpiresAt`. `webhooks-sqlite` migrates the columns itself; `webhooks-prisma` needs them in your schema.
+
 ### Automatic dispatch from domain events
 
 With `@basaltkit/events` registered, pass `events` to the plugin and every domain event matching the patterns is dispatched automatically — with the tenant read from the request context and in *fire-and-forget* mode (whoever emits the event never blocks waiting for the HTTP call):
@@ -148,6 +168,27 @@ await app.container.get(EVENTS).emit(InvoicePaid, { amount: 42 })
 ### Retries and failures
 
 The deliverer only retries transient failures — network errors, timeouts and `5xx` responses — with *exponential backoff* (a wait that doubles each attempt: 500 ms, 1 s, 2 s, ...). `4xx` responses are client errors and are **not** retried. The result of each delivery is a `DeliveryResult` with `ok`, `status`, `attempts`, `error` and — on failures — `retryable` (`true` for network/timeout/`5xx`/`408`/`429`, `false` for SSRF-blocked URLs, redirects, other `4xx` and refused secrets). One endpoint's delivery throwing unexpectedly never rejects the whole `dispatch`: it becomes a failed result (`internal delivery error`).
+
+`timeoutMs` is one deadline per attempt that covers **resolving the host and the request together**. A DNS server that never answers fails the attempt (`host resolution timed out`, retryable), and the next attempt resolves again.
+
+### Fan-out limits
+
+A `dispatch` sends to at most `dispatchConcurrency` endpoints at once (default 16). It also refuses a scope (one tenant, or the tenant-agnostic endpoints) with more than `maxEndpointsPerDispatch` active endpoints subscribed to the event (default 100). None of that scope's endpoints is sent to — picking some of them would be arbitrary. Each gets a failed result `fan-out cap exceeded…` (`retryable: false`), and `onFanOutExceeded({ event, tenantId, endpoints, limit })` is called once for alerting (default `console.warn`). Other tenants in the same dispatch are unaffected. `maxEndpointsPerDispatch: false` disables the cap.
+
+```ts
+webhooksPlugin({ secret, maxEndpointsPerDispatch: 25, dispatchConcurrency: 8, onFanOutExceeded: (i) => metrics.increment('webhooks.fanout_refused', i) })
+```
+
+### Port policy
+
+A delivery goes only to port `80`, `443`, or a port from `1024` up that is not in `DEFAULT_BLOCKED_PORTS`. That list covers ports registered to databases, caches, message brokers, cluster control planes, proxies and remote-admin services: Redis `6379`, memcached `11211`, Postgres `5432`, MySQL `3306`, MongoDB `27017`, Docker `2375`, kubelet `10250`, and so on. Other privileged ports (`22`, `25`, …) are refused. Those services never receive webhooks, and several speak text protocols that a crafted `POST` body can drive — even on a public host, where the private-address guard does not help. Set `ssrf.allowedPorts` to change the policy:
+
+```ts
+webhooksPlugin({ secret, ssrf: { allowedPorts: [443] } })     // exactly these ports
+webhooksPlugin({ secret, ssrf: { allowedPorts: 'any' } })     // policy off
+```
+
+The port is checked before any DNS lookup, also with `allowPrivateHosts`, at `register()` and on every delivery. A blocked port is a permanent failure (`attempts: 0`, `retryable: false`). Redirects are never followed, so a `3xx` can't reach a blocked port either.
 
 The webhook outbox (`webhookOutboxDispatch`) re-queues an entry only for **retryable** failures, skips endpoints that already accepted it, and re-sends the same delivery `id`. Permanent failures go to `onPermanentFailure` (default `console.warn`) instead of re-delivering to healthy endpoints.
 
@@ -187,8 +228,9 @@ webhooksPlugin({ store: new DbWebhookStore(), secret: 'whsec_...' })
 |---|---|---|
 | `register` | `(endpoint: Omit<WebhookEndpoint,'id'> & { id?: string }, options?: { system?: boolean }) => Promise<WebhookEndpoint>` | Creates a subscription (id generated if omitted). Validates first: an unparseable URL, a scheme the deliverer refuses, a `secret` under 16 chars or empty `events` throw `WebhookEndpointInvalidError` (400); an `id` held by another scope throws `WebhookEndpointIdInUseError` (409) |
 | `unregister` | `(id: string, options?: { tenantId?: string; system?: boolean }) => Promise<void>` | Removes a subscription — a no-op unless the (ambient or given) tenant owns it |
-| `list` | `(tenantId?: string) => Promise<WebhookEndpoint[]>` | Lists subscriptions, optionally by tenant |
-| `dispatch` | `(event: string, data: unknown, scope?: string \| { tenantId?, allTenants?, idempotencyKey?, skipEndpointIds? }) => Promise<DeliveryResult[]>` | Delivers to all endpoints subscribed to the event; `idempotencyKey` derives stable delivery ids |
+| `list` | `(tenantId?: string) => Promise<WebhookEndpointView[]>` | Lists subscriptions, optionally by tenant (both secrets redacted) |
+| `rotateSecret` | `(id: string, options?: { graceSeconds?, secret?, tenantId?, system? }) => Promise<WebhookEndpoint>` | New secret; the old one keeps signing alongside it for `graceSeconds` (default 86400, max 30 days, `0` = immediate). Returns the new `secret` |
+| `dispatch` | `(event: string, data: unknown, scope?: string \| { tenantId?, allTenants?, idempotencyKey?, skipEndpointIds? }) => Promise<DeliveryResult[]>` | Delivers to all endpoints subscribed to the event, at most `dispatchConcurrency` at once; a scope over `maxEndpointsPerDispatch` is refused whole; `idempotencyKey` derives stable delivery ids |
 
 ### `interface WebhookEndpoint`
 
@@ -200,6 +242,8 @@ webhooksPlugin({ store: new DbWebhookStore(), secret: 'whsec_...' })
 | `tenantId` | `string` | No | — | Restricts to a tenant; omitted = receives from all |
 | `secret` | `string` | No | deliverer's secret | This endpoint's signing secret |
 | `active` | `boolean` | No | `true` | `false` disables without deleting |
+| `previousSecret` | `string` | No | — | Set by `rotateSecret()`: the replaced secret, still signing until `previousSecretExpiresAt` |
+| `previousSecretExpiresAt` | `Date` | No | — | End of the rotation grace window (a `previousSecret` without it is ignored) |
 
 ### `webhooksPlugin(options?: WebhooksPluginOptions)`
 
@@ -210,6 +254,9 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 | `store` | `WebhookStore` | No | `MemoryWebhookStore` | Where subscriptions live |
 | `deliverer` | `WebhookDeliverer` | No | new one, with the given options | Custom deliverer |
 | `events` | `string[]` | No | `[]` | Domain event patterns to dispatch automatically (requires `@basaltkit/events`) |
+| `maxEndpointsPerDispatch` | `number \| false` | No | `100` | Most endpoints of one scope (tenant, or tenant-agnostic) per event; over it, that scope is refused whole |
+| `dispatchConcurrency` | `number` | No | `16` | Deliveries one `dispatch` runs at once |
+| `onFanOutExceeded` | `(info) => void` | No | `console.warn` | Called once per refused scope, with `{ event, tenantId, endpoints, limit }` |
 
 ### `class WebhookDeliverer`
 
@@ -222,7 +269,8 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 | `secret` | `string` | No | — | Default signing secret (the endpoint's `secret` overrides it) |
 | `maxRetries` | `number` | No | `3` | Retries after the first attempt |
 | `backoffMs` | `number` | No | `500` | Base wait in ms, doubled per attempt |
-| `timeoutMs` | `number` | No | `10000` | Timeout per attempt in ms |
+| `timeoutMs` | `number` | No | `10000` | Deadline per attempt in ms, covering DNS resolution and the request |
+| `ssrf` | `SsrfGuardOptions \| false` | No | on | `{ allowPrivateHosts?, allowedSchemes?, allowedPorts?, lookup? }` — see [Port policy](#port-policy); `false` disables the guard |
 | `fetchImpl` | `typeof fetch` | No | built-in **pinned** transport (not global `fetch`) | (Advanced) injectable HTTP client. It gets the validated IP under `init[PINNED_ADDRESS]`, which plain `fetch` ignores — delegate to `pinnedFetch` to keep DNS-rebind protection. Otherwise a one-time `BASALT_WEBHOOKS_UNPINNED_FETCH` warning is emitted and the host is re-validated before every retry (narrows, doesn't close, the rebind window) |
 | `fetchImplPinsAddress` | `boolean` | No | `false` | Declares that `fetchImpl` honours `PINNED_ADDRESS` (e.g. wraps `pinnedFetch`); silences the warning |
 | `sleep` | `(ms) => Promise<void>` | No | `setTimeout` | (Advanced) injectable wait, for tests |
@@ -248,7 +296,7 @@ Rewriting the URL host to the validated IP is not an option for plain `fetch`: i
 
 | Function | Signature | Description |
 |---|---|---|
-| `signPayload` | `(body: string, secret: string, timestampSeconds: number) => string` | Generates the `t=<unix>,v1=<hmac-sha256>` header |
+| `signPayload` | `(body: string, secret: string \| string[], timestampSeconds: number) => string` | Generates the `t=<unix>,v1=<hmac-sha256>` header — one `v1` per secret when given several |
 | `verifySignature` | `(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds?) => boolean` | Verifies in constant time; `true` if any `v1` matches (secret rotation); rejects timestamps outside the tolerance; throws `RangeError` if `toleranceSeconds` isn't a finite number ≥ 0 or `nowSeconds` isn't finite |
 | `matchesEvent` | `(patterns: string[], event: string) => boolean` | Tests whether an event matches the patterns |
 
@@ -260,6 +308,9 @@ Rewriting the URL host to the validated IP is not an option for plain `fetch`: i
 | `MemoryWebhookStore` | class | In-memory store (dev/tests); `add()` refuses an id held by another scope |
 | `WebhookEndpointInvalidError` | class | `WEBHOOK_ENDPOINT_INVALID` (400) — `register()` refused an undeliverable endpoint |
 | `WebhookEndpointIdInUseError` | class | `WEBHOOK_ENDPOINT_ID_IN_USE` (409) — the id belongs to another scope |
+| `WebhookEndpointNotFoundError` | class | `WEBHOOK_ENDPOINT_NOT_FOUND` (404) — `rotateSecret()` found no such endpoint in scope |
+| `DEFAULT_BLOCKED_PORTS` | `readonly number[]` | Ports the default port policy refuses at or above 1024 |
+| `isPortAllowed` | function | `(port, allowedPorts?) => boolean` — the port policy |
 | `WebhookStore` | type (Advanced) | Contract for persistent stores |
 | `pinnedFetch` | function | `fetch`-compatible client over the pinned transport (honours `PINNED_ADDRESS`) |
 | `deriveDeliveryId` | function | `(idempotencyKey, endpointId) => string` — the stable delivery id used by the outbox |
@@ -272,6 +323,10 @@ Rewriting the URL host to the validated IP is not an option for plain `fetch`: i
 **`verifySignature` returns `false` even though everything looks right** — Check the clock: the signature expires after `toleranceSeconds` (300s by default). Out-of-sync clocks between servers cause rejections.
 
 **Delivery failed with `ok: false` and `status: 4xx` with no retries** — Correct behavior: `4xx` means an error on the recipient's side (wrong URL, authentication), and retrying wouldn't fix it. Only `5xx` and network errors are retried.
+
+**Delivery fails with `port N is not allowed`** — The endpoint's port is outside the port policy. If the receiver really listens there, allow it with `ssrf: { allowedPorts: [...] }`.
+
+**Every endpoint of a tenant fails with `fan-out cap exceeded`** — That tenant has more than `maxEndpointsPerDispatch` endpoints subscribed to the event. Remove duplicates, or raise the cap.
 
 **Subscriptions disappear when the application restarts** — You're on `MemoryWebhookStore` (the default). In production, implement `WebhookStore` over your database.
 

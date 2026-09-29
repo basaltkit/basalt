@@ -48,6 +48,31 @@ export function resolveWriteRoot(launchRoot: string, requested: string | undefin
 }
 
 /**
+ * Resolve the root a READ tool (`basalt_analyze`, `basalt_doctor`,
+ * `basalt_plan`) inspects. Without a `requested` root it is the launch root
+ * as given. An explicit one — absolute, or relative to the launch root — must
+ * stay inside the launch root both lexically and after symlink resolution
+ * (the realpath of its nearest existing ancestor); anything else throws a
+ * {@link WorkspaceEscapeError}. A client must not be able to point the server
+ * at an arbitrary directory on the machine (`/`, `~/.ssh`, another repo).
+ */
+export function resolveReadRoot(launchRoot: string, requested: string | undefined): string {
+  if (requested === undefined || requested.trim() === '') return launchRoot
+  const lexicalBase = resolve(launchRoot)
+  const realBase = existsSync(lexicalBase) ? nearestExistingRealpath(lexicalBase) : lexicalBase
+  const candidate = resolve(lexicalBase, requested)
+  // Accept the root spelled through either form (e.g. /tmp vs /private/tmp on macOS).
+  const lexicallyInside = within(lexicalBase, candidate) || within(realBase, candidate)
+  // A launch root that does not exist (tests with an in-memory reader) has no
+  // symlinks to follow; otherwise the resolved target must stay inside too.
+  const physicallyInside = !existsSync(lexicalBase) || within(realBase, nearestExistingRealpath(candidate))
+  if (!lexicallyInside || !physicallyInside) {
+    throw new WorkspaceEscapeError(`workspaceRoot '${requested}' is outside the project root (${lexicalBase})`)
+  }
+  return candidate
+}
+
+/**
  * Assert every relative target path stays within `root`: no absolute paths, no
  * `..` traversal, and no symlink that resolves outside. Called before any write.
  */

@@ -8,8 +8,10 @@ import {
   auditPlugin,
   type AuditEntry,
   type AuditStore,
+  auditKeyId,
   canonicalAuditEntry,
   computeAuditHash,
+  computeAuditHashV2,
   MemoryAuditStore,
 } from '../src/index.js'
 
@@ -28,10 +30,10 @@ describe('hash chain — append', () => {
 
     expect(a.seq).toBe(1)
     expect(a.prevHash).toBe(AUDIT_CHAIN_GENESIS)
-    expect(a.hash).toMatch(/^[0-9a-f]{64}$/)
+    expect(a.hash).toMatch(/^v2:sha256:[0-9a-f]{64}$/)
     expect(b.seq).toBe(2)
     expect(b.prevHash).toBe(a.hash)
-    expect(b.hash).toBe(computeAuditHash(b))
+    expect(b.hash).toBe(computeAuditHashV2(b))
   })
 
   it('does not chain entries when integrity is off (default)', async () => {
@@ -107,8 +109,8 @@ describe('hash chain — append', () => {
     const key = 'k'.repeat(32)
     const audit = new Audit(new MemoryAuditStore(), undefined, undefined, { integrity: { mode: 'hash-chain', key } })
     const entry = await audit.record('x')
-    expect(entry.hash).toBe(computeAuditHash(entry, key))
-    expect(entry.hash).not.toBe(computeAuditHash(entry))
+    expect(entry.hash).toBe(computeAuditHashV2(entry, { id: auditKeyId(key), key }))
+    expect(entry.hash).not.toBe(computeAuditHashV2(entry))
     expect((await audit.verify()).ok).toBe(true)
     expect(() => new Audit(new MemoryAuditStore(), undefined, undefined, { integrity: { mode: 'hash-chain', key: 'short' } })).toThrow(
       /128 bits/,

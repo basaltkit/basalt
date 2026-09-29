@@ -17,9 +17,8 @@ import {
   TenantAlreadyExistsError,
   TenantCreateUnsupportedError,
   TenantDeleteUnsupportedError,
-  TenantNotReadyError,
   TenantResolutionConflictError,
-  isTenantReady,
+  assertTenantServing,
   type Tenant,
   type TenantSource,
   type TenantStatus,
@@ -39,8 +38,12 @@ export {
   TenantCreateUnsupportedError,
   TenantDeleteUnsupportedError,
   TenantNotReadyError,
+  TenantSuspendedError,
+  TenantStatusUnknownError,
   TenantResolutionConflictError,
+  TENANT_STATUSES,
   isTenantReady,
+  assertTenantServing,
   type Tenant,
   type TenantSource,
   type TenantStatus,
@@ -91,24 +94,100 @@ declare module '@basaltkit/core' {
   }
 }
 
+/**
+ * Everything `new Tenancy()` takes, by name. `tenancyPlugin` builds the facade
+ * for you; construct it directly only for a test or a script that runs without
+ * the plugin.
+ */
+export interface TenancyOptions {
+  source: TenantSource
+  resolvers: TenantResolver[]
+  /** Where `tenancy:created`, `tenancy:destroyed` and `tenancy:switched` are emitted. */
+  hooks?: HookBus
+  /** See {@link TenancyPluginOptions.onProvision}. */
+  onProvision?: (tenant: Tenant) => void | Promise<void>
+  /** 'deferred' → `create()` returns before provisioning; see `provision()`. Default `'inline'`. */
+  provisionMode?: 'inline' | 'deferred'
+  /** See {@link TenancyPluginOptions.onDeprovision}. */
+  onDeprovision?: (tenant: Tenant) => void | Promise<void>
+  /** See {@link TenancyPluginOptions.canonicalDomain}. */
+  canonicalDomain?: (tenant: Tenant) => string | undefined
+  /**
+   * The tenant-id grammar `create()`, `run()` and `resolve()` enforce.
+   * Default {@link isValidTenantId}.
+   */
+  validateTenantId?: (id: string) => boolean
+  /** How `resolve()` treats resolvers that name different tenants. Default `'precedence'`. */
+  onConflict?: ResolverConflictPolicy
+}
+
 export class Tenancy {
+  private readonly source: TenantSource
+  private readonly resolvers: TenantResolver[]
+  private readonly hooks: HookBus | undefined
+  private readonly onProvision: ((tenant: Tenant) => void | Promise<void>) | undefined
+  private readonly provisionMode: 'inline' | 'deferred'
+  private readonly onDeprovision: ((tenant: Tenant) => void | Promise<void>) | undefined
+  private readonly canonicalDomain: ((tenant: Tenant) => string | undefined) | undefined
+  private readonly validateTenantId: (id: string) => boolean
+  private readonly resolution: { onConflict?: ResolverConflictPolicy }
+
+  /**
+   * `new Tenancy({ source, resolvers, ... })` — see {@link TenancyOptions}.
+   */
+  constructor(options: TenancyOptions)
+  /**
+   * The positional form, kept for compatibility. Prefer the options object:
+   * nine positional arguments are easy to misalign.
+   */
   constructor(
-    private readonly source: TenantSource,
-    private readonly resolvers: TenantResolver[],
-    private readonly hooks?: HookBus,
-    private readonly onProvision?: (tenant: Tenant) => void | Promise<void>,
-    /** 'deferred' → `create()` returns before provisioning; see `provision()`. */
-    private readonly provisionMode: 'inline' | 'deferred' = 'inline',
-    private readonly onDeprovision?: (tenant: Tenant) => void | Promise<void>,
-    private readonly canonicalDomain?: (tenant: Tenant) => string | undefined,
-    /**
-     * The tenant-id grammar `create()`, `run()` and `resolve()` enforce.
-     * Default {@link isValidTenantId}.
-     */
-    private readonly validateTenantId: (id: string) => boolean = isValidTenantId,
-    /** How `resolve()` treats resolvers that name different tenants. */
-    private readonly resolution: { onConflict?: ResolverConflictPolicy } = {},
-  ) {}
+    source: TenantSource,
+    resolvers: TenantResolver[],
+    hooks?: HookBus,
+    onProvision?: (tenant: Tenant) => void | Promise<void>,
+    provisionMode?: 'inline' | 'deferred',
+    onDeprovision?: (tenant: Tenant) => void | Promise<void>,
+    canonicalDomain?: (tenant: Tenant) => string | undefined,
+    validateTenantId?: (id: string) => boolean,
+    resolution?: { onConflict?: ResolverConflictPolicy },
+  )
+  constructor(
+    sourceOrOptions: TenantSource | TenancyOptions,
+    resolvers?: TenantResolver[],
+    hooks?: HookBus,
+    onProvision?: (tenant: Tenant) => void | Promise<void>,
+    provisionMode?: 'inline' | 'deferred',
+    onDeprovision?: (tenant: Tenant) => void | Promise<void>,
+    canonicalDomain?: (tenant: Tenant) => string | undefined,
+    validateTenantId?: (id: string) => boolean,
+    resolution: { onConflict?: ResolverConflictPolicy } = {},
+  ) {
+    // A TenantSource always has `find`; the options object never does (it
+    // carries the source under `source`), so the two forms cannot be confused.
+    const options: TenancyOptions =
+      typeof (sourceOrOptions as TenantSource).find === 'function'
+        ? {
+            source: sourceOrOptions as TenantSource,
+            resolvers: resolvers ?? [],
+            ...(hooks !== undefined ? { hooks } : {}),
+            ...(onProvision !== undefined ? { onProvision } : {}),
+            ...(provisionMode !== undefined ? { provisionMode } : {}),
+            ...(onDeprovision !== undefined ? { onDeprovision } : {}),
+            ...(canonicalDomain !== undefined ? { canonicalDomain } : {}),
+            ...(validateTenantId !== undefined ? { validateTenantId } : {}),
+            ...(resolution.onConflict !== undefined ? { onConflict: resolution.onConflict } : {}),
+          }
+        : (sourceOrOptions as TenancyOptions)
+    this.source = options.source
+    this.resolvers = options.resolvers
+    this.hooks = options.hooks
+    this.onProvision = options.onProvision
+    this.provisionMode = options.provisionMode ?? 'inline'
+    this.onDeprovision = options.onDeprovision
+    this.canonicalDomain = options.canonicalDomain
+    this.validateTenantId = options.validateTenantId ?? isValidTenantId
+    this.resolution = options.onConflict !== undefined ? { onConflict: options.onConflict } : {}
+  }
 
   /** The tenant of the active context, if any. */
   current(): Tenant | undefined {
@@ -644,17 +723,17 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
       container.singleton(
         TENANCY,
         () =>
-          new Tenancy(
-            options.source,
-            options.resolvers,
+          new Tenancy({
+            source: options.source,
+            resolvers: options.resolvers,
             hooks,
-            options.onProvision,
-            options.provision ?? 'inline',
-            options.onDeprovision,
-            options.canonicalDomain,
-            options.validateTenantId,
-            options.onConflict !== undefined ? { onConflict: options.onConflict } : {},
-          ),
+            ...(options.onProvision !== undefined ? { onProvision: options.onProvision } : {}),
+            ...(options.provision !== undefined ? { provisionMode: options.provision } : {}),
+            ...(options.onDeprovision !== undefined ? { onDeprovision: options.onDeprovision } : {}),
+            ...(options.canonicalDomain !== undefined ? { canonicalDomain: options.canonicalDomain } : {}),
+            ...(options.validateTenantId !== undefined ? { validateTenantId: options.validateTenantId } : {}),
+            ...(options.onConflict !== undefined ? { onConflict: options.onConflict } : {}),
+          }),
       )
       registerTenantCommands(container, options)
       // Marker other plugins read to adopt tenant-safe defaults (e.g.
@@ -691,10 +770,9 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
           // A tenant that is still provisioning (or failed) exists but cannot
           // serve. Without this the request would reach a schema that is not
           // there yet and die on a raw database error — the whole reason the
-          // status exists.
-          if (!isTenantReady(tenant)) {
-            throw new TenantNotReadyError(tenant.id, tenant['status'] as TenantStatus)
-          }
+          // status exists. A suspended tenant is refused with 403, and a
+          // status tenancy does not know fails closed rather than serving.
+          assertTenantServing(tenant)
           context.tenant = tenant
           await hooks.emit('tenancy:switched', { tenant })
         },

@@ -1,5 +1,12 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { resolveAndValidate, WebhookUrlBlockedError, type SsrfGuardOptions, type ValidatedAddress } from './ssrf.js'
+import {
+  assertAllowedPortsOption,
+  isPortAllowed,
+  resolveAndValidate,
+  WebhookUrlBlockedError,
+  type SsrfGuardOptions,
+  type ValidatedAddress,
+} from './ssrf.js'
 import { PINNED_ADDRESS, pinnedFetch, pinnedRequest } from './pinned-fetch.js'
 import type { WebhookEndpoint } from './store.js'
 
@@ -45,10 +52,16 @@ export function generateWebhookSecret(): string {
  * Signs a payload the Stripe way: `t=<unix>,v1=<hmac-sha256(t.body)>`. The
  * receiver recomputes the HMAC over `timestamp.body` and compares in constant
  * time, rejecting stale timestamps to stop replays.
+ *
+ * Pass several secrets (current first) to emit one `v1=` entry per secret —
+ * what the deliverer does during a secret rotation's grace window, so a
+ * receiver still verifying with the previous secret keeps accepting.
  */
-export function signPayload(body: string, secret: string, timestampSeconds: number): string {
-  const signature = createHmac('sha256', secret).update(`${timestampSeconds}.${body}`).digest('hex')
-  return `t=${timestampSeconds},v1=${signature}`
+export function signPayload(body: string, secret: string | readonly string[], timestampSeconds: number): string {
+  const secrets = typeof secret === 'string' ? [secret] : secret
+  if (secrets.length === 0) throw new TypeError('signPayload(): at least one secret is required')
+  const signatures = secrets.map((key) => `v1=${createHmac('sha256', key).update(`${timestampSeconds}.${body}`).digest('hex')}`)
+  return `t=${timestampSeconds},${signatures.join(',')}`
 }
 
 /**
@@ -150,7 +163,10 @@ export interface WebhookDelivererOptions {
   maxRetries?: number
   /** Base backoff in ms, doubled per attempt. Default 500. */
   backoffMs?: number
-  /** Per-attempt timeout in ms. Default 10s. */
+  /**
+   * Per-attempt deadline in ms, covering DNS resolution AND the request: a
+   * resolver that hangs fails the attempt like a slow receiver does. Default 10s.
+   */
   timeoutMs?: number
   /**
    * (Advanced) custom HTTP client. The default is NOT global `fetch` but a
@@ -184,6 +200,35 @@ export interface WebhookDelivererOptions {
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** Outward error for an attempt whose deadline ran out while resolving the host. */
+const DNS_TIMEOUT_ERROR = 'host resolution timed out'
+
+/** Rejects with `onAbort()` as soon as `signal` aborts; otherwise settles like `promise`. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal, onAbort: () => Error): Promise<T> {
+  if (signal.aborted) return Promise.reject(onAbort())
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(onAbort())
+    signal.addEventListener('abort', abort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', abort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort)
+        reject(error)
+      },
+    )
+  })
+}
+
+/** Epoch ms of a stored timestamp (`Date`, ISO string or epoch ms), or NaN. */
+function epochMs(value: unknown): number {
+  if (value instanceof Date) return value.getTime()
+  if (typeof value === 'string' || typeof value === 'number') return new Date(value).getTime()
+  return Number.NaN
+}
+
 /** POSTs signed JSON to an endpoint, retrying transient failures with backoff. */
 export class WebhookDeliverer {
   private readonly maxRetries: number
@@ -202,6 +247,7 @@ export class WebhookDeliverer {
         `Webhook signing secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters (generate one with generateWebhookSecret()).`,
       )
     }
+    if (options.ssrf !== false) assertAllowedPortsOption(options.ssrf?.allowedPorts)
     this.maxRetries = options.maxRetries ?? 3
     this.backoffMs = options.backoffMs ?? 500
     this.timeoutMs = options.timeoutMs ?? 10_000
@@ -232,29 +278,56 @@ export class WebhookDeliverer {
     return (this.options.ssrf === false ? undefined : this.options.ssrf?.allowedSchemes) ?? ['https:', 'http:']
   }
 
+  /**
+   * True when this deliverer would send to `port` (the `ssrf.allowedPorts`
+   * policy; any port with `ssrf: false`). `WebhookManager.register()` refuses
+   * other ports.
+   */
+  allowsPort(port: number): boolean {
+    if (this.options.ssrf === false) return true
+    return isPortAllowed(port, this.options.ssrf?.allowedPorts)
+  }
+
   /** True when a default (plugin-wide) signing secret is configured. */
   get hasDefaultSecret(): boolean {
     return this.options.secret !== undefined
   }
 
-  /** Resolves the signing secret for `endpoint`, or the reason delivery is refused. */
-  private signingSecret(endpoint: WebhookEndpoint): { secret?: string; refused?: string } {
+  /**
+   * The secrets to sign `endpoint`'s deliveries with (current first, then the
+   * previous one while its rotation grace window is open), or the reason
+   * delivery is refused. An empty list means "send unsigned" (`allowUnsigned`).
+   */
+  private signingSecrets(endpoint: WebhookEndpoint): { secrets: string[]; refused?: string } {
     // `!= null`: SQL-backed stores may hand back `secret: null` / `tenantId: null`
     // for "absent"; both must mean the same as a missing field.
     if (endpoint.secret != null) {
       if (typeof endpoint.secret !== 'string' || endpoint.secret.length < MIN_WEBHOOK_SECRET_LENGTH) {
-        return { refused: `endpoint signing secret is too short (min ${MIN_WEBHOOK_SECRET_LENGTH} characters)` }
+        return { secrets: [], refused: `endpoint signing secret is too short (min ${MIN_WEBHOOK_SECRET_LENGTH} characters)` }
       }
-      return { secret: endpoint.secret }
+      const secrets = [endpoint.secret]
+      // Rotation grace: keep signing with the previous secret until it expires.
+      // A previous secret with no (or an unparseable) expiry is ignored — the
+      // window must be bounded — and so is one too short to be a real key.
+      const previous = endpoint.previousSecret
+      if (
+        typeof previous === 'string' &&
+        previous.length >= MIN_WEBHOOK_SECRET_LENGTH &&
+        previous !== endpoint.secret &&
+        epochMs(endpoint.previousSecretExpiresAt) > this.now() * 1000
+      ) {
+        secrets.push(previous)
+      }
+      return { secrets }
     }
     if (this.options.secret !== undefined) {
       if (endpoint.tenantId != null && !this.options.allowSharedSecret) {
-        return { refused: 'tenant endpoint has no own secret; refusing to sign with the shared secret' }
+        return { secrets: [], refused: 'tenant endpoint has no own secret; refusing to sign with the shared secret' }
       }
-      return { secret: this.options.secret }
+      return { secrets: [this.options.secret] }
     }
-    if (this.options.allowUnsigned) return {}
-    return { refused: 'no signing secret; refusing unsigned delivery' }
+    if (this.options.allowUnsigned) return { secrets: [] }
+    return { secrets: [], refused: 'no signing secret; refusing unsigned delivery' }
   }
 
   /**
@@ -276,7 +349,7 @@ export class WebhookDeliverer {
   }
 
   async deliver(endpoint: WebhookEndpoint, event: string, data: unknown, options: DeliverOptions = {}): Promise<DeliveryResult> {
-    const { secret, refused } = this.signingSecret(endpoint)
+    const { secrets, refused } = this.signingSecrets(endpoint)
     if (refused) return { endpointId: endpoint.id, ok: false, attempts: 0, error: refused, retryable: false }
     const timestamp = this.now()
     // A delivery id (stable across this delivery's retries — and across later
@@ -292,57 +365,65 @@ export class WebhookDeliverer {
       sentAt: new Date(timestamp * 1000).toISOString(),
     })
 
-    // SSRF guard (unless explicitly disabled): resolve+validate the URL ONCE up
-    // front and remember the validated address. The connection is later pinned to
-    // it so a DNS rebind between check and connect (TOCTOU) can't swap in an
-    // internal IP. A blocked URL is a permanent config error → fail without retry.
-    // The outward error is generic: the detailed reason (and any resolved
-    // internal address) stays on the WebhookUrlBlockedError, never in the result.
-    let pinned: ValidatedAddress | null = null
-    const validate = async (): Promise<DeliveryResult | undefined> => {
-      if (this.options.ssrf === false) return undefined
-      try {
-        pinned = (await resolveAndValidate(endpoint.url, this.options.ssrf ?? {})).pinned
-        return undefined
-      } catch (error) {
-        if (error instanceof WebhookUrlBlockedError) {
-          const message = error.dnsDerived ? DNS_BLOCKED_ERROR : error.message
-          return { endpointId: endpoint.id, ok: false, attempts, error: message, retryable: false }
-        }
-        throw error
-      }
-    }
-
     let attempts = 0
     let lastStatus: number | undefined
     let lastError: string | undefined
-    const blocked = await validate()
-    if (blocked) return blocked
+    // SSRF guard (unless explicitly disabled): resolve+validate the URL and
+    // remember the validated address. The connection is later pinned to it so a
+    // DNS rebind between check and connect (TOCTOU) can't swap in an internal
+    // IP. A blocked URL is a permanent config error → fail without retry. The
+    // outward error is generic: the detailed reason (and any resolved internal
+    // address) stays on the WebhookUrlBlockedError, never in the result.
+    const guard = this.options.ssrf === false ? undefined : (this.options.ssrf ?? {})
+    let pinned: ValidatedAddress | null = null
+    let validated = guard === undefined
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      // An unpinned custom fetchImpl re-resolves the host itself: re-validate
-      // before each retry so a rebind during backoff is at least caught here.
-      if (attempt > 0 && this.unpinnedFetch) {
-        const reblocked = await validate()
-        if (reblocked) return reblocked
-      }
-      attempts += 1
+      // One deadline per attempt, covering DNS resolution AND the request: a
+      // resolver that never answers must not hold the delivery (or the outbox
+      // flush waiting on it) past `timeoutMs`.
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs)
       try {
-        const headers: Record<string, string> = {
-          'content-type': 'application/json',
-          'x-basalt-event': event,
-          'x-basalt-delivery': deliveryId,
+        // Resolve on the first attempt — and again before every retry when a
+        // custom fetchImpl doesn't honour the pin (it re-resolves on its own, so
+        // a rebind during backoff is at least caught here). A resolution that
+        // timed out is retried like any transient failure.
+        if (guard !== undefined && (!validated || this.unpinnedFetch)) {
+          try {
+            pinned = (
+              await untilAborted(resolveAndValidate(endpoint.url, guard), controller.signal, () => new Error(DNS_TIMEOUT_ERROR))
+            ).pinned
+            validated = true
+          } catch (error) {
+            if (error instanceof WebhookUrlBlockedError) {
+              const message = error.dnsDerived ? DNS_BLOCKED_ERROR : error.message
+              return { endpointId: endpoint.id, ok: false, attempts, error: message, retryable: false }
+            }
+            if (controller.signal.aborted) {
+              attempts += 1 // the attempt spent its whole deadline resolving
+              lastError = DNS_TIMEOUT_ERROR
+              if (attempt < this.maxRetries) await this.sleep(this.backoffMs * 2 ** attempt)
+              continue
+            }
+            throw error
+          }
         }
-        // Signed with the time of THIS attempt: a retry after a long backoff must
-        // still fall inside the receiver's replay tolerance.
-        if (secret) headers['x-basalt-signature'] = signPayload(body, secret, this.now())
-
-        const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+        attempts += 1
         try {
+          const headers: Record<string, string> = {
+            'content-type': 'application/json',
+            'x-basalt-event': event,
+            'x-basalt-delivery': deliveryId,
+          }
+          // Signed with the time of THIS attempt: a retry after a long backoff must
+          // still fall inside the receiver's replay tolerance. During a rotation
+          // grace window the header carries one `v1=` per secret (current first).
+          if (secrets.length > 0) headers['x-basalt-signature'] = signPayload(body, secrets, this.now())
+
           // `redirect: 'manual'` so a 3xx can't bounce the request to an internal
-          // address that bypassed the SSRF check on the original URL. The socket
-          // is pinned to the validated `pinned` address (rebind-proof).
+          // address (or a refused port) that bypassed the SSRF check on the
+          // original URL. The socket is pinned to the validated `pinned` address.
           const response = await this.send(endpoint.url, { method: 'POST', headers, body, redirect: 'manual', signal: controller.signal }, pinned)
           lastStatus = response.status
           // Only the status matters: release an injected fetch's body instead of
@@ -363,11 +444,11 @@ export class WebhookDeliverer {
             const retryable = response.status === 408 || response.status === 429
             return { endpointId: endpoint.id, ok: false, status: response.status, attempts, error: `HTTP ${response.status}`, retryable }
           }
-        } finally {
-          clearTimeout(timer)
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error)
         }
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error)
+      } finally {
+        clearTimeout(timer)
       }
       if (attempt < this.maxRetries) await this.sleep(this.backoffMs * 2 ** attempt)
     }

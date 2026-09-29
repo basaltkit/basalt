@@ -6,22 +6,75 @@ export interface Tenant {
   [key: string]: unknown
 }
 
-/** Where tenants are loaded from — the app's database in production. */
 /**
  * Where a tenant is in its lifecycle.
  *
- * A record with **no** status is treated as `ready`. Every tenant that existed
- * before provisioning was introduced has no status, and they must keep serving
- * traffic — a stricter default would 503 an entire production estate on upgrade.
+ * A record with **no** status (absent or `null`) is treated as `ready`. Every
+ * tenant that existed before provisioning was introduced has no status, and
+ * they must keep serving traffic — a stricter default would 503 an entire
+ * production estate on upgrade.
+ *
+ * - `ready` — serves.
+ * - `provisioning`, `failed`, `deleting` — the storage is not (or no longer)
+ *   usable: 503 `TENANT_NOT_READY`.
+ * - `suspended` — the tenant is fine, the account is not allowed in: 403
+ *   `TENANT_SUSPENDED`. Tenancy never writes it; the app does (billing, abuse).
+ *
+ * Any other value — `active`, `disabled`, a typo — is refused with 500
+ * `TENANT_STATUS_UNKNOWN`: tenancy cannot tell whether the storage behind it is
+ * usable, so it fails closed instead of guessing either way.
  */
-export type TenantStatus = 'provisioning' | 'ready' | 'failed' | 'deleting'
+export type TenantStatus = 'provisioning' | 'ready' | 'failed' | 'deleting' | 'suspended'
 
-/** True unless the tenant is explicitly mid-provisioning, failed or being removed. */
-export function isTenantReady(tenant: Tenant): boolean {
-  const status = tenant['status'] as TenantStatus | undefined
-  return status === undefined || status === 'ready'
+/** Every {@link TenantStatus} tenancy understands. */
+export const TENANT_STATUSES: readonly TenantStatus[] = Object.freeze([
+  'provisioning',
+  'ready',
+  'failed',
+  'deleting',
+  'suspended',
+])
+
+/** The record's status, with an absent or `null` one read as `ready`. */
+function statusOf(tenant: Tenant): unknown {
+  const status = tenant['status']
+  return status === undefined || status === null ? 'ready' : status
 }
 
+/**
+ * True only for a tenant that may serve requests: no status (absent or
+ * `null`) or `ready`. Every other value — a known non-serving status or one
+ * tenancy does not recognise — is false. {@link assertTenantServing} says why.
+ */
+export function isTenantReady(tenant: Tenant): boolean {
+  return statusOf(tenant) === 'ready'
+}
+
+/**
+ * Throws the error that describes why `tenant` cannot serve, or returns when it
+ * can. The check the HTTP enricher runs on every resolved tenant:
+ *
+ * - `provisioning` / `failed` / `deleting` → {@link TenantNotReadyError} (503)
+ * - `suspended` → {@link TenantSuspendedError} (403)
+ * - anything else that is not `ready` or absent → {@link TenantStatusUnknownError} (500)
+ */
+export function assertTenantServing(tenant: Tenant): void {
+  const status = statusOf(tenant)
+  switch (status) {
+    case 'ready':
+      return
+    case 'provisioning':
+    case 'failed':
+    case 'deleting':
+      throw new TenantNotReadyError(tenant.id, status)
+    case 'suspended':
+      throw new TenantSuspendedError(tenant.id)
+    default:
+      throw new TenantStatusUnknownError(tenant.id, status)
+  }
+}
+
+/** Where tenants are loaded from — the app's database in production. */
 export interface TenantSource {
   find(id: string): Promise<Tenant | null>
   /** Required by the domain resolver (custom domains). */
@@ -211,9 +264,10 @@ export class TenantNotFoundError extends BasaltError {
 }
 
 /**
- * The request resolved to a tenant whose storage is not ready yet. 503 rather
- * than 404: the tenant exists, it is simply not serving — and 503 is the status
- * a client may retry.
+ * The request resolved to a tenant whose storage is not ready yet
+ * (`provisioning`), no longer usable (`deleting`) or never finished (`failed`).
+ * 503 rather than 404: the tenant exists, it is simply not serving — and 503 is
+ * the status a client may retry.
  */
 export class TenantNotReadyError extends BasaltError {
   readonly status = 503
@@ -225,6 +279,37 @@ export class TenantNotReadyError extends BasaltError {
         : status === 'deleting'
           ? `Tenant "${id}" is being removed and is no longer serving requests.`
           : `Tenant "${id}" is still being provisioned. Retry shortly.`,
+    )
+  }
+}
+
+/**
+ * The request resolved to a tenant whose status is `suspended`. 403, not 503:
+ * the tenant's storage is fine and retrying will not help — the account itself
+ * is not allowed in until the app lifts the suspension.
+ */
+export class TenantSuspendedError extends BasaltError {
+  readonly status = 403
+  constructor(id: string) {
+    super('TENANT_SUSPENDED', `Tenant "${id}" is suspended and is not serving requests.`)
+  }
+}
+
+/**
+ * The request resolved to a tenant whose status is not a {@link TenantStatus}
+ * (`active`, `disabled`, a typo). Refused, because tenancy cannot know whether
+ * the storage behind that value is usable; 500 because the fix is in the data
+ * or the app, not in a client retry. Store `ready` (or no status) for a
+ * serving tenant, `suspended` for one that must be locked out.
+ */
+export class TenantStatusUnknownError extends BasaltError {
+  readonly status = 500
+  constructor(id: string, status: unknown) {
+    const shown = typeof status === 'string' ? JSON.stringify(status.slice(0, 80)) : typeof status
+    super(
+      'TENANT_STATUS_UNKNOWN',
+      `Tenant "${id}" has status ${shown}, which tenancy does not recognise, so it is not serving ` +
+        `requests. Known statuses: ${TENANT_STATUSES.join(', ')} (or none, read as ready).`,
     )
   }
 }

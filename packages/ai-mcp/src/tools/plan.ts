@@ -2,8 +2,8 @@ import { detectProject } from '@basaltkit/ai/analysis'
 import { createPlan, type ArchitecturePlan, type CreatePlanOptions } from '@basaltkit/ai/workflows'
 import { ArchitecturePlanSchema, toJsonSchema } from '@basaltkit/ai/schema'
 import type { McpToolDef } from '@basaltkit/mcp-core'
-import { resolveWorkspaceRoot, type Session } from '../session.js'
-import { forwardProgress, isAbortError, providerHelp, toolError } from './errors.js'
+import type { Session } from '../session.js'
+import { forwardProgress, isAbortError, providerHelp, readRoot, toolError } from './errors.js'
 
 const inputSchema: Record<string, unknown> = {
   type: 'object',
@@ -12,7 +12,7 @@ const inputSchema: Record<string, unknown> = {
     request: { type: 'string', description: 'What to build, in natural language.' },
     workspaceRoot: {
       type: 'string',
-      description: 'Absolute path to the Basalt project. Defaults to the server workspace root.',
+      description: 'Path of the Basalt project — inside the server project root (paths outside it are refused). Defaults to the server project root.',
     },
     temperature: { type: 'number', description: 'Sampling temperature (0 = deterministic).' },
     maxTokens: { type: 'integer', description: 'Hard cap on output tokens.' },
@@ -35,6 +35,10 @@ export function planTool(session: Session): McpToolDef {
       const request = typeof args['request'] === 'string' ? args['request'].trim() : ''
       if (!request) return toolError('basalt_plan requires a non-empty "request".')
 
+      const resolved = readRoot(session, args['workspaceRoot'])
+      if ('refused' in resolved) return resolved.refused
+      const root = resolved.root
+
       let provider
       try {
         provider = session.provider()
@@ -42,7 +46,6 @@ export function planTool(session: Session): McpToolDef {
         return toolError(providerHelp(error, 'basalt_plan'))
       }
 
-      const root = resolveWorkspaceRoot(session, args['workspaceRoot'])
       const projectCtx = detectProject(root, session.reader(root))
 
       const options: CreatePlanOptions = {

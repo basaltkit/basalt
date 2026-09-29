@@ -60,7 +60,12 @@ await gate.can({ id: 'user-bob' }, 'projects:delete') // false
 
 O `gate.authorize(user, perm)` é a variante que lança — levanta
 `PermissionDeniedError` (`403 PERMISSION_DENIED`) em vez de devolver `false`.
-O `gate.hasRole(user, role)` responde diretamente sobre a posse de um role.
+O `gate.hasRole(user, role)` responde diretamente sobre a posse de um role — os
+roles que o utilizador tem de facto, no scope atual ou globalmente. Um
+`superAdmin` **não** é membro de todos os roles (era, antes do
+`@basaltkit/permissions` 4.0): o bypass curto-circuita `can()`/`authorize()`/`meta.can`,
+e o `gate.isSuperAdmin(user)` pergunta por ele explicitamente. Onde o `hasRole()`
+guardava uma ação, verifica antes a permissão.
 
 ### Os wildcards correspondem segmento a segmento
 
@@ -491,6 +496,63 @@ próprio Gate (`now`), por isso um store durável que esqueça o filtro
 `expires_at > ?` não consegue transformar uma concessão limitada no tempo numa
 permanente.
 
+Em produção, apoia ambos numa base de dados — os stores `Memory*` são por
+processo, por isso uma concessão ou delegação morre com o processo e é invisível
+às outras instâncias. O `@basaltkit/permissions-prisma` e o
+`@basaltkit/permissions-sqlite` devolvem stores duráveis ao lado do access store
+(ver [Persistência](/pt/guide/persistence)):
+
+```ts
+const p = prismaAccessStore(prisma) // ou sqliteAccessStore('./data/permissions.db')
+permissionsPlugin({ store: p.store, temporaryGrants: p.temporaryGrants, delegations: p.delegations })
+```
+
+## O que posso fazer? — `GET /me/access`
+
+O `accessRoutes()` acrescenta `GET /me/access`: os roles e as permissões de quem
+pergunta, para que a interface esconda os controlos que devolveriam `403` — e
+mostre os que abrem. Não é uma superfície de segurança (cada pedido continua a
+ser decidido pelo Gate) e não tem `meta.auth`: um chamador anónimo recebe uma
+resposta vazia, não um `401`.
+
+```ts
+fastifyPlugin({ routes: [...accessRoutes(), ...myRoutes] })
+```
+
+A resposta é o `gate.describeAccess(user)`, e cobre **todas as fontes que um
+check respeita**: grants no tenant atual *e* no `GLOBAL_SCOPE` (mais o scope
+global legado quando o `readLegacyGlobalScope` está ligado), o catálogo de roles
+e as definições globais herdadas, concessões temporárias vivas, delegações vivas
+— já reduzidas ao que o delegante tem — e o bypass `superAdmin`:
+
+```json
+{
+  "roles": ["editor"],
+  "permissions": ["billing:read", "docs:*", "reports:export"],
+  "superAdmin": false,
+  "grants": [
+    { "permission": "docs:*", "source": "role", "scope": "acme", "role": "editor" },
+    { "permission": "billing:read", "source": "direct", "scope": "@global" },
+    { "permission": "reports:export", "source": "temporary", "scope": "acme", "id": "…", "expiresAt": 1767225600000 }
+  ]
+}
+```
+
+- `roles` — os que tem no scope atual ou globalmente (aquilo para que o `hasRole()` responde `true`);
+- `permissions` — ordenadas e sem repetições; o `permitted(permissions, p)` do
+  `@basaltkit/permissions/match` dá a mesma resposta que `gate.can(user, p)`.
+  Um super admin recebe `'*'`;
+- `grants` — a `source` de cada permissão (`'direct'`, `'role'`, `'temporary'`,
+  `'delegation'`, `'super-admin'`), o `scope` onde vive, e `role`, `id`,
+  `fromUserId`, `expiresAt` quando se aplicam. Uma permissão delegada expira no
+  mais cedo entre o prazo da delegação e o da concessão temporária do delegante
+  em que assenta. Volta a pedir antes do `expiresAt` mais próximo.
+
+Antes do `@basaltkit/permissions` 4.0 a rota lia só os grants permanentes do
+tenant atual, por isso um grant global, uma concessão temporária, uma delegação
+ou o bypass de super admin abriam a porta no servidor enquanto o menu a
+escondia.
+
 ## Referência de opções
 
 O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`:
@@ -498,7 +560,7 @@ O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`
 | Opção | Tipo | Omissão | Propósito |
 | --- | --- | --- | --- |
 | `store` | `AccessStore` | — (obrigatória) | Onde vivem roles/permissões — a tua base de dados em produção |
-| `superAdmin` | `(user) => boolean \| Promise<boolean>` | — | Curto-circuita **todos** os checks para `true` quando devolve `true` (o `Gate::before` do Laravel) |
+| `superAdmin` | `(user) => boolean \| Promise<boolean>` | — | Curto-circuita **todos** os checks para `true` quando devolve `true` (o `Gate::before` do Laravel). Não é um role: o `hasRole()` continua a responder sobre a posse; o `isSuperAdmin(user)` pergunta pelo bypass |
 | `scope` | `() => string` | `ctx().tenant.id` ?? `GLOBAL_SCOPE` | Scope atual; os checks consultam-no mais o `GLOBAL_SCOPE` |
 | `policies` | `Policy[]` | `[]` | Políticas de recurso registadas à partida (o mesmo que chamar `gate.register`) |
 | `temporaryGrants` | `TemporaryGrantStore` | desligado | Ativa `grantTemporarily()` |

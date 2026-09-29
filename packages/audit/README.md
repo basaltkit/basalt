@@ -163,7 +163,7 @@ Event patterns support segments separated by `:` (hooks) or `.` (events): `*` ma
 auditPlugin({ store: sqliteAuditStore('./data/audit.db').store, integrity: 'hash-chain' })
 ```
 
-Every entry then carries `seq` (its position in the chain, from 1), `prevHash` (the previous entry's hash) and `hash` = SHA-256 over `prevHash` + a canonical serialization of the entry (stable key order, explicit fields: `id`, `seq`, `tenantId`, `at`, `source`, `event`, `actorId`, `requestId`, `ip`, `userAgent` and the payload as persisted). There is **one chain per tenant**, plus one for entries recorded without a tenant (the system chain), so tenants never contend with each other and each can be verified alone.
+Every entry then carries `seq` (its position in the chain, from 1), `prevHash` (the previous entry's hash) and `hash` = SHA-256 (or HMAC-SHA256 under a key) over `prevHash` + a canonical serialization of the entry (stable key order, explicit fields: `v`, `alg`, `kid`, `id`, `seq`, `tenantId`, `at`, `source`, `event`, `actorId`, `requestId`, `ip`, `userAgent` and the payload as persisted). The stored hash is self-describing — `v2:sha256:<hex>` or `v2:hmac-sha256:<keyId>:<hex>` — and the algorithm and key id are part of what is digested, so an entry cannot be relabelled to another key. There is **one chain per tenant**, plus one for entries recorded without a tenant (the system chain), so tenants never contend with each other and each can be verified alone.
 
 ```ts
 const result = await audit.verify({ tenantId: 'acme' })        // or { from: 100, to: 200 }
@@ -173,7 +173,7 @@ const result = await audit.verify({ tenantId: 'acme' })        // or { from: 100
 const all = await audit.verifyAll()   // system-only: every chain → { ok, chains: [...] }
 ```
 
-`verify` recomputes each hash and checks the `seq` continuity and the `prevHash` links, so it detects an **edited** row (`hash-mismatch`), a **deleted** row (`sequence-gap`), **reordered** rows and a **forged** row that does not link (`prev-hash-mismatch`, `sequence-duplicate`). `from`/`to` are sequence numbers (inclusive); a window is anchored on the entry at `from - 1` (`missing-predecessor` if it is gone). Tenant scoping works like `trail()`: inside a tenant context the context tenant is forced; outside one, `tenantId` picks the chain and omitting it verifies the system chain.
+`verify` recomputes each hash and checks the `seq` continuity and the `prevHash` links, so it detects an **edited** row (`hash-mismatch`), a **deleted** row (`sequence-gap`), **reordered** rows and a **forged** row that does not link (`prev-hash-mismatch`, `sequence-duplicate`). A second row at one `seq` is a `sequence-duplicate` wherever it falls: `verify` reads the chain in pages of `AUDIT_SCAN_PAGE` (500) and each page re-reads the last entry of the previous one, so a duplicate at a page boundary — possible in a custom store without the `(chain, seq)` unique index — is not skipped. `from`/`to` are sequence numbers (inclusive); a window is anchored on the entry at `from - 1` (`missing-predecessor` if it is gone). Tenant scoping works like `trail()`: inside a tenant context the context tenant is forced; outside one, `tenantId` picks the chain and omitting it verifies the system chain.
 
 **Rows outside the chain.** `trail()` serves every row of the table, so `verify` checks the rows that are *not* in the chain too — a row inserted straight into the database (by someone without the HMAC key) would otherwise read as history while `verify` stayed green:
 
@@ -192,8 +192,23 @@ const all = await audit.verifyAll()   // system-only: every chain → { ok, chai
 
 **What a hash chain does and does not prove.** A plain SHA-256 chain can be recomputed by anyone who can write to the database — it catches accidental and naive tampering, not a determined DBA who rewrites every hash after the edit. Two mitigations, both cheap:
 
-- **Key the chain**: `integrity: { mode: 'hash-chain', key: process.env.AUDIT_CHAIN_KEY! }` makes every hash an HMAC-SHA256 (key of at least 128 bits, stored outside the database). Without the key a writer cannot produce a chain that verifies.
+- **Key the chain**: `integrity: { mode: 'hash-chain', key: process.env.AUDIT_CHAIN_KEY! }` makes every hash an HMAC-SHA256 (key of at least 128 bits, stored outside the database). Without the key a writer cannot produce a chain that verifies. A keyed verifier refuses unkeyed (`v2:sha256`) entries, so a writer without the key cannot extend the chain with plain SHA-256 either.
 - **Anchor the head**: `verify()` returns `head: { seq, hash }`. Record it periodically somewhere the database role cannot reach (a log sink, object storage with retention lock). Truncating the tail of a chain leaves no gap, so it is only detectable by comparing against an anchor.
+
+**Rotating the key.** Every keyed entry records the id of the key that signed it (`keyId`; default `auditKeyId(key)`, a fingerprint derived from the key, identical on every replica). To rotate, sign with the new key and keep the old one for verification only:
+
+```ts
+integrity: {
+  mode: 'hash-chain',
+  key: process.env.AUDIT_CHAIN_KEY!, keyId: '2026-09',
+  verifyKeys: [{ id: '2026-01', key: process.env.AUDIT_CHAIN_KEY_2026_01! }],
+  // a bare key works too, under its default id: verifyKeys: [oldKey]
+}
+```
+
+`verify` picks each entry's key by its id; an entry whose key id is not held fails with `'unknown-key'` (add the retired key to `verifyKeys`). Keep a retired key for as long as you keep the entries it signed. Two different keys under one id, a key id outside `AUDIT_KEY_ID_PATTERN` (1–64 of `A-Z a-z 0-9 . _ -`), and `keyId`/`verifyKeys` without a `key` are refused when the `Audit` is built.
+
+**Legacy hashes.** Entries written before hashes carried a key id hold a bare 64-hex hash (v1). They keep verifying: an unkeyed verifier recomputes the SHA-256, a keyed one accepts the HMAC under **any** key it holds (`key` or `verifyKeys`) — v1 never said which. New entries link onto them as usual. A chain that started unkeyed and later gained a key can be verified in two windows: the unkeyed prefix with an unkeyed `Audit` (`to: n`), the keyed tail with the keyed one (`from: n + 1`).
 
 **Harden the table.** Make the database enforce append-only too — the application role should only be able to insert and read. On PostgreSQL:
 
@@ -213,7 +228,7 @@ basalt audit:verify                  # the system chain
 basalt audit:verify --tenant=acme    # one tenant
 basalt audit:verify --tenant=acme --from=100 --to=200
 basalt audit:verify --all            # every chain; exits 1 if any is broken
-basalt audit:verify --tenant=acme --expected-head=1284:<hash>   # against an anchor
+basalt audit:verify --tenant=acme --expected-head=1284:<hash>   # against an anchor (the head a previous run printed)
 basalt audit:verify --all --legacy-until=0                     # no legacy rows accepted
 ```
 
@@ -272,7 +287,7 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `events` | `string[]` | No | `['**']` (everything) | EventBus event patterns recorded. `[]` disables it. |
 | `redact` | `AuditRedactor` | No | `defaultAuditRedactor` | Scrubs each payload (and the request fields) before it is stored. See "Redaction". |
 | `onCaptureError` | `(error, { source, event }) => void` | No | logs | Called when a bridged hook/event capture fails; the emitting operation continues. |
-| `integrity` | `'none' \| 'hash-chain' \| { mode: 'hash-chain', key? }` | No | `'none'` | Hash-chains every entry per tenant so `verify()` detects tampering, and registers `audit:verify`. With `key` (>= 128 bits) the hash is HMAC-SHA256. Needs a store with the chain methods. See "Verifiable trail". |
+| `integrity` | `'none' \| 'hash-chain' \| { mode: 'hash-chain', key?, keyId?, verifyKeys? }` | No | `'none'` | Hash-chains every entry per tenant so `verify()` detects tampering, and registers `audit:verify`. With `key` (>= 128 bits) the hash is HMAC-SHA256 and records `keyId` (default `auditKeyId(key)`); `verifyKeys` holds retired keys (bare, or `{ id, key }`) so a rotation keeps history verifiable. Needs a store with the chain methods. See "Verifiable trail". |
 | `requestContext` | `boolean \| (ctx) => { ip?, userAgent? }` | No | off | Records the client `ip` / `userAgent`. `true` registers an HTTP enricher (all adapters) filling `ctx().client`. IP is PII — see "Request context". |
 
 ### `class Audit`
@@ -283,7 +298,7 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `record` | `(event: string, payload?: unknown) => Promise<AuditEntry>` | Manual entry (`source: 'manual'`), enriched from context. Returns the entry (with `seq`/`hash` when chained). |
 | `trail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | Query, most recent first, tenant-scoped (see above). |
 | `systemTrail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | System-only cross-tenant read. |
-| `verify` | `(options?: { tenantId?, from?, to?, expectedHead?, legacyUntil? }) => Promise<AuditVerifyResult>` | Verifies one hash chain and the tenant's rows outside it: `{ ok, tenantId, checked, unchained, unverified, firstBrokenAt?, entryId?, reason?, head? }`. `reason` is one of `hash-mismatch`, `prev-hash-mismatch`, `sequence-gap`, `sequence-duplicate`, `missing-predecessor`, `unchained-entry`, `truncated`, `head-mismatch`. Tenant-scoped like `trail()`. |
+| `verify` | `(options?: { tenantId?, from?, to?, expectedHead?, legacyUntil? }) => Promise<AuditVerifyResult>` | Verifies one hash chain and the tenant's rows outside it: `{ ok, tenantId, checked, unchained, unverified, firstBrokenAt?, entryId?, reason?, head? }`. `reason` is one of `hash-mismatch`, `prev-hash-mismatch`, `sequence-gap`, `sequence-duplicate`, `missing-predecessor`, `unchained-entry`, `truncated`, `head-mismatch`, `unknown-key`. Tenant-scoped like `trail()`. |
 | `verifyAll` | `(options?: { expectedHeads?, legacyUntil? }) => Promise<{ ok, chains: AuditVerifyResult[] }>` | System-only: verifies every chain (system chain first); a forged chain name fails with `unknown-chain`. Inside a tenant context, only that tenant's chain. |
 | `capture` | `(source: 'hook' \| 'event', event, payload) => Promise<void>` | **Advanced/internal**: used by the plugin's listeners. |
 
@@ -303,7 +318,7 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `at` | `number` | Timestamp (`Date.now()`, milliseconds). |
 | `seq` | `number \| undefined` | Position in the tenant's chain (from 1) — only with `integrity`. |
 | `prevHash` | `string \| undefined` | Previous entry's `hash` (`AUDIT_CHAIN_GENESIS` for the first). |
-| `hash` | `string \| undefined` | SHA-256 / HMAC-SHA256 hex over `prevHash` + `canonicalAuditEntry(entry)`. |
+| `hash` | `string \| undefined` | `v2:sha256:<hex>` or `v2:hmac-sha256:<keyId>:<hex>` over `prevHash` + `canonicalAuditEntry(entry, { alg, keyId })` (see `computeAuditHashV2`); a bare 64-hex (v1) hash on entries written by earlier releases. Up to 144 characters. |
 
 ### `interface AuditQuery`
 
@@ -335,7 +350,7 @@ Optional, required for `integrity: 'hash-chain'` (implemented by `MemoryAuditSto
 - `readUnchained?(tenantId, { since, limit }): Promise<AuditEntry[]>` — optional: the tenant's rows outside its chain with `at >= since`, plus any that carries a `seq` or chain name whatever its `at`, oldest first. Without it `verify` scans `query()` for seq-less rows instead.
 - `append` must reject an entry whose `(auditChainKey(tenantId), seq)` already exists with `AuditChainConflictError` — a unique constraint in SQL. `auditChainKey` maps a tenant to a never-NULL key (`'t:<id>'`, or `'@system'`), because SQL unique indexes treat NULLs as distinct.
 
-Hash-chain helpers are exported for stores and tooling: `computeAuditHash(entry, key?)`, `canonicalAuditEntry(entry)`, `AUDIT_CHAIN_GENESIS`, `auditChainKey` / `parseAuditChainKey`, `AuditChainConflictError` (code `AUDIT_CHAIN_CONFLICT`) and `createAuditVerifyCommand`.
+Hash-chain helpers are exported for stores and tooling: `computeAuditHashV2(entry, { id, key }?)` (what `Audit` writes), `computeAuditHash(entry, key?)` (the legacy v1 hash), `checkAuditHash(entry, keysById)`, `parseAuditHash(hash)` / `isAuditHash(value)`, `auditKeyId(key)`, `AUDIT_KEY_ID_PATTERN`, `canonicalAuditEntry(entry, scheme?)`, `AUDIT_CHAIN_GENESIS`, `auditChainKey` / `parseAuditChainKey`, `AuditChainConflictError` (code `AUDIT_CHAIN_CONFLICT`) and `createAuditVerifyCommand`.
 
 Two helpers exist so a driver can push the limit down safely:
 

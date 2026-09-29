@@ -19,7 +19,14 @@ export {
   sanitizeErrorDetails,
   MAX_ERROR_DETAILS_BYTES,
   MAX_ERROR_DETAILS_DEPTH,
+  REDACTED_DETAIL,
+  isSensitiveDetailsKey,
+  redactSensitiveDetails,
+  applyDetailsRedactor,
+  internalDetailsOf,
   type ErrorDetails,
+  type ErrorDetailsRedactor,
+  type ErrorDetailsRedactionInfo,
 } from './error-details.js'
 export {
   runRoute,
@@ -28,6 +35,7 @@ export {
   type RouteGuard,
   type RoutePipeline,
   type ErrorResponse,
+  type ErrorResponseOptions,
 } from './pipeline.js'
 export {
   HTTP_SERVER,

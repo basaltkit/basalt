@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { Container, BasaltError, runWithContext, type RequestContext } from '@basaltkit/core'
 import type { ZodType } from 'zod'
-import { sanitizeErrorDetails, type ErrorDetails } from './error-details.js'
+import {
+  applyDetailsRedactor,
+  sanitizeErrorDetails,
+  type ErrorDetails,
+  type ErrorDetailsRedactor,
+} from './error-details.js'
 import { HttpError, RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
@@ -210,11 +215,24 @@ function neutralMessage(status: number): string {
   return status >= 500 ? 'Internal server error.' : 'Request failed.'
 }
 
+export interface ErrorResponseOptions {
+  /**
+   * Filters the public `details` before they are placed in the body — e.g.
+   * `redactSensitiveDetails`, which masks keys that name a secret. Default:
+   * none (the details are sent as sanitised). `@basaltkit/mcp` passes one by
+   * default, since its client is a language model.
+   */
+  redactDetails?: ErrorDetailsRedactor
+}
+
 /**
  * Maps a thrown error to a standardized HTTP response — shared by all adapters
  * so error shapes are identical regardless of framework.
+ *
+ * Only the public channel is ever read: an error's `internalDetails` (see
+ * `HttpErrorOptions`) is for the error reporter and never reaches the body.
  */
-export function toErrorResponse(error: unknown): ErrorResponse {
+export function toErrorResponse(error: unknown, options: ErrorResponseOptions = {}): ErrorResponse {
   if (error instanceof RequestValidationError) {
     // Unchanged on purpose: `part` and `issues` are the documented validation
     // contract and predate `details`; folding them in would break every client.
@@ -247,7 +265,11 @@ export function toErrorResponse(error: unknown): ErrorResponse {
       }
       // Sanitised, not passed through: `details` reaches the client verbatim,
       // so it must be plain, acyclic, bounded JSON data or nothing at all.
-      const details = sanitizeErrorDetails(error.details)
+      const details = applyDetailsRedactor(sanitizeErrorDetails(error.details), options.redactDetails, {
+        error,
+        status,
+        code: error.code,
+      })
       return {
         status,
         body: { error: { code: error.code, message: error.message, ...(details ? { details } : {}) } },

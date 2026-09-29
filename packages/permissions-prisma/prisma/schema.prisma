@@ -37,3 +37,36 @@ model PermRolePermission {
   @@id([scope, role, permission])
   @@map("perm_role_permissions")
 }
+
+// Durable TemporaryGrantStore / DelegationStore (`p.temporaryGrants`,
+// `p.delegations`). Only needed when you wire them into `permissionsPlugin`.
+// `expiresAt` is filtered in the query (`> now`) and re-verified by the Gate.
+
+model PermTemporaryGrant {
+  id          String   @id
+  scope       String
+  userId      String
+  permissions String[]
+  expiresAt   DateTime
+  grantedBy   String?
+  reason      String?
+
+  @@index([scope, userId, expiresAt])
+  @@index([expiresAt])
+  @@map("perm_temporary_grants")
+}
+
+model PermDelegation {
+  id          String    @id
+  scope       String
+  fromUserId  String
+  toUserId    String
+  permissions String[]
+  createdAt   DateTime
+  expiresAt   DateTime?
+
+  @@index([scope, toUserId])
+  @@index([scope, fromUserId])
+  @@index([expiresAt])
+  @@map("perm_delegations")
+}

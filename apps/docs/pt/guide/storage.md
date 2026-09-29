@@ -89,6 +89,21 @@ await disk.list('docs')  // ['docs/read-me.txt', ...] — recursivo, ordenado
 await disk.list()        // todos os ficheiros no scope atual
 ```
 
+O `list` devolve keys **relativas ao scope do disco** — as mesmas que o
+`put`/`get` recebem — por isso uma key listada volta tal e qual para o `get()`.
+Dentro do tenant `acme`, o objeto `tenants/acme/docs/read-me.txt` aparece como
+`docs/read-me.txt`; só um disco central (`scope: null`) vê o prefixo
+`tenants/…`, porque aí faz parte da key. Um prefixo é uma pasta em todos os
+drivers: `list('docs')` é `list('docs/')` e nunca apanha `docs2/…`, mesmo nos
+object stores cuja listagem própria compara strings.
+
+::: warning Atualizar a partir do @basaltkit/storage 4.x
+Um disco com scope de tenant devolvia `tenants/<id>/docs/read-me.txt`, que o
+`get()` voltava a prefixar. Remove o código que retirava o prefixo à mão, e não
+contes com `list('invoice')` a apanhar `invoice-2026/…` num driver cloud — lista
+a própria pasta. Os discos centrais devolvem o mesmo que antes.
+:::
+
 `get` num ficheiro inexistente lança `StorageFileNotFoundError`.
 
 ## Validar keys e uploads
@@ -164,34 +179,43 @@ cancelada (`ReadableStream` web) — nada para além do limite chega a ser lido.
 
 | Capacidade | S3 | Azure | GCS | Local |
 | --- | --- | --- | --- | --- |
-| `putStream` | `PutObject` com `contentLength` ou `maxBytes`; multipart sem nenhum dos dois | `uploadStream` (qualquer tamanho) | `createWriteStream` (qualquer tamanho) | stream de escrita `fs` |
+| `putStream` | `PutObject` com `contentLength`; multipart sem ele | `uploadStream` (qualquer tamanho) | `createWriteStream` (qualquer tamanho) | stream de escrita `fs` |
 | `getStream` | corpo do `GetObject` | `download()` | `createReadStream` | stream de leitura `fs` |
 | `copy` | `CopyObject` | `syncCopyFromURL` (≤ 256 MiB) | `file.copy()` | `fs.copyFile` |
 | `stat` | `HeadObject` | `getProperties()` | `getMetadata()` | `fs.stat` (só tamanho + mtime) |
 
+O `contentLength` tem de cumprir o que promete. Um valor que não seja um
+inteiro seguro não negativo é recusado antes de se ler o que quer que seja
+(`400 STORAGE_CONTENT_LENGTH_INVALID`); um corpo com mais ou menos bytes falha
+com `400 STORAGE_CONTENT_LENGTH_MISMATCH` — sempre **antes** de o seu fim chegar
+ao driver. S3, GCS e Azure só confirmam um upload quando o corpo termina, por
+isso nada fica guardado, e o `local` remove o ficheiro parcial.
+
 ::: warning O S3 e o tamanho do corpo
 O `PutObject` não consegue enviar um corpo de tamanho desconhecido. O
-`putStream` transmite diretamente quando passas `contentLength`; só com
-`maxBytes` acumula até esse limite (memória limitada, escolha deliberada). Sem
-**nenhum dos dois**, o driver envia o corpo em **multipart** — qualquer tamanho,
-com apenas `partSizeBytes × queueSize` em memória — desde que o peer opcional
-`@aws-sdk/lib-storage` esteja instalado:
+`putStream` transmite diretamente quando passas `contentLength`. Sem ele, o
+driver envia o corpo em **multipart** — qualquer tamanho, com apenas
+`partSizeBytes × queueSize` (20 MiB por omissão) em memória, **mesmo com
+`maxBytes` definido**: o limite é aplicado a meio do stream, nunca se torna um
+buffer — desde que o peer opcional `@aws-sdk/lib-storage` esteja instalado:
 
 ```bash
 pnpm add @aws-sdk/lib-storage
 ```
 
-É carregado de forma preguiçosa, só nesse caminho, por isso uma app que não o
-instale fica exatamente como estava — e aí o `putStream` sem nenhuma das duas
-opções continua a lançar `StorageStreamLengthRequiredError`
-(`400 STORAGE_STREAM_LENGTH_REQUIRED`), nomeando o pacote que o permitiria.
+É carregado de forma preguiçosa, só nesse caminho. Sem ele, um tamanho
+desconhecido só pode seguir num único `PutObject` acumulado: com `maxBytes`,
+até esse limite em memória; sem nenhuma das duas opções,
+`StorageStreamLengthRequiredError` (`400 STORAGE_STREAM_LENGTH_REQUIRED`),
+nomeando o pacote que o permitiria.
 Afina o envio com as opções de disco `partSizeBytes` (por omissão 5 MiB, o
 mínimo do S3) e `queueSize` (por omissão 4). Uma parte que falhe — incluindo o
 limite `maxBytes` — aborta o upload e destrói a fonte, para não ficarem partes
 órfãs; acrescenta ao bucket uma regra de ciclo de vida
 `AbortIncompleteMultipartUpload` como rede de segurança, já que partes
 incompletas não aparecem nas listagens e são faturadas até serem removidas.
-Azure e GCS fragmentam streams de tamanho desconhecido nativamente.
+Azure e GCS fragmentam streams de tamanho desconhecido nativamente, com memória
+limitada.
 :::
 
 O `copy` recorre a alternativas quando uma cópia server-side é impossível — um
@@ -469,7 +493,7 @@ Tudo o que vem de `PutOptions` (`maxBytes`, `allowedContentTypes`) mais:
 | Opção | Tipo | Predefinição | Porquê |
 | --- | --- | --- | --- |
 | `contentType` | `string` | — (obrigatório) | Uma stream não tem bytes a que recorrer, por isso o tipo é declarado à partida e verificado contra `allowedContentTypes` antes de qualquer byte ser lido |
-| `contentLength` | `number` | nenhum | Tamanho exato do corpo quando conhecido. **Obrigatório no S3** salvo se `maxBytes` estiver definido |
+| `contentLength` | `number` | nenhum | Tamanho exato do corpo quando conhecido — o S3 transmite-o num único `PutObject`. Validado à partida e verificado contra o corpo (`STORAGE_CONTENT_LENGTH_INVALID` / `_MISMATCH`, 400) |
 
 ### `CopyOptions` (por `copy`)
 
@@ -546,6 +570,8 @@ A predefinição de disposition é honrada pelos três drivers de assinatura —
 | `GetStreamUnsupportedError` | `STORAGE_GET_STREAM_UNSUPPORTED` | `getStream` num driver sem a capacidade |
 | `CopyUnsupportedError` | `STORAGE_COPY_UNSUPPORTED` | `copy({ requireServerSide: true })` sem cópia server-side disponível (um driver diferente, ou um sem `copy`) |
 | `StatUnsupportedError` | `STORAGE_STAT_UNSUPPORTED` | `stat` num driver sem a capacidade |
+| `StorageContentLengthInvalidError` | `STORAGE_CONTENT_LENGTH_INVALID` (400) | `putStream` com um `contentLength` negativo, fracionário, não finito ou acima de `MAX_SAFE_INTEGER` — nada é lido |
+| `StorageContentLengthMismatchError` | `STORAGE_CONTENT_LENGTH_MISMATCH` (400) | O corpo do `putStream` trouxe mais ou menos bytes do que o seu `contentLength` — nada é confirmado |
 | `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` (400) | `putStream` no S3 sem `contentLength` nem `maxBytes`, e sem o peer opcional `@aws-sdk/lib-storage` que ativa o multipart |
 | `StorageSigningEndpointInvalidError` | `STORAGE_SIGNING_ENDPOINT_INVALID` (400) | Um `endpoint` que não é um URL `http(s)` absoluto, ou que traz credenciais, query string ou fragmento |
 
@@ -571,7 +597,7 @@ export class MyStorageDriver implements StorageDriver {
   async get(path: string): Promise<Buffer> { /* lança StorageFileNotFoundError em miss */ throw 0 }
   async exists(path: string): Promise<boolean> { /* … */ return false }
   async delete(path: string): Promise<boolean> { /* retorna se existia */ return false }
-  async list(prefix: string): Promise<string[]> { /* chaves sob o prefixo */ return [] }
+  async list(prefix: string): Promise<string[]> { /* keys completas que começam pelo prefixo — o Disk retira o scope */ return [] }
   async temporaryUrl(path: string, expiresInMs: number): Promise<string> { /* opcional */ throw 0 }
   // opcional: PUT pré-assinado — liga options.contentType (+ tamanho/checksum) e devolve os headers a enviar
   async temporaryUploadUrl(path: string, expiresInMs: number, options: TemporaryUploadUrlDriverOptions): Promise<TemporaryUploadUrl> { throw 0 }

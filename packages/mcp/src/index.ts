@@ -19,6 +19,7 @@ export {
   DEFAULT_FORWARDED_HEADERS,
   type McpTool,
   type ToolCallContext,
+  type ToolErrorOptions,
 } from './tools.js'
 
 export {

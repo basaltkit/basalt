@@ -172,15 +172,26 @@ without a tenant), `allowedContentTypes` is checked before a single byte is
 read, and past `maxBytes` the upload is aborted with `STORAGE_TOO_LARGE` and the
 source is destroyed (Node) or cancelled (web stream).
 
+`contentLength` is held to its word. A value that is not a non-negative safe
+integer is refused before anything is read (`400 STORAGE_CONTENT_LENGTH_INVALID`),
+and a body that carries more or fewer bytes fails with
+`400 STORAGE_CONTENT_LENGTH_MISMATCH` — the moment it passes the declared size,
+or at its end when it falls short, but always **before** that end reaches the
+driver. S3, GCS and Azure commit an upload only when its body ends, so nothing
+is stored; `local` removes its partial file. The server-side-copy fallback
+declares the size `stat()` reported and is verified the same way.
+
 Notes worth knowing:
 
-- **S3 and the body length.** `PutObject` cannot send a body of unknown size, so
-  `putStream` wants a `contentLength` (streamed straight through) or a
-  `maxBytes` (buffered up to that cap, bounded memory). With neither,
-  `@basaltkit/storage-s3` uploads it **multipart** when the optional peer
-  `@aws-sdk/lib-storage` is installed, and throws
-  `STORAGE_STREAM_LENGTH_REQUIRED` when it is not. Azure and GCS chunk streams
-  of unknown length natively.
+- **S3 and the body length.** With a `contentLength` the body streams straight
+  into one `PutObject`. Without one, `@basaltkit/storage-s3` uploads it
+  **multipart** through the optional peer `@aws-sdk/lib-storage` — holding at
+  most `partSizeBytes × queueSize` (20 MiB by default) whatever `maxBytes`
+  says; `maxBytes` is a limit, never a buffer size. Only without that peer does
+  an unknown length fall back to one buffered `PutObject` (up to `maxBytes` in
+  memory), or `STORAGE_STREAM_LENGTH_REQUIRED` with no `maxBytes` either.
+  Azure (`uploadStream`, SDK block buffers) and GCS (a resumable upload) stream
+  bodies of unknown length natively, in bounded memory.
 - **`copy` falls back.** Across two different drivers (or one without a
   server-side copy) it streams `getStream` → `putStream`, and finally
   `get` → `put`. Pass `{ requireServerSide: true }` to make a fallback an error
@@ -202,6 +213,21 @@ await disk.exists('a/1.txt')  // true
 await disk.delete('a/1.txt')  // true (existed and was deleted)
 await disk.delete('a/1.txt')  // false (no longer existed)
 ```
+
+Keys come back **relative to the disk's scope** — the same keys `put`/`get`
+take — so a listed key goes straight back into `get()`. Inside tenant `acme`
+the object `tenants/acme/a/1.txt` lists as `a/1.txt`; only a central disk
+(`scope: null`) sees the `tenants/…` prefix, because there it IS part of the key.
+A prefix is a directory on every driver: `list('a')` means `list('a/')` and
+never matches `ab/…`, even on object stores whose own listing is a plain
+string match.
+
+> **Upgrading from 4.x:** a tenant-scoped disk used to return
+> `tenants/<id>/a/1.txt`, which `get()` then prefixed a second time. Drop any
+> code that stripped the prefix by hand (`key.slice('tenants/acme/'.length)`),
+> and stop relying on `list('invoice')` matching `invoice-2026/…` on a cloud
+> driver — list the directory (`list('invoice-2026')`) instead. Central disks
+> return exactly what they did.
 
 ### Multiple named disks
 
@@ -361,7 +387,7 @@ inside a `@basaltkit/queue` job to keep it off the request path.
 | `get` | `get(path: string): Promise<Buffer>` | Reads a file; throws `StorageFileNotFoundError` if it doesn't exist. |
 | `exists` | `exists(path: string): Promise<boolean>` | Checks whether the file exists. |
 | `delete` | `delete(path: string): Promise<boolean>` | Deletes; `true` if it existed. |
-| `list` | `list(prefix?: string): Promise<string[]>` | Lists paths under the prefix (recursive, sorted). Prefix defaults to `''`. |
+| `list` | `list(prefix?: string): Promise<string[]>` | Keys under the prefix (recursive, sorted), **relative to the disk's scope** — each one goes back into `get()` as-is. The prefix is a directory (`'a'` = `'a/'`). Defaults to `''`. |
 | `putStream` | `putStream(path: string, source: StreamSource, options: PutStreamInput): Promise<void>` | Streams a body to the backend; `maxBytes` enforced mid-stream. Throws `PutStreamUnsupportedError` if the driver can't. |
 | `getStream` | `getStream(path: string): Promise<Readable>` | Reads the object as a stream — **consume or `destroy()` it**. Throws `GetStreamUnsupportedError` if the driver can't. |
 | `copy` | `copy(from: string, to: string, options?: CopyOptions): Promise<void>` | Server-side copy where possible, else `getStream`→`putStream`, else `get`→`put`. Both keys are validated and scoped. |
@@ -395,7 +421,7 @@ Extends `PutOptions` (`maxBytes`, `allowedContentTypes`) with:
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | `contentType` | `string` | — (required) | The type stored with the object, checked against `allowedContentTypes` before any byte is read. |
-| `contentLength` | `number` | — | Exact body size when known. **S3 needs this** (or `maxBytes`) — see [Large files](#large-files-streaming-server-side-copy-and-stat). |
+| `contentLength` | `number` | — | Exact body size when known — S3 streams it into one `PutObject`. Validated up front (`STORAGE_CONTENT_LENGTH_INVALID`) and verified against the body (`STORAGE_CONTENT_LENGTH_MISMATCH`) — see [Large files](#large-files-streaming-server-side-copy-and-stat). |
 
 #### `CopyOptions`
 
@@ -494,7 +520,10 @@ Contract for building your own driver. Required: `name` (readable string, used
 in errors), `put`, `get`, `exists`, `delete`, `list`, `disconnect`. Optional
 capabilities, each surfaced by `disk.supports(...)`: `temporaryUrl`,
 `temporaryUploadUrl`, `putStream` (receives **one normalized Node `Readable`**
-that already enforces `maxBytes`), `getStream`, `copy` and `stat`.
+that already enforces `maxBytes` and errors before its end when the body
+contradicts `contentLength`), `getStream`, `copy` and `stat`. `list(prefix)`
+returns full keys and may match `prefix` as a plain string: the Disk narrows the
+result to the directory and strips the scope.
 
 A driver that cannot honour a `TemporaryUrlOptions.endpoint` override MUST
 throw the unsupported error rather than ignore it — a URL signed for the wrong
@@ -517,6 +546,8 @@ host is a silently broken one.
 | `GetStreamUnsupportedError` | `STORAGE_GET_STREAM_UNSUPPORTED` | 500 | `getStream()` on a driver without the capability. |
 | `CopyUnsupportedError` | `STORAGE_COPY_UNSUPPORTED` | 500 | `copy({ requireServerSide: true })` with no server-side copy available. |
 | `StatUnsupportedError` | `STORAGE_STAT_UNSUPPORTED` | 500 | `stat()` on a driver without the capability. |
+| `StorageContentLengthInvalidError` | `STORAGE_CONTENT_LENGTH_INVALID` | **400** | `putStream()` with a `contentLength` that is negative, fractional, not finite or past `MAX_SAFE_INTEGER`. Nothing is read. |
+| `StorageContentLengthMismatchError` | `STORAGE_CONTENT_LENGTH_MISMATCH` | **400** | The `putStream()` body carried more or fewer bytes than its `contentLength`. Raised before the body's end reaches the driver, so nothing is committed. |
 | `StorageStreamLengthRequiredError` | `STORAGE_STREAM_LENGTH_REQUIRED` | **400** | `putStream()` on S3 with neither `contentLength` nor `maxBytes`, and without the optional `@aws-sdk/lib-storage` peer that enables multipart. |
 | `ImageProcessingUnavailableError` | `STORAGE_IMAGE_UNAVAILABLE` | 500 | An image-pipeline terminal ran with no `imageProcessor` configured. |
 | `StorageTenantRequiredError` | `STORAGE_TENANT_REQUIRED` | **400** | A scoped disk ran with no tenant in context (see *No tenant, no root*). |

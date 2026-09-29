@@ -75,7 +75,7 @@ This driver implements all four optional capabilities:
 
 | Capability | S3 call | Notes |
 |---|---|---|
-| `putStream` | `PutObject`, or multipart | Pass `contentLength` (the stream goes straight to S3) or `maxBytes` (the body is buffered up to that cap). With **neither**, the body is uploaded **multipart** when the optional peer `@aws-sdk/lib-storage` is installed; without it → `STORAGE_STREAM_LENGTH_REQUIRED` (400). See [Unbounded streams](#unbounded-streams-multipart). |
+| `putStream` | `PutObject`, or multipart | With `contentLength` the stream goes straight into one `PutObject` (the Disk verifies the body matches it). Without it the body is uploaded **multipart** through the optional peer `@aws-sdk/lib-storage` — at most `partSizeBytes × queueSize` in memory, whatever `maxBytes` says. Without the peer: buffered up to `maxBytes`, or `STORAGE_STREAM_LENGTH_REQUIRED` (400) with no `maxBytes`. See [Unbounded streams](#unbounded-streams-multipart). |
 | `getStream` | `GetObject` | Returns the response body as a Node `Readable`; consume it or `destroy()` it. |
 | `copy` | `CopyObject` | Server-side within the same bucket; the bytes never reach the process. A given `contentType` sets `MetadataDirective: 'REPLACE'`. SSE is re-applied. |
 | `stat` | `HeadObject` | `{ size, contentType, etag, lastModified }`. |
@@ -83,10 +83,13 @@ This driver implements all four optional capabilities:
 ### Unbounded streams (multipart)
 
 `PutObject` cannot send a body of unknown size in one request. When `putStream`
-is given **neither** `contentLength` **nor** `maxBytes`, the driver falls back to
-a **multipart upload** — `CreateMultipartUpload` → `UploadPart`… →
-`CompleteMultipartUpload` — so a stream of any size goes through while only
-`partSizeBytes × queueSize` bytes are ever in memory.
+is given no `contentLength`, the driver uses a **multipart upload** —
+`CreateMultipartUpload` → `UploadPart`… → `CompleteMultipartUpload` — so a
+stream of any size goes through while only `partSizeBytes × queueSize` bytes are
+ever in memory. That holds when a `maxBytes` cap is set too (it is what
+`@basaltkit/files` sends for an upload without a `Content-Length`): the cap is
+enforced mid-stream by the Disk, it never becomes a buffer. A body smaller than
+one part is sent as a single `PutObject` of that part.
 
 That path needs `@aws-sdk/lib-storage`, an **optional peer dependency**:
 
@@ -95,14 +98,15 @@ pnpm add @aws-sdk/lib-storage
 ```
 
 It is never imported at module load — it is resolved lazily, inside that one
-code path, the first time it is needed. An app that does not install it behaves
-exactly as before: `putStream` with neither option throws
-`STORAGE_STREAM_LENGTH_REQUIRED` (400), and the message names the package.
+code path, the first time it is needed. Without it, an unknown length can only be
+one buffered `PutObject`: with `maxBytes` the body is collected up to that cap
+(so up to `maxBytes` in memory — install the peer to avoid it), and with neither
+option `putStream` throws `STORAGE_STREAM_LENGTH_REQUIRED` (400), whose message
+names the package.
 
-Nothing else changes: `contentLength` still streams straight into `PutObject`,
-`maxBytes` still buffers up to the cap and sends one object, and a multipart
-object carries the same tenant-scoped `Key`, `ContentType` and server-side
-encryption a single-shot `PutObject` would.
+`contentLength` still streams straight into `PutObject`, and a multipart object
+carries the same tenant-scoped `Key`, `ContentType` and server-side encryption a
+single-shot `PutObject` would.
 
 ```ts
 s3Disk({

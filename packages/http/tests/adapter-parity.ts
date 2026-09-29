@@ -495,11 +495,42 @@ export function errorDetailsParitySuite(adapter: string, driver: ParityDriver): 
         query: z.object({ page: z.coerce.number() }),
         handler: ({ query }) => query,
       }),
+      route({
+        method: 'GET',
+        url: '/internal',
+        handler: () => {
+          throw new HttpError(422, 'CHECKS_FAILED', 'Checks failed.', {
+            details: { failed: ['age'] },
+            internalDetails: { upstream: 'kyc', reply: 'account 991 frozen' },
+          })
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/internal-500',
+        handler: () => {
+          throw new HttpError(500, 'BROKEN', 'Broken.', { internalDetails: { job: 'job-7-frozen' } })
+        },
+      }),
     ]
 
     let send: Send
     afterEach(() => driver.close())
     const get = (url: string) => send({ method: 'GET', url })
+
+    it('keeps internalDetails out of the body but hands them to the reporter (FA-H05)', async () => {
+      const reports: HttpErrorReport[] = []
+      send = await driver.boot(routes, [], { onError: (report) => reports.push(report) })
+      const res = await get('/internal')
+      expect(res.status).toBe(422)
+      expect(res.json).toEqual({ error: { code: 'CHECKS_FAILED', message: 'Checks failed.', details: { failed: ['age'] } } })
+      expect(res.bytes.toString('utf8')).not.toContain('frozen')
+      const fatal = await get('/internal-500')
+      expect(fatal.status).toBe(500)
+      expect(fatal.bytes.toString('utf8')).not.toContain('frozen')
+      const internals = reports.map((r) => (r.error as { internalDetails?: unknown }).internalDetails)
+      expect(internals).toEqual([{ upstream: 'kyc', reply: 'account 991 frozen' }, { job: 'job-7-frozen' }])
+    })
 
     it('serves the same 422-with-details body on every adapter', async () => {
       send = await driver.boot(routes, [])

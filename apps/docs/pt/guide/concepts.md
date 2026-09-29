@@ -266,6 +266,17 @@ neutro sem nada anexado, e o corpo de validação mantém exatamente a forma
 `part` + `issues[]`. Regras completas no
 [README do `@basaltkit/http`](https://github.com/basaltkit/basalt/tree/main/packages/http#structured-error-details).
 
+Dados que só o operador deve ver — a resposta de um upstream, a linha em
+conflito, o id de um job interno — vão para `internalDetails`
+(`new HttpError(422, 'KYC_FAILED', '…', { details, internalDetails })`): o
+reporter de erros (o `onError` dos adapters) recebe-os, e **nunca** são
+serializados num corpo HTTP nem num resultado de tool MCP. Como defesa em
+profundidade, `toErrorResponse(error, { redactDetails })` filtra os `details`
+públicos — `redactSensitiveDetails` mascara os valores das chaves que nomeiam
+um segredo (`password`, `token`, `apiKey`, …). Os adapters HTTP enviam
+`details` tal como sanitizados; o `@basaltkit/mcp` redige-os por omissão antes
+de um resultado de tool chegar ao modelo (ver [MCP — o que o modelo vê](/pt/guide/mcp#what-the-model-sees-when-a-tool-fails)).
+
 ### Meta de segurança tem de ser aplicada — o check de boot
 
 `meta: { auth: true }`, `meta.can`, `meta.teamRole`, `meta.scopes`,

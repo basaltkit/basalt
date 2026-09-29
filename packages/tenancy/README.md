@@ -189,8 +189,11 @@ is what lets system code (jobs, CLI commands) pin one tenant deliberately.
 
 **Non-overridable filter.** `tenantScoped` spreads `tenantId` **last**, so a
 `tenantId` smuggled into `where` by client input cannot override the context
-tenant. (When there is no context tenant, a string `where.tenantId` is used as
-the `fallback` — the same anti-widening rule, one level down.)
+tenant. A `tenantId` in `where` is **never** used as a fallback either: `where`
+is routinely built from client input (`{ ...req.query }`), so with no context
+tenant `tenantScoped()` throws `TenantRequiredError` rather than let the client
+pick the tenant. System code that must pin one calls `requireTenantId(id)`
+explicitly, or runs inside `tenancy.run(id, …)`.
 
 Use them everywhere a repository touches tenant-owned data. `requireTenantId()`
 inside a queue job throws unless you wrapped the job body in
@@ -279,9 +282,40 @@ tenant scope once the app is known to be multi-tenant.
 
 The plugin registers the facade in the container under the `TENANCY` token, and an HTTP enricher that resolves the tenant for each request, places it in `ctx().tenant`, and emits `tenancy:switched`.
 
+Before a resolved tenant is placed in the context, the enricher checks its
+`status` (`assertTenantServing(tenant)`, also exported):
+
+| `status` | Result |
+|---|---|
+| absent, `null` or `ready` | Serves. A record with no status predates provisioning and must keep serving. |
+| `provisioning` / `failed` / `deleting` | 503 `TENANT_NOT_READY` — the storage is not (or no longer) usable; a client may retry. |
+| `suspended` | 403 `TENANT_SUSPENDED` — the app locked the account out; retrying will not help. |
+| anything else (`active`, `disabled`, …) | 500 `TENANT_STATUS_UNKNOWN` — fails closed rather than guessing. |
+
+`isTenantReady(tenant)` is the boolean form: `true` only for the first row.
+
 ### `Tenancy` class
 
-Constructor: `new Tenancy(source, resolvers, hooks?, …)` (normally created by the plugin).
+Normally created by the plugin. To build one directly (a test, a script without
+the plugin), pass a `TenancyOptions` object:
+
+```ts
+const tenancy = new Tenancy({
+  source,                          // TenantSource — required
+  resolvers: [headerResolver()],   // TenantResolver[] — required
+  hooks,                           // HookBus — where tenancy:* events are emitted
+  onProvision, onDeprovision,      // same as the plugin options
+  provisionMode: 'deferred',       // the plugin's `provision` option; default 'inline'
+  canonicalDomain,
+  validateTenantId,                // default isValidTenantId
+  onConflict: 'error',             // default 'precedence'
+})
+```
+
+The positional form `new Tenancy(source, resolvers, hooks?, onProvision?,
+provisionMode?, onDeprovision?, canonicalDomain?, validateTenantId?,
+{ onConflict }?)` still works, but nine positional arguments are easy to
+misalign — prefer the object.
 
 | Method | Returns | Description |
 |---|---|---|
@@ -372,6 +406,9 @@ conditional update, so handing an expired claim over (and un-verifying one in
 | `TenantRequiredError` | `TENANT_REQUIRED` | 400 | `requireTenant()` / `requireTenantId()` / `tenantScoped()` ran with no tenant in context and no fallback. Fails closed rather than querying unscoped. |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | No resolver produced a tenant and the plugin was configured `required: true`. |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `run()` was given an id absent from the source — also raised by `forEach()` when the source has no `list()`. |
+| `TenantNotReadyError` | `TENANT_NOT_READY` | 503 | A request resolved to a tenant whose status is `provisioning`, `failed` or `deleting`. The tenant exists; its storage is not serving. |
+| `TenantSuspendedError` | `TENANT_SUSPENDED` | 403 | A request resolved to a tenant whose status is `suspended` (set by the app — billing, abuse). Retrying will not help. |
+| `TenantStatusUnknownError` | `TENANT_STATUS_UNKNOWN` | 500 | A request resolved to a tenant whose status is none of the above (`active`, `disabled`, a typo). Fails closed: tenancy cannot tell whether its storage is usable. Store `ready` (or no status) to serve, `suspended` to lock out. |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (or a source's `create()`) for an id that already exists. Nothing is written and `onProvision` does not run. A `failed`/`provisioning` tenant is retried with `tenancy.provision(id)`; an intentional update is `source.save()`. |
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | The domain is already registered (by any tenant). |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | Acting on a domain that isn't registered. |

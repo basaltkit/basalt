@@ -5,11 +5,16 @@ import {
   AUDIT_CHAIN_GENESIS,
   AUDIT_SYSTEM_CHAIN,
   AuditChainConflictError,
+  assertAuditKeyId,
   assertIntegrityKey,
   auditChainKey,
+  auditKeyId,
+  checkAuditHash,
   type AuditIntegrityKey,
-  computeAuditHash,
+  type AuditSigningKey,
+  computeAuditHashV2,
   parseAuditChainKey,
+  parseAuditHash,
 } from './chain.js'
 
 export * from './chain.js'
@@ -44,7 +49,11 @@ export interface AuditEntry {
   readonly seq?: number | undefined
   /** `hash` of the previous entry in the chain ({@link AUDIT_CHAIN_GENESIS} for the first). */
   readonly prevHash?: string | undefined
-  /** SHA-256 (or HMAC-SHA256) over `prevHash` + the canonical entry — see `computeAuditHash`. */
+  /**
+   * Self-describing hash over `prevHash` + the canonical entry:
+   * `v2:sha256:<hex>` or `v2:hmac-sha256:<keyId>:<hex>` (see `computeAuditHashV2`),
+   * or a bare 64-hex legacy (v1) hash on entries written before key ids existed.
+   */
   readonly hash?: string | undefined
 }
 
@@ -529,8 +538,42 @@ export interface AuditRequestInfo {
 /** Resolves the request fields to record, from the active context (if any). */
 export type AuditRequestContextResolver = (context: RequestContext | undefined) => AuditRequestInfo | undefined
 
-/** `'hash-chain'` (SHA-256) or `{ mode: 'hash-chain', key }` (HMAC-SHA256 under a >=128-bit secret). */
-export type AuditIntegrity = 'none' | 'hash-chain' | { mode: 'hash-chain'; key?: AuditIntegrityKey }
+/**
+ * The keyed form of `integrity: 'hash-chain'`. Every new entry is an
+ * HMAC-SHA256 under `key`, and its hash records `keyId`
+ * (`v2:hmac-sha256:<keyId>:<hex>`), so rotating the key does not invalidate
+ * what the old one signed: move the old key to `verifyKeys` and verification
+ * picks each entry's key by its id.
+ *
+ * ```ts
+ * integrity: {
+ *   mode: 'hash-chain',
+ *   key: process.env.AUDIT_CHAIN_KEY!, keyId: '2026-09',
+ *   verifyKeys: [{ id: '2026-01', key: process.env.AUDIT_CHAIN_KEY_2026_01! }],
+ * }
+ * ```
+ */
+export interface AuditHashChainIntegrity {
+  mode: 'hash-chain'
+  /** Signs new entries (HMAC-SHA256, >= 128 bits). Omit for a plain SHA-256 chain. */
+  key?: AuditIntegrityKey
+  /**
+   * The id recorded with every entry `key` signs ({@link AUDIT_KEY_ID_PATTERN}).
+   * Default: `auditKeyId(key)`, a fingerprint derived from the key — the same on
+   * every replica. Name it yourself to make rotations readable.
+   */
+  keyId?: string
+  /**
+   * Retired keys, for verification only — never used to sign. A bare key gets
+   * its default id (`auditKeyId(key)`), which is the id it recorded if it was
+   * used without an explicit `keyId`. Legacy (v1) entries, which record no id,
+   * are accepted under any key held here or as `key`. Requires `key`.
+   */
+  verifyKeys?: Array<AuditIntegrityKey | AuditSigningKey>
+}
+
+/** `'hash-chain'` (SHA-256) or {@link AuditHashChainIntegrity} (HMAC-SHA256 under a >=128-bit secret). */
+export type AuditIntegrity = 'none' | 'hash-chain' | AuditHashChainIntegrity
 
 export interface AuditOptions {
   /**
@@ -590,6 +633,11 @@ export type AuditVerifyFailure =
   | 'head-mismatch'
   /** `verifyAll()`: a chain name the store lists but no tenant chain maps back to (a forged `chain` value). */
   | 'unknown-chain'
+  /**
+   * The entry was signed under a key id this `Audit` does not hold (add the
+   * retired key to `verifyKeys`), or under a key while this `Audit` has none.
+   */
+  | 'unknown-key'
 
 export interface AuditVerifyResult {
   ok: boolean
@@ -661,7 +709,10 @@ type ChainStore = Required<Pick<AuditStore, 'chainHead' | 'readChain' | 'countUn
 
 export class Audit {
   private readonly chainEnabled: boolean
-  private readonly chainKey: AuditIntegrityKey | undefined
+  /** Signs new entries; `undefined` = plain SHA-256. */
+  private readonly signer: AuditSigningKey | undefined
+  /** Every key verification may use, by id (the signer's included). Empty = unkeyed chain. */
+  private readonly verifyKeys: ReadonlyMap<string, AuditIntegrityKey>
   private readonly requestContext: AuditRequestContextResolver | undefined
   /** Per-chain in-process mutex: appends to one chain run one at a time. */
   private readonly chainLocks = new Map<string, Promise<void>>()
@@ -684,11 +735,12 @@ export class Audit {
   ) {
     const integrity = options.integrity ?? 'none'
     this.chainEnabled = integrity !== 'none'
-    this.chainKey = typeof integrity === 'object' ? integrity.key : undefined
     if (typeof integrity === 'object' && integrity.mode !== 'hash-chain') {
       throw new TypeError(`Unknown audit integrity mode: ${String(integrity.mode)}`)
     }
-    if (this.chainKey !== undefined) assertIntegrityKey(this.chainKey)
+    const keys = typeof integrity === 'object' ? keyRing(integrity) : { signer: undefined, verifyKeys: new Map() }
+    this.signer = keys.signer
+    this.verifyKeys = keys.verifyKeys
     if (this.chainEnabled && !isChainStore(store)) {
       throw new TypeError(
         "Audit integrity 'hash-chain' needs a store implementing chainHead/readChain/countUnchained/chainTenants " +
@@ -901,19 +953,39 @@ export class Audit {
     let expected = fromSeq
     let checked = 0
     let head: AuditChainHead | undefined
+    /** Id of the last verified entry — the page overlap re-reads it. */
+    let lastId: string | undefined
     for (;;) {
-      const page = await store.readChain(tenantId, { fromSeq: expected, toSeq: to, limit: AUDIT_SCAN_PAGE })
+      // Every page after the first starts one `seq` early, at the entry just
+      // verified. Starting at `expected` would never read a second row that
+      // shares the last `seq` of the previous page: a custom store without the
+      // `(chain, seq)` unique index could hold a duplicate exactly at the page
+      // boundary and verify would stay green.
+      const overlap = lastId !== undefined
+      const page = await store.readChain(tenantId, {
+        fromSeq: overlap ? expected - 1 : expected,
+        toSeq: to,
+        limit: AUDIT_SCAN_PAGE,
+      })
+      let skipped = false
       for (const entry of page) {
         const broken = (reason: AuditVerifyFailure) =>
           result({ ok: false, checked, firstBrokenAt: expected, entryId: entry.id, reason, ...(head ? { head } : {}) })
+        if (overlap && !skipped && entry.id === lastId && entry.seq === expected - 1) {
+          skipped = true
+          continue
+        }
         if (entry.seq !== expected) return broken(entry.seq! < expected ? 'sequence-duplicate' : 'sequence-gap')
         if (entry.prevHash !== prevHash) return broken('prev-hash-mismatch')
-        if (entry.tenantId !== tenantId || entry.hash !== computeAuditHash(entry, this.chainKey)) return broken('hash-mismatch')
+        if (entry.tenantId !== tenantId) return broken('hash-mismatch')
+        const hashCheck = checkAuditHash(entry, this.verifyKeys)
+        if (hashCheck !== 'ok') return broken(hashCheck)
         if (expectedHead !== undefined && entry.seq === expectedHead.seq && entry.hash !== expectedHead.hash) {
           return broken('head-mismatch')
         }
-        prevHash = entry.hash
-        head = { seq: entry.seq, hash: entry.hash }
+        prevHash = entry.hash!
+        head = { seq: entry.seq, hash: entry.hash! }
+        lastId = entry.id
         checked++
         expected++
       }
@@ -995,7 +1067,7 @@ export class Audit {
       for (let attempt = 1; ; attempt++) {
         const head = await store.chainHead(draft.tenantId)
         const linked = { ...draft, seq: (head?.seq ?? 0) + 1, prevHash: head?.hash ?? AUDIT_CHAIN_GENESIS }
-        const entry = Object.freeze({ ...linked, hash: computeAuditHash(linked, this.chainKey) })
+        const entry = Object.freeze({ ...linked, hash: computeAuditHashV2(linked, this.signer) })
         try {
           await store.append(entry)
           return entry
@@ -1060,6 +1132,48 @@ export class Audit {
     if (typeof out['userAgent'] === 'string') fields.userAgent = out['userAgent']
     return fields
   }
+}
+
+/**
+ * The signing key and the verification ring of a keyed integrity option.
+ * Validated up front: a key id outside the grammar would produce hashes the
+ * verifier cannot parse, and two different keys under one id would make
+ * verification depend on which one happened to win.
+ */
+function keyRing(integrity: AuditHashChainIntegrity): {
+  signer: AuditSigningKey | undefined
+  verifyKeys: ReadonlyMap<string, AuditIntegrityKey>
+} {
+  const { key, keyId, verifyKeys } = integrity
+  if (key === undefined) {
+    if (keyId !== undefined) throw new TypeError('Audit integrity `keyId` needs a `key` to sign with')
+    if (verifyKeys !== undefined && verifyKeys.length > 0) {
+      throw new TypeError(
+        'Audit integrity `verifyKeys` needs a `key`: without one new entries would be unkeyed SHA-256, which a keyed verifier refuses',
+      )
+    }
+    return { signer: undefined, verifyKeys: new Map() }
+  }
+  assertIntegrityKey(key)
+  if (verifyKeys !== undefined && !Array.isArray(verifyKeys)) {
+    throw new TypeError('Audit integrity `verifyKeys` must be an array of keys or { id, key }')
+  }
+  const signer: AuditSigningKey = { id: keyId ?? auditKeyId(key), key }
+  assertAuditKeyId(signer.id)
+  const ring = new Map<string, AuditIntegrityKey>([[signer.id, key]])
+  for (const item of verifyKeys ?? []) {
+    const pair: AuditSigningKey =
+      typeof item === 'string' || item instanceof Uint8Array ? { id: auditKeyId(item), key: item } : item
+    if (pair === null || typeof pair !== 'object') throw new TypeError('Audit integrity `verifyKeys` entries must be a key or { id, key }')
+    assertIntegrityKey(pair.key)
+    assertAuditKeyId(pair.id)
+    const existing = ring.get(pair.id)
+    if (existing !== undefined && !Buffer.from(existing).equals(Buffer.from(pair.key))) {
+      throw new TypeError(`Audit integrity key id "${pair.id}" is used by two different keys`)
+    }
+    ring.set(pair.id, pair.key)
+  }
+  return { signer, verifyKeys: ring }
 }
 
 function isChainStore(store: AuditStore): store is ChainStore {
@@ -1284,8 +1398,12 @@ export function createAuditVerifyCommand(getAudit: () => Audit) {
       }
       let expectedHead: AuditChainHead | undefined
       if (flags['expected-head'] !== undefined) {
-        const match = /^(\d+):([0-9a-f]{64})$/.exec(String(flags['expected-head']))
-        if (!match) throw new TypeError('--expected-head must be <seq>:<64-hex-hash>')
+        // `<seq>:<hash>` — split on the FIRST colon only: a v2 hash has its own
+        // (`v2:hmac-sha256:<keyId>:<hex>`).
+        const match = /^(\d+):(.+)$/.exec(String(flags['expected-head']))
+        if (!match || parseAuditHash(match[2]) === undefined) {
+          throw new TypeError('--expected-head must be <seq>:<hash>, the head printed by a previous audit:verify')
+        }
         expectedHead = { seq: int(match[1]!, 'expected-head'), hash: match[2]! }
       }
       const legacy = legacyUntil !== undefined ? { legacyUntil } : {}

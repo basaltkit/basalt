@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Container, HookBus, runWithContext } from '@basaltkit/core'
 import { Disk, STORAGE, type StorageDriver } from '@basaltkit/storage'
-import { FILES, Files, MemoryFileStore, fileRoutes, filesPlugin, type FileRecord } from '../src/index.js'
+import { FILES, Files, MemoryFileStore, fileRoutes, filesPlugin, toPublicFile, type FileRecord } from '../src/index.js'
 import type { HttpReply } from '@basaltkit/fastify'
 
 class FakeDriver implements StorageDriver {
@@ -114,7 +114,7 @@ function fakeFilesService(overrides: Partial<Record<string, (...a: never[]) => u
   const svc = {
     async list() {
       record('list')
-      return [{ id: 'f1', uploadedBy: 'u1' }] as FileRecord[]
+      return [{ id: 'f1', name: 'a.png', contentType: 'image/png', size: 1, createdAt: 1, path: 'files/f1', checksum: 'c', uploadedBy: 'u1' }] as FileRecord[]
     },
     async get(id: string) {
       record('get', id)
@@ -149,7 +149,8 @@ describe('fileRoutes — handler branches', () => {
   it('GET /files lists the tenant files', async () => {
     const { svc, calls } = fakeFilesService()
     const out = await withFiles(svc, () => Promise.resolve(routeFor('GET', '/files').handler({} as never)))
-    expect(await out).toEqual([{ id: 'f1', uploadedBy: 'u1' }])
+    // The public projection: path, checksum and uploader stay server-side.
+    expect(await out).toEqual([{ id: 'f1', name: 'a.png', contentType: 'image/png', size: 1, createdAt: 1 }])
     expect(calls.list).toHaveLength(1)
   })
 
@@ -158,7 +159,8 @@ describe('fileRoutes — handler branches', () => {
     const { svc } = fakeFilesService({ get: async () => found })
     const { reply } = fakeReply()
     const out = await withFiles(svc, () => routeFor('GET', '/files/:id').handler({ params: { id: 'f9' }, reply } as never) as Promise<unknown>)
-    expect(out).toBe(found)
+    expect(out).toEqual(toPublicFile(found))
+    expect(out).not.toHaveProperty('uploadedBy')
   })
 
   it('GET /files/:id sends a 404 when the record is missing', async () => {

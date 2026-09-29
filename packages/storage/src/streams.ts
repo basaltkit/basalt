@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream'
 import type { StreamSource } from './driver.js'
-import { StorageTooLargeError } from './errors.js'
+import { StorageContentLengthMismatchError, StorageTooLargeError } from './errors.js'
 
 const isWebStream = (value: unknown): value is ReadableStream<Uint8Array> =>
   typeof (value as { getReader?: unknown }).getReader === 'function'
@@ -36,29 +36,46 @@ const asBuffer = (piece: Uint8Array | string): Buffer =>
 
 /**
  * Yields the source's bytes, failing with {@link StorageTooLargeError} the
- * moment more than `maxBytes` have gone through.
+ * moment more than `maxBytes` have gone through, and — when `expectedLength`
+ * is given — with {@link StorageContentLengthMismatchError} the moment the
+ * body passes it or, at the end, when it fell short.
+ *
+ * The short-body check runs after the last chunk but before the generator
+ * returns, so the consumer sees an error INSTEAD of the end of the stream: a
+ * backend that commits on end never commits a body of the wrong size.
  *
  * Throwing out of the `for await` returns the iterator, which destroys a Node
  * `Readable` and cancels a web `ReadableStream`: nothing past the limit is ever
  * read from the source, and the upload the generator feeds aborts with it.
  */
-async function* limited(source: StreamSource, maxBytes: number | undefined): AsyncGenerator<Buffer> {
+async function* limited(
+  source: StreamSource,
+  maxBytes: number | undefined,
+  expectedLength?: number,
+): AsyncGenerator<Buffer> {
   let total = 0
   for await (const piece of toAsyncIterable(source)) {
     const chunk = asBuffer(piece)
     total += chunk.byteLength
+    if (expectedLength !== undefined && total > expectedLength) {
+      throw new StorageContentLengthMismatchError(expectedLength, total, false)
+    }
     if (maxBytes !== undefined && total > maxBytes) throw new StorageTooLargeError(total, maxBytes)
     yield chunk
+  }
+  if (expectedLength !== undefined && total !== expectedLength) {
+    throw new StorageContentLengthMismatchError(expectedLength, total, true)
   }
 }
 
 /**
  * Normalizes any {@link StreamSource} into one Node `Readable` that enforces
- * `maxBytes` as the bytes flow. Every driver receives this — a single shape and
- * a cap none of them can forget to apply.
+ * `maxBytes` — and, when given, an exact `expectedLength` — as the bytes flow.
+ * Every driver receives this: a single shape, and limits none of them can
+ * forget to apply.
  */
-export function toLimitedReadable(source: StreamSource, maxBytes?: number): Readable {
-  return Readable.from(limited(source, maxBytes))
+export function toLimitedReadable(source: StreamSource, maxBytes?: number, expectedLength?: number): Readable {
+  return Readable.from(limited(source, maxBytes, expectedLength))
 }
 
 /** Collects a stream into one Buffer, capped the same way as {@link toLimitedReadable}. */

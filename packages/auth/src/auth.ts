@@ -628,8 +628,10 @@ export class Auth {
    *
    * When the account has MFA enabled, `mfaCode` (a TOTP or recovery code) is
    * required: a correct password with a missing code throws
-   * {@link MfaRequiredError} (without counting as a failed attempt), and a
-   * wrong code throws {@link MfaInvalidCodeError}.
+   * {@link MfaRequiredError}, and a wrong code throws {@link MfaInvalidCodeError}.
+   * Because `MfaRequiredError` reveals that the password was right, it counts
+   * against the per-account and per-IP login budgets exactly like a failure
+   * (a later successful login with the code clears the account counter).
    *
    * `amr` lists the authentication methods used — `['pwd']`, or
    * `['pwd', 'mfa']` when a second factor was verified. It is also embedded in
@@ -662,10 +664,6 @@ export class Auth {
         throw error
       }
     }
-    const release = async () => {
-      await this.throttle?.release(key)
-      if (ipKey) await this.ipThrottle?.release(ipKey)
-    }
 
     const user = await this.attempt(key, password)
     if (!user) {
@@ -676,7 +674,11 @@ export class Auth {
     const amr = ['pwd']
     if (await this.isMfaEnabled(user.id)) {
       if (!mfaCode) {
-        await release() // password was correct — not a failure
+        // The password was right, and this answer says so — a password oracle
+        // on MFA accounts (the industry-standard two-step flow). Keep BOTH
+        // reservations (per-account and per-IP) so the oracle is throttled like
+        // any other guess: a success with the code resets the account counter
+        // and frees its own IP slot; this step's IP slot expires with the window.
         throw new MfaRequiredError()
       }
       if (!(await this.verifyMfaCode(user.id, mfaCode))) {
