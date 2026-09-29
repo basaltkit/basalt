@@ -1,5 +1,12 @@
 # @basaltkit/files-prisma
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [b7171e5]
+  - @basaltkit/files@6.0.0
+
 ## 0.2.0
 
 ### Minor Changes

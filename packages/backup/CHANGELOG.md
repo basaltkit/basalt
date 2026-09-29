@@ -1,5 +1,12 @@
 # @basaltkit/backup
 
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [b7171e5]
+  - @basaltkit/storage@5.0.0
+
 ## 0.3.1
 
 ### Patch Changes
