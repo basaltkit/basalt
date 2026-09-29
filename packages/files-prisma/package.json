@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/files-prisma",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "engines": {
     "node": ">=22.5.0"
   },
