@@ -5,6 +5,7 @@
 import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { OptionDefaults } from 'typedoc'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const docsRoot = join(here, '..')
@@ -23,6 +24,10 @@ const hasTsx = (dir) => {
 }
 
 const entryPoints = []
+// `@basaltkit/<name>` → its source entry, so a comment in one package that links
+// to a symbol of another resolves to the documented reflection instead of the
+// package's `dist` typings (which typedoc can't link to and warns about).
+const paths = {}
 for (const dir of readdirSync(packagesDir).sort()) {
   const pkgPath = join(packagesDir, dir, 'package.json')
   const entry = join(packagesDir, dir, 'src/index.ts')
@@ -30,6 +35,7 @@ for (const dir of readdirSync(packagesDir).sort()) {
   if (JSON.parse(readFileSync(pkgPath, 'utf8')).private === true) continue
   if (hasTsx(join(packagesDir, dir, 'src'))) continue // JSX — skip (README covers it)
   entryPoints.push(`../../packages/${dir}/src/index.ts`)
+  paths[JSON.parse(readFileSync(pkgPath, 'utf8')).name] = [`../../packages/${dir}/src/index.ts`]
 }
 
 const typedoc = {
@@ -51,6 +57,8 @@ const typedoc = {
   // we're documenting, not building. Keeps one bad file from failing all 79.
   skipErrorChecking: true,
   gitRevision: 'main',
+  // `@security` is a project tag for the security consequence of an option.
+  blockTags: [...OptionDefaults.blockTags, '@security'],
 }
 writeFileSync(join(docsRoot, 'typedoc.json'), JSON.stringify(typedoc, null, 2) + '\n')
 
@@ -64,6 +72,7 @@ const tsconfig = {
     skipLibCheck: true,
     esModuleInterop: true,
     noEmit: true,
+    paths,
   },
   include: entryPoints,
 }
