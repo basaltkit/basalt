@@ -22,6 +22,7 @@ describe('createProject', () => {
     const result = await createProject({ name: 'my-saas', dir: join(root, 'my-saas') })
 
     expect(result.files).toEqual([
+      '.basalt/project.json',
       '.dockerignore',
       '.env.example',
       '.gitignore',
@@ -146,8 +147,12 @@ describe('createProject', () => {
 
     // The CLI entry (dev-only) imports the generator and passes it via `commands`.
     const bin = await read(result.dir, 'bin/basalt.ts')
-    expect(bin).toContain("import { runCli } from '@basaltkit/cli'")
-    expect(bin).toContain("import { generatorCommands } from '@basaltkit/generator'")
+    // Dynamic imports: the project commands (update/add/doctor/info) run first,
+    // before anything of the app or its dev tools is evaluated.
+    expect(bin).toContain("const { runCli } = await import('@basaltkit/cli')")
+    expect(bin).toContain("const { generatorCommands } = await import('@basaltkit/generator')")
+    expect(bin).not.toMatch(/^import .* from '@basaltkit\//m)
+    expect(bin.indexOf("['update', 'add', 'doctor', 'info']")).toBeLessThan(bin.indexOf("await import('@basaltkit/cli')"))
     expect(bin).toContain('commands: [...generatorCommands(), prismaSyncCommand()]')
     expect(bin).toContain('runCli({ app })')
 
@@ -164,7 +169,9 @@ describe('createProject', () => {
     expect(result.files).not.toContain('bin/basalt.ts')
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
     expect(pkg.dependencies).not.toHaveProperty('@basaltkit/cli')
-    expect(pkg.scripts).not.toHaveProperty('basalt')
+    // `pnpm basalt update|add|doctor|info` still works: the script goes to create-basalt.
+    expect(pkg.scripts.basalt).toBe('create-basalt --project')
+    expect(pkg.devDependencies['create-basalt']).toBe(versionOf('create-basalt'))
   })
 
   it('wires the MCP server with --mcp (dep, plugin, /mcp transport, opted-in routes)', async () => {
@@ -304,9 +311,9 @@ describe('pnpm 11 robustness (BK-002)', () => {
   it('pnpm-workspace.yaml documents the union syntax for per-version release-age exclusions', async () => {
     const result = await createProject({ name: 'pnpm11', dir: join(root, 'pnpm11') })
     const yaml = await read(result.dir, 'pnpm-workspace.yaml')
-    // Exactly one live entry — the @basaltkit scope.
-    expect(yaml.match(/^ {2}- /gm)).toHaveLength(1)
-    expect(yaml).toContain("minimumReleaseAgeExclude:\n  - '@basaltkit/*'")
+    // Exactly two live entries — the @basaltkit scope and create-basalt.
+    expect(yaml.match(/^ {2}- /gm)).toHaveLength(2)
+    expect(yaml).toContain("minimumReleaseAgeExclude:\n  - '@basaltkit/*'\n  - create-basalt\n")
     // pnpm matches exclusions first-match-wins BY NAME: two versions of one
     // package must be ONE entry with a `||` union, never two entries.
     expect(yaml).toContain("#   - '@types/node@22.20.4 || 26.6.2'")

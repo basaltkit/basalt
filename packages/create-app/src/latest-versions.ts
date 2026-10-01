@@ -211,7 +211,19 @@ async function probeAge(
 }
 
 /** Outcome of one registry lookup: a version, a definitive miss, or a transient failure. */
-type Lookup = { version: string } | 'miss' | 'transient'
+type Lookup = { version: string; peers: Record<string, string> } | 'miss' | 'transient'
+
+/** The `peerDependencies` of a `/latest` document (string values only). */
+function peersOf(body: { peerDependencies?: unknown } | null): Record<string, string> {
+  const peers: Record<string, string> = {}
+  const raw = body?.peerDependencies
+  if (raw && typeof raw === 'object') {
+    for (const [name, range] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof range === 'string') peers[name] = range
+    }
+  }
+  return peers
+}
 
 async function lookupLatest(
   fetchImpl: typeof globalThis.fetch,
@@ -226,9 +238,9 @@ async function lookupLatest(
     })
     if (response.status >= 500 || response.status === 429) return 'transient'
     if (!response.ok) return 'miss'
-    const body = (await response.json()) as { version?: unknown } | null
+    const body = (await response.json()) as { version?: unknown; peerDependencies?: unknown } | null
     const version = body?.version
-    return typeof version === 'string' && STABLE_SEMVER.test(version) ? { version } : 'miss'
+    return typeof version === 'string' && STABLE_SEMVER.test(version) ? { version, peers: peersOf(body) } : 'miss'
   } catch {
     // Network error, per-request timeout, or malformed JSON.
     return 'transient'
@@ -247,7 +259,7 @@ async function fetchLatest(
   name: string,
   timeoutMs: number,
   overall: AbortSignal,
-): Promise<string | undefined> {
+): Promise<{ version: string; peers: Record<string, string> } | undefined> {
   for (let attempt = 0; attempt < 2 && !overall.aborted; attempt++) {
     const result = await lookupLatest(
       fetchImpl,
@@ -256,57 +268,61 @@ async function fetchLatest(
       AbortSignal.any([AbortSignal.timeout(timeoutMs), overall]),
     )
     if (result === 'miss') return undefined
-    if (result !== 'transient') return result.version
+    if (result !== 'transient') return result
   }
   return undefined
 }
 
+/** What the registry says about one package (see {@link lookupLatestVersions}). */
+export interface LatestInfo {
+  /** The `latest` dist-tag (stable releases only), or undefined when the lookup failed. */
+  latest?: string
+  /** `peerDependencies` declared by that latest version. */
+  peers: Record<string, string>
+  /**
+   * Release age of `latest` against the window: `mature` (provably older, or
+   * not probed), `recent` (inside the window) or `unknown` (could not prove it).
+   */
+  age: 'mature' | 'recent' | 'unknown'
+}
+
 /**
- * Resolves the latest published version of every package in `fallbacks`
- * (name → fallback range) through a small pool of parallel requests. Never throws: a package the registry
- * cannot answer for keeps its fallback range and is listed in `failed`.
+ * The shared registry primitive behind both the scaffold and `create-basalt
+ * update`: looks up `latest` for every name through a small pool of parallel
+ * requests (one retry on transient failures, a global time cap) and, when
+ * `shouldProbe(name, latest)` says the version would actually be used, probes
+ * its release age against the window. Never throws — a package the registry
+ * cannot answer for comes back without `latest`.
  */
-export async function resolveLatestVersions(
-  fallbacks: Readonly<Record<string, string>>,
+export async function lookupLatestVersions(
+  names: readonly string[],
+  shouldProbe: (name: string, latest: string) => boolean,
   options: ResolveLatestOptions = {},
-): Promise<VersionResolution> {
+): Promise<{ results: Map<string, LatestInfo>; registry: string }> {
   const fetchImpl = options.fetch ?? globalThis.fetch
   const registry = registryUrl(options.registry)
-  const versions: Record<string, string> = { ...fallbacks }
-  const resolved: string[] = []
-  const failed: string[] = []
-  const heldBack: HeldBackVersion[] = []
-  const tooFresh: FreshVersion[] = []
-  const names = Object.keys(fallbacks).sort()
+  const results = new Map<string, LatestInfo>()
+  if (typeof fetchImpl !== 'function') {
+    for (const name of names) results.set(name, { peers: {}, age: 'mature' })
+    return { results, registry }
+  }
   const windowMs = minimumReleaseAgeMinutes(options.minimumReleaseAge) * 60_000
   const now = options.now ?? Date.now
   const timeoutMs = options.timeoutMs ?? PER_REQUEST_TIMEOUT_MS
-
-  if (typeof fetchImpl !== 'function') {
-    return { versions, resolved, failed: names, heldBack, tooFresh, registry }
-  }
-
-  /** A third-party latest on the template-compatible major (else undefined). */
-  const compatible = (name: string, version: string): boolean => {
-    if (alwaysLatest(name)) return true
-    const major = compatibleMajor(fallbacks[name] as string)
-    return major !== undefined && Number(version.split('.')[0]) === major
-  }
-
   const overall = new AbortController()
   const cap = setTimeout(() => overall.abort(), options.overallTimeoutMs ?? OVERALL_TIMEOUT_MS)
   try {
-    const latest: (string | undefined)[] = []
-    const age: ('mature' | 'recent' | 'unknown')[] = []
     let next = 0
     const worker = async (): Promise<void> => {
       while (next < names.length) {
-        const i = next++
-        const name = names[i] as string
-        const version = await fetchLatest(fetchImpl, registry, name, timeoutMs, overall.signal)
-        latest[i] = version
-        age[i] =
-          version === undefined || alwaysLatest(name) || windowMs === 0 || !compatible(name, version)
+        const name = names[next++] as string
+        const found = await fetchLatest(fetchImpl, registry, name, timeoutMs, overall.signal)
+        if (found === undefined) {
+          results.set(name, { peers: {}, age: 'mature' })
+          continue
+        }
+        const age =
+          windowMs === 0 || !shouldProbe(name, found.version)
             ? 'mature'
             : await probeAge(
                 fetchImpl,
@@ -316,31 +332,65 @@ export async function resolveLatestVersions(
                 now,
                 AbortSignal.any([AbortSignal.timeout(timeoutMs), overall.signal]),
               )
+        results.set(name, { latest: found.version, peers: found.peers, age })
       }
     }
     const pool = Math.max(1, Math.min(options.concurrency ?? CONCURRENCY, names.length))
     await Promise.all(Array.from({ length: pool }, worker))
-    names.forEach((name, i) => {
-      const version = latest[i]
-      const fallback = fallbacks[name] as string
-      if (version === undefined) {
-        failed.push(name)
-        return
-      }
-      if (!compatible(name, version)) {
-        heldBack.push({ name, latest: version, range: fallback })
-        return
-      }
-      const verdict = age[i]
-      if (verdict === 'recent' || verdict === 'unknown') {
-        tooFresh.push({ name, latest: version, range: fallback, reason: verdict })
-        return
-      }
-      versions[name] = `^${version}`
-      resolved.push(name)
-    })
   } finally {
     clearTimeout(cap)
+  }
+  return { results, registry }
+}
+
+/**
+ * Resolves the latest published version of every package in `fallbacks`
+ * (name → fallback range). Never throws: a package the registry cannot answer
+ * for keeps its fallback range and is listed in `failed`.
+ */
+export async function resolveLatestVersions(
+  fallbacks: Readonly<Record<string, string>>,
+  options: ResolveLatestOptions = {},
+): Promise<VersionResolution> {
+  const versions: Record<string, string> = { ...fallbacks }
+  const resolved: string[] = []
+  const failed: string[] = []
+  const heldBack: HeldBackVersion[] = []
+  const tooFresh: FreshVersion[] = []
+  const names = Object.keys(fallbacks).sort()
+
+  /** A third-party latest on the template-compatible major (else undefined). */
+  const compatible = (name: string, version: string): boolean => {
+    if (alwaysLatest(name)) return true
+    const major = compatibleMajor(fallbacks[name] as string)
+    return major !== undefined && Number(version.split('.')[0]) === major
+  }
+
+  // @basaltkit/* is never probed: the scaffolded pnpm-workspace.yaml excludes
+  // that scope from the release-age policy.
+  const { results, registry } = await lookupLatestVersions(
+    names,
+    (name, version) => !alwaysLatest(name) && compatible(name, version),
+    options,
+  )
+  for (const name of names) {
+    const info = results.get(name)
+    const version = info?.latest
+    const fallback = fallbacks[name] as string
+    if (info === undefined || version === undefined) {
+      failed.push(name)
+      continue
+    }
+    if (!compatible(name, version)) {
+      heldBack.push({ name, latest: version, range: fallback })
+      continue
+    }
+    if (info.age === 'recent' || info.age === 'unknown') {
+      tooFresh.push({ name, latest: version, range: fallback, reason: info.age })
+      continue
+    }
+    versions[name] = `^${version}`
+    resolved.push(name)
   }
   return { versions, resolved, failed, heldBack, tooFresh, registry }
 }
@@ -360,6 +410,23 @@ export function applyVersions(packageJsonText: string, versions: Readonly<Record
     }
   }
   return `${JSON.stringify(pkg, null, 2)}\n`
+}
+
+/**
+ * Resolves the latest published versions for every package.json in `files`
+ * (in place) — the scaffold's registry policy, shared with `create-basalt add`.
+ */
+export async function resolveFileVersions(
+  files: Record<string, string>,
+  registry?: ResolveLatestOptions,
+): Promise<VersionResolution> {
+  const manifests = Object.keys(files).filter((path) => path === 'package.json' || path.endsWith('/package.json'))
+  const versions = await resolveLatestVersions(
+    collectDependencies(manifests.map((path) => files[path] as string)),
+    registry,
+  )
+  for (const path of manifests) files[path] = applyVersions(files[path] as string, versions.versions)
+  return versions
 }
 
 /** Every dependency/devDependency name → range declared in the given package.json texts. */

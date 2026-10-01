@@ -384,7 +384,8 @@ describe('createProject with resolveLatest', () => {
     expect(new Set(calls).size).toBe(calls.length)
     expect(latestCalls(calls).length).toBe(Object.keys(all).length)
     const probes = calls.filter((call) => call.startsWith('HEAD '))
-    expect(probes.length).toBe(Object.keys(all).filter((name) => !name.startsWith('@basaltkit/')).length)
+    // create-basalt rides with the framework: never probed (pnpm-workspace.yaml excludes it).
+    expect(probes.length).toBe(Object.keys(all).filter((name) => !name.startsWith('@basaltkit/') && name !== 'create-basalt').length)
     expect(probes.some((call) => call.includes('@basaltkit'))).toBe(false)
     expect(calls.every((url) => url.replace(/^HEAD /, '').startsWith('https://registry.test/'))).toBe(true)
     expect(result.versions?.failed).toEqual([])
