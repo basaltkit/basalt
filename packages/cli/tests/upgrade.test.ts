@@ -1,5 +1,8 @@
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { runUpgrade, MIGRATIONS, renameMachizeScope, type UpgradeFs } from '../src/index.js'
+import { runUpgrade, MIGRATIONS, nodeUpgradeFs, renameMachizeScope, type UpgradeFs } from '../src/index.js'
 
 function memFs(tree: Record<string, string>): UpgradeFs & { tree: Record<string, string> } {
   return {
@@ -48,5 +51,22 @@ describe('upgrade — rename-machize-scope', () => {
     const reports = await runUpgrade(MIGRATIONS, fs, { dir: '.', only: 'rename-machize-scope' })
     expect(reports).toHaveLength(1)
     expect(reports[0]!.migration).toBe('rename-machize-scope')
+  })
+
+  it('nodeUpgradeFs(baseDir) reads and writes the tree it listed, whatever process.cwd() is', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'basalt-upgrade-'))
+    try {
+      await mkdir(join(dir, 'src'), { recursive: true })
+      await mkdir(join(dir, 'node_modules', 'x'), { recursive: true })
+      await writeFile(join(dir, 'src', 'app.ts'), "import { a } from '@machize/core'\n")
+      await writeFile(join(dir, 'node_modules', 'x', 'index.js'), "'@machize/core'")
+      const reports = await runUpgrade(MIGRATIONS, nodeUpgradeFs(dir), { dir })
+      expect(reports[0]!.changed).toEqual([join('src', 'app.ts')])
+      expect(await readFile(join(dir, 'src', 'app.ts'), 'utf8')).toBe("import { a } from '@basaltkit/core'\n")
+      // node_modules is never touched.
+      expect(await readFile(join(dir, 'node_modules', 'x', 'index.js'), 'utf8')).toBe("'@machize/core'")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

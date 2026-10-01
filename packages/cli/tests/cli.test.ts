@@ -83,6 +83,13 @@ describe('runCli', () => {
     const code = await runCli({ app: createApp(), argv: ['nope'], io })
     expect(code).toBe(1)
     expect(io.errors[0]).toMatch(/Unknown command "nope"/)
+    expect(io.errors).toHaveLength(1)
+  })
+
+  it('points an old bin/basalt.ts at create-basalt for the project commands', async () => {
+    const io = memoryIo()
+    expect(await runCli({ app: createApp(), argv: ['update'], io })).toBe(1)
+    expect(io.errors[1]).toContain('npx create-basalt@latest update')
   })
 
   it('list (and empty argv) shows built-ins plus registered commands', async () => {
