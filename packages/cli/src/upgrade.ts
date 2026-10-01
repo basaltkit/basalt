@@ -75,13 +75,26 @@ export async function runUpgrade(
   return reports
 }
 
-/** Node-backed {@link UpgradeFs}. Recursive, skipping build/vcs directories. */
-export function nodeUpgradeFs(): UpgradeFs {
+/**
+ * Node-backed {@link UpgradeFs}. Recursive, skipping build/vcs directories.
+ *
+ * `list(dir)` returns paths relative to `dir`; `read`/`write` resolve a relative
+ * path against `baseDir` — pass the same directory you upgrade (default: the
+ * current working directory). Before `baseDir` existed, relative paths always
+ * resolved against `process.cwd()`, so `basalt upgrade --dir=<other>` listed
+ * one tree and read another.
+ */
+export function nodeUpgradeFs(baseDir?: string): UpgradeFs {
   const SKIP = new Set(['node_modules', 'dist', '.git', '.next', 'build', 'coverage'])
+  const at = async (path: string): Promise<string> => {
+    const { isAbsolute, resolve } = await import('node:path')
+    return isAbsolute(path) ? path : resolve(baseDir ?? process.cwd(), path)
+  }
   return {
     async list(dir) {
       const { readdir } = await import('node:fs/promises')
       const { join, relative } = await import('node:path')
+      const root = await at(dir)
       const out: string[] = []
       const walk = async (current: string): Promise<void> => {
         const entries = await readdir(current, { withFileTypes: true })
@@ -89,22 +102,20 @@ export function nodeUpgradeFs(): UpgradeFs {
           if (entry.isDirectory()) {
             if (!SKIP.has(entry.name)) await walk(join(current, entry.name))
           } else {
-            out.push(relative(dir, join(current, entry.name)))
+            out.push(relative(root, join(current, entry.name)))
           }
         }
       }
-      await walk(dir)
+      await walk(root)
       return out
     },
     async read(path) {
       const { readFile } = await import('node:fs/promises')
-      const { isAbsolute, join } = await import('node:path')
-      return readFile(isAbsolute(path) ? path : join(process.cwd(), path), 'utf8')
+      return readFile(await at(path), 'utf8')
     },
     async write(path, content) {
       const { writeFile } = await import('node:fs/promises')
-      const { isAbsolute, join } = await import('node:path')
-      await writeFile(isAbsolute(path) ? path : join(process.cwd(), path), content, 'utf8')
+      await writeFile(await at(path), content, 'utf8')
     },
   }
 }
@@ -114,14 +125,15 @@ export const upgradeCommand: CommandDefinition = defineCommand({
   name: 'upgrade',
   description: 'Apply framework upgrade codemods (--dry to preview, --only=<id>)',
   async handle({ io, flags }) {
-    const dir = typeof flags['dir'] === 'string' ? flags['dir'] : process.cwd()
+    const { resolve } = await import('node:path')
+    const dir = resolve(typeof flags['dir'] === 'string' ? flags['dir'] : process.cwd())
     const dry = flags['dry'] === true
     const only = typeof flags['only'] === 'string' ? flags['only'] : undefined
     if (only && !MIGRATIONS.some((m) => m.id === only)) {
       io.error(`Unknown migration "${only}". Available: ${MIGRATIONS.map((m) => m.id).join(', ')}.`)
       return 1
     }
-    const reports = await runUpgrade(MIGRATIONS, nodeUpgradeFs(), {
+    const reports = await runUpgrade(MIGRATIONS, nodeUpgradeFs(dir), {
       dir,
       dry,
       ...(only ? { only } : {}),
