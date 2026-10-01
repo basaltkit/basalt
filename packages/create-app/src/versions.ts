@@ -7,7 +7,7 @@ export const SCAFFOLD_VERSIONS: Readonly<Record<string, string>> = {
   '@basaltkit/ai-mcp': '^0.3.0',
   '@basaltkit/auth': '^4.1.0',
   '@basaltkit/auth-prisma': '^2.0.0',
-  '@basaltkit/cli': '^1.2.0',
+  '@basaltkit/cli': '^1.3.0',
   '@basaltkit/config': '^1.1.0',
   '@basaltkit/core': '^1.5.0',
   '@basaltkit/env': '^3.1.0',
@@ -25,5 +25,5 @@ export const SCAFFOLD_VERSIONS: Readonly<Record<string, string>> = {
   '@basaltkit/tenancy': '^3.1.0',
   '@basaltkit/tenancy-prisma': '^2.0.0',
   '@basaltkit/testing': '^2.0.0',
-  'create-basalt': '^1.9.0',
+  'create-basalt': '^1.10.0',
 }

@@ -81,7 +81,7 @@ Pergunta, por esta ordem:
 | `--no-auth` | auth **ativa** | Salta autenticação (`@basaltkit/auth`, `APP_SECRET`, `/auth/*`, `mfaRoutes()`) |
 | `--billing` | desativado | Inclui subscrições e planos (`@basaltkit/subscriptions`) |
 | `--ui` | desativado | Adiciona um frontend `web/` React + shadcn — vê [Web UI](/pt/guide/web-ui). **Força pnpm** |
-| `--cli` | desativado | Adiciona `bin/basalt.ts`, o script `basalt`, os geradores e o `prisma:sync` |
+| `--no-cli` | CLI ativado | Omite o `bin/basalt.ts`, o script `basalt`, os geradores e o `prisma:sync` (todas as apps os têm por omissão) |
 | `--mcp` | desativado | Expõe rotas só-de-leitura marcadas como ferramentas MCP em `POST /mcp`, mais um `.mcp.json` para ferramentas de IA — vê [MCP](/pt/guide/mcp) |
 | `--prisma` (`--db`) | desativado | Assenta a app em PostgreSQL através do Prisma: `prisma/schema.prisma`, migrações, `src/db.ts`, as stores Prisma e uma verificação no arranque de que a base de dados é a migrada — vê [PostgreSQL com `--prisma`](#postgresql-com-prisma) |
 | `--install` / `--no-install` | ativo em TTY, desativado em CI | Instala dependências no fim |
@@ -92,7 +92,7 @@ Pergunta, por esta ordem:
 | `-h`, `--help` | — | Imprime a ajuda e sai |
 
 ```bash
-pnpm create basalt my-saas --billing --cli --install --git   # stack completa, instalada e commitada
+pnpm create basalt my-saas --billing --install --git   # stack completa, instalada e commitada
 npm create basalt service-api --no-tenancy --no-auth         # API mínima
 pnpm create basalt agent-api --mcp -y                        # API + ferramentas MCP, sem perguntas
 pnpm create basalt my-saas --prisma --billing                # com PostgreSQL desde o primeiro commit
@@ -145,11 +145,11 @@ mudam o que está lá dentro:
 | `src/server.ts` | Arranca, resolve o `FASTIFY`, escuta e encerra em `SIGINT`/`SIGTERM` |
 | `src/dev.ts` | A entrada do `pnpm dev`: define `NODE_ENV=development` se ainda não estiver definido e carrega o `server.ts` |
 | `tests/app.test.ts` | Um smoke test que arranca a app e chama `/` e `/health` |
-| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — um `NODE_ENV` não definido conta como produção), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` com `--cli`, senão `create-basalt --project`, para que o `pnpm basalt update` funcione em qualquer app) e, com `--ui`, `dev:web`. O `create-basalt` é uma devDependency. As versões `@basaltkit/*` seguem a linha de release atual de cada pacote |
+| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — um `NODE_ENV` não definido conta como produção), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` por omissão, `create-basalt --project` com `--no-cli`, para que o `pnpm basalt update` funcione em qualquer app) e, com `--ui`, `dev:web`. O `create-basalt` é uma devDependency. As versões `@basaltkit/*` seguem a linha de release atual de cada pacote |
 | `.basalt/project.json` | O manifesto do scaffold: versão do create-basalt, opções e um hash de cada ficheiro gerado — faz commit dele; o [`add`](#acrescentar-funcionalidades-depois) e o [`update`](#atualizar-uma-app) usam-no para distinguir ficheiros do template intactos dos editados |
 | `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem; o `.env.example` usa os nomes com prefixo da app e, com o README, explica a [armadilha de precedência do `--env-file`](#o-env-file-nunca-sobrepoe-variaveis-exportadas); o `pnpm-workspace.yaml` exclui `@basaltkit/*` e `create-basalt` do `minimumReleaseAge` e documenta as [definições do pnpm 11](#pnpm-11-idade-minima-e-verifydepsbeforerun)) |
 | `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | Com `--prisma`: o schema (os modelos de cada domínio Basalt ativo mais os teus), a configuração do Prisma 7 com o URL de ligação, o(s) cliente(s) que a app usa e o seed do tenant `demo` |
-| `bin/basalt.ts` | Com `--cli`: o ponto de entrada da CLI que liga os geradores e o `prisma:sync`. Reencaminha `update`, `add`, `doctor` e `info` para o create-basalt **antes** de importar a app, para funcionarem mesmo com a app partida a meio de uma atualização |
+| `bin/basalt.ts` | Por omissão (não com `--no-cli`): o ponto de entrada da CLI que liga os geradores e o `prisma:sync`. Reencaminha `update`, `add`, `doctor` e `info` para o create-basalt **antes** de importar a app, para funcionarem mesmo com a app partida a meio de uma atualização |
 | `.mcp.json` | Com `--mcp`: regista a ponte `basalt-ai-mcp`, **só de desenvolvimento**, para clientes MCP |
 | `web/…` | Com `--ui`: o frontend React + shadcn, membro do workspace pnpm |
 
@@ -300,7 +300,7 @@ Dois comportamentos do pnpm 11 moldam o `pnpm-workspace.yaml` gerado:
 
 ## Atualizar uma app
 
-Qualquer app — gerada com ou sem `--cli`, por qualquer versão do create-basalt
+Qualquer app — gerada com ou sem a CLI (`--no-cli`), por qualquer versão do create-basalt
 — passa para as versões mais recentes das dependências num só comando:
 
 ```bash
@@ -451,7 +451,7 @@ framework uma capacidade de cada vez.
 
 ## Scaffold dentro de um projeto
 
-Com `--cli` (ou depois de acrescentares tu o `@basaltkit/cli` +
+Com a CLI (por omissão, ou depois de acrescentares tu o `@basaltkit/cli` +
 `@basaltkit/generator`), o `pnpm basalt` gera verticais de recurso completas:
 
 ```bash

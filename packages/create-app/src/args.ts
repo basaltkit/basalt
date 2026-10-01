@@ -11,7 +11,8 @@ Options:
   --no-auth       Skip authentication
   --billing       Include subscriptions/billing
   --ui            Scaffold a web/ frontend (React + shadcn + SDK)
-  --cli           Scaffold the 'basalt' CLI (code generators + commands)
+  --no-cli        Skip the 'basalt' CLI (code generators + commands;
+                  on by default)
   --mcp           Expose read-only routes as MCP tools at /mcp
   --prisma, --db  Back the app with PostgreSQL through Prisma: schema,
                   migrations, prisma-backed stores and a boot-time check
@@ -62,7 +63,7 @@ export function parseArgs(argv: string[]): Flags {
     auth: true,
     billing: false,
     ui: false,
-    cli: false,
+    cli: true,
     mcp: false,
     prisma: false,
     yes: false,
@@ -74,6 +75,7 @@ export function parseArgs(argv: string[]): Flags {
     else if (token === '--billing') flags.billing = true
     else if (token === '--ui') flags.ui = true
     else if (token === '--cli') flags.cli = true
+    else if (token === '--no-cli') flags.cli = false
     else if (token === '--mcp') flags.mcp = true
     // `--db` reads naturally in a sentence ("scaffold it with a db") and is the
     // same switch; the canonical spelling stays the package name, like --mcp.

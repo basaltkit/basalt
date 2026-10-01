@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { parseArgs } from '../src/args.js'
 import {
+  PRESETS,
   runWizard,
   scriptedPrompter,
   validateProjectName,
@@ -84,5 +86,26 @@ describe('runWizard', () => {
       confirm: [false, false, false], // decline create
     })
     await expect(runWizard(p)).rejects.toBeInstanceOf(WizardCancelledError)
+  })
+})
+
+describe('the basalt CLI is on by default', () => {
+  it('every preset with a fixed feature set includes the CLI', () => {
+    for (const preset of PRESETS) {
+      if (preset.features) expect(preset.features, preset.value).toContain('cli')
+    }
+  })
+
+  it('flags: on unless --no-cli (--cli still accepted)', () => {
+    expect(parseArgs(['app']).cli).toBe(true)
+    expect(parseArgs(['app', '--cli']).cli).toBe(true)
+    expect(parseArgs(['app', '--no-cli']).cli).toBe(false)
+  })
+
+  it('the minimal and api presets scaffold the CLI', async () => {
+    for (const preset of ['minimal', 'api']) {
+      const p = scriptedPrompter({ text: ['acme'], select: [preset, 'pnpm'], confirm: [false, false, true] })
+      expect((await runWizard(p)).cli, preset).toBe(true)
+    }
   })
 })
