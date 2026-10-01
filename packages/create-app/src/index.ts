@@ -23,13 +23,8 @@ import {
   type ProjectOptions,
 } from './templates.js'
 import { uiFiles } from './templates-ui.js'
-import {
-  applyVersions,
-  collectDependencies,
-  resolveLatestVersions,
-  type ResolveLatestOptions,
-  type VersionResolution,
-} from './latest-versions.js'
+import { createManifest, MANIFEST_PATH, serializeManifest } from './project/manifest.js'
+import { resolveFileVersions, type ResolveLatestOptions, type VersionResolution } from './latest-versions.js'
 
 export type { ProjectOptions } from './templates.js'
 
@@ -114,24 +109,9 @@ export function resolveRunDefaults(input: {
   }
 }
 
-/** Generates a ready-to-run Basalt app. Does not install dependencies. */
-export async function createProject(input: CreateProjectInput): Promise<CreateProjectResult> {
-  const options: ProjectOptions = {
-    name: input.name,
-    tenancy: input.tenancy ?? true,
-    auth: input.auth ?? true,
-    billing: input.billing ?? false,
-    ui: input.ui ?? false,
-    cli: input.cli ?? false,
-    mcp: input.mcp ?? false,
-    prisma: input.prisma ?? false,
-  }
-  const dir = resolve(input.dir ?? input.name)
-
-  const existing = await readdir(dir).catch(() => null)
-  if (existing && existing.length > 0) throw new TargetNotEmptyError(dir)
-
-  const files: Record<string, string> = {
+/** Every file a scaffold with `options` writes (dependency ranges = the bundled fallbacks). */
+export function scaffoldFiles(options: ProjectOptions): Record<string, string> {
+  return {
     'package.json': packageJson(options),
     'tsconfig.json': tsconfigJson(options),
     '.env.example': envExample(options),
@@ -158,16 +138,28 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     ...(options.mcp ? { '.mcp.json': mcpJson(options) } : {}),
     ...(options.ui ? uiFiles(options) : {}),
   }
+}
 
-  let versions: VersionResolution | undefined
-  if (input.resolveLatest) {
-    const manifests = Object.keys(files).filter((path) => path === 'package.json' || path.endsWith('/package.json'))
-    versions = await resolveLatestVersions(
-      collectDependencies(manifests.map((path) => files[path] as string)),
-      input.registry,
-    )
-    for (const path of manifests) files[path] = applyVersions(files[path] as string, versions.versions)
+/** Generates a ready-to-run Basalt app. Does not install dependencies. */
+export async function createProject(input: CreateProjectInput): Promise<CreateProjectResult> {
+  const options: ProjectOptions = {
+    name: input.name,
+    tenancy: input.tenancy ?? true,
+    auth: input.auth ?? true,
+    billing: input.billing ?? false,
+    ui: input.ui ?? false,
+    cli: input.cli ?? false,
+    mcp: input.mcp ?? false,
+    prisma: input.prisma ?? false,
   }
+  const dir = resolve(input.dir ?? input.name)
+
+  const existing = await readdir(dir).catch(() => null)
+  if (existing && existing.length > 0) throw new TargetNotEmptyError(dir)
+
+  const files = scaffoldFiles(options)
+  const versions = input.resolveLatest ? await resolveFileVersions(files, input.registry) : undefined
+  files[MANIFEST_PATH] = serializeManifest(createManifest(options, files))
 
   for (const [path, content] of Object.entries(files)) {
     const target = join(dir, path)
@@ -183,6 +175,7 @@ export {
   DEFAULT_REGISTRY,
   DEFAULT_MINIMUM_RELEASE_AGE_MINUTES,
   describeResolution,
+  resolveFileVersions,
   minimumReleaseAgeMinutes,
   resolveLatestVersions,
   registryUrl,
@@ -191,5 +184,11 @@ export {
   type ResolveLatestOptions,
   type VersionResolution,
 } from './latest-versions.js'
+export { runProjectCommand, PROJECT_COMMANDS, isProjectCommand, type ProjectCommandDeps } from './project/run.js'
+export { planUpdate, type UpdatePlan, type UpdateEntry } from './project/update.js'
+export { planAdd, ADDABLE_FEATURES, type AddPlan, type AddableFeature } from './project/add.js'
+export { runDoctor, type DoctorFinding } from './project/doctor.js'
+export { loadProject, NotABasaltAppError, type ProjectContext } from './project/context.js'
+export { MANIFEST_PATH, readManifest, hashContent, type ProjectManifest } from './project/manifest.js'
 export { runWizard, validateProjectName, PRESETS, FEATURES, type WizardResult, type WizardOptions, type FeatureKey } from './wizard.js'
 export { ttyPrompter, scriptedPrompter, WizardCancelledError, type Prompter, type Choice } from './prompt.js'
