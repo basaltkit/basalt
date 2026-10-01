@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const packagesDir = join(here, '..', '..')
 const target = join(here, '..', 'src', 'versions.ts')
 
-/** Every @basaltkit/* package the templates (API + web UI) can emit. */
+/** Every package of this repo the templates (API + web UI) can emit. */
 const SCAFFOLDED = [
   '@basaltkit/admin',
   '@basaltkit/admin-shadcn',
@@ -36,6 +36,9 @@ const SCAFFOLDED = [
   '@basaltkit/tenancy',
   '@basaltkit/tenancy-prisma',
   '@basaltkit/testing',
+  // Not a framework package: the scaffold's devDependency that serves
+  // `pnpm basalt update | add | doctor | info`.
+  'create-basalt',
 ]
 
 const versions = new Map()

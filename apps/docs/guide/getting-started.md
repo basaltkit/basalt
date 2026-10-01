@@ -84,6 +84,11 @@ installs dependencies and initializes git by default (opt out with
 `--install` / `--git`. The full flag list lives in
 [Installation](/guide/installation).
 
+Nothing here is final: `pnpm basalt add ui` (or `cli`, `mcp`) adds a feature
+you skipped, and `pnpm basalt update` moves the app to the latest versions —
+see [Adding features later](/guide/installation#adding-features-later) and
+[Updating an app](/guide/installation#updating-an-app).
+
 ### 2. Install and configure
 
 ```bash
@@ -216,7 +221,8 @@ full map (SQLite and Prisma backends for auth, teams, audit, tenancy and more).
 ## Where to next
 
 - [Installation](/guide/installation) — every scaffolder flag, the requirements,
-  the `basalt` CLI, and adding Basalt to an existing app.
+  the `basalt` CLI, adding Basalt to an existing app, and updating an app or
+  adding features to it later.
 - [Configuration](/guide/config) — `src/env.ts`, fail-closed secrets and the
   settings repository.
 - [Core Concepts](/guide/concepts) — plugins, the DI container, request context

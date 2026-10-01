@@ -4,6 +4,8 @@ import type { PackageManager } from './index.js'
 export const USAGE = `Usage: npm create basalt <name> [options]
 
 Options:
+  --name=<name>   Project name (the way to create a project named like a
+                  project command: update, add, doctor, info)
   --dir=<path>    Target directory (default: ./<name>)
   --no-tenancy    Skip multi-tenancy
   --no-auth       Skip authentication
@@ -27,6 +29,13 @@ Options:
   -h, --help      Show this help
 
 Run with no name in a terminal to be prompted interactively.
+
+Project commands — inside an existing app (in a scaffolded app: pnpm basalt <command>):
+  create-basalt update            Update dependencies to the latest versions (--dry, --major, …)
+  create-basalt add <feature>     Add ui | cli | mcp to the app
+  create-basalt doctor            Check the project's health
+  create-basalt info              Versions summary for bug reports
+  create-basalt <command> --help  Options of one command
 `
 
 export interface Flags {
@@ -76,6 +85,7 @@ export function parseArgs(argv: string[]): Flags {
     else if (token === '-y' || token === '--yes') flags.yes = true
     else if (token === '--offline') flags.offline = true
     else if (token.startsWith('--dir=')) flags.dir = token.slice('--dir='.length)
+    else if (token.startsWith('--name=')) flags.name = token.slice('--name='.length)
     else if (token.startsWith('--pm=')) flags.pm = token.slice('--pm='.length) as PackageManager
     else if (token === '--help' || token === '-h') {
       stdout.write(USAGE)

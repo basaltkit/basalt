@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { stdin, stdout } from 'node:process'
 import {
   createProject,
@@ -11,6 +11,7 @@ import {
   TargetNotEmptyError,
   WizardCancelledError,
 } from './index.js'
+import { basaltCommand, isProjectCommand, runProjectCommand } from './project/run.js'
 import { parseArgs, resolvesLatest, USAGE } from './args.js'
 import { envPrefix } from './templates.js'
 
@@ -27,13 +28,54 @@ function run(command: string, args: string[], cwd: string): Promise<boolean> {
   })
 }
 
+/** Runs a command and returns its trimmed stdout, or undefined (never throws). */
+function capture(command: string, args: string[], cwd: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile(command, args, { cwd, shell: process.platform === 'win32', timeout: 10_000 }, (error, out) => {
+      resolve(error ? undefined : String(out).trim() || undefined)
+    })
+  })
+}
+
 /** Cleanly abort on Ctrl+C instead of dumping a Node AbortError stack trace. */
 function cancel(): never {
   stdout.write('\nCancelled.\n')
   process.exit(130) // 128 + SIGINT
 }
 
-const flags = parseArgs(process.argv.slice(2))
+const argv = process.argv.slice(2)
+
+// Project commands (update | add | doctor | info) operate on an EXISTING app.
+// They are selected by the first positional argument — those four words are
+// reserved, so a project literally named "update" is created with
+// --name=update. `--project` (the `basalt` script of apps without --cli) forces
+// project mode: `pnpm basalt` alone then prints the project-command help.
+const firstPositional = argv.find((token) => !token.startsWith('-'))
+if (argv.includes('--project') || isProjectCommand(firstPositional)) {
+  const code = await runProjectCommand(
+    argv.filter((token) => token !== '--project'),
+    {
+      cwd: process.cwd(),
+      out: { log: (line = '') => stdout.write(`${line}\n`), error: (line) => process.stderr.write(`${line}\n`) },
+      env: process.env,
+      interactive: Boolean(stdin.isTTY) && !process.env['CI'],
+      isTTY: Boolean(stdout.isTTY),
+      run,
+      capture,
+      confirm: async (message) => {
+        try {
+          return await ttyPrompter().confirm({ message, initial: true })
+        } catch (error) {
+          if (error instanceof WizardCancelledError) cancel()
+          throw error
+        }
+      },
+    },
+  )
+  process.exit(code)
+}
+
+const flags = parseArgs(argv)
 
 // Rich interactive wizard when nothing was specified in a terminal. CI, piped
 // input, and `--yes` keep the flag-driven path.
@@ -137,10 +179,13 @@ try {
     steps.push(`${pm} run db:migrate${flags.tenancy ? '   # creates the tables and seeds the demo tenant' : '   # creates the tables'}`)
   }
   steps.push(`${pm} run dev${flags.ui ? '        # API on :3000' : ''}`)
-  // `web` is wired as a pnpm workspace member (pnpm-workspace.yaml), so its dev
-  // server is launched with a pnpm filter regardless of the root package manager.
-  if (flags.ui) steps.push(`pnpm --filter ${result.options.name}-web dev   # UI on :5180`)
+  // `web` is a pnpm workspace member (pnpm-workspace.yaml); `dev:web` runs its
+  // dev server through a pnpm filter.
+  if (flags.ui) steps.push(`pnpm dev:web        # UI on :5180`)
   console.log(`\nNext steps:\n${steps.map((s) => `  ${s}`).join('\n')}\n`)
+  console.log(
+    `Later: \`${basaltCommand(pm, 'update')}\` updates the dependencies, \`${basaltCommand(pm, 'add ui|cli|mcp')}\` adds a feature, \`${basaltCommand(pm, 'doctor')}\` checks the project.\n`,
+  )
 } catch (error) {
   if (error instanceof TargetNotEmptyError) {
     console.error(error.message)

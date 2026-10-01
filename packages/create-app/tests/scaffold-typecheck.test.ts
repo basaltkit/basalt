@@ -4,7 +4,10 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
+import { writeFileSync } from 'node:fs'
 import { createProject } from '../src/index.js'
+import { runProjectCommand } from '../src/project/run.js'
+import { harness } from './helpers/project.js'
 
 /**
  * The scaffold-drift net (review 2026-08-b, finding D-1): a pristine scaffold
@@ -34,6 +37,16 @@ const typecheck = (dir: string): string => {
   }
 }
 
+/** Typechecks src + tests AND bin/ (the app's own tsconfig leaves bin/ out — tsx runs it). */
+const typecheckWithBin = (dir: string): string => {
+  writeFileSync(join(dir, 'tsconfig.check.json'), JSON.stringify({ extends: './tsconfig.json', include: ['src', 'tests', 'bin'] }))
+  return typecheck(join(dir, 'tsconfig.check.json'))
+}
+
+/** `create-basalt add <feature>` on an existing scaffold — offline, no install. */
+const addFeature = async (dir: string, feature: string): Promise<number> =>
+  runProjectCommand(['add', feature, '--yes', '--offline', '--no-install', '--pm=pnpm'], harness(dir).deps)
+
 afterAll(() => {
   rmSync(root, { recursive: true, force: true })
 })
@@ -52,7 +65,34 @@ describe('scaffolded apps typecheck out of the box', () => {
     rmSync(dir, { recursive: true, force: true })
     mkdirSync(dir, { recursive: true })
     await createProject({ name: 'scaffold-full', dir, billing: true, cli: true, mcp: true })
+    expect(typecheckWithBin(dir)).toBe('')
+  }, 60_000)
+})
+
+describe('features added later typecheck like features scaffolded up front', () => {
+  it('add ui: equivalent to --ui (same tree, see project-add.test.ts) and the API still typechecks', async () => {
+    const dir = join(root, 'add-ui')
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+    await createProject({ name: 'scaffold-add-ui', dir })
+    expect(await addFeature(dir, 'ui')).toBe(0)
+    expect(existsSync(join(dir, 'web', 'src', 'App.tsx'))).toBe(true)
+    const withUi = join(root, 'with-ui')
+    rmSync(withUi, { recursive: true, force: true })
+    mkdirSync(withUi, { recursive: true })
+    await createProject({ name: 'scaffold-add-ui', dir: withUi, ui: true })
+    expect(typecheck(dir)).toBe(typecheck(withUi))
     expect(typecheck(dir)).toBe('')
+  }, 60_000)
+
+  it('add cli + add mcp on a default scaffold (bin/basalt.ts included)', async () => {
+    const dir = join(root, 'add-cli-mcp')
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+    await createProject({ name: 'scaffold-add-cli', dir })
+    expect(await addFeature(dir, 'cli')).toBe(0)
+    expect(await addFeature(dir, 'mcp')).toBe(0)
+    expect(typecheckWithBin(dir)).toBe('')
   }, 60_000)
 })
 

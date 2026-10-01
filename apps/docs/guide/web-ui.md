@@ -11,7 +11,10 @@ Basalt gives you two ways to put a screen in front of your API:
 
 ```bash
 pnpm create basalt my-app --ui          # auth is on by default → the ready-made auth flows come too
+pnpm basalt add ui                      # …or add it later to an app created without --ui
 ```
+
+`add ui` writes the same `web/` an `--ui` scaffold gets, adapted to the app (its name, whether auth is on), merges `package.json`/`pnpm-workspace.yaml` and never overwrites an existing file — see [Adding features later](/guide/installation#adding-features-later).
 
 Authentication is **on by default** in the scaffold, so `--ui` gives you the auth screens as well; pass `--no-auth` if you want the frontend without them. Requires **pnpm** — the `web/` frontend is a workspace member (the scaffolder switches to pnpm automatically if you invoked it with another manager).
 
@@ -33,7 +36,7 @@ web/
 - **[`@basaltkit/sdk`](#the-type-safe-sdk)** — the type-safe client to your API.
 - The Vite dev server **proxies `/api`** to the backend, so the browser talks same-origin — no CORS to configure.
 
-`web` is registered as a pnpm workspace member (named `<your-app>-web`), so `pnpm install` at the root resolves it. Run the backend with `pnpm dev` (API on `:3000`), then the frontend with `pnpm --filter my-app-web dev` — Vite serves it on `http://localhost:5180` and proxies `/api` to the backend.
+`web` is registered as a pnpm workspace member (named `<your-app>-web`), so `pnpm install` at the root resolves it. Run the backend with `pnpm dev` (API on `:3000`), then the frontend with `pnpm dev:web` (a root script for `pnpm --filter my-app-web dev`) — Vite serves it on `http://localhost:5180` and proxies `/api` to the backend.
 
 With auth enabled (the default), `App.tsx` ships the full standard flows out of the box: sign in (with a TOTP challenge), register, forgot-password, reset-password via the emailed `?token` link, and a dashboard that manages two-factor (enroll → secret/otpauth → activate → recovery codes → disable). Pass `--no-auth` to scaffold the frontend without them.
 

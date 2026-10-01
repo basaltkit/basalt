@@ -94,8 +94,14 @@ Without registering anything, `runCli` always provides:
 | `basalt routes` | Lists the HTTP routes registered by the application (read from the `http:routes` metadata bucket, populated by HTTP adapters such as `@basaltkit/fastify`) |
 | `basalt schedule:list` | Lists scheduled tasks and their cron expressions (read from the `schedule:entries` bucket, populated by `@basaltkit/scheduler`) |
 | `basalt dev [--entry] [--worker] [--queue] [--no-routes]` | Runs the app with watch + restart, **prints the route table on boot**, and with `--worker` also starts a watched `queue:work` alongside it (server + worker in one command). Delegates watching to `tsx watch` / `node --watch`. |
-| `basalt upgrade [--dry] [--only=<id>]` | Applies framework upgrade codemods (ships the `@machize/*` → `@basaltkit/*` scope rename; `--dry` previews) |
+| `basalt upgrade [--dry] [--only=<id>] [--dir=<path>]` | Applies framework upgrade codemods (ships the `@machize/*` → `@basaltkit/*` scope rename; `--dry` previews). `create-basalt update` runs them for you after an install. `nodeUpgradeFs(baseDir)` resolves relative paths against the directory being upgraded, so `--dir=` reads the tree it lists |
 | `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile` (plus a `.dockerignore` keeping `.env` and keys out of the image), `ci`, `editorconfig` (run with no id to list) |
+
+Not served by `runCli`: the **project commands** `update`, `add`, `doctor` and
+`info` belong to `create-basalt` — the scaffolded `bin/basalt.ts` forwards them
+before booting the app (so `pnpm basalt update` works even when the app does
+not boot). On an older `bin/basalt.ts` they hit `Unknown command`, followed by a
+hint to run `npx create-basalt@latest <command>`.
 
 If you also install `@basaltkit/generator`, you gain the `make:*` commands. Feature
 plugins register their own: `queue:work|stats|retry|jobs` (`@basaltkit/queue`),
@@ -243,7 +249,7 @@ The definitions of the built-in `routes` and `schedule:list` commands. *(Advance
 ## Common errors and solutions (FAQ)
 
 **`Unknown command "x". Run "basalt list" to see what is available.`**
-The command isn't registered. Confirm you passed it inside `commandsPlugin([...])` and that plugin is in the `plugins` list of `createApp`. Run `basalt list` to see what's available.
+The command isn't registered. Confirm you passed it inside `commandsPlugin([...])` and that plugin is in the `plugins` list of `createApp`. Run `basalt list` to see what's available. For `update`, `add`, `doctor` or `info`, see the second line of the error: those are create-basalt's project commands, and `npx create-basalt@latest update` teaches an old `bin/basalt.ts` to forward them.
 
 **My command runs but the `--step 2` flag doesn't work.**
 The parser only recognizes the equals-sign form: `--step=2`. Written with a space, `2` is treated as a positional argument (it shows up in `args`).
@@ -263,4 +269,4 @@ Return a number from `handle` (for example `return 3`). `runCli` propagates it; 
 - **`@basaltkit/generator`** — provides `generatorCommands()`, a list of `make:*` commands (code generators) ready to pass to `commandsPlugin`. That's how `basalt make:resource` shows up.
 - **`@basaltkit/fastify`** — writes routes into the `http:routes` bucket, which the built-in `routes` command reads.
 - **`@basaltkit/scheduler`** — writes tasks into the `schedule:entries` bucket, which `schedule:list` reads.
-- **`create-basalt`** — with the `--cli` flag, the project generator creates `bin/basalt.ts`, the `pnpm basalt` script, and registers `commandsPlugin(generatorCommands())` for you.
+- **`create-basalt`** — with the `--cli` flag (or later, `create-basalt add cli`), the project generator creates `bin/basalt.ts`, the `pnpm basalt` script, and registers `commandsPlugin(generatorCommands())` for you. It also provides the project commands `bin/basalt.ts` forwards: `update`, `add`, `doctor`, `info`.
