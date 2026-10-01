@@ -78,7 +78,9 @@ present) to their latest published versions, with the scaffold's policy:
 Range style (^, ~, exact) and package.json formatting are preserved. Then it
 installs, runs the @basaltkit/cli upgrade codemods, and suggests typecheck+test.
 It also upgrades project tooling: an unmodified old bin/basalt.ts gains the
-project commands; create-basalt becomes a devDependency (pnpm basalt update).
+project commands, .env loading for development and a pre-boot \`upgrade\`; an
+unmodified src/dev.ts loads .env; the .env.example header is refreshed;
+create-basalt becomes a devDependency (pnpm basalt update).
 
 Options:
   --dry           Show the plan, write nothing
@@ -87,7 +89,8 @@ Options:
   --only=@basaltkit
                   Only the framework packages (and create-basalt)
   --no-install    Write package.json, skip the install (and the codemods)
-  --no-tooling    Leave bin/basalt.ts and the create-basalt devDependency alone
+  --no-tooling    Leave bin/basalt.ts, src/dev.ts, .env.example and the
+                  create-basalt devDependency alone
 ${COMMON_FLAGS}
 `,
   add: `Usage: create-basalt add <feature> [options]   (in an app: pnpm basalt add <feature>)
@@ -116,8 +119,9 @@ ${COMMON_FLAGS}
 
 Read-only health check: Node vs engines, package manager and lockfiles,
 installed vs declared versions, duplicated @basaltkit versions and unmet peer
-ranges, framework packages behind latest, the auth secret and DATABASE_URL
-(from the environment or .env), Prisma client/migrations, .mcp.json.
+ranges, framework packages behind latest, the required variables of src/env.ts
+and the auth secret (from the environment or .env), Prisma client/migrations,
+.mcp.json, and whether bin/basalt.ts / src/dev.ts are current.
 Exits 1 when an error is found; warnings alone exit 0.
 
 Options:

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { binStatus, MANUAL_BIN_SNIPPET, patchBasaltBin } from '../bin-template.js'
+import { binStatus, hasProjectCommands, manualBinSnippet, patchBasaltBin } from '../bin-template.js'
+import { devEntryStatus, MANUAL_DEV_SNIPPET, patchDevEntry, patchEnvExample } from '../dev-entry.js'
 import {
   alwaysLatest,
   lookupLatestVersions,
@@ -305,21 +306,49 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
       }
     }
 
-    // bin/basalt.ts from an earlier template: make it delegate the project commands.
+    // Template files from an earlier release: bring them to the current
+    // templates when untouched (known hash or the manifest's), else print the
+    // snippet. Patched files get their manifest hash refreshed.
+    const patched: Record<string, string> = {}
     const bin = await readOptional(join(ctx.dir, 'bin', 'basalt.ts'))
     const status = binStatus(bin, ctx.manifest?.files['bin/basalt.ts'])
     if (status === 'patchable' && bin !== undefined) {
       const after = patchBasaltBin(bin)
       files['bin/basalt.ts'] = { before: bin, after }
-      toolingNotes.push('bin/basalt.ts: unmodified template from an earlier release — gains update/add/doctor/info')
-      if (ctx.manifest) {
-        files[MANIFEST_PATH] = {
-          before: serializeManifest(ctx.manifest),
-          after: serializeManifest(extendManifest(ctx.manifest, ctx.options, { 'bin/basalt.ts': after })),
-        }
+      patched['bin/basalt.ts'] = after
+      toolingNotes.push(
+        `bin/basalt.ts: unmodified template from an earlier release — ${
+          hasProjectCommands(bin) ? '' : 'gains update/add/doctor/info; '
+        }loads .env for development, runs \`upgrade\` without booting the app, explains env errors`,
+      )
+    } else if (status === 'modified' && bin !== undefined) {
+      manual.push(`bin/basalt.ts was customised, so it was not patched. To bring it up to date:\n${manualBinSnippet(bin)}`)
+    }
+
+    const dev = await readOptional(join(ctx.dir, 'src', 'dev.ts'))
+    const devStatus = devEntryStatus(dev, ctx.manifest?.files['src/dev.ts'])
+    if (devStatus === 'patchable' && dev !== undefined) {
+      const after = patchDevEntry()
+      files['src/dev.ts'] = { before: dev, after }
+      patched['src/dev.ts'] = after
+      toolingNotes.push('src/dev.ts: unmodified template from an earlier release — `dev` loads .env (exported variables still win)')
+    } else if (devStatus === 'modified') {
+      manual.push(`src/dev.ts was customised, so it was not patched. To load .env in development:\n${MANUAL_DEV_SNIPPET}`)
+    }
+
+    const example = await readOptional(join(ctx.dir, '.env.example'))
+    const exampleAfter = example === undefined ? undefined : patchEnvExample(example)
+    if (example !== undefined && exampleAfter !== undefined) {
+      files['.env.example'] = { before: example, after: exampleAfter }
+      patched['.env.example'] = exampleAfter
+      toolingNotes.push('.env.example: header now says dev/CLI load .env automatically and `start` does not')
+    }
+
+    if (ctx.manifest && Object.keys(patched).length > 0) {
+      files[MANIFEST_PATH] = {
+        before: serializeManifest(ctx.manifest),
+        after: serializeManifest(extendManifest(ctx.manifest, ctx.options, patched)),
       }
-    } else if (status === 'modified') {
-      manual.push(`bin/basalt.ts was customised, so it was not patched. To give it the project commands:\n${MANUAL_BIN_SNIPPET}`)
     }
   }
 

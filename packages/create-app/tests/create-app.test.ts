@@ -24,6 +24,7 @@ describe('createProject', () => {
     expect(result.files).toEqual([
       '.basalt/project.json',
       '.dockerignore',
+      '.env',
       '.env.example',
       '.gitignore',
       'README.md',

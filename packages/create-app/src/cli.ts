@@ -175,7 +175,8 @@ try {
   if (flags.prisma) {
     // Nothing boots before the database exists: env.DATABASE_URL is required and
     // the app asserts at boot that it reached the MIGRATED database.
-    steps.push(`cp .env.example .env   # then point ${envPrefix(result.options.name)}_DATABASE_URL at your database`)
+    // .env is already written with a local URL (pnpm dev / pnpm basalt load it).
+    steps.push(`# start PostgreSQL, or edit ${envPrefix(result.options.name)}_DATABASE_URL in .env`)
     steps.push(`${pm} run db:migrate${flags.tenancy ? '   # creates the tables and seeds the demo tenant' : '   # creates the tables'}`)
   }
   steps.push(`${pm} run dev${flags.ui ? '        # API on :3000' : ''}`)

@@ -1,0 +1,4 @@
+// Development entrypoint (`pnpm dev`). `pnpm start` runs server.ts directly,
+// where an unset NODE_ENV counts as production: secrets are then required.
+process.env['NODE_ENV'] ??= 'development'
+await import('./server.js')

@@ -29,7 +29,9 @@ the mapping yourself, which is why it is greppable.
 `defineEnv` reads `process.env` and nothing else. Load the file before the
 module is imported — `node --env-file=.env` (Node 22 ships it) or your process
 manager's own mechanism. A `.env` sitting next to `src/env.ts` does nothing on
-its own.
+its own. (An app scaffolded by create-basalt does this in its dev entrypoints:
+`pnpm dev` and `pnpm basalt` load `.env`; `pnpm start` does not — see
+[Installation](/guide/installation#env-file-never-overrides-exported-variables).)
 :::
 
 ## Quickstart
