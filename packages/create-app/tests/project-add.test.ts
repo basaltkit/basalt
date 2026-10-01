@@ -262,6 +262,12 @@ export function buildApp(options: BuildAppOptions = {}) {
     })
   }
 
+  it('escapes the server name as a single-quoted literal (quotes, backslashes, line breaks)', () => {
+    const cli = patchAppForCli(source('fastifyPlugin')) as string
+    const mcp = patchAppForMcp(cli, "o'brien\\x\nnext") as string
+    expect(mcp).toContain("serverInfo: { name: 'o\\'brien\\\\x\\nnext', version: '0.1.0' }")
+  })
+
   it('refuses ambiguous or missing anchors', () => {
     const two = source('fastifyPlugin').replace('fastifyPlugin({ routes: appRoutes }),', 'fastifyPlugin({ routes: appRoutes }),\n      honoPlugin({ routes: appRoutes }),')
     expect(patchAppForMcp(two, 'x')).toBeUndefined()
