@@ -31,7 +31,10 @@ o consegues encontrar com um grep.
 O `defineEnv` lê o `process.env` e mais nada. Carrega o ficheiro antes de o
 módulo ser importado — `node --env-file=.env` (o Node 22 já o traz) ou o
 mecanismo do teu gestor de processos. Um `.env` ao lado de `src/env.ts` não faz
-nada por si só.
+nada por si só. (Uma app gerada pelo create-basalt fá-lo nas suas entradas de
+desenvolvimento: o `pnpm dev` e o `pnpm basalt` carregam o `.env`; o
+`pnpm start` não — vê
+[Instalação](/pt/guide/installation#o-env-file-nunca-sobrepoe-variaveis-exportadas).)
 :::
 
 ## Início rápido

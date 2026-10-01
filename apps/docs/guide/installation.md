@@ -138,14 +138,15 @@ inside it:
 | `src/env.ts` | `defineEnv` over `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` with auth), with `{ prefix: 'MY_SAAS' }` — every variable is read as `MY_SAAS_<NAME>` first, falling back to the bare name (see [`--env-file` never overrides exported variables](#env-file-never-overrides-exported-variables)) |
 | `src/app.ts` | `buildApp()` — config, logger, events, security headers + a global rate limit, then tenancy/auth/billing/MCP/CLI as selected. With tenancy + auth: `teamsPlugin()` + `tenantMembershipPlugin()` (authenticated requests for a tenant the user is not a member of get `403`) and a dev-only seed adding registrants to the `demo` tenant |
 | `src/routes.ts` | `GET /` (a friendly index) and `GET /health` |
-| `src/server.ts` | Boots, resolves `FASTIFY`, listens, and shuts down on `SIGINT`/`SIGTERM` |
-| `src/dev.ts` | The `pnpm dev` entry: sets `NODE_ENV=development` unless already set, then loads `server.ts` |
+| `src/server.ts` | Boots, resolves `FASTIFY`, listens, and shuts down on `SIGINT`/`SIGTERM`. `pnpm start` runs it directly and loads **no** `.env` — production configuration comes from the real environment |
+| `src/dev.ts` | The `pnpm dev` entry: loads `.env` when present (exported variables win), sets `NODE_ENV=development` unless already set, then loads `server.ts` |
 | `tests/app.test.ts` | A smoke test that boots the app and hits `/` and `/health` |
 | `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — an unset `NODE_ENV` counts as production), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` by default, `create-basalt --project` with `--no-cli`, so `pnpm basalt update` works in every app) and, with `--ui`, `dev:web`. `create-basalt` is a devDependency. `@basaltkit/*` ranges track each package's current release line |
 | `.basalt/project.json` | The scaffold manifest: create-basalt version, options and a hash of every generated file — commit it; [`add`](#adding-features-later) and [`update`](#updating-an-app) use it to tell untouched template files from edited ones |
+| `.env` | Local development values — a copy of `.env.example` plus, with auth, a generated `APP_SECRET`. Git-ignored, mode `0600`, never in the manifest; `pnpm dev` and `pnpm basalt` load it, `pnpm start` does not |
 | `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers; `.env.example` uses the app-prefixed names and, with the README, explains the [`--env-file` precedence pitfall](#env-file-never-overrides-exported-variables); `pnpm-workspace.yaml` excludes `@basaltkit/*` and `create-basalt` from `minimumReleaseAge` and documents the [pnpm 11 settings](#pnpm-11-release-age-and-verifydepsbeforerun)) |
 | `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | With `--prisma`: the schema (the models of every enabled Basalt domain plus your own), the Prisma 7 config carrying the connection URL, the client(s) the app uses, and the `demo` tenant seed |
-| `bin/basalt.ts` | By default (not with `--no-cli`): the CLI entrypoint wiring the generators and `prisma:sync`. It forwards `update`, `add`, `doctor` and `info` to create-basalt **before** importing the app, so they work while the app is broken mid-upgrade |
+| `bin/basalt.ts` | By default (not with `--no-cli`): the CLI entrypoint wiring the generators and `prisma:sync`. It forwards `update`, `add`, `doctor` and `info` to create-basalt and runs `upgrade` (the codemods) **before** importing the app, so they work while the app is broken mid-upgrade; then it loads `.env` (exported variables win) and turns an invalid environment, an unreachable database or an unmigrated one into a readable fix instead of a stack trace |
 | `.mcp.json` | With `--mcp`: registers the **dev-only** `basalt-ai-mcp` bridge for MCP clients |
 | `web/…` | With `--ui`: the React + shadcn frontend, a pnpm workspace member |
 
@@ -188,7 +189,7 @@ client types right after install.
 ```bash
 pnpm create basalt my-saas --prisma
 cd my-saas && pnpm install
-cp .env.example .env     # point MY_SAAS_DATABASE_URL at your database
+# .env points MY_SAAS_DATABASE_URL at postgres://…@localhost:5432/my_saas — start PostgreSQL or edit it
 pnpm db:migrate          # creates the tables and seeds the demo tenant
 pnpm dev
 ```
@@ -208,9 +209,17 @@ The generated `tests/app.test.ts` skips itself when no database is configured, s
 
 ### `--env-file` never overrides exported variables
 
-`src/env.ts` validates `process.env` and nothing else — the scaffold does not load
-`.env` for you. When you launch with `node --env-file=.env` (or
-`tsx --env-file=.env`), Node **only fills variables that are not already set**:
+`src/env.ts` validates `process.env` and nothing else. **In development the
+scaffold loads `.env` for you:** `src/dev.ts` (`pnpm dev`) and `bin/basalt.ts`
+(`pnpm basalt`, scaffolded by default) call `process.loadEnvFile()` on the project's
+`.env` when it exists, before the app is imported. **`pnpm start` does not** —
+`src/server.ts` is the production entry, and production configuration comes from
+the real environment (or launch it yourself with `node --env-file=…`). A new app
+already has a `.env`: the values of `.env.example` and, with auth, a generated
+`APP_SECRET` — git-ignored, so the secret never reaches the repository.
+
+Loading `.env` works exactly like `node --env-file=.env` (or
+`tsx --env-file=.env`): Node **only fills variables that are not already set** —
 a value exported in your shell always wins. With generic names this bites
 quietly — in a terminal where another project exported `DATABASE_URL` or `PORT`,
 the app boots against *that* database or port and fails only on the first request
@@ -252,6 +261,20 @@ the prefixed names only, write
 report names what was looked for —
 `MY_SAAS_DATABASE_URL (or DATABASE_URL): Required`. Full rules:
 [Configuration → App-specific prefixes](/guide/config#app-specific-prefixes).
+
+When a variable is invalid or missing, `pnpm basalt <command>` prints the
+variables from the report, where they were read from (your environment, and
+`.env` when it exists) and the fix — `cp .env.example .env`, fill them in, and
+for `DATABASE_URL` start PostgreSQL — and exits 1 without a stack trace
+(`BASALT_DEBUG=1` or `--debug` shows it). `pnpm basalt doctor` checks the same
+variables without booting the app. The database gets the same treatment: when
+PostgreSQL does not answer (`ECONNREFUSED`, Prisma `P1001`, or an
+`assertMigrated` that could not query it) or the database is not migrated
+(`PRISMA_NOT_MIGRATED`), the message says what failed, which database the app
+used — `postgres://host:port/name` and the variable it came from, never the
+user or password — and the fix: start PostgreSQL (`docker compose up -d`, or your
+local service), check `MY_SAAS_DATABASE_URL`, run `pnpm db:migrate`. Any other
+boot error keeps its stack trace.
 
 Two habits that still help:
 
@@ -345,15 +368,18 @@ the command prints how to revert them with git.
 | `--major` | Lets third-party packages cross a major too |
 | `--only=@basaltkit` | Only the framework packages (and `create-basalt`) |
 | `--no-install` | Writes `package.json`, skips the install and the codemods |
-| `--no-tooling` | Leaves `bin/basalt.ts` and the `create-basalt` devDependency alone |
+| `--no-tooling` | Leaves `bin/basalt.ts`, `src/dev.ts`, `.env.example` and the `create-basalt` devDependency alone |
 | `--pm=<manager>`, `--cwd=<dir>`, `--no-color` | Override the package manager / target directory; plain output (also `NO_COLOR`) |
 
 `--offline` is refused — `update` needs the registry. Project tooling rides
 along: an app without the `create-basalt` devDependency gets it (plus a `basalt`
-script), and a `bin/basalt.ts` generated by an earlier release is taught the
-project commands — **only** when it is byte-for-byte a known template or the
-manifest records it untouched. A customised one is left alone and the exact
-snippet to paste is printed.
+script); a `bin/basalt.ts` generated by an earlier release is taught the
+project commands, `.env` loading, a pre-boot `upgrade` and the readable env
+error; a `src/dev.ts` from create-basalt 1.9/1.10 learns to load `.env`; and the
+`.env.example` header stops saying "nothing loads this file". Each file is
+patched **only** when it is byte-for-byte a known template or the manifest
+records it untouched. A customised one is left alone and the exact snippet to
+paste is printed.
 
 ## Adding features later
 
@@ -402,10 +428,14 @@ manager and lockfiles; installed versus declared versions, duplicated
 `@basaltkit/*` versions and unmet peer ranges; framework packages behind
 `latest` (`--offline` skips it); the auth secret (`<PREFIX>_APP_SECRET`, from
 the environment or `.env`, against the `minLength` in `src/env.ts` and the
-placeholder rules of `secret()`) and `DATABASE_URL`; that the Prisma client is
+placeholder rules of `secret()`); every variable `src/env.ts` **requires**
+(declared without a default — `DATABASE_URL` with `--prisma`) that is set
+neither in the environment nor in `.env`, as an error with the fix; a missing
+`.env` next to a `.env.example`, as a warning; that the Prisma client is
 generated and migrations exist (whether they are *applied* needs a database —
 `prisma migrate status`); `.mcp.json` when `@basaltkit/ai-mcp` is installed; dev
-tooling declared as a runtime dependency; and an outdated `bin/basalt.ts`.
+tooling declared as a runtime dependency; and an outdated `bin/basalt.ts` or
+`src/dev.ts`.
 
 ## Choose an HTTP adapter
 
@@ -595,8 +625,22 @@ see [Queues & jobs](/guide/queues).
   `app.ts` that still uses `fastifyPlugin({ routes: [...] })`. Add the generated
   plugin to `plugins` and the routes to the adapter yourself; the generated
   files are otherwise complete.
+- **`The app cannot start — invalid environment variables`** (or a raw
+  `EnvValidationError … expected string, received undefined` from an older app)
+  — a required variable is set neither in your shell nor in `.env`. Apps from
+  create-basalt ≤ 1.10 did not load `.env` in `pnpm dev` / `pnpm basalt` at all:
+  run `npx create-basalt@latest update` once (it patches an unmodified
+  `bin/basalt.ts` and `src/dev.ts`), `cp .env.example .env` if there is none,
+  fill in what the message lists, and check with `pnpm basalt doctor`.
+- **`The app cannot start — the database did not answer`** — PostgreSQL is
+  not running, or `MY_SAAS_DATABASE_URL` points at the wrong host/port (the
+  message shows which, without credentials). Start it (`docker compose up -d`,
+  or your local service) or fix the URL in `.env`; on a fresh database run
+  `pnpm db:migrate`. **`… the database is not migrated`** — run
+  `pnpm db:migrate` (`pnpm db:deploy` in production), or check the URL if it is
+  not the database you meant.
 - **The app connects to the wrong database / port** — a variable exported in
-  your shell beats `--env-file`. Set the app-prefixed names (`MY_SAAS_PORT`)
+  your shell beats `.env` (as it beats `--env-file`). Set the app-prefixed names (`MY_SAAS_PORT`)
   the scaffold declares, not the generic ones. See
   [`--env-file` never overrides exported variables](#env-file-never-overrides-exported-variables).
 - **`pnpm basalt …` starts with a `pnpm install`** (or fails offline) — pnpm 11's
