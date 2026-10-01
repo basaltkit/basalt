@@ -41,7 +41,7 @@ explicitamente autorizado.
 
 ## Instalação (só dev)
 
-O `create-basalt --cli` já liga isto por ti. Para o adicionar a uma app existente,
+O `create-basalt` já liga isto por ti (a CLI vem ativada por omissão). Para o adicionar a uma app existente,
 instala-o como **devDependency**:
 
 ```bash
@@ -416,4 +416,4 @@ fala.
 - [`@basaltkit/mcp-core`](/pt/guide/mcp-core) — a camada de protocolo sem dependências sobre a qual ambas as pontes assentam.
 - [Tenancy](/pt/guide/tenancy) · [Equipas](/pt/guide/teams) · [Segurança](/pt/guide/security) —
   aquilo para que as regras de tenancy e de segurança do doctor te estão a apontar.
-- [Começar](/pt/guide/getting-started) — o `create-basalt --cli` liga a entrada do CLI por ti.
+- [Começar](/pt/guide/getting-started) — o `create-basalt` liga a entrada do CLI por ti.
