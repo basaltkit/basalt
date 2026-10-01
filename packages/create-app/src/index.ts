@@ -1,9 +1,11 @@
+import { randomBytes } from 'node:crypto'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import {
   appTest,
   appTs,
   dbTs,
+  devEnvFile,
   devTs,
   dockerignore,
   envExample,
@@ -23,6 +25,7 @@ import {
   type ProjectOptions,
 } from './templates.js'
 import { uiFiles } from './templates-ui.js'
+import { INSECURE_SECRET } from './project/doctor.js'
 import { createManifest, MANIFEST_PATH, serializeManifest } from './project/manifest.js'
 import { resolveFileVersions, type ResolveLatestOptions, type VersionResolution } from './latest-versions.js'
 
@@ -161,13 +164,31 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
   const versions = input.resolveLatest ? await resolveFileVersions(files, input.registry) : undefined
   files[MANIFEST_PATH] = serializeManifest(createManifest(options, files))
 
+  // A ready-to-use .env for development, so `pnpm dev` / `pnpm basalt` boot
+  // without a copy step. Written after the manifest on purpose: it is
+  // git-ignored local state (with a generated secret), not a template file.
+  files['.env'] = devEnvFile(options, generateAppSecret())
+
   for (const [path, content] of Object.entries(files)) {
     const target = join(dir, path)
     await mkdir(dirname(target), { recursive: true })
-    await writeFile(target, content)
+    // .env holds a secret: owner-only, like `umask 077` would make it.
+    await writeFile(target, content, path === '.env' ? { mode: 0o600 } : undefined)
   }
 
   return { dir, files: Object.keys(files).sort(), options, ...(versions ? { versions } : {}) }
+}
+
+/**
+ * A random APP_SECRET for the development .env: 48 random bytes, base64url —
+ * redrawn in the (rare) case it happens to contain a word `secret()` rejects
+ * as a placeholder (`test`, `0000`, …).
+ */
+export function generateAppSecret(random: (size: number) => Buffer = randomBytes): string {
+  for (;;) {
+    const value = random(48).toString('base64url')
+    if (!INSECURE_SECRET.test(value)) return value
+  }
 }
 
 export {
