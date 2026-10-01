@@ -75,7 +75,7 @@ Corre-o sem nome para responderes às perguntas interativamente, ou passa flags
 para as saltar:
 
 ```bash
-pnpm create basalt my-saas --billing --cli   # adiciona subscrições + a CLI `basalt`
+pnpm create basalt my-saas --billing   # adiciona subscrições (a CLI `basalt` vem sempre; --no-cli omite-a)
 pnpm create basalt my-saas --prisma           # PostgreSQL via Prisma, ligado de ponta a ponta
 pnpm create basalt my-saas -y                 # aceita todos os defaults, sem perguntas
 ```

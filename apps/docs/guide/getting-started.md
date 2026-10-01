@@ -72,7 +72,7 @@ pnpm create basalt my-saas       # or: npm create basalt my-saas
 Run it with no name to answer prompts interactively, or pass flags to skip them:
 
 ```bash
-pnpm create basalt my-saas --billing --cli   # add subscriptions + the `basalt` CLI
+pnpm create basalt my-saas --billing   # add subscriptions (the `basalt` CLI is always included; --no-cli skips it)
 pnpm create basalt my-saas --prisma           # PostgreSQL through Prisma, wired end to end
 pnpm create basalt my-saas -y                 # accept every default, no prompts
 ```
