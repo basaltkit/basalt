@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { basaltBin, patchBasaltBin } from '../src/bin-template.js'
 import { createProject } from '../src/index.js'
+import { devTs, ENV_EXAMPLE_LEAD, LEGACY_ENV_EXAMPLE_LEAD } from '../src/templates.js'
 import { loadProject } from '../src/project/context.js'
 import { hashContent, MANIFEST_PATH } from '../src/project/manifest.js'
 import { runProjectCommand } from '../src/project/run.js'
@@ -277,11 +278,15 @@ describe('update — project tooling', () => {
   const legacy = async (name: string) =>
     readFile(join(import.meta.dirname, 'fixtures', 'legacy-bins', `${name}.ts.txt`), 'utf8')
 
-  it('the latest legacy bin patches to exactly the current template', async () => {
+  it('the latest legacy bins (1.9, 1.10) patch to exactly the current template', async () => {
     expect(patchBasaltBin(await legacy('2026-09-19'))).toBe(basaltBin())
+    expect(patchBasaltBin(await legacy('2026-10-01'))).toBe(basaltBin())
+    // Patching is idempotent and CRLF-insensitive.
+    expect(patchBasaltBin(basaltBin())).toBe(basaltBin())
+    expect(patchBasaltBin((await legacy('2026-10-01')).replace(/\n/g, '\r\n'))).toBe(basaltBin())
   })
 
-  for (const version of ['2026-08-09', '2026-08-13', '2026-08-22', '2026-09-19']) {
+  for (const version of ['2026-08-09', '2026-08-13', '2026-08-22', '2026-09-19', '2026-10-01']) {
     it(`patches an unmodified bin/basalt.ts from ${version}`, async () => {
       const dir = await scaffold(`bin-${version}`, { cli: true })
       const old = await legacy(version)
@@ -292,9 +297,81 @@ describe('update — project tooling', () => {
       const bin = await read(dir, 'bin/basalt.ts')
       expect(bin).toContain("['update', 'add', 'doctor', 'info'].includes(process.argv[2]")
       expect(bin).not.toMatch(/^import .* from '(@basaltkit\/|\.\.\/src)/m)
+      // The dev prelude: pre-boot upgrade, .env loading, the readable env error — all before the app import.
+      const appImport = bin.indexOf("await import('../src/app.js').catch(explainBootFailure)")
+      expect(appImport).toBeGreaterThan(0)
+      for (const needle of ["if (process.argv[2] === 'upgrade')", 'process.loadEnvFile(envFile)', 'function explainBootFailure']) {
+        expect(bin.indexOf(needle), needle).toBeGreaterThan(0)
+        expect(bin.indexOf(needle), needle).toBeLessThan(appImport)
+      }
       expect(h.output()).toContain('bin/basalt.ts: unmodified template')
+      expect(h.output()).toContain('loads .env for development')
     })
   }
+
+  it('patches the 1.9/1.10 src/dev.ts and .env.example header of an app without a manifest (dry run shows the plan)', async () => {
+    const dir = await scaffold('legacy-dev', { cli: true, prisma: true })
+    const oldDev = await readFile(join(import.meta.dirname, 'fixtures', 'legacy-dev', '2026-09-19.ts.txt'), 'utf8')
+    const currentExample = await read(dir, '.env.example')
+    const oldExample = currentExample.replace(ENV_EXAMPLE_LEAD, LEGACY_ENV_EXAMPLE_LEAD)
+    expect(oldExample).not.toBe(currentExample)
+    await write(dir, 'src/dev.ts', oldDev)
+    await write(dir, '.env.example', oldExample)
+    await write(dir, 'bin/basalt.ts', await legacy('2026-09-19'))
+    await rm(join(dir, MANIFEST_PATH))
+
+    const dry = harness(dir, { fetch: await registryFor(dir) })
+    expect(await runProjectCommand(['update', '--dry'], dry.deps)).toBe(0)
+    expect(dry.output()).toContain('bin/basalt.ts: unmodified template')
+    expect(dry.output()).toContain('src/dev.ts: unmodified template from an earlier release — `dev` loads .env')
+    expect(dry.output()).toContain('.env.example: header now says dev/CLI load .env automatically')
+    expect(await read(dir, 'src/dev.ts')).toBe(oldDev)
+
+    const h = harness(dir, { fetch: await registryFor(dir) })
+    expect(await runProjectCommand(['update', '--yes', '--no-install'], h.deps)).toBe(0)
+    expect(await read(dir, 'src/dev.ts')).toBe(devTs())
+    expect(await read(dir, '.env.example')).toBe(currentExample)
+    expect(await read(dir, 'bin/basalt.ts')).toBe(basaltBin())
+  })
+
+  it('refreshes the manifest hashes of the files it patches', async () => {
+    const dir = await scaffold('manifest-dev', { cli: true })
+    const oldDev = await readFile(join(import.meta.dirname, 'fixtures', 'legacy-dev', '2026-09-19.ts.txt'), 'utf8')
+    await write(dir, 'src/dev.ts', oldDev)
+    const h = harness(dir, { fetch: await registryFor(dir) })
+    expect(await runProjectCommand(['update', '--yes', '--no-install'], h.deps)).toBe(0)
+    const manifest = JSON.parse(await read(dir, MANIFEST_PATH))
+    expect(manifest.files['src/dev.ts']).toBe(hashContent(devTs()))
+  })
+
+  it('prints the snippets for a customised src/dev.ts and a customised 1.10 bin', async () => {
+    const dir = await scaffold('custom-dev', { cli: true })
+    const customDev = `// mine\nprocess.env['NODE_ENV'] ??= 'development'\nawait import('./server.js')\n`
+    const customBin = `${await legacy('2026-10-01')}// my own tweak\n`
+    await write(dir, 'src/dev.ts', customDev)
+    await write(dir, 'bin/basalt.ts', customBin)
+    const h = harness(dir, { fetch: await registryFor(dir) })
+    expect(await runProjectCommand(['update', '--yes', '--no-install'], h.deps)).toBe(0)
+    expect(await read(dir, 'src/dev.ts')).toBe(customDev)
+    expect(await read(dir, 'bin/basalt.ts')).toBe(customBin)
+    const out = h.output()
+    expect(out).toContain('src/dev.ts was customised, so it was not patched. To load .env in development:')
+    expect(out).toContain("const envFile = fileURLToPath(new URL('../.env', import.meta.url))")
+    expect(out).toContain('bin/basalt.ts was customised, so it was not patched. To bring it up to date:')
+    // It already delegates the project commands: only the missing dev prelude is printed.
+    expect(out).not.toContain('Paste this right after the shebang line')
+    expect(out).toContain("Paste this after the project-commands block")
+    expect(out).toContain("const { buildApp } = await import('../src/app.js').catch(explainBootFailure)")
+  })
+
+  it('leaves a .env.example without the old header alone', async () => {
+    const dir = await scaffold('example-own')
+    await write(dir, '.env.example', 'PORT=3000\n')
+    const h = harness(dir, { fetch: await registryFor(dir) })
+    expect(await runProjectCommand(['update', '--yes', '--no-install'], h.deps)).toBe(0)
+    expect(await read(dir, '.env.example')).toBe('PORT=3000\n')
+    expect(h.output()).not.toContain('.env.example: header')
+  })
 
   it('prints the snippet instead of patching a customised bin/basalt.ts', async () => {
     const dir = await scaffold('custom-bin', { cli: true })
@@ -305,6 +382,8 @@ describe('update — project tooling', () => {
     expect(await read(dir, 'bin/basalt.ts')).toBe(custom)
     expect(h.output()).toContain('bin/basalt.ts was customised')
     expect(h.output()).toContain('const root = fileURLToPath')
+    // A pre-1.10 bin lacks both preludes: both snippets, in order.
+    expect(h.output()).toContain('Then paste this after the project-commands block')
   })
 
   it('patches a bin the manifest records as untouched and refreshes its hash', async () => {
@@ -341,8 +420,11 @@ describe('update — project tooling', () => {
     const old = await legacy('2026-09-19')
     await write(dir, 'bin/basalt.ts', old)
     const h = harness(dir, { fetch: await registryFor(dir) })
+    const oldDev = await readFile(join(import.meta.dirname, 'fixtures', 'legacy-dev', '2026-09-19.ts.txt'), 'utf8')
+    await write(dir, 'src/dev.ts', oldDev)
     expect(await runProjectCommand(['update', '--yes', '--no-tooling', '--no-install'], h.deps)).toBe(0)
     expect(await read(dir, 'bin/basalt.ts')).toBe(old)
+    expect(await read(dir, 'src/dev.ts')).toBe(oldDev)
   })
 })
 

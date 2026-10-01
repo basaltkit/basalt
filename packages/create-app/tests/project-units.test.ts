@@ -110,8 +110,10 @@ describe('scaffold manifest', () => {
     // package.json changes with every install/update — never hashed; nor is the manifest itself.
     expect(manifest.files).not.toHaveProperty('package.json')
     expect(manifest.files).not.toHaveProperty(MANIFEST_PATH)
+    // The development .env is local, git-ignored state (with a secret): never hashed.
+    expect(manifest.files).not.toHaveProperty('.env')
     // Every other generated file is recorded.
-    expect(Object.keys(manifest.files).length).toBe(result.files.length - 2)
+    expect(Object.keys(manifest.files).length).toBe(result.files.length - 3)
   })
 
   it('hashes are CRLF-insensitive', () => {
@@ -120,10 +122,13 @@ describe('scaffold manifest', () => {
 
   it('binStatus tells current, untouched-legacy and customised bins apart', () => {
     expect(binStatus(undefined)).toBe('absent')
-    expect(binStatus("if (['update', 'add', 'doctor', 'info'].includes(process.argv[2] ?? '')) {}")).toBe('current')
+    const projectCommands = "if (['update', 'add', 'doctor', 'info'].includes(process.argv[2] ?? '')) {}\n"
+    expect(binStatus(`${projectCommands}if (existsSync(envFile)) process.loadEnvFile(envFile)\n`)).toBe('current')
+    // Project commands alone (a customised 1.10 bin) are no longer current: .env loading is missing.
+    expect(binStatus(projectCommands)).toBe('modified')
     expect(binStatus('// custom\n')).toBe('modified')
     expect(binStatus('// custom\n', hashContent('// custom\n'))).toBe('patchable')
-    expect(LEGACY_BIN_HASHES.size).toBe(4)
+    expect(LEGACY_BIN_HASHES.size).toBe(5)
   })
 })
 

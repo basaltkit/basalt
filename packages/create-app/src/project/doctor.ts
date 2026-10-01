@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { arch, platform } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { binStatus } from '../bin-template.js'
+import { devEntryStatus } from '../dev-entry.js'
 import { alwaysLatest, lookupLatestVersions, type ResolveLatestOptions } from '../latest-versions.js'
 import { envPrefix } from '../templates.js'
 import { allDependencies, type ProjectContext } from './context.js'
@@ -38,7 +39,7 @@ export interface DoctorOptions {
 }
 
 /** Mirrors the placeholder check of `secret()` in @basaltkit/env (src/secret.ts). */
-const INSECURE_SECRET = /change.?me|changeme|placeholder|example|secret|password|default|test|xxxx+|0000+/i
+export const INSECURE_SECRET = /change.?me|changeme|placeholder|example|secret|password|default|test|xxxx+|0000+/i
 
 /** The Node range every @basaltkit package declares. */
 export const BASALT_NODE_RANGE = '>=22.5.0'
@@ -113,6 +114,64 @@ export function envPrefixOf(envTs: string | undefined, name: string): string | u
   if (envTs === undefined) return envPrefix(name)
   const match = /prefix:\s*(?:\{\s*value:\s*)?['"]([A-Z0-9_]+)['"]/.exec(envTs)
   return match ? match[1] : /prefix:/.test(envTs) ? undefined : ''
+}
+
+/**
+ * The variables src/env.ts requires: keys of the schema object passed to
+ * `defineEnv` whose declaration has no `.default(`, `.optional(`, `.catch(` or
+ * `.nullish(` (`secret()` is checked separately — it has a dev default).
+ * A light scan, not a parser: comments and strings are skipped, nesting is
+ * tracked. Undefined when there is no `defineEnv({ … })` to read.
+ */
+export function requiredEnvKeys(envTs: string | undefined): string[] | undefined {
+  if (envTs === undefined) return undefined
+  const call = envTs.indexOf('defineEnv(')
+  const open = call < 0 ? -1 : envTs.indexOf('{', call)
+  if (open < 0) return undefined
+  const entries: { key: string; body: string }[] = []
+  let depth = 0
+  let current: { key: string; body: string } | undefined
+  for (let i = open; i < envTs.length; i++) {
+    const char = envTs[i] as string
+    if (char === '/' && envTs[i + 1] === '/') {
+      const end = envTs.indexOf('\n', i)
+      i = end < 0 ? envTs.length : end - 1
+      continue
+    }
+    if (char === '/' && envTs[i + 1] === '*') {
+      const end = envTs.indexOf('*/', i + 2)
+      i = end < 0 ? envTs.length : end + 1
+      continue
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      let end = i + 1
+      while (end < envTs.length && envTs[end] !== char) end += envTs[end] === '\\' ? 2 : 1
+      if (current) current.body += envTs.slice(i, end + 1)
+      i = end
+      continue
+    }
+    if (char === '{' || char === '(' || char === '[') depth++
+    else if (char === '}' || char === ')' || char === ']') {
+      depth--
+      if (depth === 0) break
+    }
+    if (depth === 1 && (char === ',' || char === '{')) {
+      if (current) entries.push(current)
+      current = undefined
+      const start = skipTrivia(envTs, i + 1)
+      const match = /^([A-Z][A-Z0-9_]*)\s*:/.exec(envTs.slice(start, start + 200))
+      if (match) {
+        current = { key: match[1] as string, body: '' }
+        i = start + match[0].length - 1
+      }
+      continue
+    }
+    if (current) current.body += char
+  }
+  if (current) entries.push(current)
+  return entries
+    .filter(({ body }) => !/\.(default|optional|catch|nullish)\(|\bsecret\(/.test(body))
+    .map(({ key }) => key)
 }
 
 export async function runDoctor(ctx: ProjectContext, options: DoctorOptions = {}): Promise<DoctorFinding[]> {
@@ -233,8 +292,10 @@ export async function runDoctor(ctx: ProjectContext, options: DoctorOptions = {}
   const envTs = await readText(join(dir, 'src', 'env.ts'))
   const dotenvText = await readText(join(dir, '.env'))
   const dotenv = dotenvText ? parseDotenv(dotenvText) : {}
-  if (dotenvText === undefined && existsSync(join(dir, '.env.example'))) {
-    push('info', 'env', 'No .env — copy .env.example to .env (and start with --env-file=.env) or export the variables.')
+  const exampleText = await readText(join(dir, '.env.example'))
+  const example = exampleText ? parseDotenv(exampleText) : {}
+  if (dotenvText === undefined && exampleText !== undefined) {
+    push('warn', 'env', 'No .env — `dev` and `basalt` load it for development: `cp .env.example .env` (or export the variables).')
   }
   const prefix = envPrefixOf(envTs, ctx.options.name)
   const lookup = (name: string): { value: string; from: string } | undefined => {
@@ -262,10 +323,26 @@ export async function runDoctor(ctx: ProjectContext, options: DoctorOptions = {}
       push('ok', 'env', `${label} is set (${secret.from}, ${secret.value.length} characters).`)
     }
   }
-  if (ctx.options.prisma) {
-    const url = lookup('DATABASE_URL')
-    if (!url) push('warn', 'env', `${prefix ? `${prefix}_` : ''}DATABASE_URL is not set — the app does not boot without it.`)
-    else push('ok', 'env', `${prefix ? `${prefix}_` : ''}DATABASE_URL is set (${url.from}).`)
+  // Required variables: declared in src/env.ts without a default (from the
+  // environment or .env, the way the dev entrypoints load it). Without a
+  // readable schema, a Prisma app still needs DATABASE_URL.
+  const required = requiredEnvKeys(envTs) ?? (ctx.options.prisma ? ['DATABASE_URL'] : [])
+  for (const name of required) {
+    const label = prefix ? `${prefix}_${name}` : name
+    const found = lookup(name)
+    if (found) {
+      push('ok', 'env', `${label} is set (${found.from}).`)
+      continue
+    }
+    const inExample = [label, name].some((key) => example[key] !== undefined && example[key] !== '')
+    const fix =
+      dotenvText === undefined
+        ? exampleText !== undefined
+          ? `\`cp .env.example .env\`${inExample ? '' : ` and set ${label} in it`}`
+          : `create .env with ${label}=…`
+        : `set ${label} in .env${inExample ? ' (.env.example has an example value)' : ''}`
+    const database = name === 'DATABASE_URL' && ctx.options.prisma ? ' — and start PostgreSQL where it points' : ''
+    push('error', 'env', `${label} is not set (environment or .env) — the app does not boot without it. Fix: ${fix}, or export it${database}.`)
   }
 
   // --- Prisma -------------------------------------------------------------------
@@ -312,8 +389,16 @@ export async function runDoctor(ctx: ProjectContext, options: DoctorOptions = {}
   // --- Project tooling -------------------------------------------------------------
   const bin = await readText(join(dir, 'bin', 'basalt.ts'))
   const status = binStatus(bin, ctx.manifest?.files['bin/basalt.ts'])
-  if (status === 'patchable') push('warn', 'tooling', 'bin/basalt.ts predates the project commands — `npx create-basalt@latest update` patches it.')
-  if (status === 'modified') push('info', 'tooling', 'bin/basalt.ts is customised and does not delegate update/add/doctor/info — see `create-basalt update` for the snippet.')
+  if (status === 'patchable') {
+    push('warn', 'tooling', 'bin/basalt.ts is an older template (no .env loading / pre-boot project commands) — `npx create-basalt@latest update` patches it.')
+  }
+  if (status === 'modified') {
+    push('info', 'tooling', 'bin/basalt.ts is customised and lacks the current preludes (project commands, .env loading, pre-boot `upgrade`) — see `create-basalt update` for the snippet.')
+  }
+  const dev = await readText(join(dir, 'src', 'dev.ts'))
+  const devStatus = devEntryStatus(dev, ctx.manifest?.files['src/dev.ts'])
+  if (devStatus === 'patchable') push('warn', 'tooling', 'src/dev.ts does not load .env (older template) — `npx create-basalt@latest update` patches it.')
+  if (devStatus === 'modified') push('info', 'tooling', 'src/dev.ts is customised and does not load .env — see `create-basalt update` for the snippet.')
   if (!ctx.manifest) push('info', 'tooling', 'No .basalt/project.json (scaffolded before create-basalt 1.10) — features are inferred from package.json.')
 
   return findings
@@ -369,4 +454,21 @@ export async function projectInfo(ctx: ProjectContext, options: { nodeVersion?: 
     }
   }
   return lines
+}
+
+/** Index of the first character at or after `from` that is not whitespace or a comment (linear scan). */
+function skipTrivia(source: string, from: number): number {
+  let i = from
+  while (i < source.length) {
+    const char = source[i]
+    if (char === ' ' || char === '\t' || char === '\n' || char === '\r') i++
+    else if (source.startsWith('//', i)) {
+      const end = source.indexOf('\n', i)
+      i = end === -1 ? source.length : end + 1
+    } else if (source.startsWith('/*', i)) {
+      const end = source.indexOf('*/', i + 2)
+      i = end === -1 ? source.length : end + 2
+    } else break
+  }
+  return i
 }

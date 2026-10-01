@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+import { spawnSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Project commands run BEFORE anything of the app is imported, so they keep
+// working while the app is broken mid-upgrade. create-basalt provides them —
+// the project's devDependency when installed, else its latest release:
+//   pnpm basalt update                  — update dependencies to the latest versions (--dry to preview)
+//   pnpm basalt add ui                  — add a feature later (ui, cli, mcp)
+//   pnpm basalt doctor                  — check the project's health
+//   pnpm basalt info                    — versions summary for bug reports
+const root = fileURLToPath(new URL('..', import.meta.url))
+if (['update', 'add', 'doctor', 'info'].includes(process.argv[2] ?? '')) {
+  process.exit(createBasalt(process.argv.slice(2)))
+}
+
+/** Runs create-basalt: the installed devDependency, else `<pm> dlx create-basalt@latest`. */
+function createBasalt(args: string[]): number {
+  const local = join(root, 'node_modules', 'create-basalt', 'dist', 'cli.js')
+  if (existsSync(local)) {
+    return spawnSync(process.execPath, [local, ...args], { cwd: root, stdio: 'inherit' }).status ?? 1
+  }
+  let declared = ''
+  try {
+    declared = String(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).packageManager ?? '')
+  } catch {
+    // No readable package.json: the lockfiles decide.
+  }
+  const uses = (pm: string, ...lockfiles: string[]): boolean =>
+    declared.startsWith(`${pm}@`) || lockfiles.some((file) => existsSync(join(root, file)))
+  const [command, prefix]: [string, string[]] = uses('pnpm', 'pnpm-lock.yaml')
+    ? ['pnpm', ['dlx']]
+    : uses('bun', 'bun.lock', 'bun.lockb')
+      ? ['bunx', []]
+      : ['npx', ['--yes']]
+  const result = spawnSync(command, [...prefix, 'create-basalt@latest', ...args], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  })
+  return result.status ?? 1
+}
+
+// The dev tools are imported dynamically, after the project commands above.
+const { runCli } = await import('@basaltkit/cli')
+const { generatorCommands } = await import('@basaltkit/generator')
+const { prismaSyncCommand } = await import('@basaltkit/prisma')
+
+// Dev tooling: opt into development defaults unless NODE_ENV is already set
+// (imported dynamically below so env.ts is evaluated after this line).
+process.env['NODE_ENV'] ??= 'development'
+const { buildApp } = await import('../src/app.js')
+
+// The 'basalt' CLI: boots the app WITH the dev/CLI commands, runs one, shuts down.
+// The dev tools (@basaltkit/generator; add @basaltkit/ai for ai:*) are imported
+// ONLY here — the runtime server (src/server.ts) never loads them, so the SaaS
+// runs without the codegen/AI layer.
+//   pnpm basalt dev                     — dev server: route table + watch (--worker for a queue worker)
+//   pnpm basalt list                    — show available commands
+//   pnpm basalt routes                  — list registered HTTP routes
+//   pnpm basalt make:resource Project   — generate a full resource vertical
+//   pnpm basalt make:service Project    — generate a single artifact (schema/service/…)
+const app = buildApp({
+  logLevel: 'silent',
+  commands: [...generatorCommands(), prismaSyncCommand()],
+})
+process.exit(await runCli({ app }))

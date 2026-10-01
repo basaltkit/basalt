@@ -67,6 +67,8 @@ describe('add ui', () => {
     for (const path of files) {
       const [a, b] = [await read(without, path), await read(withUi, path)]
       if (path === 'package.json') expect(JSON.parse(a), path).toEqual(JSON.parse(b))
+      // .env carries a secret generated per scaffold: equal once it is masked.
+      else if (path === '.env') expect(a.replace(/_APP_SECRET=.*/, ''), path).toBe(b.replace(/_APP_SECRET=.*/, ''))
       else expect(a, path).toBe(b)
     }
   })
