@@ -41,7 +41,7 @@ Nothing in either half touches your database except the explicitly gated
 
 ## Install (dev-only)
 
-`create-basalt --cli` wires this for you. To add it to an existing app, install
+`create-basalt` wires this for you (the CLI is on by default). To add it to an existing app, install
 it as a **devDependency**:
 
 ```bash
@@ -412,4 +412,4 @@ reusable architecture — the framework owns it; the AI is a tool that speaks it
 - [`@basaltkit/mcp-core`](/guide/mcp-core) — the zero-dependency protocol layer both bridges sit on.
 - [Tenancy](/guide/tenancy) · [Teams](/guide/teams) · [Security](/guide/security) —
   what the doctor's tenancy and security rules are pointing you at.
-- [Getting started](/guide/getting-started) — `create-basalt --cli` wires the CLI entry for you.
+- [Getting started](/guide/getting-started) — `create-basalt` wires the CLI entry for you.

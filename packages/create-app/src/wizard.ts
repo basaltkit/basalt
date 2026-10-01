@@ -24,9 +24,9 @@ interface Preset {
 
 export const PRESETS: Preset[] = [
   { value: 'saas', label: 'SaaS starter', hint: 'tenancy + auth + billing + database + CLI', features: ['tenancy', 'auth', 'billing', 'prisma', 'cli'] },
-  { value: 'api', label: 'API only', hint: 'auth + MCP, no tenancy or UI', features: ['auth', 'mcp'] },
+  { value: 'api', label: 'API only', hint: 'auth + MCP + CLI, no tenancy or UI', features: ['auth', 'mcp', 'cli'] },
   { value: 'full', label: 'Full stack', hint: 'everything + web UI', features: ['tenancy', 'auth', 'billing', 'prisma', 'ui', 'cli', 'mcp'] },
-  { value: 'minimal', label: 'Minimal', hint: 'no batteries, add them later', features: [] },
+  { value: 'minimal', label: 'Minimal', hint: 'just the CLI, add the rest later', features: ['cli'] },
   { value: 'custom', label: 'Custom', hint: 'pick features yourself', features: null },
 ]
 
@@ -99,7 +99,7 @@ export async function runWizard(prompter: Prompter, options: WizardOptions = {})
       (await prompter.multiselect({
         message: 'Select features',
         choices: FEATURES,
-        initial: ['tenancy', 'auth'],
+        initial: ['tenancy', 'auth', 'cli'],
       })),
   )
 

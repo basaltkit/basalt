@@ -93,7 +93,7 @@ Usage: npm create basalt <name> [options]
 | `--no-auth` | auth **on** | Removes authentication (`@basaltkit/auth`, `APP_SECRET`, `/auth/*` routes) |
 | `--billing` | off | Includes subscriptions/plans (`@basaltkit/subscriptions`, example `free` and `pro` plans) |
 | `--ui` | off | Generates the `web/` frontend (React + shadcn via `@basaltkit/admin-shadcn` + `@basaltkit/sdk`). **Forces pnpm** — see note below |
-| `--cli` | off | Generates the `basalt` CLI (`bin/basalt.ts`, `pnpm basalt` script, `make:*` generators from `@basaltkit/generator`) |
+| `--no-cli` | CLI on | Skips the `basalt` CLI (by default every app gets it: `bin/basalt.ts`, the `pnpm basalt` script, `make:*` generators from `@basaltkit/generator`) |
 | `--mcp` | off | Exposes read-only routes as MCP tools (`@basaltkit/mcp`) over HTTP at `POST /mcp` — the overview and health endpoints are opted in via `meta.mcp` |
 | `--prisma` (alias `--db`) | off | Backs the app with PostgreSQL through Prisma: `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, the `@basaltkit/*-prisma` stores instead of the in-memory ones, a required `<APP>_DATABASE_URL`, the `db:*` scripts and `prismaPlugin({ assertMigrated: true })` — see *With `--prisma`* below |
 | `--install` | off | Installs dependencies at the end (with the detected/chosen manager) |
@@ -120,7 +120,7 @@ Behavior notes (faithful to the code):
 pnpm create basalt
 
 # Full project, no questions, with everything:
-pnpm create basalt my-app --billing --ui --cli --prisma --install --git
+pnpm create basalt my-app --billing --ui --prisma --install --git
 
 # Minimal API (no tenancy or auth), in another folder:
 npm create basalt service-api --no-tenancy --no-auth --dir=./apps/service-api
@@ -153,7 +153,7 @@ my-app/
 └── tests/app.test.ts     # smoke test adapted to the options
 ```
 
-With `--prisma`, adds `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` (with tenancy) and the `db:generate` / `db:migrate` / `db:deploy` / `db:seed` scripts. The `basalt` script is `create-basalt --project` without `--cli` (so `pnpm basalt update|add|doctor|info` works in every app); with `--cli` it is `tsx bin/basalt.ts`, and `bin/basalt.ts` forwards those four commands to create-basalt before booting the app. With `--ui`, adds the `web/` folder (Vite 8 + React 19 + Tailwind CSS 4 via `@tailwindcss/vite` + shadcn — Tailwind is configured in `web/src/index.css`, no `tailwind.config.js`/PostCSS — with `web/src/api.ts` built on top of `@basaltkit/sdk`; with auth on it includes a login/register screen).
+With `--prisma`, adds `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` (with tenancy) and the `db:generate` / `db:migrate` / `db:deploy` / `db:seed` scripts. The `basalt` script is `create-basalt --project` with `--no-cli` (so `pnpm basalt update|add|doctor|info` works in every app); with `--cli` it is `tsx bin/basalt.ts`, and `bin/basalt.ts` forwards those four commands to create-basalt before booting the app. With `--ui`, adds the `web/` folder (Vite 8 + React 19 + Tailwind CSS 4 via `@tailwindcss/vite` + shadcn — Tailwind is configured in `web/src/index.css`, no `tailwind.config.js`/PostCSS — with `web/src/api.ts` built on top of `@basaltkit/sdk`; with auth on it includes a login/register screen).
 
 ### With `--ui`: running the API and frontend
 
@@ -201,9 +201,9 @@ the database and host instead of a `500` on the first request. In production:
 The generated `tests/app.test.ts` skips itself when no database is configured, so
 `pnpm test` stays green on a machine without PostgreSQL. To add another Basalt
 domain later, install its `@basaltkit/<domain>-prisma` package, run
-`pnpm basalt prisma:sync` (with `--cli`) and then `pnpm db:migrate`.
+`pnpm basalt prisma:sync` (unless `--no-cli`) and then `pnpm db:migrate`.
 
-### With `--cli`: the `basalt` command line
+### The `basalt` command line (default; `--no-cli` skips it)
 
 ```bash
 pnpm basalt list                    # available commands
@@ -215,7 +215,7 @@ With pnpm 11, every `pnpm <script>` and `pnpm exec` first verifies dependencies 
 
 ## Project commands: update, add, doctor, info
 
-Run inside an existing Basalt app — any app, created with or without `--cli`,
+Run inside an existing Basalt app — any app, created with or without the CLI (`--no-cli`),
 by any create-basalt release:
 
 ```bash
@@ -235,7 +235,7 @@ field, then the lockfile), and output is colored unless `NO_COLOR` is set,
 `--no-color` is passed or stdout is not a terminal.
 
 **How `pnpm basalt <command>` reaches them.** New apps list `create-basalt` as a
-devDependency. Without `--cli` the `basalt` script is `create-basalt --project`;
+devDependency. With `--no-cli` the `basalt` script is `create-basalt --project`;
 with `--cli`, `bin/basalt.ts` handles `update`/`add`/`doctor`/`info` **before**
 importing anything of the app (they must work while the app is broken
 mid-upgrade) and runs the installed create-basalt — or `pnpm dlx` /
@@ -515,6 +515,6 @@ The app's `bin/basalt.ts` predates the project commands. Run `npx create-basalt@
 - **`@basaltkit/auth`** — included by default (remove with `--no-auth`): `/auth/*` routes and `APP_SECRET` validated in `env.ts`.
 - **`@basaltkit/subscriptions`** — with `--billing`: example `free`/`pro` plans with trial and feature limits.
 - **`@basaltkit/prisma` + `@basaltkit/{tenancy,auth,teams,subscriptions}-prisma`** — with `--prisma`: the PostgreSQL layer — `prismaPlugin` (tenant-scoped client, boot-time `assertMigrated`), the composed `prisma/schema.prisma` and the Prisma-backed stores for whichever domains are on.
-- **`@basaltkit/cli` + `@basaltkit/generator`** — with `--cli`: `bin/basalt.ts` calls `runCli`, and `commandsPlugin(generatorCommands())` registers the `make:*` generators. `update` runs the installed `@basaltkit/cli` upgrade codemods after an install.
+- **`@basaltkit/cli` + `@basaltkit/generator`** — by default (not with `--no-cli`): `bin/basalt.ts` calls `runCli`, and `commandsPlugin(generatorCommands())` registers the `make:*` generators. `update` runs the installed `@basaltkit/cli` upgrade codemods after an install.
 - **`@basaltkit/sdk` + `@basaltkit/admin-shadcn` + `@basaltkit/admin`** — with `--ui`: the `web/` frontend calls the API through a typed client and uses the shadcn components.
 - **`@basaltkit/testing`** — always present in `devDependencies`, with a generated smoke test in `tests/app.test.ts`.
