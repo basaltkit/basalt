@@ -158,6 +158,11 @@ export function patchAppForCli(source: string): string | undefined {
   return addImport(out, `import { commandsPlugin, type CommandDefinition } from '@basaltkit/cli'`)
 }
 
+/** `value` as a single-quoted TS string literal (backslashes, quotes and line breaks escaped). */
+function singleQuoted(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r/g, '\\r').replace(/\n/g, '\\n')}'`
+}
+
 /**
  * Wires the MCP server into a scaffold-shaped src/app.ts (any adapter):
  * `mcpPlugin({ routes: <the adapter's routes> })` before the adapter, and
@@ -174,7 +179,7 @@ export function patchAppForMcp(source: string, name: string): string | undefined
   else if (/^[\w$.]+(\(\))?$/.test(expression)) withMcp = `[...${expression}, ...mcpRoutes()]`
   else return undefined
   const replacement =
-    `${indent}mcpPlugin({ routes: ${expression}, serverInfo: { name: '${name.replace(/'/g, "\\'")}', version: '0.1.0' } }),\n` +
+    `${indent}mcpPlugin({ routes: ${expression}, serverInfo: { name: ${singleQuoted(name)}, version: '0.1.0' } }),\n` +
     `${indent}${plugin}({ routes: ${withMcp} })${comma}`
   const out = source.slice(0, adapter.index) + replacement + source.slice(adapter.index + line.length)
   return addImport(out, `import { mcpPlugin, mcpRoutes } from '@basaltkit/mcp'`)
