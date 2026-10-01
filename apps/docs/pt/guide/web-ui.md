@@ -11,7 +11,10 @@ O Basalt dá-te duas formas de pôr um ecrã à frente da tua API:
 
 ```bash
 pnpm create basalt my-app --ui          # a auth está ligada por omissão → os fluxos de auth prontos vêm juntos
+pnpm basalt add ui                      # …ou acrescenta-o depois a uma app criada sem --ui
 ```
+
+O `add ui` escreve o mesmo `web/` que um scaffold `--ui` recebe, adaptado à app (o nome, se a auth está ligada), funde o `package.json`/`pnpm-workspace.yaml` e nunca sobrescreve um ficheiro existente — vê [Acrescentar funcionalidades depois](/pt/guide/installation#acrescentar-funcionalidades-depois).
 
 A autenticação está **ligada por omissão** no scaffold, portanto o `--ui` dá-te também os ecrãs de auth; passa `--no-auth` se quiseres o frontend sem eles. Requer **pnpm** — o frontend `web/` é um membro do workspace (o scaffolder muda automaticamente para pnpm se o invocaste com outro gestor).
 
@@ -33,7 +36,7 @@ web/
 - **[`@basaltkit/sdk`](#o-sdk-type-safe)** — o cliente type-safe para a tua API.
 - O dev server do Vite **faz proxy de `/api`** para o backend, portanto o browser fala same-origin — sem CORS para configurar.
 
-O `web` está registado como membro do workspace pnpm (com o nome `<your-app>-web`), portanto o `pnpm install` na raiz resolve-o. Corre o backend com `pnpm dev` (API em `:3000`), depois o frontend com `pnpm --filter my-app-web dev` — o Vite serve-o em `http://localhost:5180` e faz proxy de `/api` para o backend.
+O `web` está registado como membro do workspace pnpm (com o nome `<your-app>-web`), portanto o `pnpm install` na raiz resolve-o. Corre o backend com `pnpm dev` (API em `:3000`), depois o frontend com `pnpm dev:web` (um script da raiz para `pnpm --filter my-app-web dev`) — o Vite serve-o em `http://localhost:5180` e faz proxy de `/api` para o backend.
 
 Com a auth ativada (a omissão), o `App.tsx` traz os fluxos padrão completos out of the box: iniciar sessão (com um desafio TOTP), registo, esqueci-a-password, repor-password via o link `?token` enviado por email, e um dashboard que gere o dois-fatores (enroll → secret/otpauth → activate → recovery codes → disable). Passa `--no-auth` para gerar o frontend sem eles.
 

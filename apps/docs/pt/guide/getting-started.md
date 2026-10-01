@@ -87,6 +87,11 @@ instala dependências e inicializa o git por defeito (desativa com
 passes `--install` / `--git`. A lista completa de flags vive em
 [Instalação](/pt/guide/installation).
 
+Nada aqui é definitivo: o `pnpm basalt add ui` (ou `cli`, `mcp`) acrescenta uma
+funcionalidade que saltaste, e o `pnpm basalt update` leva a app às versões mais
+recentes — vê [Acrescentar funcionalidades depois](/pt/guide/installation#acrescentar-funcionalidades-depois)
+e [Atualizar uma app](/pt/guide/installation#atualizar-uma-app).
+
 ### 2. Instalar e configurar
 
 ```bash
@@ -220,7 +225,8 @@ tenancy e mais).
 ## Para onde a seguir
 
 - [Instalação](/pt/guide/installation) — todas as flags do scaffolder, os
-  requisitos, a CLI `basalt` e como adicionar o Basalt a uma app existente.
+  requisitos, a CLI `basalt`, como adicionar o Basalt a uma app existente, e
+  como atualizar uma app ou acrescentar-lhe funcionalidades depois.
 - [Configuração](/pt/guide/config) — o `src/env.ts`, segredos que falham
   fechados e o repositório de definições.
 - [Conceitos Fundamentais](/pt/guide/concepts) — plugins, o container de DI,
