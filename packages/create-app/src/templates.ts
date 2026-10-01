@@ -20,6 +20,8 @@ export interface ProjectOptions {
 import { THIRD_PARTY_VERSIONS } from './latest-versions.js'
 import { SCAFFOLD_VERSIONS } from './versions.js'
 
+export { basaltBin } from './bin-template.js'
+
 export { SCAFFOLD_VERSIONS } from './versions.js'
 export { THIRD_PARTY_VERSIONS } from './latest-versions.js'
 
@@ -50,6 +52,12 @@ export const thirdPartyVersionOf = (pkg: string): string => {
   }
   return range
 }
+
+/** The root `basalt` script of an app without `--cli`: create-basalt's project commands. */
+export const BASALT_PROJECT_SCRIPT = 'create-basalt --project'
+
+/** The root `dev:web` script of a `--ui` app (web/ is a pnpm workspace member). */
+export const webDevScript = (options: Pick<ProjectOptions, 'name'>): string => `pnpm --filter ${options.name}-web dev`
 
 /** True when the scaffold binds users to the tenant they act on (tenancy + auth). */
 export const enforcesMembership = (options: ProjectOptions): boolean => options.tenancy && options.auth
@@ -90,6 +98,9 @@ export function packageJson(options: ProjectOptions): string {
 
   const devDependencies: Record<string, string> = {
     '@basaltkit/testing': versionOf('@basaltkit/testing'),
+    // The project commands (\`pnpm basalt update | add | doctor | info\`) — dev
+    // tooling with no dependencies of its own, never imported by the app.
+    'create-basalt': versionOf('create-basalt'),
   }
   for (const pkg of ['@types/node', 'pino-pretty', 'tsx', 'typescript', 'vitest']) {
     devDependencies[pkg] = thirdPartyVersionOf(pkg)
@@ -122,7 +133,11 @@ export function packageJson(options: ProjectOptions): string {
         start: 'tsx src/server.ts',
         test: 'vitest run',
         typecheck: 'tsc --noEmit',
-        ...(options.cli ? { basalt: 'tsx bin/basalt.ts' } : {}),
+        // With --cli, bin/basalt.ts serves the generators AND hands the project
+        // commands to create-basalt; without it, \`pnpm basalt update\` goes to
+        // create-basalt directly (\`create-basalt add cli\` swaps the script).
+        basalt: options.cli ? 'tsx bin/basalt.ts' : BASALT_PROJECT_SCRIPT,
+        ...(options.ui ? { 'dev:web': webDevScript(options) } : {}),
         ...(options.prisma
           ? {
               // Generate right after install so `pnpm typecheck` has the client
@@ -575,33 +590,6 @@ await import('./server.js')
 `
 }
 
-export function basaltBin(): string {
-  return `#!/usr/bin/env node
-import { runCli } from '@basaltkit/cli'
-import { generatorCommands } from '@basaltkit/generator'
-import { prismaSyncCommand } from '@basaltkit/prisma'
-
-// Dev tooling: opt into development defaults unless NODE_ENV is already set
-// (imported dynamically below so env.ts is evaluated after this line).
-process.env['NODE_ENV'] ??= 'development'
-const { buildApp } = await import('../src/app.js')
-
-// The 'basalt' CLI: boots the app WITH the dev/CLI commands, runs one, shuts down.
-// The dev tools (@basaltkit/generator; add @basaltkit/ai for ai:*) are imported
-// ONLY here — the runtime server (src/server.ts) never loads them, so the SaaS
-// runs without the codegen/AI layer.
-//   pnpm basalt dev                     — dev server: route table + watch (--worker for a queue worker)
-//   pnpm basalt list                    — show available commands
-//   pnpm basalt routes                  — list registered HTTP routes
-//   pnpm basalt make:resource Project   — generate a full resource vertical
-//   pnpm basalt make:service Project    — generate a single artifact (schema/service/…)
-const app = buildApp({
-  logLevel: 'silent',
-  commands: [...generatorCommands(), prismaSyncCommand()],
-})
-process.exit(await runCli({ app }))
-`
-}
 
 
 /**
@@ -1130,9 +1118,27 @@ database and \`DATABASE_URL\` is read as \`${envPrefix(options.name)}_DATABASE_U
 To drop the fallback entirely (prefixed names only), write
 \`prefix: { value: '${envPrefix(options.name)}', fallback: false }\`. When in doubt about what
 your shell exports: \`env | grep DATABASE_URL\`.
-${
-  options.cli
-    ? `
+
+## Keeping it up to date
+
+\`\`\`bash
+pnpm basalt update          # dependencies → latest (framework always; third-party within its major)
+pnpm basalt update --dry    # preview the table, write nothing
+pnpm basalt add ui          # add a feature later: ui, cli, mcp
+pnpm basalt doctor          # Node, package manager, versions, env and Prisma checks
+\`\`\`
+
+\`.basalt/project.json\` records what create-basalt generated (options and file
+hashes) — commit it: \`add\` and \`update\` use it to tell untouched template
+files from the ones you edited.
+${options.cli ? readmeCliSection(options) : ''}${options.ui ? readmeUiSection(options) : ''}${
+    options.mcp ? readmeMcpSection(options) : ''
+  }`
+}
+
+/** README section for the \`basalt\` CLI (also appended by \`create-basalt add cli\`). */
+export function readmeCliSection(_options: ProjectOptions): string {
+  return `
 ## The \`basalt\` CLI
 
 \`\`\`bash
@@ -1157,24 +1163,26 @@ node_modules/.bin/tsx bin/basalt.ts make:resource Project
 or set \`verifyDepsBeforeRun: warn\` in \`pnpm-workspace.yaml\` (a conscious
 choice: you then run \`pnpm install\` yourself after dependency changes).
 `
-    : ''
-}${
-  options.ui
-    ? `
+}
+
+/** README section for the web/ frontend (also appended by \`create-basalt add ui\`). */
+export function readmeUiSection(options: ProjectOptions): string {
+  return `
 ## Web UI
 
 \`\`\`bash
-pnpm dev                       # terminal 1 — API on :3000
-pnpm --filter ${options.name}-web dev   # terminal 2 — UI on http://localhost:5180
+pnpm dev        # terminal 1 — API on :3000
+pnpm dev:web    # terminal 2 — UI on http://localhost:5180 (pnpm --filter ${options.name}-web dev)
 \`\`\`
 
 Open <http://localhost:5180>. The Vite dev server proxies \`/api\` to the API,
 so there is no CORS to configure${options.auth ? '. Register, then sign in' : ''}.
 `
-    : ''
-}${
-  options.mcp
-    ? `
+}
+
+/** README section for the MCP server (also appended by \`create-basalt add mcp\`). */
+export function readmeMcpSection(_options: ProjectOptions): string {
+  return `
 ## MCP server
 
 Read-only routes marked with \`meta.mcp\` in \`src/routes.ts\` (the overview and
@@ -1201,8 +1209,6 @@ app's runtime) with MCP clients such as Claude Code and Claude Desktop. It expos
 prompts. Claude Code picks up \`.mcp.json\` automatically; for Claude Desktop add the
 same server to its config with \`--cwd=<absolute project path>\`.
 `
-    : ''
-}`
 }
 
 /**
@@ -1287,10 +1293,12 @@ export function pnpmWorkspaceYaml(options: ProjectOptions): string {
   }allowBuilds:
   esbuild: true
   msgpackr-extract: false
-# @basaltkit/* releases in lockstep, often within hours — exclude the scope from
-# pnpm's minimumReleaseAge policy so \`pnpm up\` is never blocked on a fresh release.
+# @basaltkit/* releases in lockstep, often within hours — exclude the scope (and
+# create-basalt, which serves \`pnpm basalt update\`) from pnpm's minimumReleaseAge
+# policy so an update is never blocked on a fresh release.
 minimumReleaseAgeExclude:
   - '@basaltkit/*'
+  - create-basalt
 # To let specific versions of ONE package bypass the policy, write ONE entry
 # with a \`||\` union. pnpm evaluates this list first match wins by package
 # name, so a second '<name>@<version>' entry for the same package is ignored:

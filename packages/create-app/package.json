@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22.5.0"
   },
-  "description": "Scaffold a production-shaped Basalt SaaS app: npm create basalt my-saas [--billing] [--ui] [--cli] [--install] [--git]",
+  "description": "Scaffold a production-shaped Basalt SaaS app (npm create basalt my-saas [--billing] [--ui] [--cli] [--install] [--git]) — then keep it current: create-basalt update | add | doctor | info",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,

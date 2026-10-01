@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+import { runCli } from '@basaltkit/cli'
+import { buildApp } from '../src/app.js'
+
+// The 'basalt' CLI: boots the app, runs one command, shuts down.
+//   pnpm basalt list                    — show available commands
+//   pnpm basalt routes                  — list registered HTTP routes
+//   pnpm basalt make:resource Project   — generate a full resource vertical
+//   pnpm basalt make:service Project    — generate a single artifact (schema/service/…)
+const app = buildApp({ logLevel: 'silent' })
+process.exit(await runCli({ app }))

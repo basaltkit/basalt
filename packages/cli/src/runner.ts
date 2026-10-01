@@ -4,6 +4,9 @@ import type { CommandDefinition, CommandIo } from './command.js'
 import { consoleIo } from './io.js'
 import { parseArgv } from './parse.js'
 
+/** Commands create-basalt serves (bin/basalt.ts forwards them before booting the app). */
+const PROJECT_COMMANDS = ['update', 'add', 'doctor', 'info']
+
 export interface RunCliOptions {
   app: BasaltApp
   /** Defaults to process.argv.slice(2). */
@@ -39,6 +42,11 @@ export async function runCli(options: RunCliOptions): Promise<number> {
     const found = commands.find((candidate) => candidate.name === command)
     if (!found) {
       io.error(`Unknown command "${command}". Run "basalt list" to see what is available.`)
+      if (PROJECT_COMMANDS.includes(command)) {
+        // A bin/basalt.ts generated before the project commands existed: they
+        // live in create-basalt, which also patches this file.
+        io.error(`"${command}" is a project command of create-basalt: run \`npx create-basalt@latest ${command}\` (its \`update\` also teaches this bin/basalt.ts to forward it).`)
+      }
       return 1
     }
 

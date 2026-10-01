@@ -4,8 +4,9 @@ There are two ways in. `create-basalt` scaffolds a production-shaped app in one
 command and only writes the features you pick — nothing dead ships. Or you add
 individual `@basaltkit/*` packages to an app you already have: every package is
 ESM with types, follows the same plugin contract, and works on its own. This
-page covers both, plus the `basalt` CLI that generates code once you're inside a
-project.
+page covers both, the `basalt` CLI that generates code once you're inside a
+project, and how to [update an app](#updating-an-app) or
+[add a feature later](#adding-features-later).
 
 [[toc]]
 
@@ -72,7 +73,8 @@ order:
 
 | Flag | Default | What it does |
 | --- | --- | --- |
-| `<name>` (positional) | — | Project name and, unless `--dir` says otherwise, the target folder |
+| `<name>` (positional) | — | Project name and, unless `--dir` says otherwise, the target folder. `update`, `add`, `doctor` and `info` are reserved for the [project commands](#updating-an-app) |
+| `--name=<name>` | — | The name as a flag — how to create a project literally called `update`, `add`, `doctor` or `info` |
 | `--dir=<path>` | `./<name>` | Destination folder |
 | `--no-tenancy` | tenancy **on** | Skip multi-tenancy (`@basaltkit/tenancy`, header + subdomain resolvers) |
 | `--no-auth` | auth **on** | Skip authentication (`@basaltkit/auth`, `APP_SECRET`, `/auth/*`, `mfaRoutes()`) |
@@ -139,10 +141,11 @@ inside it:
 | `src/server.ts` | Boots, resolves `FASTIFY`, listens, and shuts down on `SIGINT`/`SIGTERM` |
 | `src/dev.ts` | The `pnpm dev` entry: sets `NODE_ENV=development` unless already set, then loads `server.ts` |
 | `tests/app.test.ts` | A smoke test that boots the app and hits `/` and `/health` |
-| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — an unset `NODE_ENV` counts as production), `test`, `typecheck` — plus `basalt` with `--cli`. `@basaltkit/*` ranges track each package's current release line |
-| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers; `.env.example` uses the app-prefixed names and, with the README, explains the [`--env-file` precedence pitfall](#env-file-never-overrides-exported-variables); `pnpm-workspace.yaml` excludes `@basaltkit/*` from `minimumReleaseAge` and documents the [pnpm 11 settings](#pnpm-11-release-age-and-verifydepsbeforerun)) |
+| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — an unset `NODE_ENV` counts as production), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` with `--cli`, else `create-basalt --project`, so `pnpm basalt update` works in every app) and, with `--ui`, `dev:web`. `create-basalt` is a devDependency. `@basaltkit/*` ranges track each package's current release line |
+| `.basalt/project.json` | The scaffold manifest: create-basalt version, options and a hash of every generated file — commit it; [`add`](#adding-features-later) and [`update`](#updating-an-app) use it to tell untouched template files from edited ones |
+| `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers; `.env.example` uses the app-prefixed names and, with the README, explains the [`--env-file` precedence pitfall](#env-file-never-overrides-exported-variables); `pnpm-workspace.yaml` excludes `@basaltkit/*` and `create-basalt` from `minimumReleaseAge` and documents the [pnpm 11 settings](#pnpm-11-release-age-and-verifydepsbeforerun)) |
 | `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | With `--prisma`: the schema (the models of every enabled Basalt domain plus your own), the Prisma 7 config carrying the connection URL, the client(s) the app uses, and the `demo` tenant seed |
-| `bin/basalt.ts` | With `--cli`: the CLI entrypoint wiring the generators and `prisma:sync` |
+| `bin/basalt.ts` | With `--cli`: the CLI entrypoint wiring the generators and `prisma:sync`. It forwards `update`, `add`, `doctor` and `info` to create-basalt **before** importing the app, so they work while the app is broken mid-upgrade |
 | `.mcp.json` | With `--mcp`: registers the **dev-only** `basalt-ai-mcp` bridge for MCP clients |
 | `web/…` | With `--ui`: the React + shadcn frontend, a pnpm workspace member |
 
@@ -286,6 +289,123 @@ Two pnpm 11 behaviours shape the generated `pnpm-workspace.yaml`:
   or uncomment `verifyDepsBeforeRun: warn` in `pnpm-workspace.yaml` — pnpm then
   only warns, and running `pnpm install` after dependency changes is on you. The
   scaffold keeps pnpm's default and the `basalt` script as `tsx bin/basalt.ts`.
+
+## Updating an app
+
+Every app — scaffolded with or without `--cli`, by any create-basalt release —
+can move to the latest dependency versions in one command:
+
+```bash
+pnpm basalt update --dry          # the plan, nothing written
+pnpm basalt update                # asks, writes, installs, runs the codemods
+npx create-basalt@latest update   # the same, in an app without the basalt script
+```
+
+It applies the **same policy as a new scaffold** (it is the same registry code):
+
+- `@basaltkit/*` and `create-basalt` go to `latest`, across majors. Each
+  framework major prints a link to the package's CHANGELOG and to the
+  [upgrade notes](/guide/whats-new#upgrading) — read them before applying.
+- Third-party packages go to the newest release **on the app's current major**;
+  a newer major is listed as `kept … pass --major` and only taken with `--major`.
+- A version younger than the release-age window (pnpm `minimumReleaseAge`, read
+  from the project's `pnpm-workspace.yaml` when set) is left for later, so the
+  install can't refuse it.
+- When a framework release declares a peer range the app would not meet (say
+  `zod ^5` while zod is held on 4), the plan warns before anything is written.
+
+```text
+4 update(s):
+
+  package          in    current     target   kind
+  @basaltkit/core  .     ^1.5.0   →  ^2.0.0   MAJOR
+  zod              .     ^4.6.5   →  ^4.9.0   minor
+  react            web/  ^19.3.0  →  ^19.9.0  minor
+  zod              web/  ^4.6.5   →  ^4.9.0   minor
+
+  kept typescript ^7.0.2: 8.0.0 is a new major — pass --major to take it
+
+Framework majors — read before applying:
+  @basaltkit/core 1.5.0 → 2.0.0: https://github.com/basaltkit/basalt/blob/main/packages/core/CHANGELOG.md
+```
+
+Both `package.json` and `web/package.json` are edited **in place** — only the
+version strings change; key order, indentation and range style (`^`, `~`, exact)
+stay, and ranges it does not manage (`workspace:`, tags, git, `>=`) are left
+alone. The lockfile is never touched by hand: the detected package manager
+(`packageManager` field, then the lockfile) installs, the installed
+`@basaltkit/cli` upgrade codemods run without booting the app, and the command
+ends with `pnpm typecheck && pnpm test`. If the install fails, the edits stay and
+the command prints how to revert them with git.
+
+| Flag | What it does |
+| --- | --- |
+| `--dry` | Prints the plan; writes nothing |
+| `-y`, `--yes` | Applies without asking — required when stdin is not a terminal (CI) |
+| `--major` | Lets third-party packages cross a major too |
+| `--only=@basaltkit` | Only the framework packages (and `create-basalt`) |
+| `--no-install` | Writes `package.json`, skips the install and the codemods |
+| `--no-tooling` | Leaves `bin/basalt.ts` and the `create-basalt` devDependency alone |
+| `--pm=<manager>`, `--cwd=<dir>`, `--no-color` | Override the package manager / target directory; plain output (also `NO_COLOR`) |
+
+`--offline` is refused — `update` needs the registry. Project tooling rides
+along: an app without the `create-basalt` devDependency gets it (plus a `basalt`
+script), and a `bin/basalt.ts` generated by an earlier release is taught the
+project commands — **only** when it is byte-for-byte a known template or the
+manifest records it untouched. A customised one is left alone and the exact
+snippet to paste is printed.
+
+## Adding features later
+
+Didn't pick `--ui`, `--cli` or `--mcp` at creation time? Add it now — no need
+to recreate the project:
+
+```bash
+pnpm basalt add ui --dry   # what would be created, merged and skipped
+pnpm basalt add ui         # web/ exactly as --ui scaffolds it
+pnpm basalt add cli        # bin/basalt.ts + @basaltkit/cli, generator and prisma:sync
+pnpm basalt add mcp        # @basaltkit/mcp at POST /mcp + the dev-only ai-mcp bridge + .mcp.json
+```
+
+`add` adapts the templates to the project as it is now (its name, auth and
+tenancy from the dependencies) and plans every change before applying any:
+
+- **Existing files are never overwritten** — they are skipped with a notice;
+  `--force` overwrites generated files.
+- **Shared files are merged:** `package.json` (new dependencies in sorted
+  position, scripts such as `dev:web`; an existing entry is never changed),
+  `pnpm-workspace.yaml` (`web` added to `packages:`), `.gitignore` and
+  `README.md`.
+- **Your code** (`src/app.ts`, `src/routes.ts`) is regenerated only when
+  `.basalt/project.json` proves it untouched, patched where the template's
+  anchors are still unambiguous — `fastifyPlugin`, `expressPlugin` and
+  `honoPlugin` alike — and otherwise left alone, with the exact manual steps
+  printed.
+- `add ui` needs pnpm (`web/` is a workspace member) and changes no API code:
+  the Vite dev server proxies `/api`, so there is no CORS to configure.
+- Dependencies are installed afterwards (`--no-install` to skip); `--offline`
+  uses the ranges bundled with create-basalt instead of the registry.
+
+A project created without `--ui` and then given `add ui` has the same files as
+one created with `--ui` — the create-basalt test suite asserts exactly that, and
+that both typecheck.
+
+## Checking a project: `doctor` and `info`
+
+```bash
+pnpm basalt doctor     # read-only; exit 1 on errors, 0 on warnings only
+pnpm basalt info       # versions summary to paste into bug reports
+```
+
+`doctor` checks Node against `engines` and Basalt's `>=22.5.0`; the package
+manager and lockfiles; installed versus declared versions, duplicated
+`@basaltkit/*` versions and unmet peer ranges; framework packages behind
+`latest` (`--offline` skips it); the auth secret (`<PREFIX>_APP_SECRET`, from
+the environment or `.env`, against the `minLength` in `src/env.ts` and the
+placeholder rules of `secret()`) and `DATABASE_URL`; that the Prisma client is
+generated and migrations exist (whether they are *applied* needs a database —
+`prisma migrate status`); `.mcp.json` when `@basaltkit/ai-mcp` is installed; dev
+tooling declared as a runtime dependency; and an outdated `bin/basalt.ts`.
 
 ## Choose an HTTP adapter
 
@@ -438,6 +558,7 @@ directions — `--no-prisma` overrides `prisma: true`.
 | `schedule:list` | Scheduled tasks with their cron expressions and timezones |
 | `dev` | Print the route table, then run the app with watch/restart. `--entry=<file>`, `--worker` (`-w`) to start a queue worker alongside, `--queue=<name>` |
 | `upgrade` | Apply framework upgrade codemods. `--dry` to preview, `--only=<id>`, `--dir=<path>` |
+| `update`, `add`, `doctor`, `info` | Not `runCli` commands: `bin/basalt.ts` forwards them to create-basalt before booting the app — see [Updating an app](#updating-an-app) |
 | `publish` | Copy a stub group into the app (`dockerfile` — with a `.dockerignore` that keeps `.env` and keys out of the image —, `ci`, `editorconfig`). Run with no id to list; `--force` to overwrite |
 
 Registering `queuePlugin` adds `queue:work`, `queue:stats`, `queue:retry` and
@@ -453,6 +574,11 @@ see [Queues & jobs](/guide/queues).
 | `FileExistsError` — "Refusing to overwrite existing files" | 1 | A `make:*` target already exists. Re-run with `--force` |
 | `Unknown command "…". Run "basalt list" to see what is available.` | 1 | Typo, or the plugin that registers the command isn't in `buildApp` |
 | `No entry file found. Looked for src/main.ts, src/server.ts, …` | 1 | `basalt dev` in a project with a different entrypoint — pass `--entry=<file>` |
+| `Unknown command "update"` (+ a create-basalt hint) | 1 | `bin/basalt.ts` predates the project commands — run `npx create-basalt@latest update` once; it patches an unmodified file |
+| `No package.json in …` / `… does not look like a Basalt app` | 1 | A project command outside an app — `cd` into it or pass `--cwd=<dir>`. To create a project called `update`: `npm create basalt -- --name=update` |
+| `Not a terminal — nothing written. Re-run with --yes` | 1 | `update`/`add` without `--yes` in CI or a pipe |
+| `update resolves the latest versions from the npm registry, so it cannot run with --offline` | 1 | Drop `--offline`; a mirror works through `npm_config_registry` |
+| `The web/ frontend is a pnpm workspace member … this project uses npm` | 1 | `add ui` on a non-pnpm project — switch it to pnpm first |
 
 - **The scaffolder ignored my flags** — some package managers keep everything
   after the package name for themselves. Put the flags after `--`:
@@ -462,9 +588,9 @@ see [Queues & jobs](/guide/queues).
   explicit flag, only an interactive non-CI terminal installs. Pass `--install`
   (and `--git`) to force it.
 - **`--ui` silently became pnpm** — it has to; the `web/` package is a pnpm
-  workspace member. Start the frontend with
-  `pnpm --filter <name>-web dev` (port 5180) while `pnpm dev` serves the API on
-  3000.
+  workspace member. Start the frontend with `pnpm dev:web`
+  (= `pnpm --filter <name>-web dev`, port 5180) while `pnpm dev` serves the API
+  on 3000.
 - **"Could not auto-wire src/app.ts"** — `make:resource` only edits an
   `app.ts` that still uses `fastifyPlugin({ routes: [...] })`. Add the generated
   plugin to `plugins` and the routes to the adapter yourself; the generated

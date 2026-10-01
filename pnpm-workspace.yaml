@@ -90,6 +90,11 @@ overrides:
   # override is the only way to raise it; 6.16 is the same major and the parser's
   # behaviour for well-formed input is unchanged.
   qs: ^6.16.0
+  # GHSA-qhr7-859c-m2p7 and the parseCommaParts advisory (high): brace-expansion
+  # below 5.0.11 recurses without bound on nested or comma-heavy brace groups.
+  # It reaches us only through eslint's minimatch (dev tooling), but eslint pins
+  # a range that admits the vulnerable 5.0.x; 5.0.11 is a patch on the same line.
+  brace-expansion: ^5.0.11
   # GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf (high):
   # fast-uri can be made to disagree with the WHATWG parser about a URL's host —
   # skipped IDN normalisation, and SSRF through hosts it parses differently from

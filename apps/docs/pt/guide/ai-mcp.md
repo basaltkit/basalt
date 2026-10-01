@@ -112,11 +112,13 @@ O `create-basalt` liga a ponte por ti quando optas por MCP:
 
 ```bash
 npm create basalt my-saas -- --mcp
+pnpm basalt add mcp          # …ou depois, numa app criada sem --mcp
 ```
 
 Isto acrescenta o `@basaltkit/ai-mcp` às **devDependencies** (nunca às
 dependencies), escreve um `.mcp.json` na raiz do projeto, e documenta-o no README da
-app. Vê [`create-basalt`](/pt/guide/getting-started).
+app. Vê [`create-basalt`](/pt/guide/getting-started) e
+[Acrescentar funcionalidades depois](/pt/guide/installation#acrescentar-funcionalidades-depois).
 
 ## As ferramentas
 
