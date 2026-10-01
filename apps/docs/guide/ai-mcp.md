@@ -109,11 +109,13 @@ Planning and review call an LLM — see Provider setup below.
 
 ```bash
 npm create basalt my-saas -- --mcp
+pnpm basalt add mcp          # …or later, in an app created without --mcp
 ```
 
 This adds `@basaltkit/ai-mcp` to **devDependencies** (never dependencies), writes
 a project-root `.mcp.json`, and documents it in the app's README. See
-[`create-basalt`](/guide/getting-started).
+[`create-basalt`](/guide/getting-started) and
+[Adding features later](/guide/installation#adding-features-later).
 
 ## The tools
 
