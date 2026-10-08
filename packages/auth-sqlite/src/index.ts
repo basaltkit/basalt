@@ -12,8 +12,10 @@ import type {
   AccountLink,
   AccountLinkStore,
   ApiKeyFilter,
+  ApiKeyPatch,
   ApiKeyRecord,
   ApiKeyStore,
+  ApiKeyUpdateOptions,
   AuthTokenPurpose,
   AuthTokenRecord,
   AuthTokenStore,
@@ -112,7 +114,13 @@ export function migrate(db: DatabaseSync): void {
       created_at   INTEGER NOT NULL,
       expires_at   INTEGER,
       last_used_at INTEGER,
-      revoked_at   INTEGER
+      revoked_at   INTEGER,
+      service_id   TEXT,
+      previous_hash TEXT,
+      previous_hash_expires_at INTEGER,
+      rotated_at   INTEGER,
+      allowed_ips  TEXT,
+      meta         TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON auth_api_keys (hash);
 
@@ -157,6 +165,26 @@ export function migrate(db: DatabaseSync): void {
   } catch {
     // Existing databases already have the column.
   }
+  // API key lifecycle (rotation grace, service keys, IP allowlist, metadata).
+  // Nullable columns: existing keys keep working unchanged.
+  for (const column of [
+    'service_id TEXT',
+    'previous_hash TEXT',
+    'previous_hash_expires_at INTEGER',
+    'rotated_at INTEGER',
+    'allowed_ips TEXT',
+    'meta TEXT',
+  ]) {
+    try {
+      db.exec(`ALTER TABLE auth_api_keys ADD COLUMN ${column}`)
+    } catch {
+      /* column already present */
+    }
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_prev_hash ON auth_api_keys (previous_hash) WHERE previous_hash IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_api_keys_service ON auth_api_keys (service_id);
+  `)
 
   // Session activity for the idle timeout (AuthOptions.sessionIdleTtl).
   // Existing rows stay NULL and start their idle clock on their next use.
@@ -492,6 +520,12 @@ interface ApiKeyRow {
   expires_at: number | null
   last_used_at: number | null
   revoked_at: number | null
+  service_id: string | null
+  previous_hash: string | null
+  previous_hash_expires_at: number | null
+  rotated_at: number | null
+  allowed_ips: string | null
+  meta: string | null
 }
 
 const toApiKey = (r: ApiKeyRow): ApiKeyRecord => {
@@ -508,7 +542,31 @@ const toApiKey = (r: ApiKeyRow): ApiKeyRecord => {
   if (r.user_id !== null) rec.userId = r.user_id
   if (r.last_used_at !== null) rec.lastUsedAt = r.last_used_at
   if (r.revoked_at !== null) rec.revokedAt = r.revoked_at
+  if (r.service_id !== null) rec.serviceId = r.service_id
+  if (r.previous_hash !== null) rec.previousHash = r.previous_hash
+  if (r.previous_hash_expires_at !== null) rec.previousHashExpiresAt = r.previous_hash_expires_at
+  if (r.rotated_at !== null) rec.rotatedAt = r.rotated_at
+  if (r.allowed_ips !== null) rec.allowedIps = JSON.parse(r.allowed_ips) as string[]
+  if (r.meta !== null) rec.meta = JSON.parse(r.meta) as Record<string, string>
   return rec
+}
+
+/**
+ * The columns `update` may write, keyed by `ApiKeyPatch` field. The SQL is
+ * built from this fixed map, never from the patch's own keys; identity columns
+ * are absent on purpose.
+ */
+const API_KEY_PATCH_COLUMNS: Record<keyof ApiKeyPatch, { column: string; json?: true }> = {
+  name: { column: 'name' },
+  scopes: { column: 'scopes', json: true },
+  expiresAt: { column: 'expires_at' },
+  hash: { column: 'hash' },
+  prefix: { column: 'prefix' },
+  previousHash: { column: 'previous_hash' },
+  previousHashExpiresAt: { column: 'previous_hash_expires_at' },
+  rotatedAt: { column: 'rotated_at' },
+  allowedIps: { column: 'allowed_ips', json: true },
+  meta: { column: 'meta', json: true },
 }
 
 export class SqliteApiKeyStore implements ApiKeyStore {
@@ -518,8 +576,9 @@ export class SqliteApiKeyStore implements ApiKeyStore {
     this.db
       .prepare(
         `INSERT INTO auth_api_keys
-           (id, name, prefix, hash, tenant_id, user_id, scopes, created_at, expires_at, last_used_at, revoked_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, name, prefix, hash, tenant_id, user_id, scopes, created_at, expires_at, last_used_at, revoked_at,
+            service_id, previous_hash, previous_hash_expires_at, rotated_at, allowed_ips, meta)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -533,13 +592,20 @@ export class SqliteApiKeyStore implements ApiKeyStore {
         orNull(record.expiresAt),
         orNull(record.lastUsedAt),
         orNull(record.revokedAt),
+        orNull(record.serviceId),
+        orNull(record.previousHash),
+        orNull(record.previousHashExpiresAt),
+        orNull(record.rotatedAt),
+        record.allowedIps !== undefined ? JSON.stringify(record.allowedIps) : null,
+        record.meta !== undefined ? JSON.stringify(record.meta) : null,
       )
   }
 
+  /** Matches the current hash or, during a rotation grace window, the previous one. */
   async findByHash(hash: string): Promise<ApiKeyRecord | null> {
     const row = this.db
-      .prepare('SELECT * FROM auth_api_keys WHERE hash = ?')
-      .get(hash) as ApiKeyRow | undefined
+      .prepare('SELECT * FROM auth_api_keys WHERE hash = ? OR previous_hash = ? LIMIT 1')
+      .get(hash, hash) as ApiKeyRow | undefined
     return row ? toApiKey(row) : null
   }
 
@@ -561,6 +627,10 @@ export class SqliteApiKeyStore implements ApiKeyStore {
       where.push('user_id = ?')
       args.push(filter.userId)
     }
+    if (filter.serviceId !== undefined) {
+      where.push('service_id = ?')
+      args.push(filter.serviceId)
+    }
     const rows = this.db
       .prepare(`SELECT * FROM auth_api_keys WHERE ${where.join(' AND ')} ORDER BY created_at`)
       .all(...args) as unknown as ApiKeyRow[]
@@ -573,6 +643,33 @@ export class SqliteApiKeyStore implements ApiKeyStore {
 
   async revoke(id: string, at: number): Promise<void> {
     this.db.prepare('UPDATE auth_api_keys SET revoked_at = ? WHERE id = ?').run(at, id)
+  }
+
+  /** One atomic `UPDATE` on a non-revoked row (compare-and-set on `hash` with `ifHash`). */
+  async update(id: string, patch: ApiKeyPatch, options: ApiKeyUpdateOptions = {}): Promise<ApiKeyRecord | null> {
+    const sets: string[] = []
+    const args: Bindable[] = []
+    for (const [field, { column, json }] of Object.entries(API_KEY_PATCH_COLUMNS)) {
+      if (!Object.hasOwn(patch, field)) continue
+      const value = patch[field as keyof ApiKeyPatch]
+      if (value === undefined) continue
+      sets.push(`${column} = ?`)
+      args.push(value === null ? null : json ? JSON.stringify(value) : (value as string | number))
+    }
+    const where = ['id = ?', 'revoked_at IS NULL']
+    args.push(id)
+    if (options.ifHash !== undefined) {
+      where.push('hash = ?')
+      args.push(options.ifHash)
+    }
+    // An empty patch still checks the row exists and is live.
+    const sql =
+      sets.length > 0
+        ? `UPDATE auth_api_keys SET ${sets.join(', ')} WHERE ${where.join(' AND ')}`
+        : `UPDATE auth_api_keys SET id = id WHERE ${where.join(' AND ')}`
+    const result = this.db.prepare(sql).run(...args)
+    if (Number(result.changes) === 0) return null
+    return this.findById(id)
   }
 }
 

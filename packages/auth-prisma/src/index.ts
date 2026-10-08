@@ -5,8 +5,10 @@ import type {
   AccountLink,
   AccountLinkStore,
   ApiKeyFilter,
+  ApiKeyPatch,
   ApiKeyRecord,
   ApiKeyStore,
+  ApiKeyUpdateOptions,
   AuthTokenPurpose,
   AuthTokenRecord,
   AuthTokenStore,
@@ -95,6 +97,16 @@ interface PApiKey {
   expiresAt: Date | null
   lastUsedAt: Date | null
   revokedAt: Date | null
+  // 3.0 lifecycle columns. Optional in the type so a row is still readable
+  // while an app migrates; the store writes and queries them.
+  serviceId?: string | null
+  previousHash?: string | null
+  previousHashExpiresAt?: Date | null
+  rotatedAt?: Date | null
+  /** `String[]` on PostgreSQL, a `Json` array on MySQL. */
+  allowedIps?: unknown
+  /** `Json`: a flat string map. */
+  meta?: unknown
 }
 interface PMfa {
   userId: string
@@ -226,7 +238,7 @@ export type AuthColumnLimits = ColumnLimits<{
   AuthSession: 'id' | 'userId'
   AuthRefreshToken: 'token' | 'familyId' | 'userId'
   AuthToken: 'token' | 'userId' | 'purpose'
-  AuthApiKey: 'id' | 'name' | 'prefix' | 'hash' | 'tenantId' | 'userId'
+  AuthApiKey: 'id' | 'name' | 'prefix' | 'hash' | 'tenantId' | 'userId' | 'serviceId' | 'previousHash'
   AuthMfa: 'userId' | 'secret'
   AuthTokenVersion: 'userId'
   AuthAccountLink: 'id' | 'provider' | 'subject' | 'userId' | 'email'
@@ -245,7 +257,7 @@ export const authMysqlColumnLimits: AuthColumnLimits = {
   AuthSession: { id: V, userId: V },
   AuthRefreshToken: { token: V, familyId: V, userId: V },
   AuthToken: { token: V, userId: V, purpose: V },
-  AuthApiKey: { id: V, name: MYSQL_TEXT, prefix: V, hash: V, tenantId: V, userId: V },
+  AuthApiKey: { id: V, name: MYSQL_TEXT, prefix: V, hash: V, tenantId: V, userId: V, serviceId: V, previousHash: V },
   AuthMfa: { userId: V, secret: MYSQL_TEXT },
   AuthTokenVersion: { userId: V },
   AuthAccountLink: { id: V, provider: V, subject: MYSQL_TEXT, userId: V, email: MYSQL_TEXT },
@@ -624,25 +636,92 @@ const toApiKey = (r: PApiKey): ApiKeyRecord => {
   if (r.userId !== null) rec.userId = r.userId
   if (r.lastUsedAt !== null) rec.lastUsedAt = ms(r.lastUsedAt)
   if (r.revokedAt !== null) rec.revokedAt = ms(r.revokedAt)
+  if (typeof r.serviceId === 'string') rec.serviceId = r.serviceId
+  if (typeof r.previousHash === 'string') rec.previousHash = r.previousHash
+  if (r.previousHashExpiresAt instanceof Date) rec.previousHashExpiresAt = ms(r.previousHashExpiresAt)
+  if (r.rotatedAt instanceof Date) rec.rotatedAt = ms(r.rotatedAt)
+  // A cleared allowlist is stored as `[]` and a cleared map as `{}` (Prisma
+  // refuses a plain `null` for a Json column without its generated sentinels):
+  // both read back as absent.
+  const allowedIps = stringList(r.allowedIps)
+  if (allowedIps.length > 0) rec.allowedIps = allowedIps
+  const meta = stringMap(r.meta)
+  if (meta !== undefined) rec.meta = meta
   return rec
 }
 
+/** A `Json` string map; anything else (null, `{}`, arrays, non-string values) reads as absent. */
+const stringMap = (value: unknown): Record<string, string> | undefined => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(value)) if (typeof v === 'string') out[k] = v
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 /**
- * The database's `auth_api_keys` table is older than the store: a column the
- * store reads or writes does not exist. `@basaltkit/auth-prisma` 1.5.0 added
- * `expiresAt`; an app that regenerated its client without migrating (or, with
- * schema-per-tenant, without migrating every tenant schema) would otherwise fail
- * every API-key request with a raw Prisma `P2022`. The original error is `cause`.
+ * An {@link ApiKeyPatch} as Prisma `data`, built from a fixed field list —
+ * never from the patch's own keys, so identity columns cannot be written.
+ */
+const apiKeyPatchData = (patch: ApiKeyPatch): Record<string, unknown> => {
+  const data: Record<string, unknown> = {}
+  const has = (k: keyof ApiKeyPatch): boolean => Object.hasOwn(patch, k) && patch[k] !== undefined
+  if (has('name')) data['name'] = patch.name
+  if (has('scopes')) data['scopes'] = patch.scopes
+  if (has('hash')) data['hash'] = patch.hash
+  if (has('prefix')) data['prefix'] = patch.prefix
+  if (has('previousHash')) data['previousHash'] = patch.previousHash
+  if (has('rotatedAt')) data['rotatedAt'] = at(patch.rotatedAt as number)
+  if (has('expiresAt')) data['expiresAt'] = patch.expiresAt === null ? null : at(patch.expiresAt as number)
+  if (has('previousHashExpiresAt')) {
+    data['previousHashExpiresAt'] = patch.previousHashExpiresAt === null ? null : at(patch.previousHashExpiresAt as number)
+  }
+  if (has('allowedIps')) data['allowedIps'] = patch.allowedIps ?? []
+  if (has('meta')) data['meta'] = patch.meta ?? {}
+  return data
+}
+
+/**
+ * The SQL that brings an `auth_api_keys` table up to the 3.0 schema — what the
+ * `add_api_key_lifecycle` migration contains. Kept here so the error, the
+ * README and the tests agree.
+ */
+export const API_KEY_LIFECYCLE_MIGRATION_SQL = {
+  postgresql:
+    'ALTER TABLE "auth_api_keys" ADD COLUMN "serviceId" TEXT, ADD COLUMN "previousHash" TEXT, ' +
+    'ADD COLUMN "previousHashExpiresAt" TIMESTAMP(3), ADD COLUMN "rotatedAt" TIMESTAMP(3), ' +
+    'ADD COLUMN "allowedIps" TEXT[] DEFAULT ARRAY[]::TEXT[], ADD COLUMN "meta" JSONB; ' +
+    'CREATE UNIQUE INDEX "auth_api_keys_previousHash_key" ON "auth_api_keys"("previousHash"); ' +
+    'CREATE INDEX "auth_api_keys_serviceId_idx" ON "auth_api_keys"("serviceId");',
+  mysql:
+    'ALTER TABLE `auth_api_keys` ADD COLUMN `serviceId` VARCHAR(191) NULL, ADD COLUMN `previousHash` VARCHAR(191) NULL, ' +
+    'ADD COLUMN `previousHashExpiresAt` DATETIME(3) NULL, ADD COLUMN `rotatedAt` DATETIME(3) NULL, ' +
+    'ADD COLUMN `allowedIps` JSON NULL, ADD COLUMN `meta` JSON NULL; ' +
+    'CREATE UNIQUE INDEX `auth_api_keys_previousHash_key` ON `auth_api_keys`(`previousHash`); ' +
+    'CREATE INDEX `auth_api_keys_serviceId_idx` ON `auth_api_keys`(`serviceId`);',
+} as const
+
+/**
+ * The database's `auth_api_keys` table (or the generated client) is older than
+ * the store: a column the store reads or writes does not exist.
+ * `@basaltkit/auth-prisma` 1.5.0 added `expiresAt` and 3.0.0 the lifecycle
+ * columns (`serviceId`, `previousHash`, `previousHashExpiresAt`, `rotatedAt`,
+ * `allowedIps`, `meta`). An app that regenerated its client without migrating
+ * (or, with schema-per-tenant, without migrating every tenant schema), or that
+ * migrated without regenerating, would otherwise fail every API-key request
+ * with a raw Prisma error. The original error is `cause`.
  */
 export class ApiKeySchemaOutdatedError extends BasaltError {
   constructor(cause: unknown) {
     super(
       'AUTH_API_KEY_SCHEMA_OUTDATED',
       'The "auth_api_keys" table is missing a column the API key store needs. ' +
-        '@basaltkit/auth-prisma 1.5.0 added the nullable column "auth_api_keys.expiresAt"; ' +
-        'add a migration for it (e.g. `prisma migrate dev --name add_api_key_expires_at`), which on PostgreSQL is: ' +
-        'ALTER TABLE "auth_api_keys" ADD COLUMN "expiresAt" TIMESTAMP(3); ' +
-        'With schema-per-tenant the column must exist in EVERY tenant schema: add the migration to your ' +
+        '@basaltkit/auth-prisma 3.0.0 needs the columns expiresAt (since 1.5.0), serviceId, previousHash, ' +
+        'previousHashExpiresAt, rotatedAt, allowedIps and meta. Copy the AuthApiKey model from the package ' +
+        'schema, run `prisma generate`, and add a migration (e.g. `prisma migrate dev --name add_api_key_lifecycle`). ' +
+        `On PostgreSQL: ${API_KEY_LIFECYCLE_MIGRATION_SQL.postgresql} ` +
+        `On MySQL: ${API_KEY_LIFECYCLE_MIGRATION_SQL.mysql} ` +
+        '(A database older than 1.5.0 also needs "expiresAt" TIMESTAMP(3) / DATETIME(3).) ' +
+        'With schema-per-tenant the columns must exist in EVERY tenant schema: add the migration to your ' +
         'tenant migrations, then run `basalt tenant:migrate`.',
       { cause },
     )
@@ -651,14 +730,17 @@ export class ApiKeySchemaOutdatedError extends BasaltError {
 
 // "Undefined column" codes: Prisma P2022, PostgreSQL 42703, MySQL 1054.
 const UNDEFINED_COLUMN_CODES = new Set<unknown>(['P2022', '42703', 1054, '1054', 'ER_BAD_FIELD_ERROR'])
-const MISSING_COLUMN_TEXT = /does not exist|no such column|unknown column|ColumnNotFound/i
+const MISSING_COLUMN_TEXT = /does not exist|no such column|unknown column|ColumnNotFound|Unknown argument|Unknown field/i
+/** The `auth_api_keys` columns added after 1.0 — a missing one means an outdated schema or client. */
+const API_KEY_ADDED_COLUMNS = /\b(expiresAt|serviceId|previousHash|previousHashExpiresAt|rotatedAt|allowedIps|meta)\b/
 
 /**
  * Whether `err` reports a missing `auth_api_keys` column. Every query here goes
  * through the `authApiKey` delegate, so an undefined-column code can only mean
- * that table is outdated. A driver-adapter error without a recognised code must
- * name `expiresAt` in its message or meta, so unrelated failures are never
- * relabelled. Nested `cause`s are followed a few levels deep.
+ * that table is outdated. An error without a recognised code (a driver-adapter
+ * error, or a `PrismaClientValidationError` from a client generated before 3.0:
+ * "Unknown argument `previousHash`") must name one of the added columns in its
+ * message or meta, so unrelated failures are never relabelled. Nested `cause`s are followed a few levels deep.
  */
 function isApiKeySchemaOutdated(err: unknown, depth = 0): boolean {
   if (typeof err !== 'object' || err === null || depth > 3) return false
@@ -678,7 +760,7 @@ function isApiKeySchemaOutdated(err: unknown, depth = 0): boolean {
     // unserializable meta: judge by the message alone
   }
   const text = [e.message, e.kind].filter((v) => typeof v === 'string').join(' ') + ' ' + meta
-  if (text.includes('expiresAt') && MISSING_COLUMN_TEXT.test(text)) return true
+  if (API_KEY_ADDED_COLUMNS.test(text) && MISSING_COLUMN_TEXT.test(text)) return true
   return isApiKeySchemaOutdated(e.cause, depth + 1)
 }
 
@@ -712,6 +794,13 @@ export class PrismaApiKeyStore implements ApiKeyStore {
       expiresAt: record.expiresAt !== undefined ? at(record.expiresAt) : null,
       lastUsedAt: record.lastUsedAt !== undefined ? at(record.lastUsedAt) : null,
       revokedAt: record.revokedAt !== undefined ? at(record.revokedAt) : null,
+      serviceId: record.serviceId ?? null,
+      previousHash: record.previousHash ?? null,
+      previousHashExpiresAt: record.previousHashExpiresAt !== undefined ? at(record.previousHashExpiresAt) : null,
+      rotatedAt: record.rotatedAt !== undefined ? at(record.rotatedAt) : null,
+      // Omitted when absent: the column default (`[]` / NULL) applies.
+      ...(record.allowedIps !== undefined ? { allowedIps: record.allowedIps } : {}),
+      ...(record.meta !== undefined ? { meta: record.meta } : {}),
     }
     assertColumnLengths(PKG, this.limits, 'AuthApiKey', data)
     try {
@@ -721,9 +810,12 @@ export class PrismaApiKeyStore implements ApiKeyStore {
     }
   }
 
+  /** Two unique lookups: the current hash, then a rotation's previous hash. */
   async findByHash(hash: string): Promise<ApiKeyRecord | null> {
     try {
-      const r = await this.client.authApiKey.findUnique({ where: { hash } })
+      const r =
+        (await this.client.authApiKey.findUnique({ where: { hash } })) ??
+        (await this.client.authApiKey.findUnique({ where: { previousHash: hash } }))
       return r ? toApiKey(r) : null
     } catch (err) {
       throw apiKeyError(err)
@@ -740,9 +832,10 @@ export class PrismaApiKeyStore implements ApiKeyStore {
   }
 
   async list(filter: ApiKeyFilter): Promise<ApiKeyRecord[]> {
-    const where: { revokedAt: null; tenantId?: string; userId?: string } = { revokedAt: null }
+    const where: { revokedAt: null; tenantId?: string; userId?: string; serviceId?: string } = { revokedAt: null }
     if (filter.tenantId !== undefined) where.tenantId = filter.tenantId
     if (filter.userId !== undefined) where.userId = filter.userId
+    if (filter.serviceId !== undefined) where.serviceId = filter.serviceId
     try {
       const rows = await this.client.authApiKey.findMany({ where, orderBy: { createdAt: 'asc' } })
       return rows.map(toApiKey)
@@ -764,6 +857,21 @@ export class PrismaApiKeyStore implements ApiKeyStore {
   async revoke(id: string, at_: number): Promise<void> {
     try {
       await this.client.authApiKey.updateMany({ where: { id }, data: { revokedAt: at(at_) } })
+    } catch (err) {
+      throw apiKeyError(err)
+    }
+  }
+
+  /** One `updateMany` on a non-revoked row (compare-and-set on `hash` with `ifHash`). */
+  async update(id: string, patch: ApiKeyPatch, options: ApiKeyUpdateOptions = {}): Promise<ApiKeyRecord | null> {
+    const data = apiKeyPatchData(patch)
+    assertColumnLengths(PKG, this.limits, 'AuthApiKey', data)
+    const where = { id, revokedAt: null, ...(options.ifHash !== undefined ? { hash: options.ifHash } : {}) }
+    try {
+      const { count } = await this.client.authApiKey.updateMany({ where, data })
+      if (count === 0) return null
+      const r = await this.client.authApiKey.findUnique({ where: { id } })
+      return r ? toApiKey(r) : null
     } catch (err) {
       throw apiKeyError(err)
     }
