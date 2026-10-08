@@ -15,7 +15,9 @@ describe('body markers', () => {
     expect(rawBodyOptionsOf(foreign)).toEqual({ maxBytes: 512 })
 
     const foreignUpload = {}
-    Object.defineProperty(foreignUpload, Symbol.for('basalt.http.upload'), { value: { maxBytes: 10, maxFiles: 1 } })
+    Object.defineProperty(foreignUpload, Symbol.for('basalt.http.upload'), {
+      value: { maxBytes: 10, maxFiles: 1, maxFileBytes: 10, maxFields: 50, maxFieldBytes: 1024, maxHeaderBytes: 8192, allowedTypes: undefined },
+    })
     expect(isUploadBody(foreignUpload)).toBe(true)
   })
 
@@ -36,5 +38,14 @@ describe('body markers', () => {
     expect(isRawBody(bogus)).toBe(false)
     expect(isRawBody(null)).toBe(false)
     expect(isUploadBody('x')).toBe(false)
+    // A marker missing a limit is not an upload with that limit lifted.
+    const partial = {}
+    Object.defineProperty(partial, Symbol.for('basalt.http.upload'), { value: { maxBytes: 10, maxFiles: 1 } })
+    expect(isUploadBody(partial)).toBe(false)
+    const badTypes = {}
+    Object.defineProperty(badTypes, Symbol.for('basalt.http.upload'), {
+      value: { maxBytes: 10, maxFiles: 1, maxFileBytes: 10, maxFields: 1, maxFieldBytes: 1, maxHeaderBytes: 1, allowedTypes: 'image/*' },
+    })
+    expect(isUploadBody(badTypes)).toBe(false)
   })
 })
