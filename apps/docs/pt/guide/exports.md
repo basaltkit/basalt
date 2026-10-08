@@ -42,7 +42,9 @@ const result = await exports.run(usersExport, users, 'csv')
 // { content: Buffer, contentType: 'text/csv', filename: 'users.csv', format: 'csv', rowCount: 1 }
 ```
 
-CSV/TSV fazem quoting corretamente (RFC 4180), as datas renderizam como ISO, e
+CSV/TSV fazem quoting corretamente (RFC 4180), as datas renderizam como ISO (vê
+[locales pt](#exportar-para-excel-erp-em-locales-pt) para um BOM, `;` e
+`1 408 278,55`), e
 `run` aceita um array **ou** um `AsyncIterable`. O `run` faz sempre **buffer** —
 recolhe todas as linhas e devolve o ficheiro inteiro num único `Buffer`; para
 grandes volumes de dados usa o [`stream()`](#exportacoes-grandes-em-stream).
@@ -159,7 +161,72 @@ precisam dos tamanhos e CRCs, por isso a folha inteira é construída em memóri
 usa o `run()`, não o `stream()`.
 
 Para adicionar outro formato (PDF, ODS…), implementa `ExportFormatter.render(headers,
-rows) → Buffer` e regista-o da mesma forma — sem alterações à definição de
-exportação. Implementa também o `renderStream(headers, rows: AsyncIterable<unknown[]>)
-→ AsyncIterable<string | Buffer>` opcional (com bytes idênticos ao `render`) para
-tornar o formato streamable.
+rows, columns?) → Buffer` e regista-o da mesma forma — sem alterações à definição de
+exportação. Implementa também o `renderStream(headers, rows: AsyncIterable<unknown[]>,
+columns?) → AsyncIterable<string | Buffer>` opcional (com bytes idênticos ao `render`)
+para tornar o formato streamable. O `columns` traz o `header` de cada coluna e as
+dicas opcionais `type`, `format` e `width`; um formatador pode ignorá-lo.
+
+## Exportar para Excel/ERP em locales pt
+
+Um ficheiro que uma folha de cálculo ou um ERP num locale de língua portuguesa
+abra sem retoques precisa de três coisas que os valores por omissão não fazem: um
+BOM UTF-8 (sem ele o Excel em Windows lê `Número` como `NÃºmero`), `;` como
+separador, e números/datas escritos à maneira local (`1 408 278,55`,
+`14/03/2026`). O `createCsvFormatter` faz as três:
+
+```ts
+import { createCsvFormatter, exportsPlugin } from '@basaltkit/exports'
+
+const ptCsv = createCsvFormatter({
+  delimiter: ';',
+  bom: true,
+  locale: { decimal: ',', thousands: ' ', date: 'dd/mm/yyyy' },
+})
+
+exportsPlugin({ formatters: [ptCsv] }) // regista-se como 'csv', substituindo o de omissão
+// 1408278.55 → 1 408 278,55 · -1408278.55 → -1 408 278,55 · Date → 14/03/2026
+```
+
+Passa **números e `Date`s, não strings já formatadas**: o locale só muda a forma
+como um número primitivo é escrito *depois* de a proteção contra injeção de
+fórmulas o ter isentado, por isso o `-1 408 278,55` de uma nota de crédito
+continua a ser um número, enquanto uma string como `'-1408278,55'` continua
+protegida (`'-1408278,55`) — a proteção não é configurável. O `'dd/mm/yyyy'` usa
+o dia do calendário UTC; passa uma função (`date: (d) => …`) para outra coisa
+qualquer. Com `format: 'csv-pt'` regista-se ao lado do de omissão em vez de o
+substituir. O `stream()` emite os mesmos bytes, BOM incluído.
+
+Para XLSX, o `createXlsxFormatter` escreve **células de data verdadeiras**
+(números de série do Excel com um formato de data, a partir do instante UTC) e
+aplica formatos de número por coluna, larguras, um nome de folha e um cabeçalho
+fixo. As dicas ficam na definição da exportação:
+
+```ts
+import { createXlsxFormatter } from '@basaltkit/exports-xlsx'
+
+const invoicesExport = defineExport<Invoice>({
+  name: 'invoices',
+  columns: [
+    { header: 'Número', value: (i) => i.number, width: 16 },
+    { header: 'Data', value: (i) => i.issuedAt, type: 'date' },
+    { header: 'Total', value: (i) => i.total, type: 'number', format: '#,##0.00', width: 14 },
+  ],
+})
+
+exportsPlugin({
+  formatters: [ptCsv, createXlsxFormatter({ sheetName: 'Facturas', freezeHeader: true, dateFormat: 'dd/mm/yyyy' })],
+})
+```
+
+| Opção do `createXlsxFormatter` | Omissão | Efeito |
+| --- | --- | --- |
+| `sheetName` | `'Sheet1'` | Nome da folha; 1–31 caracteres, nenhum de `[ ] : * ? / \`, sem começar/acabar em `'` (caso contrário lança `TypeError`) |
+| `freezeHeader` | `false` | Mantém a linha de cabeçalho visível ao fazer scroll |
+| `dateFormat` | `'yyyy-mm-dd'` | Formato das células de data cuja coluna não tem `format` |
+| `widths` | — | Larguras das colunas por índice; sobrepõem-se ao `width` das colunas |
+| `format` | `'xlsx'` | Nome do formato com que se regista |
+
+O `xlsxFormatter` simples não muda (datas como texto ISO, sem estilos). Os
+formatos de número são formatos de apresentação: a célula guarda o número em
+bruto, por isso o Excel mostra-o com o separador decimal de quem o abre.

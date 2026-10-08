@@ -43,7 +43,9 @@ const result = await exports.run(usersExport, users, 'csv')
 // { content: Buffer, contentType: 'text/csv', filename: 'users.csv', format: 'csv', rowCount: 1 }
 ```
 
-CSV/TSV quote correctly (RFC 4180), dates render as ISO, and `run` accepts an
+CSV/TSV quote correctly (RFC 4180), dates render as ISO (see
+[pt locales](#exporting-for-excel-erp-in-pt-locales) for a BOM, `;` and
+`1 408 278,55`), and `run` accepts an
 array **or** an `AsyncIterable`. `run` always **buffers** — it collects every row
 and returns the whole file as one `Buffer`; for large datasets use
 [`stream()`](#streaming-large-exports).
@@ -158,7 +160,71 @@ their sizes and CRCs, so the whole sheet is built in memory — use `run()`, not
 `stream()`.
 
 To add another format (PDF, ODS…), implement `ExportFormatter.render(headers,
-rows) → Buffer` and register it the same way — no export definition changes.
-Implement the optional `renderStream(headers, rows: AsyncIterable<unknown[]>)
-→ AsyncIterable<string | Buffer>` as well (byte-identical to `render`) to make
-the format streamable.
+rows, columns?) → Buffer` and register it the same way — no export definition changes.
+Implement the optional `renderStream(headers, rows: AsyncIterable<unknown[]>,
+columns?) → AsyncIterable<string | Buffer>` as well (byte-identical to `render`)
+to make the format streamable. `columns` carries each column's `header` plus its
+optional `type`, `format` and `width` hints; a formatter may ignore it.
+
+## Exporting for Excel/ERP in pt locales
+
+A file that a spreadsheet or ERP in a Portuguese-speaking locale opens without
+retouching needs three things the defaults don't do: a UTF-8 BOM (or Excel on
+Windows reads `Número` as `NÃºmero`), `;` as the delimiter, and numbers/dates
+written the local way (`1 408 278,55`, `14/03/2026`). `createCsvFormatter` does
+all three:
+
+```ts
+import { createCsvFormatter, exportsPlugin } from '@basaltkit/exports'
+
+const ptCsv = createCsvFormatter({
+  delimiter: ';',
+  bom: true,
+  locale: { decimal: ',', thousands: ' ', date: 'dd/mm/yyyy' },
+})
+
+exportsPlugin({ formatters: [ptCsv] }) // registers as 'csv', replacing the default
+// 1408278.55 → 1 408 278,55 · -1408278.55 → -1 408 278,55 · Date → 14/03/2026
+```
+
+Pass **numbers and `Date`s, not pre-formatted strings**: the locale only changes
+how a primitive number is spelled *after* the formula-injection guard has exempted
+it, so a credit note's `-1 408 278,55` stays a number, while a string such as
+`'-1408278,55'` is still guarded (`'-1408278,55`) — the guard is not
+configurable. `'dd/mm/yyyy'` uses the UTC calendar day; pass a function
+(`date: (d) => …`) for anything else. `format: 'csv-pt'` registers it next to the
+default instead of replacing it. `stream()` emits the same bytes, BOM included.
+
+For XLSX, `createXlsxFormatter` writes **real date cells** (Excel serial numbers
+with a date format, from the UTC instant) and applies per-column number formats,
+widths, a sheet name and a frozen header. The hints live on the export
+definition:
+
+```ts
+import { createXlsxFormatter } from '@basaltkit/exports-xlsx'
+
+const invoicesExport = defineExport<Invoice>({
+  name: 'invoices',
+  columns: [
+    { header: 'Número', value: (i) => i.number, width: 16 },
+    { header: 'Data', value: (i) => i.issuedAt, type: 'date' },
+    { header: 'Total', value: (i) => i.total, type: 'number', format: '#,##0.00', width: 14 },
+  ],
+})
+
+exportsPlugin({
+  formatters: [ptCsv, createXlsxFormatter({ sheetName: 'Facturas', freezeHeader: true, dateFormat: 'dd/mm/yyyy' })],
+})
+```
+
+| `createXlsxFormatter` option | Default | Effect |
+| --- | --- | --- |
+| `sheetName` | `'Sheet1'` | Worksheet name; 1–31 chars, none of `[ ] : * ? / \`, not starting/ending with `'` (throws `TypeError` otherwise) |
+| `freezeHeader` | `false` | Keeps the header row visible while scrolling |
+| `dateFormat` | `'yyyy-mm-dd'` | Number format of date cells whose column has no `format` |
+| `widths` | — | Column widths by index; override the columns' `width` |
+| `format` | `'xlsx'` | Format name it registers under |
+
+The plain `xlsxFormatter` is unchanged (dates as ISO text, no styles). Number
+formats are display formats: the cell still holds the raw number, so Excel shows
+it with the viewer's own decimal separator.
