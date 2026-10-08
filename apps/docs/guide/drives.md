@@ -740,6 +740,40 @@ and `/`, `?`, `#`, `%`, `.`, `..` and whitespace are refused with
 `DRIVE_ACCESS_DENIED`. A `folderId` may narrow a call to a folder but never name
 another drive.
 
+### SharePoint columns
+
+A document library's files are list items with columns (matter, client,
+status…). The adapter can bring the ones you name along with every listing,
+`getItem` and change-feed page, without a request per file:
+
+```ts
+import { microsoftDrive, sharePointFieldsOf } from '@basaltkit/drives-microsoft'
+
+microsoftDrive({ clientId, clientSecret, listItemFields: ['Matter', 'ClientName', 'DocStatus'] })
+
+const page = await drives.listItems(connection.id)
+for (const item of page.items) {
+  const columns = sharePointFieldsOf(item) // { Matter: 'ACME v. Globex', DocStatus: 'Signed' } | undefined
+}
+```
+
+- Names are **internal** column names, validated at startup. There is no
+  "all": a list item carries author ids, workflow state and whatever the site
+  added, and `raw` is persisted by sinks.
+- Values are flattened to primitives under `item.raw.listItemFields`: a lookup
+  or managed-metadata value becomes its label, a person their email, and a
+  multi-value column the labels joined with `"; "`. Other shapes are dropped.
+  At most 64 columns, 1 KB per value.
+- A personal OneDrive has no list item, so the key is simply absent. With the
+  option unset, `raw` stays exactly `{ driveId }`.
+- This is Microsoft-only, so it lives in the adapter, not the drive contract.
+
+::: warning Unverified data
+Column values are whatever the tenant's users typed into SharePoint. Validate
+them like any other user input before they decide anything — which matter a
+document is filed under, who may see it.
+:::
+
 ### Four things Microsoft does differently
 
 **The refresh token rotates, every time.** The old one dies the instant a new one
