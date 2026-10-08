@@ -4,7 +4,14 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import { TenantAlreadyExistsError, type Tenant, type TenantSource } from '@basaltkit/tenancy'
+import {
+  DomainTakenError,
+  TenantAlreadyExistsError,
+  type CustomDomain,
+  type DomainStore,
+  type Tenant,
+  type TenantSource,
+} from '@basaltkit/tenancy'
 
 /**
  * Durable, SQLite-backed implementation of the `@basaltkit/tenancy` `TenantSource`,
@@ -43,6 +50,19 @@ export function migrate(db: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_tenant_domains_tenant ON tenant_domains (tenant_id);
   `)
+  // Custom-domain verification columns (SqliteDomainStore), added in place so
+  // a database created by an older version migrates on open. A row with a NULL
+  // token mirrors `tenant.domains`; a row with a token is a CustomDomains claim.
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(tenant_domains)').all() as unknown as { name: string }[]).map((c) => c.name),
+  )
+  const add = (name: string, definition: string) => {
+    if (!columns.has(name)) db.exec(`ALTER TABLE tenant_domains ADD COLUMN ${name} ${definition}`)
+  }
+  add('verification_token', 'TEXT')
+  add('verified', 'INTEGER NOT NULL DEFAULT 1')
+  add('created_at', 'INTEGER NOT NULL DEFAULT 0')
+  add('verified_at', 'INTEGER')
 }
 
 /** The custom domains a tenant claims — a `string[]` under `tenant.domains`. */
@@ -66,8 +86,11 @@ export class SqliteTenantSource implements TenantSource {
   constructor(readonly db: DatabaseSync) {}
 
   /**
-   * Insert or update a tenant and replace its custom-domain set in one
-   * transaction. Claiming a domain already owned by a *different* tenant throws
+   * Insert or update a tenant and bring its domain set in line with
+   * `tenant.domains`, in one transaction. Only mirror rows are touched: a
+   * domain claimed through `CustomDomains` + {@link SqliteDomainStore} survives
+   * every save, so re-provisioning or a status change keeps a verified custom
+   * domain and its proof. Claiming a domain already owned by a *different* tenant throws
    * (domains are globally unique — routing must be unambiguous); the whole save
    * rolls back so the tenant record and its domains never drift apart.
    *
@@ -113,11 +136,24 @@ export class SqliteTenantSource implements TenantSource {
         if (refuseExisting && isUniqueViolation(error)) throw new TenantAlreadyExistsError(tenant.id)
         throw error
       }
-      // Replace this tenant's domain set: drop the old rows, then insert the new
-      // ones. A plain INSERT fails if another tenant already owns the domain.
-      this.db.prepare('DELETE FROM tenant_domains WHERE tenant_id = ?').run(tenant.id)
-      const insert = this.db.prepare('INSERT INTO tenant_domains (domain, tenant_id) VALUES (?, ?)')
-      for (const domain of domains) insert.run(domain, tenant.id)
+      // Diff this tenant's mirror rows against the set: drop the ones no longer
+      // listed (claim rows, which carry a token, are never dropped), insert the
+      // missing ones. A plain INSERT fails if another tenant already owns the
+      // domain; a domain the tenant already holds (mirror or claim) is kept.
+      this.db
+        .prepare(
+          'DELETE FROM tenant_domains WHERE tenant_id = ? AND verification_token IS NULL ' +
+            'AND domain NOT IN (SELECT value FROM json_each(?))',
+        )
+        .run(tenant.id, JSON.stringify(domains))
+      const owner = this.db.prepare('SELECT tenant_id FROM tenant_domains WHERE domain = ?')
+      const insert = this.db.prepare('INSERT INTO tenant_domains (domain, tenant_id, created_at) VALUES (?, ?, ?)')
+      const now = Date.now()
+      for (const domain of domains) {
+        const row = owner.get(domain) as { tenant_id: string } | undefined
+        if (row?.tenant_id === tenant.id) continue
+        insert.run(domain, tenant.id, now)
+      }
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -130,9 +166,16 @@ export class SqliteTenantSource implements TenantSource {
     return row ? (JSON.parse(row.data) as Tenant) : null
   }
 
+  /**
+   * The tenant a domain belongs to. Fail-closed for custom domains: a claim
+   * row resolves only once verified, so a domain another tenant merely claimed
+   * never routes a request.
+   */
   async findByDomain(domain: string): Promise<Tenant | null> {
     const row = this.db
-      .prepare('SELECT tenant_id FROM tenant_domains WHERE domain = ?')
+      .prepare(
+        'SELECT tenant_id FROM tenant_domains WHERE domain = ? AND (verification_token IS NULL OR verified = 1)',
+      )
       .get(domain) as { tenant_id: string } | undefined
     return row ? this.find(row.tenant_id) : null
   }
@@ -163,6 +206,138 @@ export class SqliteTenantSource implements TenantSource {
       throw error
     }
   }
+}
+
+interface DomainRow {
+  domain: string
+  tenant_id: string
+  verification_token: string
+  verified: number
+  created_at: number
+  verified_at: number | null
+}
+
+const CLAIM_COLUMNS = 'domain, tenant_id, verification_token, verified, created_at, verified_at'
+
+function toRecord(row: DomainRow): CustomDomain {
+  return {
+    domain: row.domain,
+    tenantId: row.tenant_id,
+    verified: row.verified === 1,
+    verificationToken: row.verification_token,
+    createdAt: Number(row.created_at),
+    ...(row.verified_at !== null ? { verifiedAt: Number(row.verified_at) } : {}),
+  }
+}
+
+const claimValues = (r: CustomDomain) =>
+  [r.domain, r.tenantId, r.verificationToken, r.verified ? 1 : 0, r.createdAt, r.verifiedAt ?? null] as const
+
+/**
+ * Durable `DomainStore` for `CustomDomains`, on the same `tenant_domains` table
+ * `SqliteTenantSource` reads — a verified custom domain resolves through the
+ * source's `findByDomain` with no extra wiring.
+ *
+ * Rows with a verification token are this store's (claims); rows without one
+ * mirror `tenant.domains` and belong to the source — invisible here, and never
+ * deleted or rewritten by this store. The domain is the primary key, so
+ * `add()` of a domain already present, of either kind, throws
+ * `DomainTakenError` (409 through `CustomDomains.add()`).
+ */
+export class SqliteDomainStore implements DomainStore {
+  constructor(readonly db: DatabaseSync) {}
+
+  async add(record: CustomDomain): Promise<void> {
+    try {
+      this.db
+        .prepare(`INSERT INTO tenant_domains (${CLAIM_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(...claimValues(record))
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new DomainTakenError(record.domain)
+      throw error
+    }
+  }
+
+  async get(domain: string): Promise<CustomDomain | null> {
+    const row = this.db
+      .prepare(`SELECT ${CLAIM_COLUMNS} FROM tenant_domains WHERE domain = ? AND verification_token IS NOT NULL`)
+      .get(domain) as DomainRow | undefined
+    return row ? toRecord(row) : null
+  }
+
+  async forTenant(tenantId: string): Promise<CustomDomain[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT ${CLAIM_COLUMNS} FROM tenant_domains WHERE tenant_id = ? AND verification_token IS NOT NULL ORDER BY domain`,
+      )
+      .all(tenantId) as unknown as DomainRow[]
+    return rows.map(toRecord)
+  }
+
+  async markVerified(domain: string, at: number): Promise<void> {
+    this.db
+      .prepare('UPDATE tenant_domains SET verified = 1, verified_at = ? WHERE domain = ? AND verification_token IS NOT NULL')
+      .run(at, domain)
+  }
+
+  async markUnverified(domain: string): Promise<void> {
+    this.db
+      .prepare(
+        'UPDATE tenant_domains SET verified = 0, verified_at = NULL WHERE domain = ? AND verification_token IS NOT NULL',
+      )
+      .run(domain)
+  }
+
+  async remove(domain: string): Promise<void> {
+    this.db.prepare('DELETE FROM tenant_domains WHERE domain = ? AND verification_token IS NOT NULL').run(domain)
+  }
+
+  /** One conditional UPDATE: of two callers racing on the same claim, exactly one matches. */
+  async replace(expected: CustomDomain, next: CustomDomain): Promise<boolean> {
+    try {
+      const info = this.db
+        .prepare(
+          'UPDATE tenant_domains SET domain = ?, tenant_id = ?, verification_token = ?, verified = ?, ' +
+            'created_at = ?, verified_at = ? ' +
+            'WHERE domain = ? AND tenant_id = ? AND verification_token = ? AND verified = ?',
+        )
+        .run(
+          ...claimValues(next),
+          expected.domain,
+          expected.tenantId,
+          expected.verificationToken,
+          expected.verified ? 1 : 0,
+        )
+      return Number(info.changes) === 1
+    } catch (error) {
+      if (isUniqueViolation(error)) return false
+      throw error
+    }
+  }
+
+  async listVerified(): Promise<CustomDomain[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT ${CLAIM_COLUMNS} FROM tenant_domains WHERE verified = 1 AND verification_token IS NOT NULL ORDER BY domain`,
+      )
+      .all() as unknown as DomainRow[]
+    return rows.map(toRecord)
+  }
+}
+
+/**
+ * A durable domain store for `CustomDomains`, on the same database as the
+ * tenant source (pass `source.db`), or on its own file:
+ *
+ * ```ts
+ * const tenants = sqliteTenantSource('./data/tenants.db')
+ * const customDomains = new CustomDomains({ store: sqliteDomainStore(tenants.db) })
+ * ```
+ */
+export function sqliteDomainStore(dbOrLocation: DatabaseSync | string = ':memory:'): SqliteDomainStore {
+  const db = typeof dbOrLocation === 'string' ? openTenancyDatabase(dbOrLocation) : dbOrLocation
+  if (typeof dbOrLocation !== 'string') migrate(db)
+  return new SqliteDomainStore(db)
 }
 
 /**

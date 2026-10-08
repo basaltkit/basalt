@@ -243,10 +243,57 @@ userinfo (`acme.basalt.app@evil.com`), paths, `%`-escapes, non-ASCII and IP
 literals with `400 DOMAIN_INVALID` instead of rewriting them. Register an
 internationalized domain in its `xn--` form (`domainToASCII()` from `node:url`).
 
-`verify()` does a live `TXT` lookup via `node:dns` (injectable for tests). Provide a
-durable `DomainStore` (the same shape as `MemoryDomainStore`) to persist domains.
-TLS certificate provisioning is infrastructure — issue the cert with your platform
+`verify()` does a live `TXT` lookup via `node:dns` (injectable for tests). TLS
+certificate provisioning is infrastructure — issue the cert with your platform
 (Cloudflare, Caddy, ACME) once `verify()` returns `true`.
+
+### A durable domain store
+
+`MemoryDomainStore` forgets every claim and proof on restart. The two durable
+tenant sources each ship a matching store on the same `tenant_domains` table:
+
+```ts
+import { prismaDomainStore, prismaTenantSource } from '@basaltkit/tenancy-prisma'
+// or: import { sqliteDomainStore, sqliteTenantSource } from '@basaltkit/tenancy-sqlite'
+
+const tenants = prismaTenantSource(prisma)
+const domains = new CustomDomains({
+  store: prismaDomainStore(prisma),   // sqliteDomainStore(tenants.db) for SQLite
+  reservedDomains: ['basalt.app'],
+})
+tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'basalt.app' }), domainResolver()] })
+```
+
+No `findByVerifiedDomain` is needed with these: the source's own `findByDomain`
+is fail-closed, so a claim resolves only once verified and a domain another
+tenant merely claimed (`victim.com`) never routes a request. The table holds two
+kinds of row, told apart by `verificationToken`:
+
+| Row | Written by | `save()` / `provision()` | Resolves |
+| --- | --- | --- | --- |
+| mirror (`verificationToken` NULL) | the source, from `tenant.domains` | kept in line with `tenant.domains` | always |
+| claim (`verificationToken` set) | the domain store | never deleted | once `verified` |
+
+So re-provisioning a tenant or changing its status never erases a verified
+custom domain or its proof. A domain is one row whichever kind it is: claiming a
+domain already on some `tenant.domains` throws `DOMAIN_TAKEN` (409), translated
+from the driver's unique violation inside the store.
+
+The Prisma store needs the verification columns of the bundled `TenantDomain`
+model (`verificationToken`, `verified`, `createdAt`, `verifiedAt`) — an additive
+migration: re-run `basalt prisma:sync`, then `prisma migrate dev`. The SQLite
+source adds them on open.
+
+Writing a store of your own? Run the shared contract against it — it lives on
+a test-only subpath and works with any runner:
+
+```ts
+import { domainStoreContract } from '@basaltkit/tenancy/testing'
+
+describe('MyDomainStore', () => {
+  for (const c of domainStoreContract(() => new MyDomainStore(db))) it(c.name, c.run)
+})
+```
 
 ## Creating tenants
 
@@ -300,8 +347,10 @@ tenancyPlugin({
 })
 ```
 
-`save` and `create` replace the tenant's custom-domain set; a domain already owned
-by another tenant is rejected (routing must be unambiguous). See [Persistence](/guide/persistence).
+`save` and `create` bring the tenant's domain rows in line with `tenant.domains`
+(domains claimed through `CustomDomains` are left alone — see
+[a durable domain store](#a-durable-domain-store)); a domain already owned by
+another tenant is rejected (routing must be unambiguous). See [Persistence](/guide/persistence).
 
 ::: tip Prisma-backed registry
 `prismaTenantSource(prisma)` stores the registry in the Postgres/MySQL database
@@ -951,7 +1000,7 @@ literal) matches nothing.
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `store` | `DomainStore` | `new MemoryDomainStore()` | Where registered domains live. A durable implementation **must** back `add()` with a UNIQUE constraint — that insert is the anti-hijack gate |
+| `store` | `DomainStore` | `new MemoryDomainStore()` | Where registered domains live — `prismaDomainStore(prisma)` or `sqliteDomainStore(db)` in production. A durable implementation **must** back `add()` with a UNIQUE constraint and throw `DomainTakenError` — that insert is the anti-hijack gate (check yours with `domainStoreContract` from `@basaltkit/tenancy/testing`) |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 | `token` | `() => string` | 24 random bytes, base64url | Verification-token generator (tests) |
 | `resolveTxt` | `(host) => Promise<string[][]>` | `node:dns/promises` `resolveTxt` | DNS lookup used by `verify()`; stub it in tests |
