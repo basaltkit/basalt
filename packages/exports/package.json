@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22.5.0"
   },
-  "description": "Data exports for Basalt: render typed export definitions to CSV/TSV/JSON/NDJSON (native, zero-dep) through a pluggable formatter seam, designed to run async via @basaltkit/queue.",
+  "description": "Data exports for Basalt: render typed export definitions to CSV/TSV/JSON/NDJSON (native, zero-dep) through a pluggable formatter seam, designed to run async via @basaltkit/queue; reads CSV back with strict locale parsing and per-line errors.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,

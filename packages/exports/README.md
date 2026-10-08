@@ -97,9 +97,24 @@ It also works as a web `Response` body (`new Response(ReadableStream.from(out))`
 | `json` | `application/json` | `.json` |
 | `ndjson` | `application/x-ndjson` | `.ndjson` |
 
+### CSV for Excel/ERP in pt locales
+
+`createCsvFormatter({ delimiter, bom, locale, format })` builds a configured CSV formatter: a UTF-8 BOM so Excel on Windows reads accents correctly, `;` as delimiter, and numbers/dates rendered by a `LocaleSpec`:
+
+```ts
+import { createCsvFormatter } from '@basaltkit/exports'
+
+exportsPlugin({
+  formatters: [createCsvFormatter({ delimiter: ';', bom: true, locale: { decimal: ',', thousands: ' ', date: 'dd/mm/yyyy' } })],
+})
+// 1408278.55 → 1 408 278,55 · -12 → -12 (still a number, not guard-quoted) · Date → 14/03/2026
+```
+
+The locale applies only to primitive numbers and `Date`s, after the formula-injection guard decides — strings are guarded exactly as before.
+
 ### Adding a format (XLSX, PDF…)
 
-A formatter implements `render(headers, rows) → Buffer`, and optionally `renderStream(headers, rows: AsyncIterable<unknown[]>) → AsyncIterable<string | Buffer>` to support `stream()` (its concatenated output must equal `render()`'s). Bring your own library and register it:
+A formatter implements `render(headers, rows, columns?) → Buffer`, and optionally `renderStream(headers, rows: AsyncIterable<unknown[]>, columns?) → AsyncIterable<string | Buffer>` to support `stream()` (its concatenated output must equal `render()`'s). `columns` carries each column's `header` and optional `type`/`format`/`width` hints. Bring your own library and register it:
 
 ```ts
 const xlsx: ExportFormatter = {
@@ -111,11 +126,36 @@ const xlsx: ExportFormatter = {
 exportsPlugin({ formatters: [xlsx] })
 ```
 
+## Importing CSV: `defineImport` / `readImport`
+
+The reverse path — reading what an ERP exports. Declare the columns once, read a file (string, bytes or an async iterable of chunks), and get typed rows plus a per-line error report; it never throws on bad data and fails closed (no rows) on a malformed file.
+
+```ts
+import { defineImport, readImport } from '@basaltkit/exports'
+
+const orders = defineImport<{ number: string; unitPrice: number; dueDate: Date | null }>({
+  name: 'purchase-orders',
+  delimiter: ';',
+  locale: { decimal: ',', thousands: ' ', date: 'dd/mm/yyyy' },
+  maxRows: 2000,
+  columns: [
+    { key: 'number', headers: ['Número', 'Nº'], required: true },
+    { key: 'unitPrice', headers: ['Preço unitário'], required: true, parse: 'decimal' },
+    { key: 'dueDate', headers: ['Data de entrega'], parse: 'date' },
+  ],
+})
+
+const { rows, errors, warnings } = await readImport(orders, file)
+// errors: [{ line: 7, column: 'unitPrice', code: 'AMBIGUOUS_DECIMAL', message: … }]
+```
+
+Headers match by name ignoring case/accents/whitespace; with a comma decimal `1.250,50` is 1250.5 but `12.5` is `AMBIGUOUS_DECIMAL` (never guessed); dates are calendar-validated. The RFC 4180 reader underneath is exported as `parseDelimited(input, { delimiter, quote, bom, maxRows, maxFieldLength })` → async iterator of `{ line, cells }` (throws `DelimitedParseError`).
+
 ## API reference
 
 | API | Description |
 |---|---|
-| `defineExport<T>({ name, columns })` | Defines a typed export; each column has `header` and `value(row)`. |
+| `defineExport<T>({ name, columns })` | Defines a typed export; each column has `header` and `value(row)`, plus optional `type` (`'text' \| 'number' \| 'date'`), `format` and `width` hints for formatters. |
 | `exportsPlugin({ formatters? })` | Registers the `EXPORTS` token with the native formats plus yours. |
 | `EXPORTS` | DI token → the `Exports` service. |
 | `exports.run(def, data, format)` | Renders the whole file in memory; returns `{ content: Buffer, contentType, filename, format, rowCount }`. `data` is an array or `AsyncIterable` (collected). |
@@ -124,6 +164,10 @@ exportsPlugin({ formatters: [xlsx] })
 | `exports.streamableFormats()` | Formats `stream()` accepts. |
 | `UnknownExportFormatError` / `ExportNotStreamableError` | `EXPORT_UNKNOWN_FORMAT` / `EXPORT_NOT_STREAMABLE`, both HTTP 400. |
 | `csvFormatter`, `tsvFormatter`, `jsonFormatter`, `ndjsonFormatter` | Native formatters. |
+| `createCsvFormatter({ delimiter?, bom?, locale?, format? })` | A configured CSV formatter (BOM, delimiter, `LocaleSpec` number/date rendering). |
+| `defineImport<T>({ name, columns, locale?, delimiter?, bom?, maxRows?, maxFieldLength?, unknownColumns?, maxErrors? })` | Declares a typed CSV import; each column has `key`, `headers` (synonyms), `required?` and `parse?` (`'text' \| 'integer' \| 'decimal' \| 'date' \| fn`). |
+| `readImport(def, input)` | Reads a file → `{ rows: { line, value }[], errors, warnings }`; issues are `{ line, column?, code, message }`. Never throws on bad data. |
+| `parseDelimited(input, options?)` | RFC 4180 async iterator of `{ line, cells }`; throws `DelimitedParseError` (`CSV_<reason>`). |
 
 ## How it connects to other modules
 

@@ -529,7 +529,8 @@ enquanto nenhum plugin de autenticação o aplicar, e os pedidos anónimos receb
 401. Quando o projeto depende de `@basaltkit/tenancy`, o recurso **pertence ao
 tenant**: o repositório restringe cada leitura e escrita com `requireTenantId()`
 (sem tenant → `TENANT_REQUIRED`, 400), e o modelo Prisma ganha uma coluna
-`tenantId` indexada. O teste gerado autentica-se, verifica que os pedidos
+`tenantId` indexada (com `--tenant=schema` ou `--tenant=database`, sem coluna: o
+schema ou a base de dados é o isolamento). O teste gerado autentica-se, verifica que os pedidos
 anónimos recebem 401 e, para dados de tenant, que um tenant não vê as linhas de
 outro. Uma breve nota de segurança após a geração diz o que se aplica. A
 autorização por linha (quem pode ler ou escrever que linhas) continua a ser
@@ -544,6 +545,7 @@ contigo.
 | `--no-register` | `make:resource` | Salta a ligação automática ao `src/app.ts` |
 | `--public` | `make:resource`, `make:routes`, `make:test` | Rotas sem `meta.auth`, abertas a pedidos anónimos (alias `--no-auth`). Usa apenas para um recurso deliberadamente público |
 | `--tenant` / `--no-tenant` | `make:resource`, `make:repository`, `make:test` | Força o âmbito por tenant ligado ou desligado (por predefinição: ligado quando o `package.json` depende de `@basaltkit/tenancy`) |
+| `--tenant=column\|schema\|database` | `make:resource`, `make:repository`, `make:test` | Como os tenants são isolados: uma coluna `tenantId` (por predefinição), ou um schema/base de dados por tenant — sem coluna `tenantId`, mas sempre `requireTenantId()` em cada acesso. Nunca adivinhado; vê [Gerar recursos de tenant](/pt/guide/database-per-tenant#gerar-recursos-de-tenant) |
 | `--crud` / `--no-crud` | `make:service` | Força o serviço CRUD ou o mínimo (por predefinição: CRUD quando o repositório e o schema irmãos já estão na diretoria de destino) |
 
 Os artefactos individuais estão disponíveis como `make:schema`,

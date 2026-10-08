@@ -1,9 +1,13 @@
 import { BasaltError } from '@basaltkit/core'
-import { nativeFormatters, type ExportFormatter } from './formatters.js'
+import { nativeFormatters, type ExportColumnMeta, type ExportFormatter } from './formatters.js'
 
-/** One output column: a header and how to read the cell from a row. */
-export interface ExportColumn<T> {
-  header: string
+/**
+ * One output column: a header and how to read the cell from a row. The optional
+ * `type`, `format` and `width` are rendering hints handed to formatters as
+ * `ExportColumnMeta` (e.g. an XLSX number format or column width); formatters
+ * that don't use them ignore them.
+ */
+export interface ExportColumn<T> extends ExportColumnMeta {
   value: (row: T) => unknown
 }
 
@@ -66,6 +70,15 @@ async function* toAsync<T>(data: Iterable<T> | AsyncIterable<T>): AsyncGenerator
   yield* data as AsyncIterable<T>
 }
 
+const columnMeta = <T>(definition: ExportDefinition<T>): ExportColumnMeta[] =>
+  definition.columns.map(({ header, type, format, width }) => {
+    const meta: ExportColumnMeta = { header }
+    if (type !== undefined) meta.type = type
+    if (format !== undefined) meta.format = format
+    if (width !== undefined) meta.width = width
+    return meta
+  })
+
 async function collect<T>(data: Iterable<T> | AsyncIterable<T>): Promise<T[]> {
   if (Array.isArray(data)) return data
   if (Symbol.asyncIterator in (data as AsyncIterable<T>)) {
@@ -116,7 +129,7 @@ export class Exports {
     const rows = await collect(data)
     const headers = definition.columns.map((c) => c.header)
     const cells = rows.map((row) => definition.columns.map((c) => c.value(row)))
-    const content = await formatter.render(headers, cells)
+    const content = await formatter.render(headers, cells, columnMeta(definition))
 
     return {
       content,
@@ -148,6 +161,7 @@ export class Exports {
 
     const chunkSize = Math.max(1, options.chunkSize ?? DEFAULT_CHUNK_SIZE)
     const headers = definition.columns.map((c) => c.header)
+    const columns = columnMeta(definition)
     let rowCount = 0
 
     async function* cells(): AsyncGenerator<unknown[]> {
@@ -160,7 +174,7 @@ export class Exports {
     async function* chunks(): AsyncGenerator<Buffer> {
       let pending: Buffer[] = []
       let size = 0
-      for await (const piece of renderStream!(headers, cells())) {
+      for await (const piece of renderStream!(headers, cells(), columns)) {
         const buf = typeof piece === 'string' ? Buffer.from(piece) : piece
         pending.push(buf)
         size += buf.length
