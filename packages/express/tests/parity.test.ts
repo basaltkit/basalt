@@ -15,6 +15,7 @@ import {
   enricherReplyParitySuite,
   rateLimitKeyParitySuite,
   rateLimitBucketsParitySuite,
+  openApiParitySuite,
   rateLimitWarningParitySuite,
   rawBodyParitySuite,
   crossCopyParitySuite,
@@ -57,6 +58,7 @@ rawBodyParitySuite('express', driver)
 crossCopyParitySuite('express', driver)
 rateLimitKeyParitySuite('express', driver)
 rateLimitBucketsParitySuite('express', driver)
+openApiParitySuite('express', driver)
 rateLimitWarningParitySuite('express', driver)
 errorDetailsParitySuite('express', driver)
 routeHeadersParitySuite('express', driver)

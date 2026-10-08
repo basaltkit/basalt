@@ -15,6 +15,7 @@ import {
   enricherReplyParitySuite,
   rateLimitKeyParitySuite,
   rateLimitBucketsParitySuite,
+  openApiParitySuite,
   rateLimitWarningParitySuite,
   rawBodyParitySuite,
   crossCopyParitySuite,
@@ -77,6 +78,7 @@ rawBodyParitySuite('hono', driver)
 crossCopyParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
 rateLimitBucketsParitySuite('hono', driver)
+openApiParitySuite('hono', driver)
 rateLimitWarningParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)
 routeHeadersParitySuite('hono', driver)

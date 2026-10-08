@@ -1154,6 +1154,39 @@ ou limitar por chamador. Como qualquer cliente anónimo o consegue disparar, est
 hook **não** é registado pelos padrões do `auditPlugin` — vê
 [que hooks são auditados](/pt/guide/persistence#which-hooks-are-audited).
 
+**Uma API pública, de ponta a ponta.** Os clientes máquina estão muitas vezes
+atrás de um só endereço (um ERP, uma plataforma de integração), por isso um
+limite por IP é o teto errado para eles. Dá aos caminhos da API o seu próprio
+orçamento de borda e depois orçamenta cada chave e cada cliente nas rotas:
+
+```ts
+import { securityPlugin, type RouteRateLimits } from '@basaltkit/http'
+
+securityPlugin({
+  rateLimit: {
+    limit: 300, windowMs: 60_000,                                  // o resto da app
+    prefixes: [{ prefix: '/v1', limit: 3_000, windowMs: 60_000 }], // por IP, antes de procurar a chave
+  },
+})
+apiKeysPlugin({ users, rejectInvalid: true })
+
+const v1Budget = [
+  { limit: 10, windowMs: 1_000, key: 'apiKey' },                                          // rajada, por chave
+  { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'v1-daily' },             // quota, por cliente
+] satisfies RouteRateLimits
+
+route({ method: 'GET', url: '/v1/orders', meta: { scopes: ['orders:read'], rateLimit: v1Budget }, /* … */ })
+```
+
+O prefixo mantém um orçamento por IP à frente do `verify()`, por isso uma
+avalanche de chaves inventadas continua limitada; `'apiKey'` só usa chaves que
+verificaram; a quota diária é por tenant porque uma quota por chave se multiplica
+por cada chave que um cliente cria. Vê [rate limiting](/pt/guide/security#rate-limiting)
+para as regras de ordem e de cabeçalhos. O documento OpenAPI anuncia estas rotas
+com um esquema `apiKeyAuth` e `x-required-scopes` — passa
+`openapiPlugin({ apiKey: { header } })` se mudaste o header da chave
+([esquemas de segurança OpenAPI](/pt/guide/openapi#security-schemes-sessions-and-api-keys)).
+
 ## Bloqueio por força bruta
 
 Ativo por padrão: 5 tentativas falhadas por email em 15 minutos → `AccountLockedError`

@@ -18,6 +18,7 @@ import {
   enricherReplyParitySuite,
   rateLimitKeyParitySuite,
   rateLimitBucketsParitySuite,
+  openApiParitySuite,
   rateLimitWarningParitySuite,
   rawBodyParitySuite,
   crossCopyParitySuite,
@@ -54,6 +55,7 @@ rawBodyParitySuite('fastify', driver)
 crossCopyParitySuite('fastify', driver)
 rateLimitKeyParitySuite('fastify', driver)
 rateLimitBucketsParitySuite('fastify', driver)
+openApiParitySuite('fastify', driver)
 rateLimitWarningParitySuite('fastify', driver)
 errorDetailsParitySuite('fastify', driver)
 routeHeadersParitySuite('fastify', driver)

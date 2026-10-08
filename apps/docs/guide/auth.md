@@ -1148,6 +1148,38 @@ throttle per caller. Because any anonymous client can trigger it, this hook is
 **not** recorded by `auditPlugin`'s defaults — see
 [which hooks are audited](/guide/persistence#which-hooks-are-audited).
 
+**A public API, end to end.** Machine clients often sit behind one address (an
+ERP, an integration platform), so a per-IP limit is the wrong ceiling for them.
+Give the API's paths their own edge budget, then budget each key and each
+customer on the routes:
+
+```ts
+import { securityPlugin, type RouteRateLimits } from '@basaltkit/http'
+
+securityPlugin({
+  rateLimit: {
+    limit: 300, windowMs: 60_000,                                  // the rest of the app
+    prefixes: [{ prefix: '/v1', limit: 3_000, windowMs: 60_000 }], // per IP, before any key lookup
+  },
+})
+apiKeysPlugin({ users, rejectInvalid: true })
+
+const v1Budget = [
+  { limit: 10, windowMs: 1_000, key: 'apiKey' },                                          // burst, per key
+  { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'v1-daily' },             // quota, per customer
+] satisfies RouteRateLimits
+
+route({ method: 'GET', url: '/v1/orders', meta: { scopes: ['orders:read'], rateLimit: v1Budget }, /* … */ })
+```
+
+The prefix keeps a per-IP budget in front of `verify()`, so a flood of made-up
+keys is still limited; `'apiKey'` uses only keys that verified; the daily quota
+is per tenant because a per-key quota multiplies with every key a customer
+mints. See [rate limiting](/guide/security#rate-limiting) for the ordering and
+header rules. The OpenAPI document advertises these routes with an `apiKeyAuth`
+scheme and `x-required-scopes` — pass `openapiPlugin({ apiKey: { header } })` if
+you changed the key header ([OpenAPI security schemes](/guide/openapi#security-schemes-sessions-and-api-keys)).
+
 ## Brute-force lockout
 
 Active by default: 5 failed attempts per email within 15 minutes → `AccountLockedError`

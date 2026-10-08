@@ -303,6 +303,8 @@ function serialise(payload: unknown, contentType: string | undefined): { body: s
 export class IdempotencyStage {
   readonly store: IdempotencyStore
   private readonly header: string
+  /** The header as configured (original case), for documentation. */
+  private readonly headerDisplay: string
   private readonly methods: ReadonlySet<string>
   private readonly credentialHeaders: readonly string[]
   private readonly allowAnonymous: boolean
@@ -315,12 +317,22 @@ export class IdempotencyStage {
       throw new TypeError(`idempotencyPlugin: fingerprint must be 'body', false or a function (got ${String(fp)})`)
     }
     this.store = options.store ?? new MemoryIdempotencyStore(options.ttlMs)
-    this.header = (options.header ?? 'idempotency-key').toLowerCase()
+    this.headerDisplay = options.header ?? 'Idempotency-Key'
+    this.header = this.headerDisplay.toLowerCase()
     this.methods = new Set((options.methods ?? ['POST']).map((method) => method.toUpperCase()))
     this.credentialHeaders = (options.credentialHeaders ?? [...DEFAULT_IDEMPOTENCY_CREDENTIAL_HEADERS]).map((name) => name.toLowerCase())
     this.allowAnonymous = options.allowAnonymous === true
     this.fingerprintMode = fp
     this.replayAfterGuards = options.replayAfterGuards === true
+  }
+
+  /**
+   * What clients see of this stage, for documentation (the OpenAPI
+   * `Idempotency-Key` parameter): the header as configured — original case,
+   * `Idempotency-Key` when none was given — and the methods, upper case.
+   */
+  describe(): { header: string; methods: string[] } {
+    return { header: this.headerDisplay, methods: [...this.methods] }
   }
 
   /**

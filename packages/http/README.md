@@ -816,7 +816,7 @@ import { openapiPlugin } from '@basaltkit/http'
 openapiPlugin({ info: { title: 'My API', version: '1.0.0' } })
 ```
 
-Routes with `meta: { auth: true }` are marked with `bearerAuth` security in the document. The route's `response` field (schemas per status code) feeds the documented responses, and `meta.summary` / `meta.description` / `meta.tags` / `meta.operationId` enrich the operation. Pass `tags` to the plugin to give those groups top-level names and descriptions.
+Routes with `meta: { auth: true }` are marked with `bearerAuth` security in the document; routes with `meta.scopes` get an `apiKeyAuth` scheme (header `x-api-key`, or `apiKey: { header }`) plus an `x-required-scopes` extension listing the scopes (OpenAPI 3.0.3 allows no scopes in an `apiKey` requirement). `apiKey: { header, onAuthRoutes: true }` also offers the key on `meta.auth` routes — only when your keys really pass them; `apiKey: false` hides the scheme. With `idempotencyPlugin` registered, guarded methods document its `Idempotency-Key` header (`idempotency: false` hides it). The route's `response` field (schemas per status code) feeds the documented responses, and `meta.summary` / `meta.description` / `meta.tags` / `meta.operationId` enrich the operation. Pass `tags` to the plugin to give those groups top-level names and descriptions.
 
 The document is built on `app:booted` — after every plugin has published its routes, and before the server listens — so plugin order never matters.
 
