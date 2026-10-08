@@ -19,6 +19,7 @@ import {
   HttpError,
   idempotencyPlugin,
   InvalidRouteMetaError,
+  MemoryRateLimitStore,
   META_VALIDATORS_BUCKET,
   metricsPlugin,
   openapiPlugin,
@@ -1082,7 +1083,51 @@ export function enricherReplyParitySuite(adapter: string, driver: ParityDriver):
         ensureMetadata(container).add('http:enrichers', enricher)
       },
     })
-    const ok = route({ method: 'GET', url: '/thing', handler: () => ({ ok: true }) })
+    let handled = 0
+    const ok = route({
+      method: 'GET',
+      url: '/thing',
+      handler: () => {
+        handled += 1
+        return { ok: true }
+      },
+    })
+    const answering = definePlugin({
+      name: 'test:answering-enricher',
+      register({ container }) {
+        const enricher: RequestEnricher = ({ request, reply }) => {
+          if (request.headers['x-moved'] !== 'yes') return
+          reply?.code(451).header('x-answered-by', 'enricher').send({ blocked: true })
+        }
+        ensureMetadata(container).add('http:enrichers', enricher)
+      },
+    })
+    const guardRuns: string[] = []
+    const watching = definePlugin({
+      name: 'test:watching-guard',
+      register({ container }) {
+        const guard: RouteGuard = ({ route: r }) => {
+          guardRuns.push(r.url)
+        }
+        ensureMetadata(container).add('http:guards', guard)
+      },
+    })
+
+    it('an enricher that sends the reply ends the request: no guard, no handler (I2)', async () => {
+      handled = 0
+      guardRuns.length = 0
+      const send = await driver.boot([ok], [answering, watching])
+      const moved = await send({ method: 'GET', url: '/thing', headers: { 'x-moved': 'yes' } })
+      expect(moved.status).toBe(451)
+      expect(moved.headers['x-answered-by']).toBe('enricher')
+      expect(moved.json).toEqual({ blocked: true })
+      expect(handled).toBe(0)
+      expect(guardRuns).toEqual([])
+      const fine = await send({ method: 'GET', url: '/thing' })
+      expect(fine.status).toBe(200)
+      expect(handled).toBe(1)
+      expect(guardRuns).toEqual(['/thing'])
+    })
 
     it('keeps the header set before the throw, with the standard error body', async () => {
       const send = await driver.boot([ok], [refusing])
@@ -1795,6 +1840,37 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
         },
       }),
     ]
+    routes.push(
+      route({
+        method: 'POST',
+        url: '/limited',
+        // The array form is charged in the route guard on every adapter.
+        meta: { rateLimit: [{ limit: 1, windowMs: 1_000 }] },
+        handler: ({ reply }) => {
+          runs += 1
+          reply.code(201)
+          return { charge: runs }
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/sold-out',
+        meta: { signedIn: true },
+        handler: () => {
+          runs += 1
+          throw new HttpError(409, 'OUT_OF_STOCK', 'Sold out.', { details: { sku: 'A-1', left: 0 } })
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/busy',
+        handler: () => {
+          runs += 1
+          if (runs === 1) throw new HttpError(429, 'UPSTREAM_BUSY', 'Try again shortly.')
+          return { charge: runs }
+        },
+      }),
+    )
     const json = (value: unknown) => Buffer.from(JSON.stringify(value))
     const headers = (key: string, extra: Record<string, string> = {}) => ({
       authorization: 'Bearer user-1',
@@ -1873,6 +1949,78 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
       expect(guarded.status).toBe(401)
       expect(guarded.headers['idempotent-replayed']).toBeUndefined()
       expect(runs).toBe(1)
+    })
+
+    it("a rate limiter's 429 is not recorded: the retry after the window runs the operation (W3)", async () => {
+      runs = 0
+      revoked.clear()
+      let now = 1_000_000
+      const store = new MemoryRateLimitStore(() => now)
+      const send = await driver.boot(routes, [
+        idempotencyPlugin(),
+        auth,
+        securityPlugin({ rateLimit: { limit: 1_000, windowMs: 60_000, store }, headers: false }),
+      ])
+      const first = await send({ method: 'POST', url: '/limited', headers: headers('rl-a') })
+      expect(first.status).toBe(201)
+      const limited = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+      expect(limited.status).toBe(429)
+      expect(limited.headers['idempotent-replayed']).toBeUndefined()
+      now += 1_001 // the client honours Retry-After
+      const retry = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+      expect(retry.status).toBe(201)
+      expect(retry.json).toEqual({ charge: 2 })
+      expect(retry.headers['idempotent-replayed']).toBeUndefined()
+      // Its outcome is now recorded: a repeat replays it (decided before the guards).
+      const repeat = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+      expect(repeat.status).toBe(201)
+      expect(repeat.headers['idempotent-replayed']).toBe('true')
+      expect(runs).toBe(2)
+    })
+
+    it("a guard's 401 is not recorded: the authenticated retry runs the handler (W3)", async () => {
+      const send = await boot()
+      revoked.add('Bearer user-1')
+      const refused = await send({ method: 'POST', url: '/charge', headers: headers('auth-1'), body: json({ amount: 10 }) })
+      expect(refused.status).toBe(401)
+      revoked.delete('Bearer user-1')
+      const retry = await send({ method: 'POST', url: '/charge', headers: headers('auth-1'), body: json({ amount: 10 }) })
+      expect(retry.status).toBe(201)
+      expect(retry.headers['idempotent-replayed']).toBeUndefined()
+      expect(runs).toBe(1)
+    })
+
+    it('a validation 400 before the handler is not recorded either (W3)', async () => {
+      const send = await boot()
+      const invalid = await send({ method: 'POST', url: '/charge', headers: headers('val-1'), body: json({ amount: 'ten' }) })
+      expect(invalid.status).toBe(400)
+      const fixed = await send({ method: 'POST', url: '/charge', headers: headers('val-1'), body: json({ amount: 10 }) })
+      expect(fixed.status).toBe(201)
+      expect(fixed.headers['idempotent-replayed']).toBeUndefined()
+      expect(runs).toBe(1)
+    })
+
+    it("the handler's own 4xx is still recorded and replayed byte-for-byte", async () => {
+      const send = await boot()
+      const first = await send({ method: 'POST', url: '/sold-out', headers: headers('h4xx') })
+      const again = await send({ method: 'POST', url: '/sold-out', headers: headers('h4xx') })
+      expect(first.status).toBe(409)
+      expect(codeOf(first)).toBe('OUT_OF_STOCK')
+      expect(again.status).toBe(409)
+      expect(again.headers['idempotent-replayed']).toBe('true')
+      expect(again.headers['content-type']).toMatch(/^application\/json/)
+      expect(again.bytes.equals(first.bytes)).toBe(true)
+      expect(runs).toBe(1)
+    })
+
+    it("a retry-later status (429) is never recorded, even from the handler", async () => {
+      const send = await boot()
+      const busy = await send({ method: 'POST', url: '/busy', headers: headers('busy-1') })
+      expect(busy.status).toBe(429)
+      const retry = await send({ method: 'POST', url: '/busy', headers: headers('busy-1') })
+      expect(retry.status).toBe(200)
+      expect(retry.json).toEqual({ charge: 2 })
+      expect(retry.headers['idempotent-replayed']).toBeUndefined()
     })
 
     it('does not cache a 5xx: the retry runs the handler again', async () => {

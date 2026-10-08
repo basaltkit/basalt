@@ -17,8 +17,19 @@ import { uploadOptionsOf } from './upload.js'
  */
 export const DEFAULT_IDEMPOTENCY_CREDENTIAL_HEADERS = ['authorization', 'x-session-id', 'cookie', 'x-api-key'] as const
 
-/** Headers that select the tenant; folded into the scope so replays never cross tenants. */
+/**
+ * Headers that select the tenant, folded into the scope. Only these raw
+ * headers are: a tenant resolved some other way (a path segment, a token
+ * claim) is not part of the scope — see `idempotencyPlugin`.
+ */
 const TENANT_HEADERS = ['x-tenant-id', 'host'] as const
+
+/**
+ * Statuses that tell the client to come back later rather than describe the
+ * operation's outcome. They are never recorded, wherever they come from, so a
+ * client that honours `Retry-After` gets its operation run on the retry.
+ */
+const RETRY_LATER_STATUSES: ReadonlySet<number> = new Set([408, 425, 429])
 
 /** Longest accepted Idempotency-Key (matches the IETF draft / common provider limits). */
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 255
@@ -196,6 +207,11 @@ export interface IdempotencyPluginOptions {
    *   result is hashed. Return `undefined` to skip fingerprinting a request.
    * - `false` (default): keys are not bound to a body (the pre-existing
    *   behaviour; a future major will default to `'body'`).
+   *
+   * `'body'` covers the body only, not the query string or the path params:
+   * `POST /orders/1/pay` and `POST /orders/2/pay` with the same body and key
+   * fingerprint alike. Use a function to bind those too (e.g.
+   * `({ request }) => request.url + '\n' + JSON.stringify(request.body)`).
    */
   fingerprint?: 'body' | false | ((input: IdempotencyFingerprintInput) => string | undefined)
   /**
@@ -203,8 +219,9 @@ export interface IdempotencyPluginOptions {
    * just before the handler, instead of before the guards. A caller whose
    * credentials were revoked then gets the guard's `401`/`403` instead of the
    * cached success, and a request that fails validation is never reserved.
-   * Default `false` (the pre-existing order; a future major will default to
-   * `true`).
+   * Default `false`: the check runs after the enrichers and before the guards
+   * (a future major will default to `true`). With either placement a refusal
+   * raised before the handler is never recorded — the key is released.
    */
   replayAfterGuards?: boolean
 }
@@ -382,8 +399,10 @@ export class IdempotencyStage {
     if (key.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
       throw new HttpError(400, 'IDEMPOTENCY_KEY_INVALID', `Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters.`)
     }
-    // Scope by the caller's full credential material and tenant so an
-    // Idempotency-Key can never replay one user's cached response to another.
+    // Scope by the caller's full credential material, the tenant headers, the
+    // method and the route PATTERN, so an Idempotency-Key never replays one
+    // credential's cached response to another. The resolved tenant and the
+    // concrete path params are NOT in the scope (see idempotencyPlugin).
     // Before the guards an anonymous request has no identity to scope by: skip
     // it unless explicitly allowed. (The scope is the one the Fastify-only
     // plugin used, so records it stored keep replaying.)
@@ -421,7 +440,7 @@ export class IdempotencyStage {
     const status = reply.statusCode
     let serialised: ReturnType<typeof serialise>
     try {
-      serialised = status >= 500 ? undefined : serialise(reply.sentHere ? reply.payload : result, reply.contentType)
+      serialised = status >= 500 || RETRY_LATER_STATUSES.has(status) ? undefined : serialise(reply.sentHere ? reply.payload : result, reply.contentType)
     } catch {
       // Not JSON-serialisable (a BigInt, a cycle): the adapter fails to send it
       // too. Release rather than leave the key pending, or every retry would
@@ -440,13 +459,14 @@ export class IdempotencyStage {
   }
 
   /**
-   * Settles a ticket whose route threw. A client error (`< 500`) is recorded as
-   * the response the adapter is about to send; anything else releases the key.
-   * Never throws: the route's own error is what the client must see.
+   * Settles a ticket whose HANDLER threw. A client error (`< 500`) is recorded
+   * as the response the adapter is about to send — except the retry-later
+   * statuses `408`, `425` and `429`; anything else releases the key. Never
+   * throws: the route's own error is what the client must see.
    */
   async fail(ticket: IdempotencyTicket, response: { status: number; body: unknown }): Promise<void> {
     try {
-      if (response.status >= 500) {
+      if (response.status >= 500 || RETRY_LATER_STATUSES.has(response.status)) {
         await this.store.release(ticket.scoped)
         return
       }
@@ -458,6 +478,21 @@ export class IdempotencyStage {
       })
     } catch {
       // A store failure here must not mask the route's error.
+    }
+  }
+
+  /**
+   * Settles a ticket whose request was refused before the handler ran — by a
+   * guard (`401`/`403`), the rate limiter (`429`), request validation or a
+   * body that could not be read. Nothing was executed, so nothing is
+   * recorded: the key is released and the retry runs the operation. Never
+   * throws: the refusal is what the client must see.
+   */
+  async abandon(ticket: IdempotencyTicket): Promise<void> {
+    try {
+      await this.store.release(ticket.scoped)
+    } catch {
+      // A store failure here must not mask the refusal.
     }
   }
 }
@@ -487,17 +522,30 @@ export function idempotencyStageOf(container: Container | undefined): Idempotenc
  * - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
  * - With `fingerprint`, a repeat carrying a different request →
  *   `422 IDEMPOTENCY_KEY_REUSED` (in flight or completed).
- * - Responses `>= 500`, streams and event streams are not cached, so genuine
- *   failures stay retryable.
- * - Keys are scoped by caller credentials (`credentialHeaders`), tenant
- *   (`x-tenant-id`, `host`), method and route, and stored as a SHA-256 hash.
+ * - Only the handler's own outcome is recorded. A refusal raised before the
+ *   handler ran — a guard's `401`/`403`, the rate limiter's `429`, a
+ *   validation `400` — releases the key, so the retry runs the operation.
+ * - Responses `>= 500` and the retry-later statuses `408`, `425` and `429`
+ *   (even from the handler), streams and event streams are not cached, so
+ *   genuine failures stay retryable.
+ * - Keys are scoped by caller credentials (`credentialHeaders`), the raw tenant
+ *   headers (`x-tenant-id`, `host`), the method and the route PATTERN, and
+ *   stored as a SHA-256 hash. The scope does NOT include a tenant resolved
+ *   another way (a path segment, a token claim) nor the concrete path params:
+ *   the same credential reusing a key on `/t/acme/orders` and `/t/globex/orders`,
+ *   or on `/orders/1/pay` and `/orders/2/pay`, receives the first response.
+ *   Have clients mint a fresh key per operation, and use `fingerprint` (a
+ *   function over `request.url` and the body) to refuse such a reuse with `422`.
  * - Requests without credentials are not cached unless `allowAnonymous: true`.
  * - Keys longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`.
- * - By default the check runs before the route guards; `replayAfterGuards`
- *   moves it after them.
+ * - By default the check runs after the enrichers and before the route guards
+ *   (so a replay is decided after, e.g., tenant resolution: a suspended tenant
+ *   gets its `403`, not the replay); `replayAfterGuards` moves it after the
+ *   guards and validation.
  *
  * It covers the routes Basalt serves (`route()` definitions on any adapter),
- * not handlers registered on the underlying framework by hand.
+ * not handlers registered on the underlying framework by hand (a raw
+ * `fastify.post()` is not protected — declare it with `route()`).
  */
 export function idempotencyPlugin(options: IdempotencyPluginOptions = {}) {
   const stage = new IdempotencyStage(options)
