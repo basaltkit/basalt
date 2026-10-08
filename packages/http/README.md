@@ -820,8 +820,8 @@ createApp({
     expressPlugin({ routes }), // or fastifyPlugin / honoPlugin
     idempotencyPlugin({
       store: new RedisIdempotencyStore(new Redis(process.env.REDIS_URL!)), // default: in-memory
-      fingerprint: 'body',     // a different body under the same key → 422
-      replayAfterGuards: true, // a revoked caller gets 401/403, not the cached success
+      // By default each key is bound to its request (params, query, body: a different
+      // one → 422) and replays only after the guards (a revoked caller gets 401/403).
     }),
   ],
 })
@@ -838,20 +838,24 @@ Rules:
   (default `authorization`, `x-session-id`, `cookie`, `x-api-key`), the tenant is
   `x-tenant-id` + `host`. Requests with none of the credential headers are skipped unless
   `allowAnonymous: true`.
-- `fingerprint: 'body'` binds the key to the request: canonical JSON (sorted keys) of a
-  parsed body, the exact bytes of a `rawBody()` route. A mismatch →
-  `422 IDEMPOTENCY_KEY_REUSED`, also against a request still in flight. `upload()`
-  routes need a function: `fingerprint: ({ route, request }) => string | undefined`.
-- By default the check runs after the enrichers and **before** the guards.
-  `replayAfterGuards: true` runs it after guards and validation, just before the handler.
-  A `rawBody()` route fingerprinted by `'body'` is always checked after the guards.
+- By default (`fingerprint: 'request'`) the key is bound to the request: the route params,
+  the query and the body — canonical JSON (sorted keys) of a parsed body, the exact bytes
+  of a `rawBody()` route. A mismatch → `422 IDEMPOTENCY_KEY_REUSED`, also against a
+  request still in flight. `'body'` binds the body only; `false` binds nothing. `upload()`
+  routes bind only params and query; give them a function
+  (`fingerprint: ({ route, request }) => unknown` — a string is hashed as-is, any other
+  value is canonicalized first) to bind more.
+- By default (`replayAfterGuards: true`) the check runs after the guards and validation,
+  just before the handler. `replayAfterGuards: false` runs it after the enrichers and
+  **before** the guards; even then a `rawBody()` route fingerprinted by `'request'` or
+  `'body'` is checked after the guards.
 - An `Idempotency-Key` longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`.
 - The reservation is an **atomic** `setPending()` before the handler runs.
 - Only Basalt `route()` definitions are covered — not handlers registered on the
   underlying framework by hand.
 
-`fingerprint` and `replayAfterGuards` default to off so existing apps keep their
-behaviour; a future major turns them on.
+Upgrading from 2.x, where both defaults were off: see
+[idempotency is strict by default](https://basaltkit-docs.pages.dev/guide/whats-new#idempotency-strict-by-default).
 
 ### Advanced: `runRoute()` and the pipeline
 
@@ -957,15 +961,16 @@ readonly field — it is a boot failure, never an HTTP response.
 | `ttlMs` | `number` | `86_400_000` (24 h) | Retention of the default in-memory store. |
 | `credentialHeaders` | `string[]` | `authorization`, `x-session-id`, `cookie`, `x-api-key` | Headers folded into the replay scope. |
 | `allowAnonymous` | `boolean` | `false` | Also cache requests carrying none of the credential headers. |
-| `fingerprint` | `'body' \| false \| (input) => string \| undefined` | `false` | Bind a key to its request; a mismatch → `422 IDEMPOTENCY_KEY_REUSED`. |
-| `replayAfterGuards` | `boolean` | `false` | Run the check after guards and validation instead of before the guards. |
+| `fingerprint` | `'request' \| 'body' \| false \| (input) => unknown` | `'request'` (2.x: `false`) | Bind a key to its request (`'request'`: params + query + body; `'body'`: body only; a function: your own value, canonicalized unless a string); a mismatch → `422 IDEMPOTENCY_KEY_REUSED`. |
+| `replayAfterGuards` | `boolean` | `true` (2.x: `false`) | Run the check after guards and validation; `false` runs it before the guards. |
 
 `IdempotencyStore`: `get(key)` → `IdempotencyRecord | IdempotencyPending | 'pending' | undefined`;
 `setPending(key, info?)` → `boolean` (**an atomic check-and-set** — Redis `SET NX`, or one
 synchronous step in-process; `info.fingerprint` may be kept on the reservation and returned
 as `{ pending: true, fingerprint }`); `complete(key, record)`; `release(key)`.
-`IdempotencyRecord` = `{ status, body, contentType?, fingerprint? }`. A store that ignores
-fingerprints keeps working; a concurrent repeat is then a `409` rather than a `422`.
+`IdempotencyRecord` = `{ status, body, contentType?, fingerprint? }`; a store must persist
+`record.fingerprint` for completed records to be refused with `422`. A store that drops the
+fingerprint on the reservation keeps working; a concurrent repeat is then a `409` rather than a `422`.
 `MemoryIdempotencyStore(ttlMs?, clock?, { maxEntries? })` is the in-process store (default
 10 000 entries, oldest evicted first). `RedisIdempotencyStore(redis, { prefix?, ttlMs? })`
 takes any ioredis-compatible `RedisIdempotencyClient` (`get`/`set`/`del`).
