@@ -131,6 +131,46 @@ describe('idempotency stage', () => {
     expect(runs).toBe(2)
   })
 
+  it('a retry-later status the handler sends through reply.send() is not recorded', async () => {
+    let runs = 0
+    const store = new MemoryIdempotencyStore()
+    const container = await bootStage({ store })
+    const def = route({
+      method: 'POST',
+      url: '/later',
+      handler: ({ reply }) => {
+        runs += 1
+        return runs === 1 ? reply.code(429).send({ later: true }) : { done: runs }
+      },
+    })
+    expect((await call(container, def, auth, {})).statusCode).toBe(429)
+    expect(store.size).toBe(0)
+    const retry = await call(container, def, auth, {})
+    expect(retry.payload).toEqual({ done: 2 })
+    expect(retry.headers['idempotent-replayed']).toBeUndefined()
+  })
+
+  it('a guard refusal releases the key and is not masked by a failing store', async () => {
+    const released: string[] = []
+    const store: IdempotencyStore = {
+      get: () => undefined,
+      setPending: () => true,
+      complete: () => undefined,
+      release: (key) => {
+        released.push(key)
+        throw new Error('store down')
+      },
+    }
+    const container = await bootStage({ store })
+    const def = route({ method: 'POST', url: '/guarded', handler: () => ({ ok: true }) })
+    const refuse = () => {
+      throw new HttpError(403, 'FORBIDDEN', 'No.')
+    }
+    const request = makeRequest({ method: 'POST', url: '/guarded', headers: auth, body: {} })
+    await expect(runRoute(def, request, new FakeReply(), { container, guards: [refuse] })).rejects.toMatchObject({ status: 403 })
+    expect(released).toHaveLength(1)
+  })
+
   it('refuses an invalid fingerprint option', () => {
     expect(() => idempotencyPlugin({ fingerprint: 'headers' as never })).toThrow(TypeError)
   })

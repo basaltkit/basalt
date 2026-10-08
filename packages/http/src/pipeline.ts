@@ -42,7 +42,9 @@ export type RequestEnricher = (info: {
   /**
    * The reply, so an enricher that rejects the request can set a response
    * header first (e.g. `WWW-Authenticate` on a refused credential). Optional:
-   * a pipeline may run enrichers without one.
+   * a pipeline may run enrichers without one. An enricher that answers the
+   * request itself (`reply.send()`) ends it: the remaining enrichers, the
+   * guards and the handler do not run.
    */
   reply?: HttpReply
 }) => void | RequestDisposer | Promise<void | RequestDisposer>
@@ -232,6 +234,10 @@ export async function runRoute(
 
   return runWithContext(context, async () => {
     let ticket: IdempotencyTicket | undefined
+    // Whether the handler was entered: only its own outcome is recorded for
+    // replay. A refusal raised before it (a guard's 401/403, the rate limiter's
+    // 429, a validation 400) releases the key, so the retry runs the operation.
+    let handlerStarted = false
     try {
       // The route's static headers go on first, so every response it produces
       // carries them — a guard's 401, a validation 400 and a thrown 500 too.
@@ -248,6 +254,10 @@ export async function runRoute(
         for (const enrich of pipeline.enrichers ?? []) {
           const disposer = await enrich({ route: definition, request, context, container: scoped, reply })
           if (typeof disposer === 'function') onDispose(disposer)
+          // An enricher that answered the request itself (`reply.send()`, e.g.
+          // a redirect) ends it here: the guards and the handler must not run
+          // behind a response that has already been decided.
+          if (reply.sent) return undefined
         }
         if (placement === 'beforeGuards') {
           const begun = await idempotency!.begin(definition, request, reply)
@@ -269,6 +279,7 @@ export async function runRoute(
       }
       // The reservation owner records what the handler sends, to replay it.
       const recorder = ticket ? new RecordingReply(reply) : undefined
+      handlerStarted = true
       const result = await definition.handler({
         body,
         query,
@@ -284,9 +295,13 @@ export async function runRoute(
       }
       return final
     } catch (error) {
-      // A thrown route: record the client error the adapter is about to send,
-      // or release the key so a server failure stays retryable.
-      if (ticket) await idempotency!.fail(ticket, toErrorResponse(error))
+      // A thrown route: record the client error the handler raised, or release
+      // the key so a server failure, or a refusal before the handler ran, stays
+      // retryable.
+      if (ticket) {
+        if (handlerStarted) await idempotency!.fail(ticket, toErrorResponse(error))
+        else await idempotency!.abandon(ticket)
+      }
       throw error
     } finally {
       session?.release(reply)
