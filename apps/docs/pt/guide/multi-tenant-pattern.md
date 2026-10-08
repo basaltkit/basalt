@@ -101,6 +101,46 @@ normal. O `basalt db:status` reporta os dois planos só em leitura, e as
 [Operações de base de dados](/pt/guide/database-operations) cobrem os erros e os
 grants que as migrações não conseguem manter no sítio.
 
+### Proteger contra o plano errado
+
+Um único `prisma.config.ts` na raiz que alcança o schema completo é uma
+armadilha: o comando que toda a gente escreve por reflexo, `prisma migrate dev`,
+compara **os dois** planos com a base central e recria lá todas as tabelas de
+tenant — `auth_users`, `team_memberships`, `perm_*` — depois vê drift e oferece um
+reset. As tabelas ficam vazias e inalcançáveis, e são exactamente o `User` global
+que este padrão proíbe.
+
+Três protecções, da mais barata à mais forte:
+
+1. **Uma config por plano.** Com `targets` declarados, o `basalt prisma:sync`
+   imprime o `prisma.config.ts` em falta de cada plano (`--yes` escreve-os, nunca
+   por cima de um existente): o seu próprio `schema` e o seu próprio
+   `migrations.path`, relativos à pasta da config.
+2. **Uma config de raiz só para generate.** Quando o `prisma.config.ts` da raiz
+   ainda declara `migrations` ou uma `datasource`, o `prisma:sync` avisa e imprime
+   uma substituta só com `schema`. O Prisma 7 precisa do URL da datasource na
+   config, por isso o `prisma migrate dev` na raiz passa a recusar correr; cada
+   plano migra com `--config prisma/prisma.config.ts` ou
+   `--config prisma/tenants/prisma.config.ts`.
+3. **Uma protecção no boot.** Lista as tabelas do plano tenant como proibidas na
+   base central, e a app recusa arrancar sobre uma base misturada:
+
+```ts
+prismaPlugin({
+  client: centralDb,
+  assertMigrated: {
+    tables: ['tenants', 'tenant_domains'],
+    // As tabelas do plano tenant: a presença delas aqui significa que uma
+    // migração correu contra o plano errado. Falha o boot com PRISMA_PLANE_MIXED.
+    forbiddenTables: ['auth_users', 'team_memberships', 'perm_roles'],
+  },
+})
+```
+
+A verificação consulta cada nome da mesma forma que `tables`, por isso funciona
+em PostgreSQL, MySQL e SQLite. O erro lista as tabelas que encontrou
+(`error.details.tables`); apaga-as depois de confirmares que não têm linhas.
+
 ## Regra 3 — Resolver pelo host, registar com uma lista reservada
 
 ```ts

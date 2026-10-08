@@ -423,7 +423,7 @@ Registers the client(s) in the container (`DB`, `DB_POOL`), attaches the client 
 | `max` | `number` | No | `10` | Max per-tenant clients open at once — never exceeded. |
 | `idleMs` | `number` | No | `1_000` | Grace period: how long an idle tenant keeps its client before the slot can go to another tenant. Requests and `tenancy.run()` hold a lease for their whole duration, so this never needs to cover a request. |
 | `acquireTimeoutMs` | `number` | No | `10_000` | How long a request for a new tenant waits for a free slot when all `max` clients are in use, before `TenantPoolExhaustedError` (503). |
-| `assertMigrated` | `boolean \| { tables?: string[] }` | No | off | At boot, check that the shared `client`'s database has `_prisma_migrations` (and the listed tables, case-sensitive) and fail with `DatabaseNotMigratedError` naming the database and host (never credentials). Catches a wrong `DATABASE_URL` at startup instead of a P2021 on the first request. Needs `client`. |
+| `assertMigrated` | `boolean \| { tables?: string[]; forbiddenTables?: string[] }` | No | off | At boot, check that the shared `client`'s database has `_prisma_migrations` (and the listed tables, case-sensitive) and fail with `DatabaseNotMigratedError` naming the database and host (never credentials). Catches a wrong `DATABASE_URL` at startup instead of a P2021 on the first request. `forbiddenTables` lists tables that must NOT exist (the other plane's, e.g. tenant tables in the central database) and fails with `DatabasePlaneMixedError` (`PRISMA_PLANE_MIXED`). Needs `client`. |
 
 \* Use at least one of the three: `client`, `forTenant`, or `schemaPerTenant` (`forTenant` takes priority over `schemaPerTenant`).
 
@@ -503,7 +503,7 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 
 ### `assertMigrated(client, options?)`
 
-`assertMigrated(client, options?: { tables?: string[] }): Promise<void>` — what `prismaPlugin({ assertMigrated })` runs at boot; usable on its own (a readiness probe, a script). Throws `DatabaseNotMigratedError` when `_prisma_migrations` or a listed table is missing, or the check cannot run (driver errors are included with URL credentials masked by `redactCredentials`). `error.details.diagnosis` carries the `describeDbError` diagnosis; a role without privileges on the schema (SQLSTATE `42501`, or a schema hidden from the `search_path` for lack of `USAGE`) is reported as `DB_PERMISSION_DENIED` with the `GRANT` to run, not as "not migrated".
+`assertMigrated(client, options?: { tables?: string[]; forbiddenTables?: string[] }): Promise<void>` — what `prismaPlugin({ assertMigrated })` runs at boot; usable on its own (a readiness probe, a script). Throws `DatabaseNotMigratedError` when `_prisma_migrations` or a listed table is missing, or the check cannot run (driver errors are included with URL credentials masked by `redactCredentials`). `error.details.diagnosis` carries the `describeDbError` diagnosis; a role without privileges on the schema (SQLSTATE `42501`, or a schema hidden from the `search_path` for lack of `USAGE`) is reported as `DB_PERMISSION_DENIED` with the `GRANT` to run, not as "not migrated".
 
 ### `describeDbError(error, options?)`
 
@@ -606,7 +606,8 @@ Returns a `CommandDefinition` (`@basaltkit/cli`) named `tenant:migrate`.
 | `CrossTenantScanInTenantError` | Code `PRISMA_CROSS_TENANT_IN_TENANT` — a cross-tenant scan/sweep was started inside a tenant context; it is central code. |
 | `CrossTenantScanShapeError` | Code `PRISMA_CROSS_TENANT_SCAN_SHAPE` — the deployed scan function returned a column that was not declared as an identifier (or a NULL identifier). |
 | `InvalidTenantSchemaError` | Code `PRISMA_INVALID_SCHEMA` — tenant id without a valid schema identifier. |
-| `DatabaseNotMigratedError` | Code `PRISMA_NOT_MIGRATED` — `assertMigrated` found no `_prisma_migrations` (or a listed table) in the database it reached. |
+| `DatabaseNotMigratedError` | Code `PRISMA_NOT_MIGRATED` — `assertMigrated` found no `_prisma_migrations` (or a listed table) in the database it reached, or could not check it; `details.diagnosis` says why (see `describeDbError`). |
+| `DatabasePlaneMixedError` | Code `PRISMA_PLANE_MIXED` — a table listed in `assertMigrated({ forbiddenTables })` exists: a migration ran against the wrong plane. `details.tables` lists them. |
 | `EmptyTenantSchemaError` | Code `PRISMA_TENANT_SCHEMA_EMPTY` — the migration exited cleanly but produced no tables. |
 
 ## Common errors and solutions (FAQ)
