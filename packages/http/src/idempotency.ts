@@ -484,7 +484,11 @@ export class IdempotencyStage {
   /**
    * Settles a ticket whose request was refused before the handler ran — by a
    * guard (`401`/`403`), the rate limiter (`429`), request validation or a
-   * body that could not be read. Nothing was executed, so nothing is
+   * body that could not be read — including an `upload()` body refused while
+   * the handler was streaming it (`413` over a limit, `400` malformed, `415`
+   * a refused file type), exactly like the same refusal from a declared
+   * `Content-Length` before the handler. (A `rawBody()` body is read in full
+   * before the handler, so its refusals always land here.) Nothing is
    * recorded: the key is released and the retry runs the operation. Never
    * throws: the refusal is what the client must see.
    */
