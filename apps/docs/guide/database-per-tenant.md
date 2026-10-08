@@ -265,6 +265,31 @@ the isolation has to be physical — or when staff and customers must be
 different populations, see [the multi-tenant pattern](/guide/multi-tenant-pattern).
 :::
 
+## Generating tenant resources
+
+`basalt make:resource` defaults to a shared database: a tenant-owned resource
+gets an indexed `tenantId` column and a filter on every query. Under
+schema- or database-per-tenant that column is dead weight — the isolation is the
+schema or the database itself — so say which model you use:
+
+```bash
+pnpm basalt make:resource PurchaseOrder --prisma --tenant=schema    # or --tenant=database
+```
+
+The model comes out **without** `tenantId` (add it to the tenant
+`schema.prisma`, then [migrate every tenant](#migrating-every-tenant)), and the
+repository queries without a tenant filter on `db()` — the tenant's own client,
+resolved by `prismaPlugin`. It stays fail-closed: every access starts with
+`requireTenantId()`, so with no tenant resolved the call is `TENANT_REQUIRED`
+(400) instead of a query on whatever client is in context. The generated test
+still runs as a tenant and checks that another tenant sees nothing.
+
+The generator never guesses the isolation model from your dependencies — a wrong
+guess would silently drop tenant scoping. Set it once for the project instead of
+on every call with `generatorCommands({ tenant: 'schema', prisma: true,
+prismaClient: { import: '../../tenant-db.js', type: 'TenantDb' } })`; a bare
+`--tenant` then keeps that mode, and `--tenant=column` / `--no-tenant` still win.
+
 ## Serving central and tenant routes from one app
 
 Most apps are not purely multi-tenant. There is a landing page, a sign-up form,

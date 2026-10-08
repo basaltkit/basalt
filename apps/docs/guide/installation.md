@@ -490,7 +490,8 @@ an auth plugin enforces it and anonymous callers get 401. When the project
 depends on `@basaltkit/tenancy`, the resource is **tenant-owned**: the
 repository scopes every read and write with `requireTenantId()` (no tenant →
 `TENANT_REQUIRED`, 400), and the Prisma model gets an indexed `tenantId`
-column. The generated test signs in, checks that anonymous calls get 401 and,
+column (with `--tenant=schema` or `--tenant=database`, no column: the schema or
+database is the isolation). The generated test signs in, checks that anonymous calls get 401 and,
 for tenant-owned data, that one tenant cannot see another's rows. A short
 security note after generation says which of these applies. Row-level
 authorization (who may read or write which rows) is still up to you.
@@ -504,6 +505,7 @@ authorization (who may read or write which rows) is still up to you.
 | `--no-register` | `make:resource` | Skip the automatic wiring into `src/app.ts` |
 | `--public` | `make:resource`, `make:routes`, `make:test` | Routes without `meta.auth`, open to anonymous callers (alias `--no-auth`). Use only for a deliberately public resource |
 | `--tenant` / `--no-tenant` | `make:resource`, `make:repository`, `make:test` | Force tenant scoping on or off (default: on when `package.json` depends on `@basaltkit/tenancy`) |
+| `--tenant=column\|schema\|database` | `make:resource`, `make:repository`, `make:test` | How tenants are isolated: a `tenantId` column (default), or a schema/database per tenant — no `tenantId` column, still `requireTenantId()` on every access. Never guessed; see [Generating tenant resources](/guide/database-per-tenant#generating-tenant-resources) |
 | `--crud` / `--no-crud` | `make:service` | Force the CRUD service or the minimal one (default: CRUD when the sibling repository and schema are already in the target directory) |
 
 Individual artifacts are available as `make:schema`, `make:repository`,

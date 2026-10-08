@@ -1,5 +1,5 @@
 export { names, type Names } from './names.js'
-export { moduleFile, type ModuleArtifact, type GeneratedFile } from './templates.js'
+export { moduleFile, type ModuleArtifact, type GeneratedFile, type TenantMode } from './templates.js'
 export {
   GENERATORS,
   generate,

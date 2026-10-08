@@ -263,6 +263,33 @@ tiver de ser físico — ou quando staff e clientes tiverem de ser populações
 diferentes, vê [o padrão multi-tenant](/pt/guide/multi-tenant-pattern).
 :::
 
+## Gerar recursos de tenant
+
+O `basalt make:resource` assume uma base de dados partilhada: um recurso de
+tenant ganha uma coluna `tenantId` indexada e um filtro em cada query. Com um
+schema ou uma base de dados por tenant essa coluna é peso morto — o isolamento é
+o próprio schema ou a própria base de dados — por isso diz qual o modelo que usas:
+
+```bash
+pnpm basalt make:resource PurchaseOrder --prisma --tenant=schema    # ou --tenant=database
+```
+
+O modelo sai **sem** `tenantId` (acrescenta-o ao `schema.prisma` do tenant e
+depois [migra todos os tenants](#migrar-todos-os-tenants)), e o repositório faz
+as queries sem filtro de tenant sobre o `db()` — o cliente do próprio tenant,
+resolvido pelo `prismaPlugin`. Continua a falhar fechado: cada acesso começa com
+`requireTenantId()`, por isso sem tenant resolvido a chamada dá
+`TENANT_REQUIRED` (400) em vez de uma query sobre o cliente que estiver no
+contexto. O teste gerado continua a correr como tenant e verifica que outro
+tenant não vê nada.
+
+O gerador nunca adivinha o modelo de isolamento a partir das tuas dependências —
+um palpite errado tiraria o âmbito de tenant em silêncio. Define-o uma vez para o
+projeto em vez de em cada chamada, com `generatorCommands({ tenant: 'schema',
+prisma: true, prismaClient: { import: '../../tenant-db.js', type: 'TenantDb' } })`;
+um `--tenant` simples mantém então esse modo, e `--tenant=column` / `--no-tenant`
+continuam a prevalecer.
+
 ## Servir rotas centrais e de tenant na mesma app
 
 A maioria das apps não é puramente multi-tenant. Há uma landing page, um
