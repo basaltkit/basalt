@@ -100,6 +100,13 @@ Entrou no `main` depois da publicação da 1.12, tudo sem quebras:
   um tenant que já não existe acabam mortas (`TENANT_NOT_FOUND`) em vez de serem
   entregues. Desativa com `webhooksPlugin({ runInTenant: false })` — vê
   [Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant).
+- **Mail de entrada.** Um pacote novo, `@basaltkit/inbound-mail` 0.1, recebe
+  email de um relay como bytes em bruto assinados (um destinatário por pedido,
+  envelope dentro da assinatura), encaminha-o pelo destinatário assinado para
+  handlers conscientes do tenant e faz o parse dentro de limites, confiando em
+  `Authentication-Results` e ARC só de servidores que indicares. Traz um Worker
+  de referência para o Cloudflare Email Routing — vê
+  [Mail de entrada](/pt/guide/inbound-mail).
 
 ## Destaques
 

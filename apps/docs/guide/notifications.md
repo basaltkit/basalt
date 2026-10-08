@@ -178,16 +178,20 @@ mailerPlugin({
 
 ### Receiving mail (inbound)
 
-The mailer only **sends**. Basalt has no inbound-mail package: providers
-(Postmark, SendGrid Inbound Parse, Mailgun routes, SES → SNS) deliver received
-messages to an HTTP endpoint, often as the raw `message/rfc822` bytes. Receive
-them on a [`rawBody()` route](/guide/adapters#raw-request-bodies-webhook-signatures),
-which hands the handler the untouched bytes on every adapter, and — when the
-provider signs with an HMAC over the body — verify those bytes directly with
-[`verifySignature(header, body.bytes, secret)`](/guide/webhooks#verifying-raw-bytes)
-before parsing the MIME with the library of your choice. Never decode the bytes
-to a string first: a message that is not valid UTF-8 would no longer match its
-signature.
+The mailer only **sends**. Receiving is a separate package,
+[`@basaltkit/inbound-mail`](/guide/inbound-mail): a relay (Cloudflare Email
+Routing, an IMAP poller, your own MTA) posts each message as signed raw bytes,
+`inboundMailRoutes()` verifies them and routes by the signed recipient, and
+`parseInbound()` parses within limits and trusts `Authentication-Results` only
+from servers you list. Never decode the message to a string before verifying
+it: a message that is not valid UTF-8 would no longer match its signature.
+
+For a provider that posts its own format (Postmark, SendGrid Inbound Parse,
+Mailgun routes, SES → SNS), put it behind a relay that signs the
+[wire format](/guide/inbound-mail#wire-format-v1), or receive it yourself on a
+[`rawBody()` route](/guide/adapters#raw-request-bodies-webhook-signatures) and
+verify the bytes with
+[`verifySignature(header, body.bytes, secret)`](/guide/webhooks#verifying-raw-bytes).
 
 ## SMS & WhatsApp
 

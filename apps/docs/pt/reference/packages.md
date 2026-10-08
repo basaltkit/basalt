@@ -32,6 +32,7 @@ Cada um funciona por si só; juntos formam o framework. Cada pacote é versionad
 | `@basaltkit/storage` | Local/S3/MinIO sob um contrato, isolamento por tenant, URLs assinados |
 | `@basaltkit/storage-gcs` · `@basaltkit/storage-azure` | Drivers para Google Cloud Storage e Azure Blob |
 | `@basaltkit/mailer` | Emails declarativos tipados, drivers SMTP/log/memory, remetente por tenant |
+| `@basaltkit/inbound-mail` | Receber email: entregas assinadas em bytes em bruto a partir de um relay, parse MIME com limites e veredictos A-R/ARC de confiança, encaminhamento por endereço |
 | `@basaltkit/scheduler` | Cron fluente: `schedule.job(X).daily().at('03:00')`; `defineReconciler` volta a despachar trabalho encalhado |
 
 ## Filas

@@ -90,6 +90,12 @@ Shipped to `main` after the 1.12 release, all non-breaking:
   tenant that no longer exists dead-letter (`TENANT_NOT_FOUND`) instead of being
   delivered. Opt out with `webhooksPlugin({ runInTenant: false })` — see
   [Webhooks → Schema-per-tenant](/guide/webhooks#schema-per-tenant).
+- **Inbound mail.** A new package, `@basaltkit/inbound-mail` 0.1, receives
+  email from a relay as signed raw bytes (one recipient per request, envelope
+  inside the signature), routes it by the signed recipient to tenant-aware
+  handlers, and parses it within limits, trusting `Authentication-Results` and
+  ARC only from servers you list. It ships with a reference Cloudflare Email
+  Routing Worker — see [Inbound mail](/guide/inbound-mail).
 
 ## Highlights
 
