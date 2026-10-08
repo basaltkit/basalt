@@ -180,6 +180,7 @@ oficiais:
 | `commands` | `CommandDefinition` (estrutural) | qualquer package com comandos CLI | `@basaltkit/cli` |
 | `schedule:entries` | descritores de agendamento | o scheduler | tooling CLI `schedule:list` |
 | `tenancy:active` | `true` | `tenancyPlugin` | packages que adotam defaults tenant-safe (primeiro consumidor: cache) |
+| `tenancy:run` | `TenantRunner` (`tenancy.run`) | `tenancyPlugin` | código em segundo plano que entra num tenant sem importar `TENANCY` (primeiro consumidor: webhooks) |
 
 Contribui no `register`, consome no `boot` — a ordem das fases garante a
 visibilidade.

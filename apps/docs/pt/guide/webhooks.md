@@ -461,32 +461,31 @@ um evento morto, liga o outbox tu mesmo com o `outboxPlugin` de
 :::
 
 ```ts
-import { eventsPlugin, outboxPlugin } from '@basaltkit/events'
-import {
-  WebhookDeliverer,
-  WebhookManager,
-  webhookOutboxDispatch,
-  webhooksPlugin,
-} from '@basaltkit/webhooks'
+import { eventsPlugin, outboxPlugin, type OutboxDispatch } from '@basaltkit/events'
+import { WEBHOOKS, webhookOutboxDispatch, webhooksPlugin } from '@basaltkit/webhooks'
 
-const deliverer = new WebhookDeliverer({ secret: process.env.WEBHOOK_SECRET })
-const webhooks = new WebhookManager(store, deliverer) // `store` é o teu WebhookStore
+// Faz o relay pelo WebhookManager do contentor — o que o webhooksPlugin
+// construiu, com o teu secretBox e a ligação à tenancy — depois do boot.
+let relay: OutboxDispatch = () => {
+  throw new Error('webhook relay not ready') // um tick antecipado só repete
+}
 
-createApp({
+const app = await createApp({
   plugins: [
     eventsPlugin(),
-    webhooksPlugin({ store, deliverer }), // o token WEBHOOKS recebe as mesmas peças
+    webhooksPlugin({ store, secret: process.env.WEBHOOK_SECRET }),
     outboxPlugin({
       store: outboxStore,
       captureEvents: ['invoice.*', 'user.created'],
       intervalMs: 5000,
-      dispatch: webhookOutboxDispatch(webhooks),
+      dispatch: (entry) => relay(entry),
       maxAttempts: 10,
       onDead: (entry, error) => pager.page(`webhook outbox dead: ${entry.event}`, error),
       onFlushError: (error) => logger.error({ error }, 'outbox flush failed'),
     }),
   ],
-})
+}).boot()
+relay = webhookOutboxDispatch(app.container.get(WEBHOOKS))
 ```
 
 Regista **um** dos dois — ambos reclamam o token `OUTBOX`.
@@ -849,9 +848,17 @@ a funcionar até chamares o `rotateSecret()` — sincroniza e migra antes disso.
 
 ### Schema por tenant
 
-Com [schema por tenant](/pt/guide/database-per-tenant) os endpoints de cada
-tenant vivem no seu próprio schema. Dá ao store Prisma um cliente que se resolve
-a cada chamada em vez de um fixo — não é preciso nenhum modo especial do store:
+Com [schema por tenant](/pt/guide/database-per-tenant) tens dois layouts.
+
+**O mais simples: manter as tabelas de webhooks centrais.** Dá ao
+`prismaWebhookStore` o cliente central normal. Cada endpoint já guarda o seu
+`tenantId` e cada dispatch é delimitado por ele, por isso o isolamento não
+depende do schema — e tudo nesta página, incluindo o relay do outbox, funciona
+sem alterações. Prefere este layout, a não ser que precises dos endpoints de
+cada tenant dentro do seu próprio schema.
+
+**Endpoints por tenant.** Dá ao store Prisma um cliente que se resolve a cada
+chamada em vez de um fixo — não é preciso nenhum modo especial do store:
 
 ```ts
 import { tenantClient } from '@basaltkit/prisma'
@@ -863,9 +870,44 @@ webhooksPlugin({ store: webhooks.store, secretBox })
 
 Dentro de um pedido, `register()` / `list()` / `dispatch()` chegam ao schema do
 tenant ativo (o endpoint continua associado a esse tenant, o que o schema torna
-redundante mas inofensivo). Fora do caminho do pedido, cada chamada tem de
-correr dentro do contexto do tenant — caso contrário o `db()` lança
-`DB_UNAVAILABLE`:
+redundante mas inofensivo).
+
+Fora do caminho do pedido, um `dispatch()` delimitado por um `tenantId`
+explícito entra nesse tenant **apenas para a pesquisa de endpoints** quando o
+`tenancyPlugin` está registado: o `webhooksPlugin` usa o sinal `'tenancy:run'`
+da tenancy (`runInTenant`), por isso a leitura do store corre dentro de
+`tenancy.run(tenantId)` e resolve o schema do tenant. Os secrets são abertos e
+os pedidos enviados depois de esse run terminar, por isso um endpoint lento
+nunca prende o cliente do pool desse tenant. Isto cobre o relay do
+`webhookOutboxPlugin`, a [receita com
+`outboxPlugin`](#entradas-mortas-e-falhas-de-flush), chamadas manuais a
+`flush(...)` e os teus próprios jobs:
+
+```ts
+webhooksPlugin({ store: webhooks.store, secretBox })
+webhookOutboxPlugin({
+  store: centralOutboxStore, // a tabela do outbox fica central (cliente normal)
+  tenantOnly: true,          // um evento sem tenant não tem endpoint a alcançar aqui
+})
+```
+
+- **Mantém a tabela do outbox central.** O relay lê-a sem tenant; só a pesquisa
+  de endpoints entra no tenant de cada entrada.
+- **Define `tenantOnly: true`.** Eventos emitidos sem tenant só encontrariam
+  endpoints sem tenant, que um store por tenant não tem — sem esta opção são
+  repetidos com `DB_UNAVAILABLE` e acabam mortos.
+- **As entradas de um tenant apagado acabam mortas** (`TENANT_NOT_FOUND` do
+  `tenancy.run`) em vez de serem entregues.
+- **O `secretBox` recebe o `tenantId` explicitamente** no seu contexto e não
+  pode ler o tenant ambiente durante a entrega — não há nenhum.
+- `register()` / `list()` / `unregister()` / `rotateSecret()` não são envolvidos:
+  fora do caminho do pedido, corre-os dentro de `tenancy.run(tenantId, ...)`.
+
+Um job de fila que faz o dispatch à mão continua a ser uma alternativa válida (o
+`idempotencyKey` mantém o `id` da entrega estável entre retries). Envolve-o tu
+em `tenancy.run`: um worker do `@basaltkit/queue` repõe o tenant do job no
+contexto e, com um tenant já no contexto, a pesquisa corre aí e não pelo
+`runInTenant`:
 
 ```ts
 // um job de fila com { tenantId, event, data } vindo do pedido que o emitiu
@@ -874,12 +916,9 @@ await tenancy.run(job.tenantId, () =>
 )
 ```
 
-O `webhookOutboxPlugin` **não** serve este cenário: o seu relay faz de propósito
-o dispatch de cada entrada num contexto novo, sem tenant, onde um store
-`tenantClient()` não se consegue resolver. Conduz as entregas a partir de um job
-de fila como acima (o `idempotencyKey` mantém o `id` da entrega estável entre
-retries), ou mantém as tabelas de webhooks no schema central com um cliente
-normal.
+Desativa com `webhooksPlugin({ runInTenant: false })`; sem `tenancyPlugin` (ou
+com um `@basaltkit/tenancy` anterior ao sinal `'tenancy:run'`) a pesquisa corre
+no contexto de quem chama, como antes.
 
 ### Qual backend?
 
@@ -932,7 +971,7 @@ rotações são cortes imediatos.
 
 ### `webhooksPlugin(options)`
 
-Tudo exceto `store`, `deliverer`, `events`, `secretBox` e as três opções de fan-out é reencaminhado para oTudo exceto `store`, `deliverer`, `events` e as três opções de fan-out é reencaminhado para o
+Tudo exceto `store`, `deliverer`, `events`, `secretBox`, `runInTenant` e as três opções de fan-out é reencaminhado para o
 `WebhookDeliverer` que constrói (e ignorado se passares o teu próprio
 `deliverer`).
 
@@ -945,6 +984,7 @@ Tudo exceto `store`, `deliverer`, `events`, `secretBox` e as três opções de f
 | `dispatchConcurrency` | `number` | `16` | Entregas que um `dispatch` corre ao mesmo tempo |
 | `onFanOutExceeded` | `(info) => void` | `console.warn` | Chamado uma vez por âmbito recusado, com `{ event, tenantId, endpoints, limit }`. Nunca pode lançar |
 | `secretBox` | `WebhookSecretBox` | — (guardado tal como chega) | Sela os secrets dos endpoints antes da escrita no store e abre-os em cada entrega ([selar secrets em repouso](#selar-secrets-em-repouso)) |
+| `runInTenant` | `TenantRunner \| false` | o sinal `'tenancy:run'` da tenancy, quando presente | Entra no tenant para a pesquisa de endpoints de um `dispatch()` fora do pedido delimitado por `tenantId` ([schema por tenant](#schema-por-tenant)). `false` mantém a pesquisa no contexto de quem chama |
 | `secret` | `string` | — | Secret HMAC de assinatura por predefinição (mín. 16 caracteres) para endpoints sem tenant. Os endpoints de tenant usam sempre o seu |
 | `allowSharedSecret` | `boolean` | `false` | Opt-out: assinar um endpoint de tenant sem secret próprio com o `secret` por predefinição (senão é recusado) |
 | `allowUnsigned` | `boolean` | `false` | Opt-out: enviar sem assinatura quando não há secret nenhum (senão é recusado) |
@@ -982,6 +1022,7 @@ Tudo exceto `store`, `deliverer`, `events`, `secretBox` e as três opções de f
 | `dispatchTimeoutMs` | `number \| false` | `10_000` | Espera máxima por entrada antes de o flush avançar; a entrega continua destacada e o resultado é registado na mesma |
 | `onFlushError` | `(error) => void` | `console.error` | Um flush do timer/shutdown falhou ao nível do store. Nunca pode lançar |
 | `onPermanentFailure` | `(entry, failures) => void` | `console.warn` | A entrega de uma entrada falhou de forma permanente para alguns endpoints; não são repetidos. Nunca pode lançar |
+| `tenantOnly` | `boolean` | `false` | Captura só eventos emitidos dentro de um contexto de tenant. Define-a quando os endpoints vivem por tenant ([schema por tenant](#schema-por-tenant)) |
 
 Não há `onDead` aqui — usa o `outboxPlugin` de `@basaltkit/events` quando
 precisares dele, como mostrado acima. O plugin

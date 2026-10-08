@@ -760,6 +760,24 @@ export interface TenancyPluginOptions {
   validateTenantId?: (id: string) => boolean
 }
 
+/**
+ * Enters a tenant for `fn` from background code: the function `tenancyPlugin`
+ * publishes under the `'tenancy:run'` metadata key (a signal other packages
+ * read, never an import of `TENANCY`). It is exactly `tenancy.run(tenantId, fn)`:
+ * - throws `InvalidTenantIdError` for an id that fails the tenant-id grammar and
+ *   `TenantNotFoundError` for a tenant the `TenantSource` does not know, before
+ *   `fn` runs;
+ * - emits `'tenancy:switched'` (`via: 'run'`) on the way in and
+ *   `'tenancy:exited'` on the way out, so per-tenant resources (prismaPlugin's
+ *   pooled client) are taken and given back;
+ * - does NOT check the tenant's `status` (a suspended tenant is entered);
+ * - runs from the caller's current context — call it from
+ *   `runWithContext({}, ...)` when the caller's ambient state must not leak in.
+ *
+ * Consumers declare this type structurally under the same name.
+ */
+export type TenantRunner = <T>(tenantId: string, fn: () => T | Promise<T>) => Promise<T>
+
 export function tenancyPlugin(options: TenancyPluginOptions) {
   return definePlugin({
     name: 'basalt:tenancy',
@@ -800,6 +818,14 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
       // @basaltkit/cache fails closed on a missing tenant scope when this app
       // is multi-tenant). String-keyed metadata — no package coupling.
       ensureMetadata(container).add('tenancy:active', true)
+      // Signal (not an import) for background code in other packages to enter a
+      // tenant the official way: id grammar, TenantSource lookup and the
+      // 'tenancy:switched' (via: 'run') / 'tenancy:exited' pairing, so
+      // prismaPlugin leases and releases the tenant's client. Runs from the
+      // CALLER's current context (tenancy.run spreads tryCtx()); enter from
+      // runWithContext({}) when the caller's ambient state must not leak in.
+      const runInTenant: TenantRunner = (tenantId, fn) => container.get(TENANCY).run(tenantId, fn)
+      ensureMetadata(container).add('tenancy:run', runInTenant)
 
       // Request enricher consumed by the HTTP adapter: resolves the tenant,
       // attaches it to the context and fires the switch hook.
