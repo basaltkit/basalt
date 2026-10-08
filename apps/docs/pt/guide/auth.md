@@ -192,7 +192,7 @@ import type { UserSource, AuthUser, UserPatch } from '@basaltkit/auth'
 const users: UserSource = {
   async findByEmail(email) { /* SELECT … WHERE email = ? */ return null },
   async findById(id) { /* SELECT … WHERE id = ? */ return null },
-  async create(data) { // data = { email, passwordHash } — hash já calculado
+  async create(data) { // data = { email, passwordHash, emailVerified? } — hash já calculado; persiste o emailVerified (omissão false)
     return { id: crypto.randomUUID(), ...data } as AuthUser
   },
   async update(id, patch: UserPatch) { /* UPDATE … */ return null },
@@ -250,7 +250,7 @@ fastifyPlugin({ routes: [...appRoutes, ...authRoutes(), ...mfaRoutes(), ...apiKe
 
 | Endpoint | Body | Notas |
 | --- | --- | --- |
-| `POST /auth/register` | `{ email, password }` | Sempre `202 { ok: true }` — à prova de enumeração (ver abaixo) |
+| `POST /auth/register` | `{ email, password }` | Sempre `202 { ok: true }` — à prova de enumeração (ver abaixo). Com `register: 'closed'`, `404`; ver [Política de registo](#registration-policy) |
 | `POST /auth/login` | `{ email, password, mfaCode? }` | → `{ user, accessToken, refreshToken }` |
 | `POST /auth/refresh` | `{ refreshToken }` | novo par de tokens; mata a família em caso de reutilização |
 | `POST /auth/logout` | `{ refreshToken? }` (corpo opcional) | `204`; revoga a família de refresh quando é dado, e termina a sessão do cookie / `x-session-id` e expira o cookie. Uma SPA só com cookie não envia corpo. Um logout cross-site só com cookie é recusado (`403 AUTH_CSRF_REJECTED`) |
@@ -296,6 +296,49 @@ seus tokens são enviados por email através dos hooks `auth:verify_requested` /
 concluída revoga todas as sessões e refresh tokens.
 :::
 
+### Política de registo {#registration-policy}
+
+O `POST /auth/register` serve todos os planos. Num host de tenant isso normalmente
+não deve significar "qualquer pessoa que escreva o endereço da empresa fica com
+conta lá": o padrão multi-tenant canónico torna o registo num host de tenant
+**só por convite**. Diz quem se pode registar com `authRoutes({ register })`, ou
+uma vez para todos os caminhos self-service com `authPlugin({ registerPolicy })`:
+
+```ts
+import { authPlugin, authRoutes } from '@basaltkit/auth'
+
+// Uma vez: aplica-se à rota de registo E a um primeiro login social / SSO.
+authPlugin({ users, secret, registerPolicy: ({ email, tenantId }) => tenantId === undefined || allowList.has(email) })
+// …ou por rota:
+authRoutes({ register: 'closed' }) // 404 estático AUTH_REGISTRATION_CLOSED
+```
+
+| `register` | Comportamento |
+| --- | --- |
+| omitido (omissão) | A `registerPolicy` do `authPlugin()`, ou aberto quando não há nenhuma |
+| `'open'` | Qualquer pessoa, mesmo quando o `authPlugin()` tem uma `registerPolicy` |
+| `'closed'` | `404 AUTH_REGISTRATION_CLOSED` para **todos** os pedidos. O corpo não é lido, logo a resposta não diz nada sobre nenhum endereço |
+| `(input) => boolean` | Consultada com o `email` canónico e o `tenantId` do pedido (`ctx().tenant?.id`, `undefined` no apex) |
+
+Um predicado que recusa responde o **mesmo `202 { ok: true }`** que um registo bem
+sucedido, não cria nada, faz o mesmo trabalho de hash e emite
+`auth:register_refused` (`{ email, tenantId?, source: 'register' }`) para o teu
+registo de auditoria ou um email fora de banda. Um `404` para "não convidado" ao
+lado de um `202` para "convidado" transformaria a rota num oráculo de quem a
+empresa convidou. Uma política que lança falha o pedido (fail closed).
+
+A `registerPolicy` do `authPlugin()` também controla o ramo de **criação** de um
+login social / SSO (`Auth.socialLogin`). Esse fluxo já está autenticado pelo
+fornecedor, por isso a recusa é explícita: `RegistrationClosedError`
+(`404 AUTH_REGISTRATION_CLOSED`) mais `auth:register_refused` com
+`source: 'social'`. Logins em contas existentes e o `auth.register()` de
+confiança nunca são controlados.
+
+Para o habitual "só por convite nos hosts de tenant", o `@basaltkit/teams` traz a
+política: `teamsInviteGate(teams)` admite o apex e, num tenant, apenas um endereço
+com um convite pendente e não expirado para esse tenant. Ver
+[Equipas: registo só por convite](/pt/guide/teams#invite-only-registration).
+
 ### O fluxo register → login → refresh (HTTP)
 
 ```bash
@@ -332,6 +375,30 @@ const { user: u, tokens } = await auth.login('ada@example.com', 'secretpassword1
 const next = await auth.refresh(tokens.refreshToken) // → novo { accessToken, refreshToken }
 await auth.revoke(next.refreshToken) // logout para clientes baseados em tokens
 ```
+
+### Criar contas a partir de fluxos de confiança {#trusted-account-creation}
+
+O `auth.register()` é a forma de confiança, no servidor, de criar uma conta
+(seeding, um back-office, um fluxo de registo que provou o endereço antes de criar
+a conta). Nunca faças tu o hash de uma password e insiras a linha. Quando o fluxo já
+provou o endereço (o link "abrir empresa" foi clicado a partir dessa caixa de
+correio), cria a conta já verificada:
+
+```ts
+const owner = await auth.register(email, password, { emailVerified: true })
+```
+
+A flag é persistida com a linha (`UserSource.create({ email, passwordHash,
+emailVerified })`), por isso o `auth:registered` já traz `emailVerified: true` e um
+hook de correio decide sozinho: não verificada, envia o link de verificação;
+verificada, não envia. Um login social verificado pelo fornecedor cria a sua conta
+da mesma forma.
+
+O `POST /auth/register` público nunca cria uma conta verificada: um campo
+`emailVerified` no corpo é ignorado. Um `UserSource` próprio escrito antes de o
+`create()` aceitar a flag é corrigido através do `update()`; sem `update()`, pedir
+uma conta verificada falha com `UserUpdateUnsupportedError` em vez de a criar, em
+silêncio, não verificada.
 
 ## Rotação de refresh com deteção de reutilização
 
@@ -1082,6 +1149,8 @@ plugin fornece:
 | `csrf` (plugin) | `{ trustedOrigins?: string[] } \| false` | ligado | Verificação CSRF da sessão por cookie em métodos não seguros — ver [Sessões por cookie e CSRF](#cookie-sessions-and-csrf) |
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Orçamento por IP que apanha *password spraying* (uma tentativa em muitas contas), que um contador por email não vê. Só se aplica quando quem chama passa o ip do cliente — o `authRoutes()` passa |
 | `enumerationSafeRegister` | `boolean` | `true` | Impede que o `POST /auth/register` revele que um email já tem conta. `false` repõe o `409 AUTH_EMAIL_TAKEN` |
+| `registerPolicy` | `({ email, tenantId? }) => boolean \| Promise<boolean>` | — (aberto) | Quem pode criar uma conta **nova** pelo `POST /auth/register` e por um primeiro login social / SSO. Ver [Política de registo](#registration-policy) |
+| `register` (`authRoutes`) | `'open' \| 'closed' \| RegisterPolicy` | a `registerPolicy` acima | Sobreposição por rota para o `POST /auth/register` |
 | `tokenVersions` | `TokenVersionStore` | — (desligado) | **Revogação** opcional de access tokens: os tokens levam uma claim `tv` que o `resetPassword`/`revokeAllTokens` incrementa, matando os tokens em circulação antes do TTL. Custa uma leitura ao store por pedido autenticado |
 | `accountLinks` | `AccountLinkStore` | em memória | Ligações de contas OAuth/OIDC (fornecedor + subject → conta) — durável em produção, ou as ligações perdem-se ao reiniciar |
 | `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy?: { v1Keys?, plaintext? } }` | — (texto simples) | Cifra os segredos TOTP em repouso (AES-256-GCM, chaves HKDF com id, ligadas ao utilizador); valores que não sejam envelopes são recusados salvo adesão em `legacy`. Ver [Cifrar os segredos TOTP em repouso](#mfa-encryption) |
@@ -1168,7 +1237,8 @@ autenticar os utilizadores.
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` numa conta com MFA ativo — desativa-o primeiro com um código |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | Uma rota `meta.auth` recebeu um pedido cross-site, só com cookie, que altera estado |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | O orçamento de logins falhados por email ou por IP esgotou-se; traz `retryAfterMs` |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição, e para criar uma conta verificada quando o `create()` ignora o `emailVerified` |
+| `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, ou uma `registerPolicy` recusou o primeiro login social / SSO de um endereço |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | arranque | `secret` em falta, ou com menos de 32 caracteres fora de um `NODE_ENV=development`/`test` explícito |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | Uma rota com `meta.scopes` foi chamada sem uma API key que tenha esse scope (ou `*`), ou uma chave sem `*` chamou uma rota protegida por identidade que não declara `meta.scopes` |
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | Uma chave usada fora do tenant em que foi emitida (ou uma chave sem tenant num pedido com tenant) |
@@ -1227,6 +1297,7 @@ autenticar os utilizadores.
 | --- | --- | --- |
 | `auth:registered` | `{ user }` | Email de boas-vindas, provisionamento |
 | `auth:register_existing_email` | `{ email }` | O email fora de banda "já tens conta" — o sinal que a resposta HTTP retém deliberadamente |
+| `auth:register_refused` | `{ email, tenantId?, source }` | Uma [política de registo](#registration-policy) recusou uma conta nova (`source`: `'register'` ou `'social'`); nada foi criado |
 | `auth:login` · `auth:login_failed` | `{ user }` · `{ email }` | Trilho de auditoria, alertas |
 | `auth:logout` | `{ user }` | Trilho de auditoria |
 | `auth:verify_requested` · `auth:email_verified` | `{ user, token }` · `{ user }` | **Envia o token por email** — nunca é devolvido por HTTP |

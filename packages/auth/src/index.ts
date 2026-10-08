@@ -22,6 +22,7 @@ export {
   type PublicUser,
   type UserSource,
   type UserPatch,
+  type NewUser,
   type SessionStore,
   type SessionRecord,
   type RefreshTokenStore,
@@ -75,8 +76,10 @@ export {
   SocialLinkRefusedError,
   AccountLinkConflictError,
   AccountEmailAmbiguousError,
+  RegistrationClosedError,
   canonicalEmail,
   type AuthOptions,
+  type RegisterPolicy,
   type SessionCookieOptions,
   type TokenPair,
 } from './auth.js'
@@ -129,6 +132,7 @@ export {
   MAX_PASSWORD_LENGTH,
   type AuthRoutesOptions,
   type PasswordPolicy,
+  type RegisterOption,
 } from './routes.js'
 export {
   OAuth,

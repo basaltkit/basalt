@@ -266,8 +266,13 @@ export class SqliteUserSource implements UserSource {
     })
   }
 
-  async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {
-    const user: AuthUser = { id: randomUUID(), email: data.email, passwordHash: data.passwordHash, emailVerified: false }
+  async create(data: { email: string; passwordHash: string; emailVerified?: boolean }): Promise<AuthUser> {
+    const user: AuthUser = {
+      id: randomUUID(),
+      email: data.email,
+      passwordHash: data.passwordHash,
+      emailVerified: data.emailVerified === true,
+    }
     // Case-insensitive uniqueness in the statement itself, not only in the
     // NOCASE index: a legacy database holding case-variant duplicates cannot
     // take that index (see migrate()), and must still refuse a new variant —
@@ -276,10 +281,10 @@ export class SqliteUserSource implements UserSource {
     const inserted = this.db
       .prepare(
         `INSERT INTO auth_users (id, email, password_hash, email_verified)
-         SELECT ?, ?, ?, 0
+         SELECT ?, ?, ?, ?
          WHERE NOT EXISTS (SELECT 1 FROM auth_users WHERE email = ? COLLATE NOCASE)`,
       )
-      .run(user.id, user.email, user.passwordHash, user.email.trim())
+      .run(user.id, user.email, user.passwordHash, user.emailVerified === true ? 1 : 0, user.email.trim())
     if (Number(inserted.changes) === 0) throw new EmailTakenError()
     return user
   }
