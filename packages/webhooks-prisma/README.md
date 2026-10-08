@@ -63,6 +63,21 @@ const webhooks = prismaWebhookStore(prisma)
 webhooksPlugin({ store: webhooks.store, secret: process.env.WEBHOOK_SECRET })
 ```
 
+Under schema- or database-per-tenant, either keep the webhook tables central
+(pass the plain client — the simplest option, everything works unchanged) or
+keep each tenant's endpoints in its own database through `tenantClient()`:
+
+```ts
+import { tenantClient } from '@basaltkit/prisma'
+
+webhooksPlugin({ store: prismaWebhookStore(tenantClient<PrismaClient>()).store, secretBox })
+webhookOutboxPlugin({ store: centralOutboxStore, tenantOnly: true }) // outbox stays central
+```
+
+With `tenancyPlugin` registered, off-request dispatches (the outbox relay
+included) enter each entry's tenant for the endpoint lookup automatically. See
+the [webhooks guide](https://basaltkit-docs.pages.dev/guide/webhooks#schema-per-tenant).
+
 Wire the store before its model exists and it **fails fast** with a message naming the missing model and pointing you at `basalt prisma:sync` — no cryptic `reading 'updateMany' of undefined`.
 
 ## API

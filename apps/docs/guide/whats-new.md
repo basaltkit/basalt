@@ -58,7 +58,7 @@ key, webhooks that respect a port policy and a fan-out cap, and more. See
 
 ## Since 1.12 (unreleased)
 
-Shipped to `main` after the 1.12 release, all opt-in and non-breaking:
+Shipped to `main` after the 1.12 release, all non-breaking:
 
 - **Idempotency on every adapter.** `idempotencyPlugin` moved from
   `@basaltkit/fastify` into the shared route pipeline in `@basaltkit/http`, so
@@ -76,6 +76,20 @@ Shipped to `main` after the 1.12 release, all opt-in and non-breaking:
   `onAttempt` and `DeliveryResult.durationMs` report every delivery attempt,
   `headerPrefix` renames the `x-basalt-*` headers, and `signPayload()` /
   `verifySignature()` accept raw bytes — see [Webhooks](/guide/webhooks#sealing-secrets-at-rest).
+- **The webhook outbox works with endpoints per tenant.** Under
+  schema-per-tenant (or database-per-tenant) with the webhook store over
+  `tenantClient()`, every relayed entry used to fail with `DB_UNAVAILABLE` and
+  dead-letter. `tenancyPlugin` now publishes a `'tenancy:run'` signal
+  (`TenantRunner`, `@basaltkit/tenancy` minor), and `webhooksPlugin` uses it to
+  run the endpoint lookup of an off-request `dispatch()` scoped by `tenantId`
+  inside `tenancy.run` — the lookup only, never the delivery, so a slow endpoint
+  cannot hold a pooled client. `webhookOutboxPlugin({ tenantOnly: true })` skips
+  events emitted without a tenant. **On by default** whenever `tenancyPlugin` is
+  registered, which shared-schema apps notice too: one `TenantSource.find` and a
+  `tenancy:switched`/`tenancy:exited` pair per such dispatch, and entries of a
+  tenant that no longer exists dead-letter (`TENANT_NOT_FOUND`) instead of being
+  delivered. Opt out with `webhooksPlugin({ runInTenant: false })` — see
+  [Webhooks → Schema-per-tenant](/guide/webhooks#schema-per-tenant).
 
 ## Highlights
 

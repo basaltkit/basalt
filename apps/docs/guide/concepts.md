@@ -179,6 +179,7 @@ the official buckets:
 | `commands` | `CommandDefinition` (structural) | any package shipping CLI commands | `@basaltkit/cli` |
 | `schedule:entries` | schedule descriptors | the scheduler | CLI `schedule:list` tooling |
 | `tenancy:active` | `true` | `tenancyPlugin` | packages adopting tenant-safe defaults (first consumer: cache) |
+| `tenancy:run` | `TenantRunner` (`tenancy.run`) | `tenancyPlugin` | background code entering a tenant without importing `TENANCY` (first consumer: webhooks) |
 
 Contribute in `register`, consume in `boot` — the phase ordering guarantees
 visibility.

@@ -290,6 +290,25 @@ Other packages read it — string-keyed, so no package coupling — to adopt
 tenant-safe defaults; `@basaltkit/cache`, for example, fails closed on a missing
 tenant scope once the app is known to be multi-tenant.
 
+It also publishes a `'tenancy:run'` signal: a `TenantRunner` (exported type,
+`<T>(tenantId, fn) => Promise<T>`) that is exactly `tenancy.run(tenantId, fn)`.
+Background code in other packages reads it from the metadata — again no import
+of `TENANCY` — to enter a tenant the official way:
+
+```ts
+const run = ensureMetadata(container).get<TenantRunner>('tenancy:run')[0]
+const rows = run ? await runWithContext({}, () => run('acme', () => db().order.findMany())) : undefined
+```
+
+The contract: the id must pass the tenant-id grammar (`InvalidTenantIdError`) and
+the `TenantSource` must know the tenant (`TenantNotFoundError`), both checked
+before `fn` runs; `tenancy:switched` (`via: 'run'`) and `tenancy:exited` fire
+around `fn`, so per-tenant resources such as `prismaPlugin`'s pooled client are
+leased and released; the tenant's `status` is **not** checked. It runs from the
+caller's current context — start from `runWithContext({}, ...)` when the caller's
+ambient state must not leak in. `@basaltkit/webhooks` uses it for the endpoint
+lookup of off-request dispatches.
+
 The plugin registers the facade in the container under the `TENANCY` token, and an HTTP enricher that resolves the tenant for each request, places it in `ctx().tenant`, and emits `tenancy:switched`.
 
 Before a resolved tenant is placed in the context, the enricher checks its

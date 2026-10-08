@@ -628,6 +628,10 @@ await tenancy.forEach(async (tenant) => {
 As mesmas instâncias de store (`auth`, `access`, …) funcionam em todos os contextos —
 o proxy encaminha cada chamada para o tenant que o `run`/`forEach` colocou em scope.
 
+Os dispatches de webhooks delimitados por `tenantId` fora do pedido — incluindo o
+relay do `webhookOutboxPlugin` — entram no tenant por ti, só para a pesquisa de
+endpoints (ver [Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant)).
+
 ## Juntar tudo
 
 A forma completa de uma app database-per-tenant na Basalt:
