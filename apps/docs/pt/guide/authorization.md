@@ -164,27 +164,36 @@ ou agregada:
 - o `count` e o `findMany` não batem certo, e a UI mostra "42 resultados" sobre 3 linhas.
 
 A listagem precisa de um **predicado de acesso** que a base de dados aplique.
-Escreve-o uma vez por recurso, num único módulo, e usa-o em todas as queries que
-listam ou contam esse recurso:
+Declara-o na política, **ao lado do check que espelha**, como uma entrada de
+`filters` para a mesma ação — e pede-o ao Gate com `gate.listFilter()`:
 
 ```ts
-// documents/access.ts: a fonte única da regra "quem vê que documento"
-const isAdmin = (user: { roles?: unknown }) => Array.isArray(user.roles) && user.roles.includes('admin')
+// documents/policy.ts: a fonte única da regra "quem vê que documento"
+import { definePolicy, type PolicyUser } from '@basaltkit/permissions'
 
-export function documentAccessWhere(user: { id: string; roles?: unknown }) {
-  if (isAdmin(user)) return {}
-  return { OR: [{ ownerId: user.id }, { shares: { some: { userId: user.id } } }] }
-}
+const isAdmin = (user: PolicyUser) => Array.isArray(user.roles) && user.roles.includes('admin')
 
-export const DocumentPolicy = definePolicy<Document>('document', {
-  // A mesma regra, para um objeto (requisitos de recurso do meta.can, gate.can).
-  read: (user, doc) =>
-    isAdmin(user) || doc.ownerId === user.id || doc.shares.some((s) => s.userId === user.id),
-})
+export const DocumentPolicy = definePolicy<Document, Prisma.DocumentWhereInput>(
+  'document',
+  {
+    // Um objeto (requisitos de recurso do meta.can, gate.can).
+    read: (user, doc) =>
+      isAdmin(user) || doc.ownerId === user.id || doc.shares.some((s) => s.userId === user.id),
+  },
+  {
+    // A mesma regra, como predicado de lista (gate.listFilter).
+    filters: {
+      read: (user) =>
+        isAdmin(user) ? true : { OR: [{ ownerId: user.id }, { shares: { some: { userId: user.id } } }] },
+    },
+  },
+)
 
 // documents/repository.ts
-export async function listDocuments(user: AppUser, filter: Prisma.DocumentWhereInput, page: Page) {
-  const where = { AND: [documentAccessWhere(user), filter] } // um objeto, reutilizado abaixo
+export async function listDocuments(me: PolicyUser, filter: Prisma.DocumentWhereInput, page: Page) {
+  const f = await gate.listFilter<Prisma.DocumentWhereInput>(me, 'document:read')
+  if (f.kind === 'none') return { rows: [], total: 0 }
+  const where = f.kind === 'unrestricted' ? filter : { AND: [f.where, filter] } // um objeto, reutilizado abaixo
   const [rows, total] = await Promise.all([
     prisma.document.findMany({ where, ...page }),
     prisma.document.count({ where }),
@@ -193,23 +202,96 @@ export async function listDocuments(user: AppUser, filter: Prisma.DocumentWhereI
 }
 ```
 
+`gate.listFilter(user, 'recurso:ação')` responde uma de três coisas:
+
+| `kind` | Quando | O repositório |
+| --- | --- | --- |
+| `'unrestricted'` | o `superAdmin` passa (como no `can()`), ou o filtro devolveu o literal `true` | não acrescenta predicado de acesso |
+| `'none'` | o filtro devolveu o literal `false` | devolve uma página vazia sem fazer a query |
+| `'where'` | o filtro devolveu outra coisa qualquer (`f.where`, tal e qual) | compõe `f.where` com `AND` |
+
+**Falha fechado**: sem filtro para exatamente `recurso:ação`, lança
+`MissingPolicyFilterError` (`PERMISSION_FILTER_MISSING`) — diga o
+`onMissingPolicy` o que disser, e nunca recai no RBAC ("o RBAC permite" não tem
+significado como conjunto de linhas). Um filtro que devolve `null` ou
+`undefined` lança um `TypeError` — um `return` esquecido é um bug, nunca "todas
+as linhas". A procura segue as regras do check (só as ações próprias,
+exatamente dois segmentos), cada chave de `filters` tem de ter um check com o
+mesmo nome (senão o `definePolicy` lança), e a chamada não tem efeitos
+secundários, como o `can()`. Tal como em `can(user, p, resource)`, a política
+decide sozinha: as concessões e as delegações do Gate não são consultadas — põe
+o que a regra precisa (ids de equipa, por quem o utilizador está a substituir)
+no ator que passas. O `meta.can` da rota continua a guardar o próprio endpoint.
+
 - Compõe o predicado com `AND` em `findMany`, `count`, `groupBy`, `aggregate` e
   nas queries de autocomplete. Constrói o `where` uma vez e passa o **mesmo
   objeto** ao `count` e ao `findMany`.
-- Mantém o `definePolicy` para a decisão sobre um objeto (o
-  [requisito de recurso](#politicas-no-guard-requisitos-de-recurso) de uma rota,
-  um `gate.can(user, 'document:read', doc)` num handler) e escreve-o como a mesma
-  regra do predicado, para que a lista e a página de detalhe nunca discordem.
-- Testa o `total` e as contagens dos facets, não só as linhas: é aí que um
-  pós-filtro se nota.
-- O scope do tenant é outra coisa. A extensão de tenancy do `@basaltkit/prisma`
-  acrescenta o tenant a cada query; o predicado de acesso restringe ainda mais
-  dentro do tenant.
+- **Os registos filhos compõem o filtro do pai.** Comentários de um documento:
+  `{ document: documentWhere }` (ou `{ OR: [{ documentId: null }, { document: documentWhere }] }`
+  quando o pai é opcional).
+- **Os teus includes são teus para filtrar.** O predicado cobre a query onde o
+  pões. Um `include: { comments: true }`, um `_count` ou um filtro de relação
+  `some`/`every`/`none` na query de *outro* modelo não é restringido — aplica lá o
+  filtro tu mesmo. O framework não reescreve as tuas queries.
+- **`unrestricted` significa nenhuma restrição de acesso dentro do isolamento de
+  tenant que a tua camada de dados já aplica; o filtro nunca transporta o
+  isolamento de tenant.** A extensão de tenancy do `@basaltkit/prisma` (ou o teu
+  schema-por-tenant) acrescenta o tenant; o predicado de acesso restringe ainda
+  mais dentro dele.
+- **O parâmetro de tipo é uma asserção.** `listFilter<Prisma.DocumentWhereInput>()`
+  não é verificado contra o `TWhere` com que a política foi definida — as
+  políticas são procuradas pelo nome. Mantém um `TWhere` por recurso.
+- **SQL cru funciona da mesma forma.** O `TWhere` é o que a tua camada de dados
+  compõe: um fragmento `Prisma.Sql`, ou uma função do alias da tabela quando a
+  mesma regra é usada com aliases diferentes:
+
+  ```ts
+  filters: {
+    read: (user) => (alias: string) =>
+      Prisma.sql`(${Prisma.raw(alias)}.owner_id = ${user.id} or exists (
+        select 1 from document_shares s
+        where s.document_id = ${Prisma.raw(alias)}.id and s.user_id = ${user.id}))`,
+  }
+  // const f = await gate.listFilter<(alias: string) => Prisma.Sql>(me, 'document:read')
+  ```
+
+- **Testa a paridade contra a tua base de dados real.** Para uma matriz de
+  utilizadores × linhas de fixture, verifica que `gate.can(user, 'document:read', row)`
+  é `true` exatamente para as linhas que a query filtrada devolve — e que o
+  `total` bate certo. Testa o `total` e as contagens dos facets, não só as
+  linhas: é aí que um pós-filtro se nota.
+
+  ```ts
+  for (const user of users) {
+    const { rows, total } = await listDocuments(user, {}, { take: 1000 })
+    const seen = new Set(rows.map((r) => r.id))
+    for (const doc of await prisma.document.findMany({ include: { shares: true } })) {
+      expect(seen.has(doc.id)).toBe(await gate.can(user, 'document:read', doc))
+    }
+    expect(total).toBe(rows.length)
+  }
+  ```
+
 - Para resultados de pesquisa full-text, o framework já tem o hook: o
   [`authorize`](/pt/guide/search#quem-pode-ver-um-resultado) do
   `@basaltkit/search` corre a tua política sobre os resultados, continua a pedir
   ao driver até a página estar cheia, e indica em `totalExact` se o `total` pode
   ser mostrado.
+
+#### Porque não um filtro ao nível do ORM?
+
+Um filtro que o ORM aplicasse automaticamente a todas as queries parece mais
+seguro. Não é: um predicado de acesso não é fechado sobre as relações como o
+tenant é, por isso um filtro ambiente em `Document` é contornado por
+`comment.findMany({ include: { document: true } })`, por `_count` e por filtros
+de relação noutros modelos — e um include to-one nem sequer pode ser filtrado
+no Prisma. Fechar esses buracos obriga a reescrever cada `include`/`select`
+contra o schema; deixá-los abertos falha aberto. Também não serviria regras
+escritas em SQL cru. Por isso o framework dá à regra uma forma de lista e deixa
+a sua aplicação explícita. Para aplicação ambiente dentro de um tenant, escreve
+políticas de row-level security do Postgres nas tuas próprias migrations. O
+raciocínio está registado no
+[RFC 0003](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0003-policy-list-filters.md).
 
 ## Proteger rotas
 
@@ -626,7 +708,7 @@ O `permissionsPlugin(options)` recebe as mesmas opções que `new Gate(options)`
 | `store` | `AccessStore` | — (obrigatória) | Onde vivem roles/permissões — a tua base de dados em produção |
 | `superAdmin` | `(user) => boolean \| Promise<boolean>` | — | Curto-circuita **todos** os checks para `true` quando devolve `true` (o `Gate::before` do Laravel). Não é um role: o `hasRole()` continua a responder sobre a posse; o `isSuperAdmin(user)` pergunta pelo bypass |
 | `scope` | `() => string` | `ctx().tenant.id` ?? `GLOBAL_SCOPE` | Scope atual; os checks consultam-no mais o `GLOBAL_SCOPE` |
-| `policies` | `Policy[]` | `[]` | Políticas de recurso registadas à partida (o mesmo que chamar `gate.register`) |
+| `policies` | `Policy[]` | `[]` | Políticas de recurso registadas à partida (o mesmo que chamar `gate.register`), com os seus [`filters`](#as-politicas-decidem-um-objeto-nao-uma-lista) de lista |
 | `temporaryGrants` | `TemporaryGrantStore` | desligado | Ativa `grantTemporarily()` |
 | `delegations` | `DelegationStore` | desligado | Ativa `delegate()` |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
@@ -643,6 +725,13 @@ O plugin regista o Gate sob o token `GATE`, adiciona o guard do `meta.can` e a
 sua verificação de visibilidade sem efeitos secundários (`http:route-visibility`),
 valida os requisitos de recurso no boot (`http:meta-validators`), e reclama a
 chave `can` no check de guarded-meta que os adapters fazem no boot.
+
+`definePolicy(resource, checks, { filters })` recebe a forma de lista dos checks
+como terceiro argumento (ação → `(user) => where | true | false`, cada chave
+emparelhada com um check), e `gate.listFilter<TWhere>(user, 'recurso:ação')`
+devolve-a como um `ListFilter` — `{ kind: 'unrestricted' }`, `{ kind: 'none' }`
+ou `{ kind: 'where', where }`. Vê
+[As políticas decidem um objeto, não uma lista](#as-politicas-decidem-um-objeto-nao-uma-lista).
 
 ## Hooks — o rasto de auditoria
 
@@ -671,6 +760,7 @@ e não do store: escritas feitas diretamente no `AccessStore` não deixam rasto.
 | `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | boot | Um requisito de recurso está malformado, ou nenhuma política decide a sua permissão (com `onMissingPolicy: 'error'`) |
 | `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` | 403 | O id de tenant do pedido é um scope reservado (`'@global'` ou `'global'`), ou o tenant não tem id utilizável |
 | `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | O `can`/`authorize` recebeu um recurso mas nenhum check de política corresponde a `resource:action` — a regra ABAC que pretendias seria saltada |
+| `MissingPolicyFilterError` | `PERMISSION_FILTER_MISSING` | 500 | O `gate.listFilter(user, 'resource:action')` não encontrou filtro de lista para exatamente essa permissão — nunca responde a partir do RBAC nem do `onMissingPolicy` |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | Uma rota declara `meta.can` (ou `auth`/`teamRole`/`scopes`/`subscribed`/`feature`) e nenhum guard registado reclama essa chave |
 
 - **`PERMISSION_DENIED` para um utilizador que "tem o role"** — verifica o
@@ -685,6 +775,11 @@ e não do store: escritas feitas diretamente no `AccessStore` não deixam rasto.
   `definePolicy`, regista o check em falta, ou — se aquela chamada é mesmo RBAC
   simples — deixa de passar o recurso. `onMissingPolicy: 'rbac'` repõe o
   comportamento antigo por completo.
+- **`PERMISSION_FILTER_MISSING` numa listagem** — a política tem um check para
+  essa ação mas não tem a forma de lista. Acrescenta `filters: { <ação>: (user) => … }`
+  como terceiro argumento do seu `definePolicy`, ao lado do check, ou corrige a
+  escrita de `resource:action` (o erro lista os filtros registados). Não há
+  fallback de propósito: responder "unrestricted" listaria todas as linhas.
 - **Um check de política parece ignorado** — a política só corre quando um
   *recurso* é passado a `can`/`authorize`; `can(user, 'project:update')` sem
   recurso — e um `meta.can: 'project:update'` simples — é RBAC puro por design e
