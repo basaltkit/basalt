@@ -424,11 +424,17 @@ tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'localhos
 A tenant is an **open record** (`{ id, ...anything }`), stored as JSON so any
 per-tenant field round-trips unchanged; custom domains are normalized into an
 indexed table so `findByDomain` (the domain resolver) is a keyed lookup. Both add
-write methods — `save` (upsert + replace the domain set), `remove` — and enforce
+write methods — `save` (upsert + sync the domain set), `remove` — and enforce
 **globally-unique domains**: claiming one already owned by another tenant is
 rejected, so routing stays unambiguous. `prismaTenantSource` ships a reference
 `schema.prisma` picked up by `basalt prisma:sync`; same "which one?" trade-off as
 auth — SQLite for a single node, Prisma when you already run a database.
+
+Each package also ships the durable `DomainStore` for verified custom domains
+(`CustomDomains`), on the same table: `prismaDomainStore(prisma)` /
+`sqliteDomainStore(tenants.db)`. Domains claimed through it survive every
+`save()`, and `findByDomain` resolves them only once verified — see
+[a durable domain store](/guide/tenancy#a-durable-domain-store).
 
 ## Events outbox — `@basaltkit/events-sqlite` / `@basaltkit/events-prisma`
 
@@ -746,6 +752,7 @@ un-configured factory is still safe in tests.
 | Notifications | `sqliteInAppStore()` | `prismaInAppStore(client)` | `notificationsPlugin({ inApp: store })` |
 | Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store, temporaryGrants, delegations })` |
 | Tenancy | `sqliteTenantSource()` | `prismaTenantSource(client)` | `tenancyPlugin({ source })` — returns the source itself, not `{ store }` |
+| Custom domains | `sqliteDomainStore(db)` | `prismaDomainStore(client)` | `new CustomDomains({ store })` — returns the store itself |
 | Events outbox | `sqliteOutboxStore()` | `prismaOutboxStore(client, { claim? })` | `outboxPlugin({ store })` |
 | Webhooks | `sqliteWebhookStore()` | `prismaWebhookStore(client)` | `webhooksPlugin({ store })` |
 

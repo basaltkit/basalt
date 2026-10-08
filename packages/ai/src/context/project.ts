@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
@@ -8,7 +8,16 @@ import { join } from 'node:path'
 export interface ProjectReader {
   read(relPath: string): string | null
   exists(relPath: string): boolean
+  /**
+   * Every file under `relDir`, recursively, as paths relative to the root.
+   * Optional: a reader without it simply skips the checks that scan the
+   * project's route files.
+   */
+  list?(relDir: string): string[]
 }
+
+/** Upper bound on the files a route scan reads — a doctor run stays cheap on a large repo. */
+const MAX_SCANNED_FILES = 2000
 
 /** Default reader backed by the filesystem. */
 export function nodeReader(root: string): ProjectReader {
@@ -21,6 +30,26 @@ export function nodeReader(root: string): ProjectReader {
       }
     },
     exists: (relPath) => existsSync(join(root, relPath)),
+    list(relDir) {
+      const out: string[] = []
+      const walk = (dir: string): void => {
+        let entries
+        try {
+          entries = readdirSync(join(root, dir), { withFileTypes: true })
+        } catch {
+          return
+        }
+        for (const entry of entries) {
+          if (out.length >= MAX_SCANNED_FILES) return
+          if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+          const rel = `${dir}/${entry.name}`
+          if (entry.isDirectory()) walk(rel)
+          else if (entry.isFile()) out.push(rel)
+        }
+      }
+      walk(relDir.replace(/\/+$/, ''))
+      return out
+    },
   }
 }
 
@@ -29,6 +58,10 @@ export function memoryReader(files: Record<string, string>): ProjectReader {
   return {
     read: (relPath) => files[relPath] ?? null,
     exists: (relPath) => relPath in files,
+    list: (relDir) => {
+      const prefix = `${relDir.replace(/\/+$/, '')}/`
+      return Object.keys(files).filter((path) => path.startsWith(prefix))
+    },
   }
 }
 
@@ -92,8 +125,24 @@ export interface EnvFileInfo {
   redisUrlDefault: string | null
 }
 
+/**
+ * A route declared central (`meta.tenant: false`) whose permission names the
+ * platform plane (`can: 'platform:…'`), without `tenant: 'never'`. It still
+ * runs on a tenant host, against that tenant's storage.
+ */
+export interface CentralPlatformRouteHint {
+  path: string
+  /** 1-based line of the `meta` object. */
+  line: number
+}
+
 export interface ProjectContext {
   root: string
+  /**
+   * Platform routes that do not refuse a tenant. Absent when the reader cannot
+   * list files.
+   */
+  centralPlatformRoutes?: CentralPlatformRouteHint[]
   /** All `@basaltkit/*` packages found in package.json deps. */
   installed: string[]
   stack: DetectedStack
@@ -143,7 +192,48 @@ export function detectProject(root: string, reader: ProjectReader = nodeReader(r
   const env = detectEnvFile(reader)
   const prisma = detectPrisma(reader)
   const stack = buildStack(installed, app, prisma)
-  return { root, installed, stack, prisma, app, server, env }
+  const centralPlatformRoutes = detectCentralPlatformRoutes(reader)
+  return {
+    root,
+    installed,
+    stack,
+    prisma,
+    app,
+    server,
+    env,
+    ...(centralPlatformRoutes ? { centralPlatformRoutes } : {}),
+  }
+}
+
+/**
+ * Finds `meta: { … }` literals with `tenant: false` and a `can` naming
+ * `platform:…`. A regex over flat object literals, not a parser: it sees
+ * `meta: { tenant: false, can: 'platform:plans' }` written inline, which is
+ * how routes are declared; meta built elsewhere and spread in goes unseen.
+ */
+function detectCentralPlatformRoutes(reader: ProjectReader): CentralPlatformRouteHint[] | undefined {
+  if (!reader.list) return undefined
+  const files = reader
+    .list('src')
+    .filter((path) => /\.[cm]?[jt]s$/.test(path) && !/\.d\.ts$|\.(test|spec)\.[cm]?[jt]s$/.test(path))
+    .slice(0, MAX_SCANNED_FILES)
+  const hits: CentralPlatformRouteHint[] = []
+  for (const path of files) {
+    const content = reader.read(path)
+    if (!content || !content.includes('platform:')) continue
+    // Same length as the source, comments and string text blanked: a match
+    // must start in code, so a commented-out route never counts.
+    const code = codeOnly(content)
+    for (const match of content.matchAll(/\bmeta\s*:\s*\{([^{}]*)\}/g)) {
+      const index = match.index ?? 0
+      if (code.slice(index, index + 4) !== 'meta') continue
+      const body = match[1] ?? ''
+      if (!/\btenant\s*:\s*false\b/.test(body)) continue
+      if (!/\bcan\s*:\s*\[?\s*['"`]platform:/.test(body)) continue
+      hits.push({ path, line: content.slice(0, index).split('\n').length })
+    }
+  }
+  return hits
 }
 
 function detectInstalled(reader: ProjectReader): string[] {

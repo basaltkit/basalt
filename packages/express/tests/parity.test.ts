@@ -21,6 +21,7 @@ import {
 import { fileRoutesParitySuite } from '../../files/tests/route-parity.js'
 import { commentRoutesParitySuite } from '../../comments/tests/route-parity.js'
 import { realtimeSseParitySuite } from '../../realtime/tests/sse-parity.js'
+import { centralOnlyParitySuite } from '../../tenancy/tests/central-only-parity.js'
 import { EXPRESS, expressPlugin } from '../src/index.js'
 
 let app: BasaltApp | undefined
@@ -62,3 +63,4 @@ fileRoutesParitySuite('express', driver)
 commentRoutesParitySuite('express', driver)
 realtimeSseParitySuite('express', driver)
 disposerParitySuite('express', driver)
+centralOnlyParitySuite('express', driver)

@@ -137,6 +137,30 @@ export const DEFAULT_RULES: DoctorRule[] = [
     },
   }),
   defineRule({
+    id: 'platform-route-accepts-tenant',
+    category: 'tenancy',
+    check(ctx) {
+      const hits = ctx.centralPlatformRoutes ?? []
+      if (hits.length === 0) return null
+      const where = hits.map((hit) => `${hit.path}:${hit.line}`).join(', ')
+      return {
+        id: 'platform-route-accepts-tenant',
+        title: "Platform route declares tenant: false instead of tenant: 'never'",
+        severity: 'warning',
+        category: 'tenancy',
+        detected: `platform routes still served on tenant hosts: ${where}`,
+        recommended: "declare meta: { tenant: 'never' } on routes of the central plane",
+        reason:
+          '`tenant: false` lifts the tenant requirement but still resolves one: ' +
+          'acme.<host>/platform/… runs inside Acme, against its database, and a ' +
+          "tenant owner holding '*' satisfies 'platform:*'. `tenant: 'never'` answers " +
+          'a tenant host with the plain 404 before any guard runs.',
+        fix: "meta: { tenant: 'never', auth: true, can: 'platform:plans.manage' }",
+        docs: '/guide/multi-tenant-pattern',
+      }
+    },
+  }),
+  defineRule({
     id: 'tenant-scoping-missing',
     category: 'tenancy',
     check(ctx) {
