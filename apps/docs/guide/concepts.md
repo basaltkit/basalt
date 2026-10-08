@@ -322,8 +322,12 @@ client, a lock, a span — returns a disposer instead of hoping someone cleans
 up. The adapter runs it exactly once when the response has really ended:
 after the body was sent (a `stream()` download or an `sse()` stream included),
 after an error response, when a later enricher or guard rejected the request,
-or when the client went away. Disposers run last-registered first; a failing
-one is reported (`REQUEST_DISPOSER_FAILED`) and never changes the response.
+or when the client went away. It never runs while the handler is still
+running: a client that aborts mid-handler only marks the response as over,
+and the disposer waits for the handler to settle, so the handler keeps a live
+resource until it returns or throws. Disposers run last-registered first; a
+failing one is reported (`REQUEST_DISPOSER_FAILED`) and never changes the
+response.
 
 ```ts
 const enricher: RequestEnricher = async ({ context }) => {

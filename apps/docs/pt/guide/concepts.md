@@ -327,7 +327,10 @@ lease, um lock, um span — devolve um disposer em vez de esperar que alguém
 limpe. O adapter executa-o exactamente uma vez quando a resposta terminou de
 facto: depois de o corpo ser enviado (incluindo um download `stream()` ou um
 stream `sse()`), depois de uma resposta de erro, quando um enricher ou guard
-posterior rejeitou o pedido, ou quando o cliente se foi embora. Os disposers
+posterior rejeitou o pedido, ou quando o cliente se foi embora. Nunca corre
+com o handler ainda em execução: um cliente que aborta a meio do handler só
+marca a resposta como terminada, e o disposer espera que o handler assente,
+pelo que o handler mantém um recurso vivo até devolver ou lançar. Os disposers
 correm do último registado para o primeiro; um que falhe é reportado
 (`REQUEST_DISPOSER_FAILED`) e nunca altera a resposta.
 

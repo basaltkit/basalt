@@ -63,7 +63,9 @@ export type RequestEnricher = (info: {
  * leased database client to its pool. The adapter runs it exactly once, after
  * the response has finished, was abandoned by the client (abort/close) or
  * failed, including a streamed (`stream()`) or event-stream (`sse()`) body
- * that outlives the handler. Disposers run last-registered first.
+ * that outlives the handler — and never before the pipeline (`runRoute`) has
+ * settled, so a client abort mid-handler leaves the handler's resource alive
+ * until it returns or throws. Disposers run last-registered first.
  */
 export type RequestDisposer = () => void | Promise<void>
 

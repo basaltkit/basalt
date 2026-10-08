@@ -334,31 +334,48 @@ function toNeutralRequest(request: FastifyRequest): HttpRequest {
 }
 
 /**
- * The sink for the disposers enrichers return: they run once, when the Node
- * response has finished or closed — whichever comes first, and also for a
- * hijacked event stream, a streamed body, an error response or a client that
- * went away. Listeners are attached only when a disposer shows up, so routes
- * without one pay nothing.
+ * The sink for the disposers enrichers return. They run exactly once, when
+ * BOTH the route pipeline (`runRoute`) has settled AND the Node response has
+ * finished or closed — so a client that aborts while the handler is still
+ * running never pulls a resource (a leased database client) out from under
+ * it, and a hijacked event stream or a streamed body that outlives the
+ * handler is still covered until its last byte or its abort. Listeners are
+ * attached only when a disposer shows up, so routes without one pay nothing.
  */
-function disposeOnResponseEnd(
+function disposeAfterResponse(
   reply: FastifyReply,
   onError: (error: unknown) => void,
-): (disposer: RequestDisposer) => void {
+): { onDispose: (disposer: RequestDisposer) => void; settled: () => void } {
   let disposers: RequestDisposers | undefined
-  return (disposer) => {
-    if (!disposers) {
-      disposers = new RequestDisposers(onError)
-      const run = (): void => void disposers!.run()
-      const res = reply.raw
-      // Already over (the client left while an enricher was awaiting): 'close'
-      // has fired and will not again — run now, and add() runs late arrivals.
-      if (res.writableFinished || res.destroyed) run()
-      else {
-        res.once('finish', run)
-        res.once('close', run)
+  let handlerSettled = false
+  let responseEnded = false
+  const runIfDone = (): void => {
+    if (disposers && handlerSettled && responseEnded) void disposers.run()
+  }
+  return {
+    onDispose(disposer) {
+      if (!disposers) {
+        disposers = new RequestDisposers(onError)
+        const res = reply.raw
+        // Already over (the client left while an enricher was awaiting):
+        // 'close' has fired and will not again.
+        if (res.writableFinished || res.destroyed) responseEnded = true
+        else {
+          const ended = (): void => {
+            responseEnded = true
+            runIfDone()
+          }
+          res.once('finish', ended)
+          res.once('close', ended)
+        }
       }
-    }
-    disposers.add(disposer)
+      // After run(), add() disposes a late arrival at once.
+      disposers.add(disposer)
+    },
+    settled() {
+      handlerSettled = true
+      runIfDone()
+    },
   }
 }
 
@@ -371,7 +388,7 @@ function wrapHandler(
 ) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const neutralReply = new FastifyReplyAdapter(reply)
-    const onDispose = disposeOnResponseEnd(reply, (error) => {
+    const disposal = disposeAfterResponse(reply, (error) => {
       try {
         report(onError, error, 500, 'REQUEST_DISPOSER_FAILED', request)
       } catch {
@@ -392,9 +409,9 @@ function wrapHandler(
           ...(container ? { container } : {}),
           enrichers,
           guards,
-          onDispose,
+          onDispose: disposal.onDispose,
         },
-      )
+      ).finally(disposal.settled)
 
       if (isSseResponse(result)) {
         reply.hijack()
