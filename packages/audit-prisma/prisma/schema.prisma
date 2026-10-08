@@ -1,6 +1,7 @@
 // Reference schema for @basaltkit/audit-prisma.
 // Copy this model into your app's schema.prisma, migrate, and pass the client
-// to `prismaAuditStore()`. Append-only by contract.
+// to `prismaAuditStore()`. Append-only by contract (the one in-place change is
+// an attested erasure, `Audit.redact()`).
 
 datasource db {
   provider = "postgresql"
@@ -29,6 +30,10 @@ model AuditEntry {
   seq       Int?
   prevHash  String?
   hash      String?
+  // Attested erasure (Audit.redact): the erased set (stable JSON) and the id of
+  // the `audit:redacted` entry that vouches for it. NULL until a row is redacted.
+  redaction  String?
+  redactedBy String?
 
   @@index([tenantId, at])
   // One writer per (chain, seq): concurrent replicas cannot fork a chain.
