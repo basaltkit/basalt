@@ -1,5 +1,6 @@
 import { definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
 import { HttpError } from './errors.js'
+import { GUARDED_META_BUCKET, RATE_LIMIT_META_KEY } from './guarded-meta.js'
 import type { RouteGuard } from './pipeline.js'
 import type { HttpReply, HttpRequest } from './route.js'
 import { HTTP_SERVER } from './server.js'
@@ -178,9 +179,13 @@ export const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'"
  *
  * The IP itself can be missing too: when the adapter could not resolve
  * `request.ip` (Hono on a runtime without `getClientIp`, a hand-built
- * pipeline), every such request shares ONE bucket, `unknown` — deliberately
- * fail-closed, since the alternative would be a bucket per spoofable header.
- * Resolve the address in the adapter to get per-client buckets back.
+ * pipeline, an MCP tool called over stdio or through `McpServer.callTool`).
+ * The per-route guard then keys the bucket by the caller's identity
+ * (`user:<id>|tenant:<id>`, resolved from `ctx()` like `'user+tenant'`), so
+ * authenticated callers keep separate budgets. Anonymous ip-less requests all
+ * share ONE bucket, `unknown` — deliberately fail-closed, since the
+ * alternative would be a bucket per spoofable header. Resolve the address in
+ * the adapter to get per-client buckets back.
  */
 export type RateLimitKey =
   | 'ip'
@@ -377,12 +382,23 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
         const override = parseRouteRateLimit(route.meta?.['rateLimit'])
         if (!override || rateLimit.skip?.(request)) return
         if (isObject(request.raw) && charged.has(request.raw)) return
-        const bucket = identityKey(override.key, context) ?? clientKey(request)
+        // No IP (and no custom global key): an identified caller still gets
+        // its own bucket; only anonymous ip-less callers share `unknown`.
+        const bucket =
+          identityKey(override.key, context) ??
+          rateLimit.key?.(request) ??
+          request.ip ??
+          identityKey('user+tenant', context) ??
+          'unknown'
         const result = await store.hit(`${bucket}::${route.url}`, override.limit, override.windowMs)
         if (reply) applyRateLimitHeaders(reply, result)
         if (!result.allowed) throw new HttpError(429, RATE_LIMITED.code, RATE_LIMITED.message)
       }
-      ensureMetadata(container).add('http:guards', guard)
+      const metadata = ensureMetadata(container)
+      metadata.add('http:guards', guard)
+      // Claim `meta.rateLimit` so the adapters' boot check knows the budgets
+      // declared on routes are enforced (it warns when nobody claims them).
+      metadata.add(GUARDED_META_BUCKET, RATE_LIMIT_META_KEY)
     },
     boot({ container, hooks }) {
       if (rateLimit && store) {

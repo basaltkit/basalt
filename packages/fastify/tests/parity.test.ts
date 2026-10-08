@@ -13,6 +13,7 @@ import {
   metaValidatorParitySuite,
   routeTableParitySuite,
   rateLimitKeyParitySuite,
+  rateLimitWarningParitySuite,
   rawBodyParitySuite,
   streamParitySuite,
   uploadParitySuite,
@@ -45,6 +46,7 @@ const driver: ParityDriver = {
 uploadParitySuite('fastify', driver)
 rawBodyParitySuite('fastify', driver)
 rateLimitKeyParitySuite('fastify', driver)
+rateLimitWarningParitySuite('fastify', driver)
 errorDetailsParitySuite('fastify', driver)
 streamParitySuite('fastify', driver)
 corsPreflightParitySuite('fastify', driver)

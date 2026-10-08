@@ -78,6 +78,12 @@ response, or `null` for a notification (which by spec gets no reply). Implemente
 Resources and prompts are also only advertised in the `initialize` capabilities when
 present, so a tools-only server is byte-for-byte a classic MCP tool server.
 
+`tools/call` refuses a present-but-non-object `arguments` (array, string, number,
+`null`) with `INVALID_PARAMS` before the tool runs; `prompts/get` also requires its
+`arguments` to be an object of strings. A handler that **throws** produces
+`INTERNAL_ERROR` with the generic text `Internal error` — the original error is
+handed to `options.onError`, never to the client, unless it carries `expose: true`.
+
 `callTool(name, args, ctx?)` invokes a tool directly, bypassing JSON-RPC (handy in tests);
 it throws for an unknown name, where the RPC path returns `INVALID_PARAMS` instead.
 
@@ -164,6 +170,7 @@ always gets through.
 | `resources` | `McpResourceDef[]` | `[]` | Read-only context the agent can pull, keyed by `uri`. Registering any enables `resources/*`. |
 | `prompts` | `McpPromptDef[]` | `[]` | Reusable prompt templates, keyed by `name`. Registering any enables `prompts/*`. |
 | `serverInfo` | `McpServerInfo` (`{ name, version }`) | `{ name: 'basalt-mcp-core', version: '0.1.0' }` | Identity reported in `initialize`. Set it — clients show it to the user. |
+| `onError` | `(error, message) => void` | none | Receives the original error when a tool/resource/prompt throws. The client only gets `INTERNAL_ERROR` with the text `Internal error` (unless the error sets `expose: true`). |
 
 Definition shapes:
 

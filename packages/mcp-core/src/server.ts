@@ -159,6 +159,30 @@ export interface McpServerOptions {
   resources?: McpResourceDef[]
   prompts?: McpPromptDef[]
   serverInfo?: McpServerInfo
+  /**
+   * Called with the original error whenever a request fails unexpectedly
+   * (a tool/resource/prompt threw). The client only ever sees a generic
+   * `Internal error` — unless the error carries `expose: true` — so use this
+   * hook to log the real cause. A throwing `onError` is ignored.
+   */
+  onError?: (error: unknown, message: JsonRpcRequest) => void
+}
+
+/** True for a plain JSON object (`{}`), not an array, null or a primitive. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value) as unknown
+  return proto === Object.prototype || proto === null
+}
+
+/**
+ * The text a client sees for an unexpected failure: generic by default (an
+ * internal message may carry secrets, paths or SQL), the real message only
+ * when the error opts in with `expose: true`.
+ */
+function internalErrorText(error: unknown): string {
+  if (error instanceof Error && (error as { expose?: unknown }).expose === true) return error.message
+  return 'Internal error'
 }
 
 const DEFAULT_SERVER_INFO: McpServerInfo = { name: 'basalt-mcp-core', version: '0.1.0' }
@@ -197,6 +221,7 @@ export class McpServer {
   private readonly prompts: Map<string, McpPromptDef>
   /** True when some tool filters its own listing (`visible`). */
   private readonly hasVisibility: boolean
+  private readonly onError: McpServerOptions['onError']
   /**
    * In-flight tool calls keyed by session, then request id — the target of
    * `notifications/cancelled`. Scoped per session so a cancel from one client
@@ -210,6 +235,7 @@ export class McpServer {
     this.hasVisibility = [...this.tools.values()].some((t) => t.visible !== undefined)
     this.resources = new Map((options.resources ?? []).map((r) => [r.uri, r]))
     this.prompts = new Map((options.prompts ?? []).map((p) => [p.name, p]))
+    this.onError = options.onError
   }
 
   /**
@@ -327,9 +353,15 @@ export class McpServer {
           return this.unknownMethod(id, notification, message.method)
       }
     } catch (error) {
+      if (this.onError) {
+        try {
+          this.onError(error, message)
+        } catch {
+          // A failing error hook must not change the response.
+        }
+      }
       if (notification) return null
-      const messageText = error instanceof Error ? error.message : 'Internal error'
-      return fail(id, RPC_ERRORS.INTERNAL_ERROR, messageText)
+      return fail(id, RPC_ERRORS.INTERNAL_ERROR, internalErrorText(error))
     }
   }
 
@@ -362,7 +394,10 @@ export class McpServer {
     if (!tool) {
       return fail(id, RPC_ERRORS.INVALID_PARAMS, `Unknown tool: ${params.name}`)
     }
-    const args = (params.arguments ?? {}) as Record<string, unknown>
+    if (params.arguments !== undefined && !isPlainObject(params.arguments)) {
+      return fail(id, RPC_ERRORS.INVALID_PARAMS, 'tools/call `arguments` must be an object')
+    }
+    const args = params.arguments ?? {}
     const controller = new AbortController()
     linkSignal(ctx.signal, controller)
     // Per-request cancellation: register under (session, id) so
@@ -432,6 +467,12 @@ export class McpServer {
     const prompt = this.prompts.get(params.name)
     if (!prompt) {
       return fail(id, RPC_ERRORS.INVALID_PARAMS, `Unknown prompt: ${params.name}`)
+    }
+    if (
+      params.arguments !== undefined &&
+      (!isPlainObject(params.arguments) || Object.values(params.arguments).some((v) => typeof v !== 'string'))
+    ) {
+      return fail(id, RPC_ERRORS.INVALID_PARAMS, 'prompts/get `arguments` must be an object of string values')
     }
     const args = (params.arguments ?? {}) as Record<string, string>
     return ok(id, await prompt.get(args))
