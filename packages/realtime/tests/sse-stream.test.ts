@@ -132,4 +132,11 @@ describe('BK-079 · realtimeSse', () => {
     await realtimeSse(hub, { meta: { tenantId: 'acme', id: 'x' }, channels: ['notes'] })(stream)
     expect(hub.count('acme', 'notes')).toBe(0)
   })
+
+  it('returns on a closed stream that does not replay onClose to late listeners', async () => {
+    const hub = new RealtimeHub()
+    const stream: SseStreamLike = { send: () => false, close() {}, onClose() {}, closed: true }
+    await realtimeSse(hub, { meta: { tenantId: 'acme', id: 'y' }, channels: ['notes'] })(stream)
+    expect(hub.count('acme', 'notes')).toBe(0)
+  })
 })
