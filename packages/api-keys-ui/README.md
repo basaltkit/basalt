@@ -78,6 +78,16 @@ non-browser clients and is not copied to `localStorage` by this UI.
 
 Returns the page's HTML as a string — use it directly if you want to serve it your own way (or on another framework).
 
+## Guarding the route
+
+The route always requires a logged-in user (`auth: true`). Pass `meta` to add
+your own guard — or a rate limit, OpenAPI tags — merged into the page route;
+`auth: true` is applied on top and cannot be switched off:
+
+```ts
+apiKeysUiRoutes({ meta: { can: 'apikeys:manage' } })
+```
+
 ## Content-Security-Policy
 
 The route sets a route-scoped CSP by default: everything locked down and the

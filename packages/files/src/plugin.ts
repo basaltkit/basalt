@@ -111,6 +111,12 @@ export interface FileRoutesOptions {
    * see; it runs after authorization, as the calling user.
    */
   present?: (record: FileRecord, user: FileRouteUser) => unknown
+  /**
+   * Extra route metadata merged into every route — a guard such as
+   * `{ can: 'files:read' }`, a rate limit, OpenAPI tags. `auth: true` is
+   * always applied on top and cannot be switched off.
+   */
+  meta?: Record<string, unknown>
 }
 
 /**
@@ -210,6 +216,7 @@ const notFound = { error: { code: 'FILE_NOT_FOUND', message: 'File not found.' }
  */
 export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
   const maxTtlMs = parseDuration(options.maxUrlTtl ?? DEFAULT_MAX_URL_TTL)
+  const meta = { ...options.meta, auth: true }
   const present = (record: FileRecord): unknown =>
     options.present ? options.present(record, currentUser()) : toPublicFile(record)
   // The lifetime used when the client names none, never longer than the cap.
@@ -241,7 +248,7 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/files',
-      meta: { auth: true },
+      meta,
       async handler() {
         currentUser()
         const out: unknown[] = []
@@ -252,7 +259,7 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'GET',
       url: '/files/:id',
-      meta: { auth: true },
+      meta,
       params: z.object({ id: z.string() }),
       async handler({ params, reply }) {
         const record = await reachable(params.id, 'read')
@@ -262,7 +269,7 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: '/files/:id/url',
-      meta: { auth: true },
+      meta,
       params: z.object({ id: z.string() }),
       body: z.object({ expiresIn: expiresIn.optional() }).optional(),
       async handler({ params, body, reply }) {
@@ -273,7 +280,7 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'DELETE',
       url: '/files/:id',
-      meta: { auth: true },
+      meta,
       params: z.object({ id: z.string() }),
       async handler({ params, reply }) {
         if (!(await reachable(params.id, 'delete'))) return reply.code(404).send(notFound)
@@ -288,7 +295,7 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
       route({
         method: 'GET',
         url: '/files/:id/content',
-        meta: { auth: true },
+        meta,
         params: z.object({ id: z.string() }),
         async handler({ params, reply }) {
           // Both gates close before a single byte leaves: `reachable` answers
@@ -319,7 +326,7 @@ export function fileRoutes(options: FileRoutesOptions = {}): BasaltRoute[] {
       route({
         method: 'POST',
         url: '/files',
-        meta: { auth: true },
+        meta,
         body: upload({
           maxBytes: uploads.maxBytes,
           maxFiles: uploads.maxFiles ?? 1,

@@ -49,7 +49,8 @@ export const InvoicePaid = defineNotification({
 `channels` também pode ser uma função `(recipient, data) => string[]` para
 encaminhamento dinâmico. Cada renderer `via.<canal>` devolve a forma de mensagem
 do canal — `{ subject, text?, html? }` para mail, `{ title, body?, data? }` para
-in-app, `{ body }` para sms/whatsapp.
+in-app, `{ body }` para sms/whatsapp. Uma definição pode ainda definir `defaults`
+e `mandatory` por canal — vê [Canais desligados por omissão e obrigatórios](#canais-desligados-por-omissao-e-obrigatorios).
 
 ## Registar e enviar
 
@@ -225,10 +226,98 @@ outros.
 ## Preferências e digests
 
 Para opt-out durável por notificação × canal, adiciona um `PreferenceStore`
-(`notificationsPlugin({ preferences })`) — ganha a regra **mais específica**.
-Para agrupar notificações de baixa prioridade num resumo periódico, junta-as num
-`Digest` e faz `flush()` num agendamento. Vê a
+(`notificationsPlugin({ preferences })`) — ganha a regra **mais específica**. Em
+produção usa uma durável: `sqliteInAppStore(path).preferences` de
+`@basaltkit/notifications-sqlite`, ou `prismaPreferenceStore(prisma)` de
+`@basaltkit/notifications-prisma` (o modelo `NotificationPreference` está no
+schema incluído). Para agrupar notificações de baixa prioridade num resumo
+periódico, junta-as num `Digest` e faz `flush()` num agendamento. Vê a
 [referência do pacote](/reference/packages/notifications) para a API completa.
+
+### Canais desligados por omissão e obrigatórios
+
+Uma definição pode mudar a predefinição por canal, e isentar canais do opt-out:
+
+```ts
+export const WeeklyDigest = defineNotification({
+  name: 'digest.weekly',
+  channels: ['mail', 'sms'],
+  via: { /* … */ },
+  defaults: { sms: false }, // opt-in: só quem ligou o SMS o recebe
+})
+
+export const PasswordChanged = defineNotification({
+  name: 'security.password-changed',
+  channels: ['mail', 'inApp'],
+  via: { /* … */ },
+  mandatory: ['mail'], // não pode ser silenciado
+})
+```
+
+O notifier decide cada canal por esta ordem: um canal `mandatory` é sempre
+enviado; um `channelPreferences: { x: false }` inline silencia-o; senão decide a
+preferência guardada mais específica; depois um `true` inline; e só quando o
+destinatário não disse nada se aplica `defaults[canal]` (por omissão `true`).
+`NotificationPreferences.allowed()` não muda (permite por omissão); o novo
+`preference()` devolve `undefined` quando nada corresponde.
+
+## A caixa in-app
+
+`inAppRoutes()` serve o sino do utilizador **autenticado** — o destinatário é
+sempre a sessão, nunca um parâmetro:
+
+| Rota | O quê |
+| --- | --- |
+| `GET /me/notifications` | Lista (`?unreadOnly`, `?limit` ≤ 100, por omissão 30) |
+| `GET /me/notifications/unread-count` | `{ count }` |
+| `POST /me/notifications/:id/read` | Marca uma como lida (404 para as de outra pessoa) |
+| `POST /me/notifications/read-all` | Marca todas como lidas → `{ marked }` |
+
+```ts
+fastifyPlugin({ routes: [...inAppRoutes({ meta: { rateLimit: { max: 60 } } })] })
+```
+
+O `meta` é fundido em todas as rotas; `auth: true` é sempre aplicado por cima.
+`read-all` marca **todas** as não lidas: numa só instrução numa store com
+`markAllRead` (memória, SQLite, Prisma), ou página a página numa store própria
+mais antiga — antes parava depois das primeiras 100.
+
+### Agrupamento
+
+Dá à mensagem in-app um `groupKey` para fundir repetições numa só linha enquanto
+não for lida — "3 novos comentários no Contrato 12" em vez de três linhas:
+
+```ts
+via: {
+  inApp: (d) => ({ title: `${d.author} comentou`, groupKey: `doc:${d.docId}:comments` }),
+}
+```
+
+O `count` da linha não lida sobe e ela fica com o título, corpo e dados mais
+recentes; depois de lida, a seguinte começa uma linha nova. Requer uma store com
+`upsertGroup` (memória, SQLite, Prisma — o schema Prisma ganhou as colunas
+opcionais `groupKey`/`count`); uma store própria sem ele acrescenta uma linha por
+notificação.
+
+### Retenção
+
+As caixas crescem para sempre se nada as apagar. As stores com `prune` apagam
+linhas lidas mais antigas que `readBefore` e não lidas mais antigas que
+`unreadBefore` (epoch ms, de todos os destinatários). Corre-o no scheduler:
+
+```ts
+schedulerPlugin({
+  define: (schedule) => {
+    schedule.call('notifications:prune', async () => {
+      const day = 86_400_000
+      await app.container.get(IN_APP).prune?.({
+        readBefore: Date.now() - 30 * day,
+        unreadBefore: Date.now() - 180 * day,
+      })
+    }).daily().at('04:00')
+  },
+})
+```
 
 ## Referência de opções
 

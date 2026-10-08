@@ -26,7 +26,22 @@ model InAppNotification {
   data         String?   @db.MediumText
   readAt       DateTime?
   at           DateTime
+  // Grouping (InAppMessage.groupKey): only written when a notification groups.
+  groupKey     String?
+  count        Int?
 
   @@index([recipientId, at])
+  @@index([recipientId, groupKey])
   @@map("in_app_notifications")
+}
+
+// Durable per-user preferences — prismaPreferenceStore(prisma).
+model NotificationPreference {
+  userId       String
+  notification String
+  channel      String
+  enabled      Boolean
+
+  @@id([userId, notification, channel])
+  @@map("notification_preferences")
 }

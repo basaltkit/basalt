@@ -1,4 +1,4 @@
-import type { Comment, CommentPatch, CommentStore } from '@basaltkit/comments'
+import type { Comment, CommentPatch, CommentRevision, CommentStore } from '@basaltkit/comments'
 import {
   assertColumnLengths,
   type ColumnLimits,
@@ -31,6 +31,20 @@ interface PComment {
   resolvedBy: string | null
   editedAt: Date | null
   createdAt: Date
+  /** Absent on a client generated before these columns were added. */
+  anchor?: string | null
+  deletedAt?: Date | null
+  deletedBy?: string | null
+  deleteReason?: string | null
+}
+
+interface PRevision {
+  tenantId: string
+  id: string
+  commentId: string
+  body: string
+  at: Date
+  by: string | null
 }
 
 /**
@@ -46,6 +60,12 @@ export interface PrismaCommentsClient {
     findMany(a: any): Promise<PComment[]>
     create(a: any): Promise<PComment>
     updateMany(a: any): Promise<{ count: number }>
+    deleteMany(a: any): Promise<{ count: number }>
+  }
+  /** Only needed with `revisions: true` (the `CommentRevision` model). */
+  commentRevision?: {
+    create(a: any): Promise<PRevision>
+    findMany(a: any): Promise<PRevision[]>
     deleteMany(a: any): Promise<{ count: number }>
   }
 }
@@ -70,6 +90,10 @@ const toComment = (r: PComment): Comment => {
   if (r.resolvedAt !== null) c.resolvedAt = ms(r.resolvedAt)
   if (r.resolvedBy !== null) c.resolvedBy = r.resolvedBy
   if (r.editedAt !== null) c.editedAt = ms(r.editedAt)
+  if (r.anchor != null) c.anchor = JSON.parse(r.anchor) as Record<string, unknown>
+  if (r.deletedAt != null) c.deletedAt = ms(r.deletedAt)
+  if (r.deletedBy != null) c.deletedBy = r.deletedBy
+  if (r.deleteReason != null) c.deleteReason = r.deleteReason
   return c
 }
 
@@ -83,8 +107,14 @@ export type CommentColumn =
   | 'authorId'
   | 'body'
   | 'resolvedBy'
+  | 'anchor'
+  | 'deletedBy'
+  | 'deleteReason'
 
-export type CommentsColumnLimits = ColumnLimits<{ Comment: CommentColumn }>
+/** The `CommentRevision` columns the store writes as strings. */
+export type CommentRevisionColumn = 'tenantId' | 'id' | 'commentId' | 'body' | 'by'
+
+export type CommentsColumnLimits = ColumnLimits<{ Comment: CommentColumn; CommentRevision: CommentRevisionColumn }>
 
 /**
  * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
@@ -100,6 +130,16 @@ export const commentsMysqlColumnLimits: CommentsColumnLimits = {
     authorId: V,
     body: MYSQL_TEXT,
     resolvedBy: V,
+    anchor: MYSQL_TEXT,
+    deletedBy: V,
+    deleteReason: MYSQL_TEXT,
+  },
+  CommentRevision: {
+    tenantId: V,
+    id: V,
+    commentId: V,
+    body: MYSQL_TEXT,
+    by: V,
   },
 }
 
@@ -139,6 +179,12 @@ export class PrismaCommentStore implements CommentStore {
       resolvedBy: comment.resolvedBy ?? null,
       editedAt: comment.editedAt !== undefined ? at(comment.editedAt) : null,
       createdAt: at(comment.createdAt),
+      // Written only when set, so a schema without these columns keeps working
+      // until the features that need them are used.
+      ...(comment.anchor !== undefined ? { anchor: JSON.stringify(comment.anchor) } : {}),
+      ...(comment.deletedAt !== undefined ? { deletedAt: at(comment.deletedAt) } : {}),
+      ...(comment.deletedBy !== undefined ? { deletedBy: comment.deletedBy } : {}),
+      ...(comment.deleteReason !== undefined ? { deleteReason: comment.deleteReason } : {}),
     }
     assertColumnLengths(PKG, this.limits, 'Comment', data)
     await this.client.comment.create({ data })
@@ -166,6 +212,9 @@ export class PrismaCommentStore implements CommentStore {
     if ('editedAt' in patch) data.editedAt = patch.editedAt !== undefined ? at(patch.editedAt) : null
     if ('resolvedAt' in patch) data.resolvedAt = patch.resolvedAt !== undefined ? at(patch.resolvedAt) : null
     if ('resolvedBy' in patch) data.resolvedBy = patch.resolvedBy ?? null
+    if ('deletedAt' in patch) data.deletedAt = patch.deletedAt !== undefined ? at(patch.deletedAt) : null
+    if ('deletedBy' in patch) data.deletedBy = patch.deletedBy ?? null
+    if ('deleteReason' in patch) data.deleteReason = patch.deleteReason ?? null
     if (Object.keys(data).length > 0) {
       assertColumnLengths(PKG, this.limits, 'Comment', data)
       await this.client.comment.updateMany({ where: { tenantId, id }, data })
@@ -175,6 +224,46 @@ export class PrismaCommentStore implements CommentStore {
 
   async delete(tenantId: string, id: string): Promise<void> {
     await this.client.comment.deleteMany({ where: { tenantId, id } })
+    await this.client.commentRevision?.deleteMany({ where: { tenantId, commentId: id } })
+  }
+
+  async addRevision(revision: CommentRevision): Promise<void> {
+    const data = {
+      tenantId: revision.tenantId,
+      id: revision.id,
+      commentId: revision.commentId,
+      body: revision.body,
+      at: at(revision.at),
+      by: revision.by ?? null,
+    }
+    assertColumnLengths(PKG, this.limits, 'CommentRevision', data)
+    await this.revisionDelegate().create({ data })
+  }
+
+  async revisions(tenantId: string, commentId: string): Promise<CommentRevision[]> {
+    const rows = await this.revisionDelegate().findMany({
+      where: { tenantId, commentId },
+      orderBy: [{ at: 'asc' }, { id: 'asc' }],
+    })
+    return rows.map((r) => ({
+      id: r.id,
+      tenantId: r.tenantId,
+      commentId: r.commentId,
+      body: r.body,
+      at: ms(r.at),
+      ...(r.by !== null ? { by: r.by } : {}),
+    }))
+  }
+
+  private revisionDelegate(): NonNullable<PrismaCommentsClient['commentRevision']> {
+    const delegate = this.client.commentRevision
+    if (!delegate) {
+      throw new Error(
+        `${PKG}: \`revisions: true\` needs the CommentRevision model. Add it to your schema.prisma ` +
+          `(copy from '${PKG}/schema.prisma'), then \`prisma generate\`.`,
+      )
+    }
+    return delegate
   }
 }
 

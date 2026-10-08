@@ -34,25 +34,44 @@ model InAppNotification {
   data         String?
   readAt       DateTime?
   at           DateTime
+  groupKey     String?   // optional: only needed for InAppMessage.groupKey
+  count        Int?
   @@index([recipientId, at])
+  @@index([recipientId, groupKey])
   @@map("in_app_notifications")
+}
+
+// optional: durable preferences — prismaPreferenceStore(prisma)
+model NotificationPreference {
+  userId       String
+  notification String
+  channel      String
+  enabled      Boolean
+  @@id([userId, notification, channel])
+  @@map("notification_preferences")
 }
 ```
 
-Then `prisma migrate dev` and `prisma generate`.
+Then `prisma migrate dev` and `prisma generate`. The `groupKey`/`count` columns
+are written only by grouped notifications, so a schema without them keeps
+working for everything else; add them before using `groupKey`.
 
 ## 2. Wire the store
 
 ```ts
 import { notificationsPlugin } from '@basaltkit/notifications'
-import { prismaInAppStore } from '@basaltkit/notifications-prisma'
+import { prismaInAppStore, prismaPreferenceStore } from '@basaltkit/notifications-prisma'
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
 const n = prismaInAppStore(prisma)   // pass your client directly, no cast
 
-createApp({ plugins: [notificationsPlugin({ inApp: n.store, mailer })] })
+createApp({ plugins: [notificationsPlugin({ inApp: n.store, preferences: prismaPreferenceStore(prisma), mailer })] })
 ```
+
+`PrismaInAppStore` implements the optional `markAllRead` (one `updateMany`),
+`prune` (retention, `deleteMany`) and `upsertGroup` (an atomic `count`
+increment on the unread row of the group, else a create).
 
 ## MySQL
 

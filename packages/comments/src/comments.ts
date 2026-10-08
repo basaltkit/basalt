@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { BasaltError, tryCtx, type HookBus } from '@basaltkit/core'
-import { MemoryCommentStore, type Comment, type CommentPatch, type CommentStore } from './store.js'
+import {
+  MemoryCommentStore,
+  type Comment,
+  type CommentPatch,
+  type CommentRevision,
+  type CommentStore,
+} from './store.js'
 
 export class CommentNotFoundError extends BasaltError {
   readonly status = 404
@@ -68,6 +74,49 @@ export class CommentMentionLimitError extends BasaltError {
   }
 }
 
+/** Editing is refused once `editWindowMs` has passed since the comment was posted. */
+export class CommentEditWindowClosedError extends BasaltError {
+  readonly status = 409
+  constructor() {
+    super('COMMENT_EDIT_WINDOW_CLOSED', 'This comment can no longer be edited.')
+  }
+}
+
+/** `anchor` is not a plain JSON object of at most {@link MAX_ANCHOR_BYTES}. */
+export class CommentAnchorInvalidError extends BasaltError {
+  readonly status = 400
+  constructor(reason: string) {
+    super('COMMENT_ANCHOR_INVALID', `Invalid comment anchor: ${reason}.`)
+  }
+}
+
+/** `revisions: true` was set on a store that cannot keep them. */
+export class CommentRevisionsUnsupportedError extends BasaltError {
+  constructor() {
+    super(
+      'COMMENT_REVISIONS_UNSUPPORTED',
+      '`revisions: true` needs a CommentStore with `addRevision` and `revisions` ' +
+        '(MemoryCommentStore, SqliteCommentStore and PrismaCommentStore have them).',
+    )
+  }
+}
+
+/**
+ * Default `mentionPattern`: `@id` not preceded by a word character, `.`, `+`
+ * or `-`, so the domain of `ana@example.com` is not read as a mention.
+ */
+export const DEFAULT_MENTION_PATTERN = /(?<![\w.+-])@([\w-]+)/g
+
+/**
+ * An explicit, delimited mention syntax — `@{user-id}` — for ids that contain
+ * characters the default pattern stops at (dots, `@`, UUIDs with braces in the
+ * UI). Pass it as `mentionPattern`.
+ */
+export const DELIMITED_MENTION_PATTERN = /@\{([^{}\s]+)\}/g
+
+/** Largest `anchor`, as UTF-8 JSON. */
+export const MAX_ANCHOR_BYTES = 4096
+
 /** Default `maxBodyLength`. */
 export const DEFAULT_MAX_COMMENT_LENGTH = 10_000
 /** Default `maxMentions`. */
@@ -95,7 +144,10 @@ export const SINGLE_TENANT_SCOPE = '@single'
 export interface CommentsOptions {
   store?: CommentStore
   hooks?: HookBus
-  /** Regex whose first capture group is a mentioned user id. Default `@([\w-]+)`. */
+  /**
+   * Regex (with the `g` flag) whose first capture group is a mentioned user id.
+   * Default {@link DEFAULT_MENTION_PATTERN}; see also {@link DELIMITED_MENTION_PATTERN}.
+   */
   mentionPattern?: RegExp
   /** Longest body accepted, in characters. Default {@link DEFAULT_MAX_COMMENT_LENGTH}. */
   maxBodyLength?: number
@@ -113,6 +165,26 @@ export interface CommentsOptions {
    * reaches a real notification channel.
    */
   resolveMentions?: (ids: string[], tenantId: string) => string[] | Promise<string[]>
+  /**
+   * What `remove()` does. `'hard'` (the default) deletes the row. `'soft'`
+   * keeps it with `deletedAt`/`deletedBy`/`deleteReason` set: threads keep
+   * their shape, and `list()`/`tree()` return it as a tombstone (empty body,
+   * no mentions). A soft-deleted comment can no longer be edited, resolved or
+   * reopened.
+   */
+  deletion?: 'hard' | 'soft'
+  /**
+   * How long after posting a comment may still be edited, in ms. Past it
+   * `edit()` throws {@link CommentEditWindowClosedError} (409). Default: no limit.
+   */
+  editWindowMs?: number
+  /**
+   * Keep every previous body: `edit()` records the old one before replacing it,
+   * and `revisions(id)` lists them. Needs a store with `addRevision` and
+   * `revisions`; without them construction throws
+   * {@link CommentRevisionsUnsupportedError}.
+   */
+  revisions?: boolean
   now?: () => number
 }
 
@@ -120,13 +192,40 @@ export interface AddCommentInput {
   authorId: string
   body: string
   parentId?: string
+  /** Where in the resource the comment points (JSON object, at most 4 KB). */
+  anchor?: Record<string, unknown>
 }
+
+/** Who acts, for the hook payloads. Default: `ctx().user.id` when there is one. */
+export interface CommentActorOptions {
+  tenantId?: string
+  actorId?: string
+}
+
+export interface RemoveCommentOptions extends CommentActorOptions {
+  /** Recorded as `deletedBy` on a soft delete. Default: the actor. */
+  by?: string
+  /** Recorded as `deleteReason` on a soft delete. */
+  reason?: string
+}
+
+/** The tenant id (legacy positional argument) or the options object. */
+type TenantOr<T> = string | T | undefined
+
+const asOptions = <T extends CommentActorOptions>(value: TenantOr<T>): T =>
+  (typeof value === 'string' ? { tenantId: value } : (value ?? {})) as T
 
 /** Everything scoped to one resource (`resourceType`:`resourceId`) of a tenant. */
 export interface ResourceComments {
   add(input: AddCommentInput): Promise<Comment>
   list(): Promise<Comment[]>
   tree(): Promise<CommentNode[]>
+}
+
+/** What a soft-deleted comment looks like in a listing: its place, not its content. */
+const tombstone = (comment: Comment): Comment => {
+  if (comment.deletedAt === undefined) return comment
+  return { ...comment, body: '', mentions: [] }
 }
 
 const buildTree = (comments: Comment[]): CommentNode[] => {
@@ -152,6 +251,9 @@ export class Comments {
   private readonly maxBodyLength: number
   private readonly maxMentions: number
   private readonly resolveMentions: CommentsOptions['resolveMentions']
+  private readonly deletion: 'hard' | 'soft'
+  private readonly editWindowMs: number | undefined
+  private readonly keepRevisions: boolean
   private readonly now: () => number
 
   constructor(
@@ -166,10 +268,14 @@ export class Comments {
   ) {
     this.store = options.store ?? new MemoryCommentStore()
     this.hooks = options.hooks
-    this.mentionPattern = options.mentionPattern ?? /@([\w-]+)/g
+    this.mentionPattern = options.mentionPattern ?? DEFAULT_MENTION_PATTERN
     this.maxBodyLength = options.maxBodyLength ?? DEFAULT_MAX_COMMENT_LENGTH
     this.maxMentions = options.maxMentions ?? DEFAULT_MAX_MENTIONS
     this.resolveMentions = options.resolveMentions
+    this.deletion = options.deletion ?? 'hard'
+    this.editWindowMs = options.editWindowMs
+    this.keepRevisions = options.revisions === true
+    if (this.keepRevisions) assertRevisionStore(this.store)
     this.now = options.now ?? Date.now
   }
 
@@ -177,46 +283,95 @@ export class Comments {
     const tenant = this.tenant(tenantId)
     return {
       add: (input) => this.add(tenant, resourceType, resourceId, input),
-      list: () => this.store.list(tenant, resourceType, resourceId),
-      tree: async () => buildTree(await this.store.list(tenant, resourceType, resourceId)),
+      list: async () => (await this.store.list(tenant, resourceType, resourceId)).map(tombstone),
+      tree: async () => buildTree((await this.store.list(tenant, resourceType, resourceId)).map(tombstone)),
     }
   }
 
+  /** One comment as stored — a soft-deleted one included, with its body and `deletedAt`. */
   get(id: string, tenantId?: string): Promise<Comment | null> {
     return this.store.find(this.tenant(tenantId), id)
   }
 
-  async edit(id: string, body: string, tenantId?: string): Promise<Comment> {
-    const tenant = this.tenant(tenantId)
-    if (!(await this.store.find(tenant, id))) throw new CommentNotFoundError()
+  /**
+   * Replaces the body (re-extracting mentions). Refused with 404 for a
+   * soft-deleted comment and with 409 once `editWindowMs` has passed. With
+   * `revisions` on, the previous body is recorded first.
+   */
+  async edit(id: string, body: string, tenantIdOrOptions?: TenantOr<CommentActorOptions>): Promise<Comment> {
+    const options = asOptions(tenantIdOrOptions)
+    const tenant = this.tenant(options.tenantId)
+    const current = await this.store.find(tenant, id)
+    if (!current || current.deletedAt !== undefined) throw new CommentNotFoundError()
+    if (this.editWindowMs !== undefined && this.now() - current.createdAt > this.editWindowMs) {
+      throw new CommentEditWindowClosedError()
+    }
     const mentions = await this.mentions(body, tenant)
-    const updated = await this.store.update(tenant, id, { body, mentions, editedAt: this.now() })
-    await this.hooks?.emit('comment:updated', { comment: updated! })
+    const actorId = actor(options.actorId)
+    const at = this.now()
+    if (this.keepRevisions) {
+      await this.store.addRevision!({
+        id: randomUUID(),
+        tenantId: tenant,
+        commentId: id,
+        body: current.body,
+        at,
+        ...(actorId !== undefined ? { by: actorId } : {}),
+      })
+    }
+    const updated = await this.store.update(tenant, id, { body, mentions, editedAt: at })
+    await this.hooks?.emit('comment:updated', { comment: updated!, ...withActor(actorId) })
     return updated!
   }
 
-  async remove(id: string, tenantId?: string): Promise<void> {
-    const tenant = this.tenant(tenantId)
+  /** A comment's previous bodies, oldest first (`revisions: true`). */
+  async revisions(id: string, tenantId?: string): Promise<CommentRevision[]> {
+    if (!this.keepRevisions) throw new CommentRevisionsUnsupportedError()
+    return this.store.revisions!(this.tenant(tenantId), id)
+  }
+
+  /**
+   * Deletes a comment — or, with `deletion: 'soft'`, marks it deleted
+   * (`deletedAt`, `deletedBy`, `deleteReason`) and keeps it as a tombstone.
+   * A missing or already deleted comment is a no-op.
+   */
+  async remove(id: string, tenantIdOrOptions?: TenantOr<RemoveCommentOptions>): Promise<void> {
+    const options = asOptions(tenantIdOrOptions)
+    const tenant = this.tenant(options.tenantId)
     const comment = await this.store.find(tenant, id)
-    if (!comment) return
-    await this.store.delete(tenant, id)
+    if (!comment || comment.deletedAt !== undefined) return
+    const actorId = actor(options.actorId ?? options.by)
+    const soft = this.deletion === 'soft'
+    if (soft) {
+      const by = options.by ?? actorId
+      await this.store.update(tenant, id, {
+        deletedAt: this.now(),
+        ...(by !== undefined ? { deletedBy: by } : {}),
+        ...(options.reason !== undefined ? { deleteReason: options.reason } : {}),
+      })
+    } else {
+      await this.store.delete(tenant, id)
+    }
     await this.hooks?.emit('comment:deleted', {
       tenantId: tenant,
       id,
       resourceType: comment.resourceType,
       resourceId: comment.resourceId,
+      soft,
+      ...withActor(actorId),
     })
   }
 
   async resolve(id: string, resolvedBy: string, tenantId?: string): Promise<Comment> {
     const comment = await this.mutate(id, { resolvedAt: this.now(), resolvedBy }, tenantId)
-    await this.hooks?.emit('comment:resolved', { comment })
+    await this.hooks?.emit('comment:resolved', { comment, actorId: resolvedBy })
     return comment
   }
 
-  async reopen(id: string, tenantId?: string): Promise<Comment> {
-    const comment = await this.mutate(id, { resolvedAt: undefined, resolvedBy: undefined }, tenantId)
-    await this.hooks?.emit('comment:reopened', { comment })
+  async reopen(id: string, tenantIdOrOptions?: TenantOr<CommentActorOptions>): Promise<Comment> {
+    const options = asOptions(tenantIdOrOptions)
+    const comment = await this.mutate(id, { resolvedAt: undefined, resolvedBy: undefined }, options.tenantId)
+    await this.hooks?.emit('comment:reopened', { comment, ...withActor(actor(options.actorId)) })
     return comment
   }
 
@@ -227,6 +382,7 @@ export class Comments {
     input: AddCommentInput,
   ): Promise<Comment> {
     const mentions = await this.mentions(input.body, tenantId)
+    if (input.anchor !== undefined) assertAnchor(input.anchor)
     if (input.parentId !== undefined) {
       const parent = await this.store.find(tenantId, input.parentId)
       if (!parent || parent.resourceType !== resourceType || parent.resourceId !== resourceId) {
@@ -243,16 +399,20 @@ export class Comments {
       mentions,
       createdAt: this.now(),
       ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
+      ...(input.anchor !== undefined ? { anchor: input.anchor } : {}),
     }
     await this.store.create(comment)
-    await this.hooks?.emit('comment:created', { comment })
-    for (const userId of mentions) await this.hooks?.emit('comment:mentioned', { comment, userId })
+    await this.hooks?.emit('comment:created', { comment, actorId: input.authorId })
+    for (const userId of mentions) {
+      await this.hooks?.emit('comment:mentioned', { comment, userId, actorId: input.authorId })
+    }
     return comment
   }
 
   private async mutate(id: string, patch: CommentPatch, tenantId?: string): Promise<Comment> {
     const tenant = this.tenant(tenantId)
-    if (!(await this.store.find(tenant, id))) throw new CommentNotFoundError()
+    const current = await this.store.find(tenant, id)
+    if (!current || current.deletedAt !== undefined) throw new CommentNotFoundError()
     return (await this.store.update(tenant, id, patch))!
   }
 
@@ -295,6 +455,40 @@ export class Comments {
     return SINGLE_TENANT_SCOPE
   }
 }
+
+/** The acting user: the explicit id, else the request's `ctx().user.id`. */
+function actor(explicit?: string): string | undefined {
+  if (explicit !== undefined) return explicit
+  return (tryCtx()?.['user'] as { id?: string } | undefined)?.id
+}
+
+const withActor = (actorId: string | undefined): { actorId?: string } =>
+  actorId !== undefined ? { actorId } : {}
+
+function assertRevisionStore(store: CommentStore): void {
+  if (typeof store.addRevision !== 'function' || typeof store.revisions !== 'function') {
+    throw new CommentRevisionsUnsupportedError()
+  }
+}
+
+/** A plain JSON object of at most {@link MAX_ANCHOR_BYTES} once encoded. */
+function assertAnchor(anchor: unknown): void {
+  if (typeof anchor !== 'object' || anchor === null || Array.isArray(anchor)) {
+    throw new CommentAnchorInvalidError('it must be a JSON object')
+  }
+  let json: string
+  try {
+    json = JSON.stringify(anchor)
+  } catch {
+    throw new CommentAnchorInvalidError('it must be JSON-serializable')
+  }
+  if (Buffer.byteLength(json, 'utf8') > MAX_ANCHOR_BYTES) {
+    throw new CommentAnchorInvalidError(`it may be at most ${MAX_ANCHOR_BYTES} bytes as JSON`)
+  }
+}
+
+/** Exported for `commentsPlugin`, which checks the store at registration. */
+export { assertRevisionStore }
 
 function assertNotReserved(tenantId: string): string {
   if (tenantId === SINGLE_TENANT_SCOPE) throw new CommentTenantReservedError()

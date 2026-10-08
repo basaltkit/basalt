@@ -199,3 +199,11 @@ describe('fileRoutes — handler branches', () => {
     expect(state.sent).toBe(true)
   })
 })
+
+describe('fileRoutes meta (BK-078)', () => {
+  it('merges extra meta into every route, upload included, and keeps auth on', () => {
+    const routes = fileRoutes({ meta: { can: 'files:read', auth: false }, upload: { maxBytes: 1024 } })
+    expect(routes.length).toBeGreaterThan(4)
+    for (const r of routes) expect(r.meta).toEqual({ can: 'files:read', auth: true })
+  })
+})

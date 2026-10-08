@@ -79,18 +79,20 @@ hooks.on('comment:mentioned', async ({ comment, userId }) => {
 | Route | Description |
 |---|---|
 | `GET /comments?resourceType=&resourceId=` | Comment tree for the resource. |
-| `POST /comments` `{ resourceType, resourceId, body, parentId? }` | Create (or reply). `parentId` must be a comment of the same resource, otherwise 400 `COMMENT_PARENT_NOT_FOUND`. |
+| `POST /comments` `{ resourceType, resourceId, body, parentId?, anchor? }` | Create (or reply). `parentId` must be a comment of the same resource, otherwise 400 `COMMENT_PARENT_NOT_FOUND`. `anchor` is a JSON object (≤ 4 KB). |
 | `PATCH /comments/:id` `{ body }` | Edit — **author only**. |
 | `DELETE /comments/:id` | Delete — **author only**. |
 | `POST /comments/:id/resolve` · `/reopen` | Resolve / reopen the discussion — **author only**. |
 
-Pass `commentRoutes({ authorize: (action, { resourceType, resourceId, comment? }, user) => boolean })` to apply your own per-resource policy (it replaces the default; compose with `defaultCommentPolicy`).
+Pass `commentRoutes({ authorize: (action, { resourceType, resourceId, comment? }, user) => boolean })` to apply your own per-resource policy (it replaces the default; compose with `defaultCommentPolicy`). Throw `CommentNotFoundError` from it to answer 404 instead of 403. `commentRoutes({ meta })` merges extra route meta (e.g. `{ can: 'comments:write' }`) into every route; `auth: true` is always kept.
 
 ## API reference
 
-### `commentsPlugin({ store?, mentionPattern?, maxBodyLength?, maxMentions?, resolveMentions? })`
+### `commentsPlugin({ store?, mentionPattern?, maxBodyLength?, maxMentions?, resolveMentions?, deletion?, editWindowMs?, revisions? })`
 
-Registers the `COMMENTS` token. `mentionPattern` is a regex whose first group is the mentioned id (default `@([\w-]+)`). Bodies are capped at `maxBodyLength` characters (default 10 000) and `maxMentions` distinct mentions (default 50); `resolveMentions(ids, tenantId)` keeps only the ids that may be mentioned (e.g. tenant members).
+Registers the `COMMENTS` token. `mentionPattern` is a `g` regex whose first group is the mentioned id (default `DEFAULT_MENTION_PATTERN`: `@id` not preceded by a word character, `.`, `+` or `-`, so an email's domain is not a mention; `DELIMITED_MENTION_PATTERN` reads `@{id}`). Bodies are capped at `maxBodyLength` characters (default 10 000) and `maxMentions` distinct mentions (default 50); `resolveMentions(ids, tenantId)` keeps only the ids that may be mentioned (e.g. tenant members) — throw from it to reject the comment instead.
+
+Opt-in: `deletion: 'soft'` keeps removed comments as tombstones (`deletedAt`/`deletedBy`/`deleteReason`; `list()`/`tree()` blank the body and mentions); `editWindowMs` refuses edits after the window (`CommentEditWindowClosedError`, 409); `revisions: true` records each previous body (needs a store with `addRevision`/`revisions`, otherwise boot fails with `CommentRevisionsUnsupportedError`).
 
 ### `class Comments`
 
@@ -98,9 +100,10 @@ Registers the `COMMENTS` token. `mentionPattern` is a regex whose first group is
 |---|---|
 | `on(resourceType, resourceId, tenantId?)` | `{ add, list, tree }` for a resource. |
 | `get(id, tenantId?)` | A single comment. |
-| `edit(id, body, tenantId?)` | Edits and re-extracts mentions; emits `comment:updated`. |
-| `remove(id, tenantId?)` | Deletes; emits `comment:deleted`. |
-| `resolve(id, by, tenantId?)` · `reopen(id, tenantId?)` | Emits `comment:resolved` / `comment:reopened`. |
+| `edit(id, body, tenantId? \| { tenantId?, actorId? })` | Edits and re-extracts mentions; emits `comment:updated`. 404 on a soft-deleted comment, 409 past `editWindowMs`. |
+| `remove(id, tenantId? \| { tenantId?, actorId?, by?, reason? })` | Deletes (or soft-deletes); emits `comment:deleted` (`soft: true` for a tombstone). |
+| `resolve(id, by, tenantId?)` · `reopen(id, tenantId? \| { tenantId?, actorId? })` | Emits `comment:resolved` / `comment:reopened`. |
+| `revisions(id, tenantId?)` | Previous bodies, oldest first (`revisions: true`). |
 
 Without `tenantId`, uses `ctx().tenant.id` (otherwise `CommentTenantRequiredError`). Inside a tenant context an explicit `tenantId` must equal it (`CommentTenantMismatchError`, 403). An app without `@basaltkit/tenancy` has no tenant dimension: its comments are keyed by `SINGLE_TENANT_SCOPE` (`'@single'`, a sentinel outside the tenant-id grammar; a tenant carrying it is refused with `CommentTenantReservedError`, `COMMENT_TENANT_RESERVED`, 400).
 
@@ -108,7 +111,7 @@ Without `tenantId`, uses `ctx().tenant.id` (otherwise `CommentTenantRequiredErro
 
 ### Events
 
-`comment:created` · `comment:updated` · `comment:deleted` · `comment:resolved` · `comment:reopened` · `comment:mentioned` (one per mentioned user).
+`comment:created` · `comment:updated` · `comment:deleted` · `comment:resolved` · `comment:reopened` · `comment:mentioned` (one per mentioned user). Every payload carries `actorId` when an actor is known (the author, the resolver, the explicit actor, or `ctx().user.id`).
 
 ## How it connects to other modules
 

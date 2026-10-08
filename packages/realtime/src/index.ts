@@ -11,8 +11,13 @@ export { Realtime, type ChannelTarget } from './realtime.js'
 export {
   sseFrame,
   sseConnection,
+  sseStreamConnection,
+  realtimeSse,
   websocketConnection,
   type ConnectionMeta,
+  type SseStreamLike,
+  type SseStreamConnectionOptions,
+  type RealtimeSseOptions,
   type WebSocketLike,
 } from './transport.js'
 export {
