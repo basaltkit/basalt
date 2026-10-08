@@ -139,7 +139,10 @@ export interface GuardedFetchOptions {
   lookup?: (host: string) => Promise<{ address: string; family?: number }[]>
   /** Injected transport (tests). Production gets the pinned node:http/https client. */
   transport?: GuardedTransport
-  /** Headers sent on every hop unless the caller overrides them. Default `{}`. */
+  /**
+   * Headers sent on every hop unless the caller overrides them. Default `{}`.
+   * Credential headers here are dropped on a cross-host redirect like any other.
+   */
   defaultHeaders?: Record<string, string>
   /**
    * Converts the guard's refusals into the caller's own error type. Applied to
@@ -323,8 +326,10 @@ export function createGuardedFetch(options: GuardedFetchOptions): GuardedFetch {
     let target = rawUrl
     let method = init.method ?? 'GET'
     let body = init.body
-    // Mutable: a redirect to another host must not carry the caller's credentials.
-    let headers: Record<string, string> = { ...init.headers }
+    // Mutable: a redirect to another host must not carry the caller's
+    // credentials. The defaults are merged in up front so a credential placed
+    // in `defaultHeaders` is stripped exactly like one passed per call.
+    let headers: Record<string, string> = { ...options.defaultHeaders, ...init.headers }
 
     for (let hop = 0; ; hop++) {
       const url = parseTarget(target, fail)
@@ -365,7 +370,7 @@ export function createGuardedFetch(options: GuardedFetchOptions): GuardedFetch {
               method: hopMethod,
               // Deliberately no accept-encoding: a body we never inflate cannot
               // be a decompression bomb.
-              headers: { ...options.defaultHeaders, ...hopHeaders },
+              headers: hopHeaders,
               ...(hopBody !== undefined ? { body: hopBody } : {}),
               signal,
               timeoutMs,

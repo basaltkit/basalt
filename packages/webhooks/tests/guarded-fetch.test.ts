@@ -157,6 +157,22 @@ describe('createGuardedFetch', () => {
     expect(seen[1]!.headers).toEqual({ 'x-keep': '1' })
   })
 
+  it('drops a credential set in defaultHeaders on a redirect to another host', async () => {
+    const seen: Seen[] = []
+    const fetch = createGuardedFetch(
+      base({
+        defaultHeaders: { authorization: 'Bearer default', accept: 'application/json' },
+        transport: transportFrom(
+          (url) => (url.hostname === 'api.example.com' ? { status: 302, headers: { location: 'https://cdn.example.com/f' } } : { status: 200, body: 'x' }),
+          seen,
+        ),
+      }),
+    )
+    await (await fetch('https://api.example.com/f')).text()
+    expect(seen[0]!.headers['authorization']).toBe('Bearer default')
+    expect(seen[1]!.headers).toEqual({ accept: 'application/json' })
+  })
+
   it('cuts an oversized body off mid-stream instead of reading it all', async () => {
     let produced = 0
     const endless = new Readable({
