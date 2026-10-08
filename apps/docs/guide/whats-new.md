@@ -58,16 +58,18 @@ key, webhooks that respect a port policy and a fan-out cap, and more. See
 
 ## Since 1.12 (unreleased)
 
-Shipped to `main` after the 1.12 release, all non-breaking:
+Shipped to `main` after the 1.12 release, all opt-in and non-breaking except
+the `@basaltkit/auth-prisma` 3.0 migration and the idempotency defaults below:
 
 - **Idempotency on every adapter.** `idempotencyPlugin` moved from
   `@basaltkit/fastify` into the shared route pipeline in `@basaltkit/http`, so
   Express and Hono get it too (the Fastify import keeps working). Two new
-  options: `fingerprint: 'body'` refuses a reused key carrying a different body
-  with `422 IDEMPOTENCY_KEY_REUSED`, and `replayAfterGuards: true` moves the
+  options: `fingerprint` refuses a reused key carrying a different request
+  with `422 IDEMPOTENCY_KEY_REUSED`, and `replayAfterGuards` moves the
   check after the route guards, so a revoked caller gets `401`/`403` instead of
-  the cached success. Both will become the default in a future major — see
-  [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyplugin).
+  the cached success. `@basaltkit/http` 3 turns both on by default — see
+  [Upgrading: idempotency is strict by default](#idempotency-strict-by-default)
+  and [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyplugin).
 - **Per-route headers.** `meta.headers` sets static response headers (say
   `X-Robots-Tag: noindex` on a public share link) on every response the route
   produces, its guard, validation and handler errors included — see
@@ -110,6 +112,88 @@ Shipped to `main` after the 1.12 release, all non-breaking:
   migration** (`add_api_key_lifecycle`) — see
   [Upgrading to auth-prisma 3.0](/guide/auth#prisma-—-basaltkit-auth-prisma) and
   [API keys](/guide/auth#apikeys-rotation).
+
+### Upgrading: idempotency is strict by default (`@basaltkit/http` 3) {#idempotency-strict-by-default}
+
+`@basaltkit/http` 3.0 flips the two `idempotencyPlugin` defaults that 2.x left
+off. `@basaltkit/fastify`, `@basaltkit/express` and `@basaltkit/hono` move to
+3.0 with it (and `@basaltkit/testing`, whose adapter peer ranges follow); none
+of them changes its own API.
+
+**What changes.**
+
+- A reused `Idempotency-Key` carrying a different request — other route params
+  (`/accounts/2/charge` after `/accounts/1/charge`), another query string or
+  another body — is refused with `422 IDEMPOTENCY_KEY_REUSED` instead of
+  silently receiving the first request's result. The new default
+  `fingerprint: 'request'` binds params, query and body; `'body'` keeps its 2.x
+  meaning (the body only).
+- The check runs after the route guards and request validation
+  (`replayAfterGuards: true`). A caller whose token was revoked, or whose
+  permission was removed, gets the guard's `401`/`403` instead of the cached
+  success; guards run on every replay.
+- A request that fails validation no longer reserves the key: its `400` is not
+  recorded or replayed, and the corrected retry runs.
+
+**Who is affected.**
+
+- Clients that put volatile fields in a retried body or query (timestamps,
+  nonces, cache-busters) now get `422`. Drop those fields with a function
+  fingerprint (below), or send them as headers.
+- Forms that retry an edited submission under the same key now get `422`. A new
+  submission needs a new key.
+- Guards that are expensive or have side effects now run on every retry.
+- A schema tightened between the first attempt and its retry (a deploy adding a
+  required field) now answers the retry `400`, not the replay of the first
+  success. Clients must not read that `400` as "not charged" and resubmit with
+  a new key.
+- A guard-based rate limit ([`meta.rateLimit`](/guide/security#rate-limiting))
+  now counts retries, so a retry storm can get `429` where 2.x replayed the
+  `201`.
+- `upload()` routes bind only params and query (their stream belongs to the
+  handler and is not read); a different file under the same key still
+  replays. Use a function fingerprint to bind more.
+- A `fingerprint` function that returns an object or array is now
+  canonicalized (keys sorted at every level) instead of being hashed as
+  `"[object Object]"` — the same for every object, a latent collision.
+
+**Keeping the 2.x behaviour.** Both options stay supported:
+
+```ts
+idempotencyPlugin({ fingerprint: false, replayAfterGuards: false }) // 2.x defaults
+```
+
+Or one axis at a time: `fingerprint: 'body'` ignores params and query,
+`fingerprint: false` binds nothing, a function binds what you choose (for
+example the body without a `sentAt` field), and `replayAfterGuards: false`
+restores the check before the guards.
+
+**Rolling deploy with a shared `RedisIdempotencyStore`.** A fingerprinted
+reservation is stored as `pending:<fingerprint>`, and with the new default
+every reservation is fingerprinted. `RedisIdempotencyStore` from
+`@basaltkit/fastify` 2.5 or earlier does not understand that value and answers
+a concurrent repeat of the same key with `500`. Move the whole fleet onto the
+last 2.x line (`@basaltkit/http` 2.8 / `@basaltkit/fastify` 2.6) first, then
+deploy 3.0.
+
+**Bump `@basaltkit/http` with the adapter.** All three adapters are 3.0 and
+depend on `@basaltkit/http` 3. Raise your own `@basaltkit/http` range to `^3`
+in the same change, or the app can end up with two copies and the defaults of
+whichever one it imports `idempotencyPlugin` from. `create-basalt update`
+resolves the latest versions for you.
+
+**No data step.** Scope hashes are unchanged, and records stored by 2.x carry
+no fingerprint, so they never mismatch: they keep replaying until they expire.
+The exception is a record that 2.x *did* fingerprint under a mode whose hash
+changes with the upgrade: an app that drops an explicit `fingerprint: 'body'`
+to take the `'request'` default, or a function that returns an object or array.
+A retry that spans the deploy then gets `422`; keep the 2.x option until the
+records have expired (24 h by default) if that matters.
+
+**Custom stores.** No contract change, but a custom `IdempotencyStore` must
+persist `record.fingerprint` for completed records to be refused with `422`. A
+store that drops the fingerprint on the reservation answers a concurrent
+repeat with a different request `409` instead of `422`.
 
 ## Highlights
 

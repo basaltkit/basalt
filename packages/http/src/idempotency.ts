@@ -11,9 +11,9 @@ import { uploadOptionsOf } from './upload.js'
  * Headers that carry caller credentials. Every one present is folded into the
  * replay scope, so a cached response can only be replayed to a caller presenting
  * the exact same credential material (bearer token, session id, session cookie
- * or API key). By default the check runs before route guards, so this is what
- * keeps a stranger who guesses an Idempotency-Key from receiving someone else's
- * response.
+ * or API key). Wherever the check runs (after the guards by default, before
+ * them with `replayAfterGuards: false`), this is what keeps a stranger who
+ * guesses an Idempotency-Key from receiving someone else's response.
  */
 export const DEFAULT_IDEMPOTENCY_CREDENTIAL_HEADERS = ['authorization', 'x-session-id', 'cookie', 'x-api-key'] as const
 
@@ -183,28 +183,35 @@ export interface IdempotencyPluginOptions {
   allowAnonymous?: boolean
   /**
    * Binds a key to the request it was first used with. A repeat of the key
-   * whose fingerprint differs — a different body under the same key, a
+   * whose fingerprint differs — a different request under the same key, a
    * client bug that would otherwise silently receive the FIRST request's
    * result — is refused with `422 IDEMPOTENCY_KEY_REUSED`, also while the
    * first request is still in flight.
    *
-   * - `'body'`: a SHA-256 of the body — canonical JSON (keys sorted) of the
-   *   parsed body, or the exact bytes of a `rawBody()` route. `upload()`
-   *   routes are not fingerprinted by `'body'` (their stream is read by the
-   *   handler); give them a function.
-   * - a function: your own fingerprint (e.g. over a header and the body); its
-   *   result is hashed. Return `undefined` to skip fingerprinting a request.
-   * - `false` (default): keys are not bound to a body (the pre-existing
-   *   behaviour; a future major will default to `'body'`).
+   * - `'request'` (default): a SHA-256 over the route params, the query and
+   *   the body — canonical JSON (keys sorted) of the parsed body, or the exact
+   *   bytes of a `rawBody()` route. The same key on `/accounts/1/charge` and
+   *   then `/accounts/2/charge` is refused even with an identical body.
+   *   `upload()` routes bind only params and query (their stream is read by
+   *   the handler); give them a function to bind more.
+   * - `'body'`: the body only (canonical JSON, or the raw bytes); params and
+   *   query are not bound. `upload()` routes are not fingerprinted.
+   * - a function: your own fingerprint (e.g. over a header and the body). A
+   *   returned object or array is canonicalized first (keys sorted at every
+   *   level, so key order never matters); a string or other primitive is
+   *   hashed by its string form. Return
+   *   `undefined` to skip fingerprinting a request.
+   * - `false`: keys are not bound to a request (the 2.x default).
    */
-  fingerprint?: 'body' | false | ((input: IdempotencyFingerprintInput) => string | undefined)
+  fingerprint?: 'request' | 'body' | false | ((input: IdempotencyFingerprintInput) => unknown)
   /**
    * Run the check after the route's enrichers, guards and request validation,
-   * just before the handler, instead of before the guards. A caller whose
-   * credentials were revoked then gets the guard's `401`/`403` instead of the
-   * cached success, and a request that fails validation is never reserved.
-   * Default `false` (the pre-existing order; a future major will default to
-   * `true`).
+   * just before the handler. A caller whose credentials were revoked gets the
+   * guard's `401`/`403` instead of the cached success, and a request that
+   * fails validation never reserves the key. Default `true`. `false` runs the
+   * check after the enrichers and before the guards (the 2.x order): a revoked
+   * caller presenting the same credential header then receives the cached
+   * success.
    */
   replayAfterGuards?: boolean
 }
@@ -313,8 +320,12 @@ export class IdempotencyStage {
 
   constructor(options: IdempotencyPluginOptions = {}) {
     const fp = options.fingerprint
-    if (fp !== undefined && fp !== false && fp !== 'body' && typeof fp !== 'function') {
-      throw new TypeError(`idempotencyPlugin: fingerprint must be 'body', false or a function (got ${String(fp)})`)
+    if (fp !== undefined && fp !== false && fp !== 'body' && fp !== 'request' && typeof fp !== 'function') {
+      throw new TypeError(`idempotencyPlugin: fingerprint must be 'request', 'body', false or a function (got ${String(fp)})`)
+    }
+    const replayAfterGuards = options.replayAfterGuards
+    if (replayAfterGuards !== undefined && typeof replayAfterGuards !== 'boolean') {
+      throw new TypeError(`idempotencyPlugin: replayAfterGuards must be a boolean (got ${String(replayAfterGuards)})`)
     }
     this.store = options.store ?? new MemoryIdempotencyStore(options.ttlMs)
     this.headerDisplay = options.header ?? 'Idempotency-Key'
@@ -322,8 +333,8 @@ export class IdempotencyStage {
     this.methods = new Set((options.methods ?? ['POST']).map((method) => method.toUpperCase()))
     this.credentialHeaders = (options.credentialHeaders ?? [...DEFAULT_IDEMPOTENCY_CREDENTIAL_HEADERS]).map((name) => name.toLowerCase())
     this.allowAnonymous = options.allowAnonymous === true
-    this.fingerprintMode = fp
-    this.replayAfterGuards = options.replayAfterGuards === true
+    this.fingerprintMode = fp === undefined ? 'request' : fp
+    this.replayAfterGuards = replayAfterGuards !== false
   }
 
   /**
@@ -337,9 +348,11 @@ export class IdempotencyStage {
 
   /**
    * Where the check runs for this route: `'beforeGuards'`, `'beforeHandler'`
-   * or `undefined` (the request is not subject to idempotency). A `rawBody()`
-   * route fingerprinted by `'body'` is always checked before the handler: its
-   * bytes are never read before the guards have passed.
+   * or `undefined` (the request is not subject to idempotency). By default
+   * (`replayAfterGuards`) it is always `'beforeHandler'`. Under
+   * `replayAfterGuards: false`, a `rawBody()` route fingerprinted by
+   * `'request'` or `'body'` is still checked before the handler: its bytes
+   * are never read before the guards have passed.
    */
   placement(route: BasaltRoute, request: HttpRequest): 'beforeGuards' | 'beforeHandler' | undefined {
     if (!this.methods.has(request.method.toUpperCase())) return undefined
@@ -347,7 +360,7 @@ export class IdempotencyStage {
     const key = Array.isArray(raw) ? raw[0] : raw
     if (!key) return undefined
     if (this.replayAfterGuards) return 'beforeHandler'
-    if (this.fingerprintMode === 'body' && rawBodyOptionsOf(route.body)) return 'beforeHandler'
+    if ((this.fingerprintMode === 'body' || this.fingerprintMode === 'request') && rawBodyOptionsOf(route.body)) return 'beforeHandler'
     return 'beforeGuards'
   }
 
@@ -356,11 +369,27 @@ export class IdempotencyStage {
     if (!mode) return undefined
     if (typeof mode === 'function') {
       const value = mode({ route, request })
-      return value === undefined ? undefined : sha256(String(value))
+      // An object or array is canonicalized so key order never matters (it used
+      // to collapse to "[object Object]"); any other value (string, number,
+      // boolean, bigint, null) is hashed as its string form, exactly as in 2.x.
+      if (value === undefined) return undefined
+      return sha256(value !== null && typeof value === 'object' ? canonicalJson(value) : String(value))
     }
-    if (uploadOptionsOf(route.body)) return undefined
-    if (rawBodyOptionsOf(route.body)) return rawBytes === undefined ? undefined : sha256(rawBytes)
-    return sha256(canonicalJson(request.body))
+    if (mode === 'body') {
+      if (uploadOptionsOf(route.body)) return undefined
+      if (rawBodyOptionsOf(route.body)) return rawBytes === undefined ? undefined : sha256(rawBytes)
+      return sha256(canonicalJson(request.body))
+    }
+    // 'request': bind the key to the route params and query as well as the
+    // body, so the same key on another resource (`/accounts/2` after
+    // `/accounts/1`) or with another query string is a different request. The
+    // scope hashes the route pattern, not the concrete path, so this is where
+    // the concrete request is bound.
+    let bodyPart: string
+    if (uploadOptionsOf(route.body)) bodyPart = '' // the stream is the handler's; bind params + query only
+    else if (rawBodyOptionsOf(route.body)) bodyPart = rawBytes === undefined ? '' : sha256(rawBytes)
+    else bodyPart = canonicalJson(request.body)
+    return sha256(`${canonicalJson({ params: request.params ?? {}, query: request.query ?? {} })}\n${bodyPart}`)
   }
 
   /**
@@ -384,9 +413,10 @@ export class IdempotencyStage {
     }
     // Scope by the caller's full credential material and tenant so an
     // Idempotency-Key can never replay one user's cached response to another.
-    // Before the guards an anonymous request has no identity to scope by: skip
-    // it unless explicitly allowed. (The scope is the one the Fastify-only
-    // plugin used, so records it stored keep replaying.)
+    // The scope is built from headers wherever the check runs, so an anonymous
+    // request has no identity to scope by: skip it unless explicitly allowed.
+    // (The scope is the one the Fastify-only plugin used, so records it stored
+    // keep replaying.)
     const principal = principalOf(request, this.credentialHeaders)
     if (!principal && !this.allowAnonymous) return undefined
     const tenant = TENANT_HEADERS.map((name) => headerValue(request, name))
@@ -485,16 +515,17 @@ export function idempotencyStageOf(container: Container | undefined): Idempotenc
  * duplicate twice.
  *
  * - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
- * - With `fingerprint`, a repeat carrying a different request →
- *   `422 IDEMPOTENCY_KEY_REUSED` (in flight or completed).
+ * - By default a repeat carrying a different request (route params, query or
+ *   body) → `422 IDEMPOTENCY_KEY_REUSED` (in flight or completed);
+ *   `fingerprint: false` turns that off.
  * - Responses `>= 500`, streams and event streams are not cached, so genuine
  *   failures stay retryable.
  * - Keys are scoped by caller credentials (`credentialHeaders`), tenant
  *   (`x-tenant-id`, `host`), method and route, and stored as a SHA-256 hash.
  * - Requests without credentials are not cached unless `allowAnonymous: true`.
  * - Keys longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`.
- * - By default the check runs before the route guards; `replayAfterGuards`
- *   moves it after them.
+ * - By default the check runs after the route guards and request validation;
+ *   `replayAfterGuards: false` restores the 2.x order (before the guards).
  *
  * It covers the routes Basalt serves (`route()` definitions on any adapter),
  * not handlers registered on the underlying framework by hand.

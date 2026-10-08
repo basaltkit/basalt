@@ -15,7 +15,7 @@ linha liga ao guia que traz a tabela de opções completa; nada aqui repete uma.
       global é chaveado só pelo endereço; uma API pública para clientes máquina
       recebe `rateLimit.prefixes` e orçamentos por chave. Vê [Rate limiting](/pt/guide/security#rate-limiting).
 - [ ] **Logins são limitados** — ligado por predefinição em `@basaltkit/auth`.
-- [ ] **Mutações são idempotentes** — `idempotencyPlugin()` para `POST`.
+- [ ] **Mutações são idempotentes** — `idempotencyPlugin()` para `POST` (associa as chaves ao pedido e repete só depois dos guards, por omissão).
 - [ ] **A app arranca a frio com a configuração de produção** — as guardas de boot
       abaixo só disparam quando chamas mesmo `boot()`.
 - [ ] **Sondas de saúde ligadas** — `healthPlugin({ checks })` para `/livez` + `/readyz`.
