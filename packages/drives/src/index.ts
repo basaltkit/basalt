@@ -18,6 +18,8 @@ export {
   DriveSecretMalformedError,
   DriveSecretKeyUnknownError,
   DriveSecretKeyInvalidError,
+  providerMessageOf,
+  type DriveProviderErrorOptions,
 } from './errors.js'
 
 export {
