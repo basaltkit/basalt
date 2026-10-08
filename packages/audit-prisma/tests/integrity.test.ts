@@ -188,4 +188,17 @@ describe('PrismaAuditStore — keyed chain across a key rotation', () => {
     expect(client.rows[1]!.hash).toMatch(/^v2:hmac-sha256:b:[0-9a-f]{64}$/)
     expect(await rotated.verify()).toMatchObject({ ok: true, checked: 2 })
   })
+
+  it('fieldPolicies: omitted and pseudonymized values never reach the client, and the chain verifies', async () => {
+    const client = fakeClient()
+    const audit = new Audit(new PrismaAuditStore(client), undefined, undefined, {
+      integrity: 'hash-chain',
+      fieldPolicies: { 'customer.created': { omit: ['notes'], pseudonymize: ['email'] } },
+      fieldPolicyKey: 'k'.repeat(32),
+    })
+    await audit.record('customer.created', { id: 'c1', email: 'ana@example.com', notes: 'allergic to peanuts' })
+    expect(JSON.stringify(client.creates)).not.toMatch(/peanuts|ana@example\.com/)
+    expect(JSON.parse(client.rows[0]!.payload!)).toEqual({ id: 'c1', email: expect.stringMatching(/^pii_[0-9a-f]{32}$/) })
+    expect(await audit.verify()).toMatchObject({ ok: true, checked: 1 })
+  })
 })

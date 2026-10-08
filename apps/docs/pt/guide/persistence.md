@@ -274,6 +274,44 @@ tem o SQL). Depois, faz a base de dados impor também o append-only:
 REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
 ```
 
+#### Dados pessoais por evento (`fieldPolicies`)
+
+O trilho é append-only e a cadeia de hashes cobre cada payload, por isso um
+valor que lá chegue não pode ser apagado depois sem partir o `verify`. Mantém os
+dados pessoais de fora no momento da escrita. Os redactors trabalham sobre nomes
+de chaves e formatos de valores (`password`, uma string com cara de email); não
+sabem que as `notes` de um evento são dados de saúde. Declara isso por evento:
+
+```ts
+auditPlugin({
+  integrity: 'hash-chain',
+  fieldPolicies: {
+    'customer.created': { omit: ['notes', 'address.street'], pseudonymize: ['email', 'fullName'] },
+    'order.placed': { pseudonymize: ['items[].buyer.phone'] },
+  },
+  fieldPolicyKey: process.env.AUDIT_PII_KEY!, // >= 128 bits
+})
+```
+
+- As chaves são nomes exatos de eventos ou hooks (sem wildcards). Os caminhos usam
+  pontos; os arrays são percorridos de forma transparente, e `items[].x` torna-o
+  explícito.
+- `omit` remove o campo. `pseudonymize` substitui cada escalar sob ele por um
+  pseudónimo HMAC com chave (`pii_<hex>`), para as entradas continuarem
+  correlacionáveis. Um caminho presente em ambos é omitido.
+- A política corre em `record()`, nos hooks e eventos capturados, **antes** do
+  redactor e antes do hash, sobre uma cópia (o teu objeto nunca é alterado).
+- Usa a mesma chave que `createPiiMinimizingRedactor({ key })` para obter os
+  mesmos pseudónimos. Sem `fieldPolicyKey` é usada uma chave aleatória por
+  processo e é registado um aviso uma vez.
+- As políticas são validadas na configuração: uma opção desconhecida, um segmento
+  vazio ou de protótipo (`__proto__`, `constructor`), ou um caminho com mais de 8
+  segmentos lança um `TypeError`.
+
+Apagar um valor que já está na cadeia (um pedido de "direito ao apagamento")
+ainda não é suportado; exige um formato de cadeia que faça hash de um digest do
+payload, planeado como um RFC à parte.
+
 #### Registar fora de um pedido (jobs, scripts)
 
 Uma entrada recebe o `actorId` e o `tenantId` do contexto ativo. Fora de um
