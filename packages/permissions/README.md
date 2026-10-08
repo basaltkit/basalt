@@ -176,6 +176,8 @@ Fix it by registering the check, correcting the `resource:action` spelling, or d
 
 **The match is exact.** Only the policy's *own* actions count (`project:constructor` / `project:toString` are missing policies, never `Object.prototype`), only a two-segment `resource:action` selects a check (`project:update:billing` is not decided by `update`), and a check authorizes only when it returns `true`. `can()` refuses a permission that is not a non-empty string without whitespace (`TypeError`); a user without a non-empty string `id` makes `can`/`authorize`/`hasRole` throw `AuthRequiredGuardError` (401).
 
+**Policies decide one object, not a list.** Filtering a query's rows through `gate.can()` afterwards gives short pages and a wrong `total`. For listings, write one access predicate per resource (a Prisma `where`) used by both `findMany` and `count`, and keep the policy for single objects. See [Policies decide one object, not a list](https://basaltkit.dev/guide/authorization#policies-decide-one-object-not-a-list).
+
 ### Super admin
 
 A function that, when it returns `true` for a user, authorizes everything (equivalent to Laravel's `Gate::before`):

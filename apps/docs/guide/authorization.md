@@ -144,6 +144,65 @@ non-empty string `id` is unauthenticated: `can`/`authorize`/`hasRole` throw
 `AuthRequiredGuardError` (401) rather than evaluating — or crashing on — an
 anonymous caller.
 
+### Policies decide one object, not a list
+
+A policy answers a yes/no question about **one loaded object**. It cannot
+answer "which rows may this user see?". Running it over the rows *after* the
+query looks right on small data and is wrong as soon as the query is paged or
+aggregated:
+
+- pages come back short (20 rows fetched, 7 survive the filter);
+- `total` counts rows the user cannot see, and so do facets and `groupBy` counts;
+- with a cursor, the rows filtered out of one page are never shown, and the next
+  page starts after them;
+- `count` and `findMany` disagree, so the UI shows "42 results" over 3 rows.
+
+The listing needs an **access predicate** that the database applies. Write it
+once per resource, from one module, and use it for every query that lists or
+counts that resource:
+
+```ts
+// documents/access.ts: the single source of the "who sees which document" rule
+const isAdmin = (user: { roles?: unknown }) => Array.isArray(user.roles) && user.roles.includes('admin')
+
+export function documentAccessWhere(user: { id: string; roles?: unknown }) {
+  if (isAdmin(user)) return {}
+  return { OR: [{ ownerId: user.id }, { shares: { some: { userId: user.id } } }] }
+}
+
+export const DocumentPolicy = definePolicy<Document>('document', {
+  // The same rule, for one object (meta.can resource requirements, gate.can).
+  read: (user, doc) =>
+    isAdmin(user) || doc.ownerId === user.id || doc.shares.some((s) => s.userId === user.id),
+})
+
+// documents/repository.ts
+export async function listDocuments(user: AppUser, filter: Prisma.DocumentWhereInput, page: Page) {
+  const where = { AND: [documentAccessWhere(user), filter] } // one object, reused below
+  const [rows, total] = await Promise.all([
+    prisma.document.findMany({ where, ...page }),
+    prisma.document.count({ where }),
+  ])
+  return { rows, total }
+}
+```
+
+- Compose the predicate with `AND` into `findMany`, `count`, `groupBy`,
+  `aggregate` and autocomplete queries. Build the `where` once and pass the
+  **same object** to `count` and `findMany`.
+- Keep `definePolicy` for the single-object decision (a route's
+  [resource requirement](#policies-in-the-guard-resource-requirements), a
+  `gate.can(user, 'document:read', doc)` in a handler) and write it as the same
+  rule as the predicate, so a list and a detail page never disagree.
+- Test `total` and the facet counts, not only the rows: that is where a
+  post-filter shows up.
+- The tenant scope is separate. `@basaltkit/prisma`'s tenancy extension adds the
+  tenant to every query; the access predicate narrows further within the tenant.
+- For full-text search hits, the framework already has the hook:
+  `@basaltkit/search`'s [`authorize`](/guide/search#who-may-see-a-hit) runs
+  your policy on the hits, keeps asking the driver until the page is full, and
+  reports through `totalExact` whether `total` can be shown.
+
 ## Protect routes
 
 Register `permissionsPlugin` and declare the permission a route needs with `meta.can` —
