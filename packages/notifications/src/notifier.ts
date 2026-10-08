@@ -86,11 +86,7 @@ export class Notifier {
 
     const report: DeliveryReport = { sent: [], failed: [], skipped: [] }
     for (const channelName of requested) {
-      if (recipient.channelPreferences?.[channelName] === false) {
-        report.skipped.push(channelName)
-        continue
-      }
-      if (this.preferences && !(await this.preferences.allowed(recipient.id, definition.name, channelName))) {
+      if (!(await this.wanted(recipient, definition, channelName))) {
         report.skipped.push(channelName)
         continue
       }
@@ -121,6 +117,25 @@ export class Notifier {
       }
     }
     return report
+  }
+
+  /**
+   * Whether the recipient gets `channel` for this notification. A mandatory
+   * channel always does. Otherwise an inline `channelPreferences: false` mutes
+   * it, then the most specific stored preference decides, then an inline
+   * `true`, and only when the recipient stated nothing does the definition's
+   * `defaults[channel]` (default `true`) apply.
+   */
+  private async wanted<T>(recipient: Notifiable, definition: NotificationDefinition<T>, channel: string): Promise<boolean> {
+    if (definition.mandatory?.includes(channel)) return true
+    const inline = recipient.channelPreferences?.[channel]
+    if (inline === false) return false
+    const stored = this.preferences
+      ? await this.preferences.preference(recipient.id, definition.name, channel)
+      : undefined
+    if (stored !== undefined) return stored
+    if (inline === true) return true
+    return definition.defaults?.[channel] ?? true
   }
 
   async notifyMany<T>(

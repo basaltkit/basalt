@@ -47,7 +47,8 @@ export const InvoicePaid = defineNotification({
 `channels` may also be a function `(recipient, data) => string[]` for dynamic
 routing. Each `via.<channel>` renderer returns the channel's message shape —
 `{ subject, text?, html? }` for mail, `{ title, body?, data? }` for in-app,
-`{ body }` for sms/whatsapp.
+`{ body }` for sms/whatsapp. A definition may also set `defaults` and
+`mandatory` per channel — see [Default-off and mandatory channels](#default-off-and-mandatory-channels).
 
 ## Register and send
 
@@ -219,10 +220,99 @@ recipient with no phone number surfaces in `failed` without blocking the others.
 ## Preferences & digests
 
 For durable, per-notification × channel opt-out, add a `PreferenceStore`
-(`notificationsPlugin({ preferences })`) — the **most-specific** rule wins. To
-batch low-priority notifications into a periodic summary, collect them into a
-`Digest` and `flush()` on a schedule. See the
+(`notificationsPlugin({ preferences })`) — the **most-specific** rule wins. In
+production use a durable one: `sqliteInAppStore(path).preferences` from
+`@basaltkit/notifications-sqlite`, or `prismaPreferenceStore(prisma)` from
+`@basaltkit/notifications-prisma` (the `NotificationPreference` model is in its
+bundled schema). To batch low-priority notifications into a periodic summary,
+collect them into a `Digest` and `flush()` on a schedule. See the
 [package reference](/reference/packages/notifications) for the full API.
+
+### Default-off and mandatory channels
+
+A definition can change the default per channel, and exempt channels from
+opting out:
+
+```ts
+export const WeeklyDigest = defineNotification({
+  name: 'digest.weekly',
+  channels: ['mail', 'sms'],
+  via: { /* … */ },
+  defaults: { sms: false }, // opt-in: only users who turned SMS on get it
+})
+
+export const PasswordChanged = defineNotification({
+  name: 'security.password-changed',
+  channels: ['mail', 'inApp'],
+  via: { /* … */ },
+  mandatory: ['mail'], // cannot be silenced
+})
+```
+
+The notifier decides each channel in this order: a `mandatory` channel is always
+sent; an inline `channelPreferences: { x: false }` mutes it; otherwise the most
+specific stored preference decides; then an inline `true`; and only when the
+recipient stated nothing does `defaults[channel]` (default `true`) apply.
+`NotificationPreferences.allowed()` is unchanged (default allow); the new
+`preference()` returns `undefined` when nothing matches.
+
+## The in-app inbox
+
+`inAppRoutes()` serves the bell for the **signed-in** user — the recipient is
+always the session, never a parameter:
+
+| Route | What |
+| --- | --- |
+| `GET /me/notifications` | List (`?unreadOnly`, `?limit` ≤ 100, default 30) |
+| `GET /me/notifications/unread-count` | `{ count }` |
+| `POST /me/notifications/:id/read` | Mark one read (404 for anyone else's) |
+| `POST /me/notifications/read-all` | Mark all read → `{ marked }` |
+
+```ts
+fastifyPlugin({ routes: [...inAppRoutes({ meta: { rateLimit: { max: 60 } } })] })
+```
+
+`meta` is merged into every route; `auth: true` is always applied on top.
+`read-all` marks **every** unread notification: in one statement on a store
+with `markAllRead` (memory, SQLite, Prisma), or page by page on an older custom
+store — it used to stop after the first 100.
+
+### Grouping
+
+Give the in-app message a `groupKey` to collapse repeats into one row while it
+is unread — "3 new comments on Contract 12" instead of three rows:
+
+```ts
+via: {
+  inApp: (d) => ({ title: `${d.author} commented`, groupKey: `doc:${d.docId}:comments` }),
+}
+```
+
+The unread row's `count` goes up and it takes the latest title, body and data;
+once it is read, the next one starts a new row. Needs a store with
+`upsertGroup` (memory, SQLite, Prisma — the Prisma schema gained the optional
+`groupKey`/`count` columns); a custom store without it appends a row per
+notification.
+
+### Retention
+
+Inboxes grow forever unless something deletes them. Stores with `prune` delete
+read rows older than `readBefore` and unread rows older than `unreadBefore`
+(epoch ms, across all recipients). Run it from the scheduler:
+
+```ts
+schedulerPlugin({
+  define: (schedule) => {
+    schedule.call('notifications:prune', async () => {
+      const day = 86_400_000
+      await app.container.get(IN_APP).prune?.({
+        readBefore: Date.now() - 30 * day,
+        unreadBefore: Date.now() - 180 * day,
+      })
+    }).daily().at('04:00')
+  },
+})
+```
 
 ## Options reference
 

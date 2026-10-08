@@ -4,7 +4,7 @@
 const sqliteSpecifier = 'node:sqlite'
 const { DatabaseSync } = (await import(sqliteSpecifier)) as typeof import('node:sqlite')
 type DatabaseSync = InstanceType<typeof DatabaseSync>
-import type { Comment, CommentPatch, CommentStore } from '@basaltkit/comments'
+import type { Comment, CommentPatch, CommentRevision, CommentStore } from '@basaltkit/comments'
 
 /**
  * Durable, SQLite-backed implementation of the `@basaltkit/comments`
@@ -47,7 +47,30 @@ export function migrate(db: DatabaseSync): void {
       PRIMARY KEY (tenant_id, id)
     );
     CREATE INDEX IF NOT EXISTS idx_comments_resource ON comments (tenant_id, resource_type, resource_id);
+    CREATE TABLE IF NOT EXISTS comment_revisions (
+      tenant_id  TEXT NOT NULL,
+      id         TEXT NOT NULL,
+      comment_id TEXT NOT NULL,
+      body       TEXT NOT NULL,
+      at         INTEGER NOT NULL,
+      by         TEXT,
+      PRIMARY KEY (tenant_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_comment_revisions ON comment_revisions (tenant_id, comment_id, at);
   `)
+  // Columns added after the table first shipped: a database created by an
+  // older version gets them here, so upgrading needs no manual step.
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(comments)').all() as unknown as { name: string }[]).map((c) => c.name),
+  )
+  for (const [name, type] of [
+    ['anchor', 'TEXT'],
+    ['deleted_at', 'INTEGER'],
+    ['deleted_by', 'TEXT'],
+    ['delete_reason', 'TEXT'],
+  ] as const) {
+    if (!columns.has(name)) db.exec(`ALTER TABLE comments ADD COLUMN ${name} ${type}`)
+  }
 }
 
 interface CommentRow {
@@ -63,6 +86,10 @@ interface CommentRow {
   resolved_by: string | null
   edited_at: number | null
   created_at: number
+  anchor: string | null
+  deleted_at: number | null
+  deleted_by: string | null
+  delete_reason: string | null
 }
 
 const toComment = (r: CommentRow): Comment => {
@@ -80,6 +107,10 @@ const toComment = (r: CommentRow): Comment => {
   if (r.resolved_at !== null) c.resolvedAt = r.resolved_at
   if (r.resolved_by !== null) c.resolvedBy = r.resolved_by
   if (r.edited_at !== null) c.editedAt = r.edited_at
+  if (r.anchor !== null) c.anchor = JSON.parse(r.anchor) as Record<string, unknown>
+  if (r.deleted_at !== null) c.deletedAt = r.deleted_at
+  if (r.deleted_by !== null) c.deletedBy = r.deleted_by
+  if (r.delete_reason !== null) c.deleteReason = r.delete_reason
   return c
 }
 
@@ -90,8 +121,9 @@ export class SqliteCommentStore implements CommentStore {
     this.db
       .prepare(
         `INSERT INTO comments
-           (tenant_id, id, resource_type, resource_id, parent_id, author_id, body, mentions, resolved_at, resolved_by, edited_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (tenant_id, id, resource_type, resource_id, parent_id, author_id, body, mentions, resolved_at, resolved_by, edited_at, created_at,
+            anchor, deleted_at, deleted_by, delete_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         comment.tenantId,
@@ -106,6 +138,10 @@ export class SqliteCommentStore implements CommentStore {
         orNull(comment.resolvedBy),
         orNull(comment.editedAt),
         comment.createdAt,
+        comment.anchor === undefined ? null : JSON.stringify(comment.anchor),
+        orNull(comment.deletedAt),
+        orNull(comment.deletedBy),
+        orNull(comment.deleteReason),
       )
   }
 
@@ -150,6 +186,18 @@ export class SqliteCommentStore implements CommentStore {
       sets.push('resolved_by = ?')
       args.push(orNull(patch.resolvedBy))
     }
+    if ('deletedAt' in patch) {
+      sets.push('deleted_at = ?')
+      args.push(orNull(patch.deletedAt))
+    }
+    if ('deletedBy' in patch) {
+      sets.push('deleted_by = ?')
+      args.push(orNull(patch.deletedBy))
+    }
+    if ('deleteReason' in patch) {
+      sets.push('delete_reason = ?')
+      args.push(orNull(patch.deleteReason))
+    }
     if (sets.length > 0) {
       args.push(tenantId, id)
       this.db.prepare(`UPDATE comments SET ${sets.join(', ')} WHERE tenant_id = ? AND id = ?`).run(...args)
@@ -159,6 +207,34 @@ export class SqliteCommentStore implements CommentStore {
 
   async delete(tenantId: string, id: string): Promise<void> {
     this.db.prepare('DELETE FROM comments WHERE tenant_id = ? AND id = ?').run(tenantId, id)
+    this.db.prepare('DELETE FROM comment_revisions WHERE tenant_id = ? AND comment_id = ?').run(tenantId, id)
+  }
+
+  async addRevision(revision: CommentRevision): Promise<void> {
+    this.db
+      .prepare('INSERT INTO comment_revisions (tenant_id, id, comment_id, body, at, by) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(revision.tenantId, revision.id, revision.commentId, revision.body, revision.at, orNull(revision.by))
+  }
+
+  async revisions(tenantId: string, commentId: string): Promise<CommentRevision[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM comment_revisions WHERE tenant_id = ? AND comment_id = ? ORDER BY at, rowid')
+      .all(tenantId, commentId) as unknown as {
+      tenant_id: string
+      id: string
+      comment_id: string
+      body: string
+      at: number
+      by: string | null
+    }[]
+    return rows.map((r) => ({
+      id: r.id,
+      tenantId: r.tenant_id,
+      commentId: r.comment_id,
+      body: r.body,
+      at: r.at,
+      ...(r.by !== null ? { by: r.by } : {}),
+    }))
   }
 }
 

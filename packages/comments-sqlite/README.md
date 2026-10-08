@@ -47,7 +47,10 @@ a handle with the other `*-sqlite` stores. `openCommentsDatabase()` and
   threads list oldest-first, exactly as in the in-memory store.
 - **Resolve/reopen** is faithful: a patch key present with `undefined` clears the
   column (reopen), an absent key is left untouched.
-- `mentions` are stored as JSON and round-trip unchanged.
+- `mentions` are stored as JSON and round-trip unchanged; so is `anchor`.
+- Soft delete (`deleted_at`, `deleted_by`, `delete_reason`) and revisions
+  (`comment_revisions` table) are supported; `migrate()` adds the new columns
+  to a database created by an older version.
 - `node:sqlite` is synchronous; the methods stay `async` to honor the contract.
 
 ## License

@@ -42,7 +42,7 @@ const app = await createApp({
 }).boot()
 ```
 
-Open **`/team/ui`** (authenticated as a team admin) to manage invitations and members.
+Open **`/team/ui`** (authenticated) to manage invitations and members. The page itself only requires a logged-in user; guard it with `meta` (below).
 
 ## Tenancy and authentication
 
@@ -52,13 +52,17 @@ The page performs same-origin `fetch` calls, so it assumes the browser session i
 teamsUiRoutes({ headers: { 'x-tenant-id': 'acme' } })
 ```
 
-Management actions (invite, change role, remove) require `teamRole: 'admin'` on the `@basaltkit/teams` routes — protect the page itself with an admin guard if you want.
+Management actions (invite, change role, remove) require `teamRole: 'admin'` on the `@basaltkit/teams` routes. To restrict the page itself, pass `meta` — merged into the route, with `auth: true` always applied on top:
+
+```ts
+teamsUiRoutes({ meta: { teamRole: 'admin' } }) // or { can: 'team:manage' } with @basaltkit/permissions
+```
 
 ## API reference
 
-### `teamsUiRoutes({ path?, apiBase?, title?, roles?, headers? })`
+### `teamsUiRoutes({ path?, apiBase?, title?, roles?, headers?, csp?, meta? })`
 
-Returns the route that serves the page. `path` (default `/team/ui`), `apiBase` (default same-origin), `title`, `roles` (default `owner`/`admin`/`member`), `headers` (extra per request).
+Returns the route that serves the page. `path` (default `/team/ui`), `apiBase` (default same-origin), `title`, `roles` (default `owner`/`admin`/`member`), `headers` (extra per request), `csp` (see below), `meta` (extra route metadata such as a guard; `auth: true` is always kept).
 
 ### `teamsPageHtml(options)`
 

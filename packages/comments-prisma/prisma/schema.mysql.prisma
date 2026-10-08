@@ -32,8 +32,27 @@ model Comment {
   resolvedBy   String?
   editedAt     DateTime?
   createdAt    DateTime
+  // Optional features — only written when used (anchor, deletion: 'soft').
+  anchor       String? @db.Text
+  deletedAt    DateTime?
+  deletedBy    String?
+  deleteReason String? @db.Text
 
   @@id([tenantId, id])
   @@index([tenantId, resourceType, resourceId])
   @@map("comments")
+}
+
+// Previous bodies, kept by edit() with `revisions: true`.
+model CommentRevision {
+  tenantId  String
+  id        String
+  commentId String
+  body      String @db.Text
+  at        DateTime
+  by        String?
+
+  @@id([tenantId, id])
+  @@index([tenantId, commentId, at])
+  @@map("comment_revisions")
 }

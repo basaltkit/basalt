@@ -27,6 +27,7 @@ export {
   type NotificationChannel,
   type InAppStore,
   type InAppNotification,
+  type InAppPruneOptions,
   type InAppMessage,
   type MailChannelMessage,
   SmsChannel,

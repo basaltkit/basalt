@@ -152,21 +152,18 @@ Estas páginas são conveniência sobre as tuas rotas existentes — não impõe
 de novo. Põe-nas atrás de autenticação (são montadas com `meta.auth`) e adiciona um
 guard para ecrãs só-de-administração. As rotas de dados subjacentes já impõem os seus
 próprios guards (ex. as ações de administração do `teamRoutes()` requerem `teamRole: 'admin'`), mas
-a própria página também vale a pena proteger — monta a tua própria cópia com um guard de
-permissões ou de papel-de-equipa para que não-administradores nunca a vejam:
+a própria página também vale a pena proteger. Todas as fábricas de páginas aceitam
+`meta`, fundido nas suas rotas (`auth: true` mantém-se sempre por cima), para que
+não-administradores nunca a vejam:
 
 ```ts
-import { route } from '@basaltkit/fastify'
-import { teamsPageHtml } from '@basaltkit/teams-ui'
-
-// Serve a página tu mesmo atrás de um guard de administração em vez de teamsUiRoutes()
-route({
-  method: 'GET',
-  url: '/team/ui',
-  meta: { auth: true, teamRole: 'admin' }, // ou meta.can: 'team:manage' com @basaltkit/permissions
-  handler: () => teamsPageHtml({ title: 'Team' }),
-})
+teamsUiRoutes({ meta: { teamRole: 'admin' } })              // ou { can: 'team:manage' } com @basaltkit/permissions
+apiKeysUiRoutes({ meta: { can: 'apikeys:manage' } })
+billingUiRoutes({ plans, meta: { can: 'billing:manage' } }) // protege /billing/ui e /billing/info
 ```
+
+A mesma opção `meta` existe em `commentRoutes()`, `fileRoutes()` e
+`inAppRoutes()` — para um guard, um rate limit ou tags OpenAPI.
 
 Como estas páginas fazem fetch same-origin sem segredos embebidos, é seguro
 servi-las a partir da origin da tua app.

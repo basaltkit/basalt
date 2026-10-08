@@ -9,21 +9,28 @@ export interface TeamsUiOptions extends TeamsPageOptions {
    * {@link teamsPageCsp}. Pass a string to override, or `false` to send none.
    */
   csp?: string | false
+  /**
+   * Extra route metadata merged into the page route — a guard such as
+   * `{ teamRole: 'admin' }`, a rate limit, OpenAPI tags. `auth: true` is
+   * always applied on top and cannot be switched off.
+   */
+  meta?: Record<string, unknown>
 }
 
 /**
  * Serves the team management page at `GET /team/ui` (requires a logged-in user;
- * add your own admin `teamRole` guard). Pair with `@basaltkit/teams`'
+ * add your own guard with `meta`, e.g. `{ teamRole: 'admin' }`). Pair with `@basaltkit/teams`'
  * `teamRoutes()`, which provides the JSON endpoints the page calls.
  */
 export function teamsUiRoutes(options: TeamsUiOptions = {}): BasaltRoute[] {
   const html = teamsPageHtml(options)
   const csp = options.csp === false ? undefined : (options.csp ?? teamsPageCsp(options))
+  const meta = { ...options.meta, auth: true }
   return [
     route({
       method: 'GET',
       url: options.path ?? '/team/ui',
-      meta: { auth: true },
+      meta,
       async handler({ reply }) {
         if (csp !== undefined) reply.header('content-security-policy', csp)
         return reply.header('content-type', 'text/html; charset=utf-8').send(html)

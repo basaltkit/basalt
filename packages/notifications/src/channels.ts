@@ -32,8 +32,30 @@ export interface InAppNotification {
   readonly data?: unknown
   readAt?: number
   readonly at: number
+  /**
+   * Collapses repeated notifications into one inbox row: while a row with the
+   * same recipient and `groupKey` is still unread, a new one bumps its `count`
+   * instead of adding a row (see {@link InAppStore.upsertGroup}).
+   */
+  readonly groupKey?: string | undefined
+  /** How many notifications this row stands for. Absent means 1. */
+  readonly count?: number | undefined
 }
 
+/** What {@link InAppStore.prune} deletes. Each bound is an epoch-ms cut-off. */
+export interface InAppPruneOptions {
+  /** Delete read notifications whose `readAt` is older than this. */
+  readBefore?: number
+  /** Delete unread notifications whose `at` is older than this. */
+  unreadBefore?: number
+}
+
+/**
+ * Where in-app notifications live. The four required methods are the original
+ * contract; the optional ones are capabilities a store may add. Callers check
+ * for them (`store.markAllRead?.(...)`) and fall back when they are missing, so
+ * a store written against the older contract keeps working unchanged.
+ */
 export interface InAppStore {
   append(record: InAppNotification): Promise<void>
   list(
@@ -42,10 +64,25 @@ export interface InAppStore {
   ): Promise<InAppNotification[]>
   markRead(recipientId: string, id: string): Promise<boolean>
   unreadCount(recipientId: string): Promise<number>
+  /** Marks every unread notification of a recipient read, in one operation. Returns how many changed. */
+  markAllRead?(recipientId: string): Promise<number>
+  /**
+   * Deletes old notifications across all recipients — the retention job. A
+   * bound that is left out deletes nothing on that side; with neither bound
+   * nothing is deleted. Returns how many rows were removed.
+   */
+  prune?(options: InAppPruneOptions): Promise<number>
+  /**
+   * Appends `record`, or collapses it onto the recipient's still-unread row
+   * with the same `groupKey`: that row's `count` goes up by one and it takes
+   * the new title, body, data and `at` (so it sorts as the newest). Once the
+   * row is read, the next notification of the group starts a new row.
+   */
+  upsertGroup?(record: InAppNotification & { groupKey: string }): Promise<void>
 }
 
 export class MemoryInAppStore implements InAppStore {
-  private readonly records: InAppNotification[] = []
+  private records: InAppNotification[] = []
 
   async append(record: InAppNotification): Promise<void> {
     this.records.push(record)
@@ -77,12 +114,62 @@ export class MemoryInAppStore implements InAppStore {
   async unreadCount(recipientId: string): Promise<number> {
     return (await this.list(recipientId, { unreadOnly: true })).length
   }
+
+  async markAllRead(recipientId: string): Promise<number> {
+    const now = Date.now()
+    let marked = 0
+    for (const record of this.records) {
+      if (record.recipientId === recipientId && record.readAt === undefined) {
+        record.readAt = now
+        marked++
+      }
+    }
+    return marked
+  }
+
+  async prune(options: InAppPruneOptions): Promise<number> {
+    const before = this.records.length
+    this.records = this.records.filter((record) => !isPrunable(record, options))
+    return before - this.records.length
+  }
+
+  async upsertGroup(record: InAppNotification & { groupKey: string }): Promise<void> {
+    const index = this.records.findIndex(
+      (candidate) =>
+        candidate.recipientId === record.recipientId &&
+        candidate.groupKey === record.groupKey &&
+        candidate.readAt === undefined,
+    )
+    if (index === -1) {
+      this.records.push({ ...record, count: record.count ?? 1 })
+      return
+    }
+    const existing = this.records[index]!
+    // Re-inserted at the end so it lists as the newest, keeping its id.
+    this.records.splice(index, 1)
+    this.records.push({
+      ...record,
+      id: existing.id,
+      count: (existing.count ?? 1) + (record.count ?? 1),
+    })
+  }
+}
+
+function isPrunable(record: InAppNotification, options: InAppPruneOptions): boolean {
+  if (record.readAt !== undefined) return options.readBefore !== undefined && record.readAt < options.readBefore
+  return options.unreadBefore !== undefined && record.at < options.unreadBefore
 }
 
 export interface InAppMessage {
   title: string
   body?: string
   data?: unknown
+  /**
+   * Collapse repeats into one inbox row while it is unread ("3 new comments on
+   * Contract 12"). Needs a store with `upsertGroup`; on a store without it the
+   * notification is appended as its own row, carrying the key.
+   */
+  groupKey?: string
 }
 
 export class InAppChannel implements NotificationChannel {
@@ -96,7 +183,7 @@ export class InAppChannel implements NotificationChannel {
     info: { notification: string },
   ): Promise<void> {
     const inApp = message as InAppMessage
-    await this.store.append({
+    const record: InAppNotification = {
       id: randomUUID(),
       recipientId: recipient.id,
       notification: info.notification,
@@ -104,7 +191,13 @@ export class InAppChannel implements NotificationChannel {
       body: inApp.body,
       data: inApp.data,
       at: Date.now(),
-    })
+      ...(inApp.groupKey !== undefined ? { groupKey: inApp.groupKey } : {}),
+    }
+    if (inApp.groupKey !== undefined && this.store.upsertGroup) {
+      await this.store.upsertGroup({ ...record, groupKey: inApp.groupKey })
+      return
+    }
+    await this.store.append(record)
   }
 }
 

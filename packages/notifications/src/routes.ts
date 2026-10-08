@@ -52,17 +52,27 @@ export interface InAppRoutesOptions {
   prefix?: string
   /** How many a listing returns without `limit`. Default 30. */
   defaultLimit?: number
+  /**
+   * Extra route metadata merged into every route — a rate limit, an OpenAPI
+   * tag, a guard such as `{ can: 'notifications:read' }`. `auth: true` is
+   * always applied on top and cannot be switched off.
+   */
+  meta?: Record<string, unknown>
 }
+
+/** Page size of the read-all fallback for stores without `markAllRead`. */
+const READ_ALL_PAGE = 100
 
 export function inAppRoutes(options: InAppRoutesOptions = {}): BasaltRoute[] {
   const prefix = options.prefix ?? '/me/notifications'
   const defaultLimit = options.defaultLimit ?? 30
+  const meta = { ...options.meta, auth: true }
 
   return [
     route({
       method: 'GET',
       url: prefix,
-      meta: { auth: true },
+      meta,
       query: z.object({
         unreadOnly: z.coerce.boolean().optional(),
         limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -78,7 +88,7 @@ export function inAppRoutes(options: InAppRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'GET',
       url: `${prefix}/unread-count`,
-      meta: { auth: true },
+      meta,
       async handler() {
         return { count: await store().unreadCount(recipient()) }
       },
@@ -87,7 +97,7 @@ export function inAppRoutes(options: InAppRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: `${prefix}/:id/read`,
-      meta: { auth: true },
+      meta,
       params: z.object({ id: z.string() }),
       async handler({ params }) {
         // `markRead` takes the recipient, so marking someone else's returns
@@ -100,13 +110,26 @@ export function inAppRoutes(options: InAppRoutesOptions = {}): BasaltRoute[] {
     route({
       method: 'POST',
       url: `${prefix}/read-all`,
-      meta: { auth: true },
+      meta,
       async handler() {
         const me = recipient()
         const s = store()
-        const porLer = await s.list(me, { unreadOnly: true, limit: 100 })
-        for (const n of porLer) await s.markRead(me, n.id)
-        return { marked: porLer.length }
+        if (s.markAllRead) return { marked: await s.markAllRead(me) }
+        // Fallback for stores written before `markAllRead`: page through the
+        // unread ones. Bounded by the count taken up front (plus one page for
+        // notifications that arrive meanwhile), and it stops on a page that
+        // marks nothing, so a store that keeps listing rows it will not mark
+        // cannot spin forever.
+        const pages = Math.ceil((await s.unreadCount(me)) / READ_ALL_PAGE) + 1
+        let marked = 0
+        for (let page = 0; page < pages; page++) {
+          const unread = await s.list(me, { unreadOnly: true, limit: READ_ALL_PAGE })
+          let changed = 0
+          for (const n of unread) if (await s.markRead(me, n.id)) changed++
+          marked += changed
+          if (changed === 0 || unread.length < READ_ALL_PAGE) break
+        }
+        return { marked }
       },
     }),
   ]
