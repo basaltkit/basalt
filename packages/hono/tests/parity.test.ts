@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
   errorDetailsParitySuite,
+  disposerParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
@@ -101,3 +102,4 @@ describe('hono: multipart on routes that are not upload() routes', () => {
     await driver.close()
   })
 })
+disposerParitySuite('hono', driver)

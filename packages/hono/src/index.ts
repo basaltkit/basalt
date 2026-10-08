@@ -6,6 +6,7 @@ import {
   runRoute,
   toErrorResponse,
   reportHttpError,
+  RequestDisposers,
   type HttpErrorReporter,
   type HttpReply,
   type HttpRequest,
@@ -357,6 +358,41 @@ function toResponse(reply: HonoReply, payload: unknown): Response {
   return new Response(body, { status: reply.statusCode, headers })
 }
 
+/**
+ * Hands a streamed `Response` on with the request's disposers wired to the
+ * end of its body: they run once the body is fully read, fails, is cancelled
+ * by the consumer, or the client aborts — never while bytes are still owed.
+ */
+function disposeWhenBodyEnds(response: Response, signal: AbortSignal, disposers: RequestDisposers): Response {
+  const run = (): void => void disposers.run()
+  if (!response.body) {
+    run()
+    return response
+  }
+  if (signal.aborted) run()
+  else signal.addEventListener('abort', run, { once: true })
+  const reader = response.body.getReader()
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          controller.close()
+          run()
+        } else controller.enqueue(value)
+      } catch (error) {
+        run()
+        controller.error(error)
+      }
+    },
+    cancel(reason) {
+      run()
+      return reader.cancel(reason)
+    },
+  })
+  return new Response(body, { status: response.status, headers: response.headers })
+}
+
 function handlerFor(
   definition: BasaltRoute,
   container: Container | undefined,
@@ -368,6 +404,21 @@ function handlerFor(
 ) {
   return async (context: Context): Promise<Response> => {
     const reply = new HonoReply(context)
+    // Disposers enrichers return (a leased database client, …): run when the
+    // response is complete — at once for a buffered body, at the end of the
+    // body for `stream()`/`sse()`.
+    let disposers: RequestDisposers | undefined
+    let streamed = false
+    const disposersOf = (): RequestDisposers =>
+      (disposers ??= new RequestDisposers((error) =>
+        report(onError, {
+          error,
+          status: 500,
+          code: 'REQUEST_DISPOSER_FAILED',
+          method: context.req.method,
+          url: pathAndQuery(context),
+        }),
+      ))
     // An upload() route streams the raw body through the neutral multipart
     // parser, which enforces its own limits — it is never buffered here.
     const uploads = isUploadBody(definition.body)
@@ -392,9 +443,16 @@ function handlerFor(
         ...(container ? { container } : {}),
         enrichers,
         guards,
+        onDispose: (disposer) => disposersOf().add(disposer),
       })
-      if (isSseResponse(result)) return sseResponse(context, sseProducerOf(result))
-      if (isStreamResponse(result)) return await streamResponse(context, streamPayloadOf(result), onError)
+      if (isSseResponse(result) || isStreamResponse(result)) {
+        const response = isSseResponse(result)
+          ? sseResponse(context, sseProducerOf(result))
+          : await streamResponse(context, streamPayloadOf(result), onError)
+        if (!disposers) return response
+        streamed = true
+        return disposeWhenBodyEnds(response, context.req.raw.signal, disposers)
+      }
       return toResponse(reply, reply.sent ? reply.payload : result)
     } catch (error) {
       const { status, body } = toErrorResponse(error)
@@ -411,6 +469,8 @@ function handlerFor(
       // Built from the context so headers accumulated before the failure
       // (security headers, CORS, x-request-id) are kept on error responses.
       return toResponse(reply.code(status), body)
+    } finally {
+      if (disposers && !streamed) await disposers.run()
     }
   }
 }

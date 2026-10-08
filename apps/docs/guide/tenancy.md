@@ -19,6 +19,7 @@ Four pieces, in the order they run:
 | `TenantSource` | once a resolver produced a ref | Loads the tenant record (`find` / `findByDomain`). An unknown ref from an **authoritative** resolver ends resolution with no tenant; from a fallback it moves on to the next fallback |
 | `ctx().tenant` | for the rest of the request | The resolved open record — `undefined` when nothing matched |
 | `tenancy:switched` | on every entry into a tenant | Lets cache, storage and the db client re-attach their per-tenant instance |
+| `tenancy:exited` | when a `tenancy.run()` callback settles | Releases what a `tenancy:switched` listener took (the leased database client) |
 | `tenancy:created` | once, after a new tenant is created **and provisioned** | Welcome email, audit entry, notifying a panel — a listener may assume the tenant's storage exists |
 
 Outside a request there is no resolver, so you enter a tenant explicitly with
@@ -1002,7 +1003,8 @@ the lookup fails — the claim stands and `add()` throws `DOMAIN_TAKEN`.
 
 | Hook | Payload |
 | --- | --- |
-| `tenancy:switched` | `{ tenant }` — emitted on every entry into a tenant context, by the HTTP enricher and by `tenancy.run()` |
+| `tenancy:switched` | `{ tenant, via }` — emitted on every entry into a tenant context, by the HTTP enricher (`via: 'http'`) and by `tenancy.run()` (`via: 'run'`) |
+| `tenancy:exited` | `{ tenant }` — emitted when a `tenancy.run()` callback settles (resolved or thrown), still inside that tenant's context, so a listener can release what it took on `tenancy:switched` (prismaPlugin returns its leased client). Not emitted for HTTP requests — an enricher returns a disposer for those |
 | `tenancy:created` | `{ tenant }` — emitted once a new tenant is created **and provisioned**, so a listener may assume its storage exists. Does not fire if `onProvision` threw |
 | `tenancy:destroyed` | `{ tenant }` — emitted by `tenancy.destroy()` after `onDeprovision` ran and the record was deleted from the source |
 

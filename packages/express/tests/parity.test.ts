@@ -5,6 +5,7 @@ import {
   httpFetcher,
   sendWith,
   errorDetailsParitySuite,
+  disposerParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
@@ -58,3 +59,4 @@ routeTableParitySuite('express', driver)
 fileRoutesParitySuite('express', driver)
 commentRoutesParitySuite('express', driver)
 realtimeSseParitySuite('express', driver)
+disposerParitySuite('express', driver)

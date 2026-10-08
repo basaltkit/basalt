@@ -325,7 +325,7 @@ misalign — prefer the object.
 | `provision(tenantOrId)` | `Promise<Tenant>` | Runs `onProvision` for a tenant left `provisioning` by `provision: 'deferred'`, then flips it to `ready`. |
 | `destroy(id, { force? })` | `Promise<void>` | Marks the tenant `deleting`, runs `onDeprovision` in its context and removes the record. `force` removes it even if the teardown threw. |
 | `resolve(request)` | `Promise<Tenant \| null>` | Runs the resolvers over `{ headers?, params?, url? }` — authoritative first, fallbacks only if none named a tenant. Throws `TenantResolutionConflictError` under `onConflict: 'error'`. |
-| `run(tenantOrId, fn)` | `Promise<T>` | Runs `fn` with `ctx().tenant` set; emits `tenancy:switched`. Throws `InvalidTenantIdError` for an id outside the grammar. |
+| `run(tenantOrId, fn)` | `Promise<T>` | Runs `fn` with `ctx().tenant` set; emits `tenancy:switched` (`via: 'run'`) on entry and `tenancy:exited` when `fn` settles (also on throw). Throws `InvalidTenantIdError` for an id outside the grammar. |
 | `forEach(fn, { concurrency? })` | `Promise<void>` | Runs `fn` for each tenant (requires `source.list`); default concurrency 5. |
 
 ### Resolvers
@@ -436,7 +436,8 @@ conditional update, so handing an expired claim over (and un-verifying one in
 
 | Hook | Payload | When |
 |---|---|---|
-| `tenancy:switched` | `{ tenant: Tenant }` | Whenever execution enters a tenant context — a resolved HTTP request, or `tenancy.run()` (including each iteration of `forEach()`). |
+| `tenancy:switched` | `{ tenant: Tenant; via?: 'run' \| 'http' }` | Whenever execution enters a tenant context — a resolved HTTP request (`via: 'http'`), or `tenancy.run()` (`via: 'run'`, including each iteration of `forEach()`). |
+| `tenancy:exited` | `{ tenant: Tenant }` | When a `tenancy.run()` callback settles (resolved or thrown), inside its tenant context — release what a `tenancy:switched` listener took. Not emitted for HTTP requests (use an enricher disposer). |
 
 The plugin also declares `ctx().tenant?: Tenant` on `RequestContext`, so the
 context is typed everywhere once this package is installed.

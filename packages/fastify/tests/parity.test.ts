@@ -8,6 +8,7 @@ import {
   httpFetcher,
   sendWith,
   errorDetailsParitySuite,
+  disposerParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
@@ -113,3 +114,4 @@ describe('fastify: a rawBody() route never touches the app\'s own content-type p
     }
   })
 })
+disposerParitySuite('fastify', driver)

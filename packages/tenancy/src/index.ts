@@ -71,8 +71,22 @@ declare module '@basaltkit/core' {
     tenant?: Tenant
   }
   interface BasaltHooks {
-    /** Emitted whenever execution enters a tenant context. */
-    'tenancy:switched': { tenant: Tenant }
+    /**
+     * Emitted whenever execution enters a tenant context. `via` tells the two
+     * entry points apart: `'run'` is `tenancy.run()` (a job, a script, a
+     * nested switch), which always pairs with a later `'tenancy:exited'`;
+     * `'http'` is the tenancy request enricher, whose context ends with the
+     * request. Absent when emitted by something other than tenancy.
+     */
+    'tenancy:switched': { tenant: Tenant; via?: 'run' | 'http' }
+    /**
+     * Emitted when a `tenancy.run()` callback finishes — resolved or thrown —
+     * still inside the tenant context it entered, so a listener can release
+     * what it took on `'tenancy:switched'` (e.g. a leased database client).
+     * Not emitted for HTTP requests: their resources end with the request
+     * (return a disposer from an enricher instead).
+     */
+    'tenancy:exited': { tenant: Tenant }
     /**
      * A tenant was created AND provisioned — emitted by `tenancy.create()`
      * after `onProvision` has resolved, so a listener may assume the tenant's
@@ -458,7 +472,8 @@ export class Tenancy {
 
   /**
    * Runs `fn` inside the tenant's context (preserving the surrounding
-   * context) and emits 'tenancy:switched'.
+   * context), emitting 'tenancy:switched' (`via: 'run'`) on the way in and
+   * 'tenancy:exited' on the way out — also when `fn` throws.
    *
    * The id — given, or on the tenant object — must pass the tenant-id grammar
    * (`InvalidTenantIdError`, 400): it becomes a namespace segment in every
@@ -473,8 +488,21 @@ export class Tenancy {
     if (!tenant) throw new TenantNotFoundError(tenantOrId as string)
 
     return runWithContext({ ...tryCtx(), tenant }, async () => {
-      await this.hooks?.emit('tenancy:switched', { tenant })
-      return fn()
+      let failed = false
+      try {
+        await this.hooks?.emit('tenancy:switched', { tenant, via: 'run' })
+        return await fn()
+      } catch (error) {
+        failed = true
+        throw error
+      } finally {
+        try {
+          await this.hooks?.emit('tenancy:exited', { tenant })
+        } catch (error) {
+          // Never mask the callback's own failure with a cleanup one.
+          if (!failed) throw error
+        }
+      }
     })
   }
 
@@ -774,7 +802,7 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
           // status tenancy does not know fails closed rather than serving.
           assertTenantServing(tenant)
           context.tenant = tenant
-          await hooks.emit('tenancy:switched', { tenant })
+          await hooks.emit('tenancy:switched', { tenant, via: 'http' })
         },
       )
     },

@@ -8,6 +8,8 @@ import {
   runRoute,
   toErrorResponse,
   reportHttpError,
+  RequestDisposers,
+  type RequestDisposer,
   type HttpErrorReporter,
   type HttpReply,
   type HttpRequest,
@@ -241,6 +243,34 @@ function attachRawBody(request: HttpRequest, req: Request): void {
   else if (!bodyAlreadyRead(req)) request.bodyStream = req
 }
 
+/**
+ * The sink for the disposers enrichers return: they run once, when the Node
+ * response has finished or closed — whichever comes first, and also for a
+ * streamed body, an event stream, an error response or a client that went
+ * away. Listeners are attached only when a disposer shows up, so routes
+ * without one pay nothing.
+ */
+function disposeOnResponseEnd(
+  res: Response,
+  onError: (error: unknown) => void,
+): (disposer: RequestDisposer) => void {
+  let disposers: RequestDisposers | undefined
+  return (disposer) => {
+    if (!disposers) {
+      disposers = new RequestDisposers(onError)
+      const run = (): void => void disposers!.run()
+      // Already over (the client left while an enricher was awaiting): 'close'
+      // has fired and will not again — run now, and add() runs late arrivals.
+      if (res.writableFinished || res.destroyed) run()
+      else {
+        res.once('finish', run)
+        res.once('close', run)
+      }
+    }
+    disposers.add(disposer)
+  }
+}
+
 function basaltHandler(
   definition: BasaltRoute,
   container: Container | undefined,
@@ -250,6 +280,15 @@ function basaltHandler(
 ) {
   return async (req: Request, res: Response): Promise<void> => {
     const reply = new ExpressReply(res)
+    const onDispose = disposeOnResponseEnd(res, (error) =>
+      reportSafely(onError, {
+        error,
+        status: 500,
+        code: 'REQUEST_DISPOSER_FAILED',
+        method: req.method,
+        url: req.originalUrl,
+      }),
+    )
     try {
       const request = toNeutralRequest(req)
       // An upload() route streams the raw body. `express.json()` and
@@ -260,6 +299,7 @@ function basaltHandler(
         ...(container ? { container } : {}),
         enrichers,
         guards,
+        onDispose,
       })
       if (isSseResponse(result)) {
         res.writeHead(200, SSE_HEADERS)

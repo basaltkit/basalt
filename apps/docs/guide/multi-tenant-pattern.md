@@ -94,6 +94,48 @@ the compiler refuses `centralDb().invoice` before a test would.
 The tenant history is migrated per schema with
 [`migrateTenants`](/guide/database-per-tenant#migrating-every-tenant) and the
 tenant `prisma.config.ts`. The central history is ordinary `prisma migrate deploy`.
+`basalt db:status` reports both planes read-only, and
+[Database operations](/guide/database-operations) covers the errors and the
+grants that migrations cannot keep in place.
+
+### Guard against the wrong plane
+
+One root `prisma.config.ts` that reaches the full schema is a trap: the command
+everyone types by reflex, `prisma migrate dev`, diffs **both** planes against the
+central database and recreates every tenant table there — `auth_users`,
+`team_memberships`, `perm_*` — then sees drift and offers a reset. The tables are
+empty and unreachable, and exactly the global `User` this pattern forbids.
+
+Three guards, from cheapest to strongest:
+
+1. **One config per plane.** With `targets` declared, `basalt prisma:sync` prints
+   the missing `prisma.config.ts` for each plane (`--yes` writes them, never over
+   an existing one): its own `schema` and its own `migrations.path`, relative to
+   the config's directory.
+2. **A generate-only root config.** When the root `prisma.config.ts` still
+   declares `migrations` or a `datasource`, `prisma:sync` warns and prints a
+   replacement with only `schema`. Prisma 7 needs the datasource URL from the
+   config, so `prisma migrate dev` at the root then refuses to run; each plane
+   migrates with `--config prisma/prisma.config.ts` or
+   `--config prisma/tenants/prisma.config.ts`.
+3. **A boot guard.** List the tenant plane's tables as forbidden in the central
+   database, and the app refuses to start on a mixed one:
+
+```ts
+prismaPlugin({
+  client: centralDb,
+  assertMigrated: {
+    tables: ['tenants', 'tenant_domains'],
+    // The tenant plane's tables: their presence here means a migration ran
+    // against the wrong plane. Fails the boot with PRISMA_PLANE_MIXED.
+    forbiddenTables: ['auth_users', 'team_memberships', 'perm_roles'],
+  },
+})
+```
+
+The check queries each name the same way `tables` does, so it works on
+PostgreSQL, MySQL and SQLite. The error lists the tables it found
+(`error.details.tables`); drop them once you have checked they hold no rows.
 
 ## Rule 3 — Resolve by host, register with one reserved list
 

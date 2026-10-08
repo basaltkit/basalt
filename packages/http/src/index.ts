@@ -31,7 +31,9 @@ export {
 export {
   runRoute,
   toErrorResponse,
+  RequestDisposers,
   type RequestEnricher,
+  type RequestDisposer,
   type RouteGuard,
   type RoutePipeline,
   type ErrorResponse,

@@ -318,7 +318,7 @@ const app = await createApp({
 }).boot()
 ```
 
-The pool never holds more than `max` clients, and it only ever closes an **idle** one (least-recently-used first, via `destroy`, which defaults to `client.$disconnect()`). A client handed to a request counts as in use for `idleMs` (default 30 s) — keep that above your longest request. When a new tenant arrives and all `max` clients are in use, the request waits up to `acquireTimeoutMs` (default 10 s) for one to go idle, then fails with `TenantPoolExhaustedError` (503). Size `max` for the number of tenants active *at the same time*. Active tenants always reuse the same client, and concurrent first requests for a cold tenant share a single client creation — a burst of requests cannot open duplicate clients.
+The pool never holds more than `max` clients, and it only ever closes an **idle** one (least-recently-used first, via `destroy`, which defaults to `client.$disconnect()`). `prismaPlugin` **leases** the tenant's client for each HTTP request (released once the response has ended — streamed bodies, event streams, errors and client aborts included, on every adapter) and for each `tenancy.run()` (released on `tenancy:exited`), so a client in use is never evicted however long the work takes. `idleMs` is then only a grace period — how long an idle tenant keeps its slot — and the plugin defaults it to 1 s. When a new tenant arrives and all `max` clients are in use, the request waits up to `acquireTimeoutMs` (default 10 s) for one to be released, then fails with `TenantPoolExhaustedError` (503), whose `details` carry `leased` and `recentlyUsed` counts. Size `max` for the number of tenants active *at the same time*. Active tenants always reuse the same client, and concurrent first requests for a cold tenant share a single client creation — a burst of requests cannot open duplicate clients.
 
 Work that can outlive `idleMs` (a report, a migration, a long job) should hold the client with a lease instead — it is never evicted while leased:
 
@@ -421,9 +421,9 @@ Registers the client(s) in the container (`DB`, `DB_POOL`), attaches the client 
 | `schemaPerTenant` | `{ url: string; createClient: (url: string) => TClient \| Promise<TClient>; prefix?: string }` | No* | `prefix: 'tenant_'` | Schema-per-tenant mode: base URL + factory from the URL with `?schema=`. |
 | `destroy` | `(client: TClient, tenantId: string) => void \| Promise<void>` | No | `client.$disconnect()` when present | Called when a client leaves the pool. |
 | `max` | `number` | No | `10` | Max per-tenant clients open at once — never exceeded. |
-| `idleMs` | `number` | No | `30_000` | How long a client handed to a request counts as in use (cannot be evicted). Keep it above your longest request. |
+| `idleMs` | `number` | No | `1_000` | Grace period: how long an idle tenant keeps its client before the slot can go to another tenant. Requests and `tenancy.run()` hold a lease for their whole duration, so this never needs to cover a request. |
 | `acquireTimeoutMs` | `number` | No | `10_000` | How long a request for a new tenant waits for a free slot when all `max` clients are in use, before `TenantPoolExhaustedError` (503). |
-| `assertMigrated` | `boolean \| { tables?: string[] }` | No | off | At boot, check that the shared `client`'s database has `_prisma_migrations` (and the listed tables, case-sensitive) and fail with `DatabaseNotMigratedError` naming the database and host (never credentials). Catches a wrong `DATABASE_URL` at startup instead of a P2021 on the first request. Needs `client`. |
+| `assertMigrated` | `boolean \| { tables?: string[]; forbiddenTables?: string[] }` | No | off | At boot, check that the shared `client`'s database has `_prisma_migrations` (and the listed tables, case-sensitive) and fail with `DatabaseNotMigratedError` naming the database and host (never credentials). Catches a wrong `DATABASE_URL` at startup instead of a P2021 on the first request. `forbiddenTables` lists tables that must NOT exist (the other plane's, e.g. tenant tables in the central database) and fails with `DatabasePlaneMixedError` (`PRISMA_PLANE_MIXED`). Needs `client`. |
 
 \* Use at least one of the three: `client`, `forTenant`, or `schemaPerTenant` (`forTenant` takes priority over `schemaPerTenant`).
 
@@ -503,7 +503,15 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 
 ### `assertMigrated(client, options?)`
 
-`assertMigrated(client, options?: { tables?: string[] }): Promise<void>` — what `prismaPlugin({ assertMigrated })` runs at boot; usable on its own (a readiness probe, a script). Throws `DatabaseNotMigratedError` when `_prisma_migrations` or a listed table is missing, or the check cannot run (driver errors are included with URL credentials masked by `redactCredentials`).
+`assertMigrated(client, options?: { tables?: string[]; forbiddenTables?: string[] }): Promise<void>` — what `prismaPlugin({ assertMigrated })` runs at boot; usable on its own (a readiness probe, a script). Throws `DatabaseNotMigratedError` when `_prisma_migrations` or a listed table is missing, or the check cannot run (driver errors are included with URL credentials masked by `redactCredentials`). `error.details.diagnosis` carries the `describeDbError` diagnosis; a role without privileges on the schema (SQLSTATE `42501`, or a schema hidden from the `search_path` for lack of `USAGE`) is reported as `DB_PERMISSION_DENIED` with the `GRANT` to run, not as "not migrated".
+
+### `describeDbError(error, options?)`
+
+`describeDbError(error: unknown, options?: { url?: string; role?: string }): { code, cause, fix } | undefined` — maps a database failure to what it means and the one-line fix: `DB_PERMISSION_DENIED` (`42501`, also inside `P2010`; `P1010`), `DB_NOT_EMPTY_BASELINE` (`P3005`), `DB_UNREACHABLE` (`P1001`/`P1002`/`P1000`/`P1003`, `ECONNREFUSED`, …) and `DB_NOT_MIGRATED` (`P2021`, `42P01`). Reads Prisma errors, driver errors, Prisma CLI stderr and plain strings; returns `undefined` for anything else; credentials are redacted. `tenant:migrate` prints its fix under a failing tenant. See the [Database operations](https://basaltkit.dev/guide/database-operations) guide.
+
+### `dbStatusCommand(config?)`
+
+Builds the read-only `basalt db:status` command (register it via `commandsPlugin()`): runs `prisma migrate status` for the central plane (`central: { configPath?, schemaPath? } | false`) and for every tenant (`tenants: { list, target, configPath?, schemaPath?, concurrency? }`, the same `target` as `tenantMigrateCommand`), prints one line per plane with the fix for what is wrong, and exits 1 when anything is pending, failed, drifted, unmanaged or unreachable. `--json` prints `{ ok, planes }`. `run` overrides how the Prisma CLI is invoked. Helpers: `parseMigrateStatus(output, exitCode)`, `prismaStatusArgs(target)`.
 
 ### `applyTenantScope(operation, args, tenantId, field)` (Advanced)
 
@@ -598,7 +606,8 @@ Returns a `CommandDefinition` (`@basaltkit/cli`) named `tenant:migrate`.
 | `CrossTenantScanInTenantError` | Code `PRISMA_CROSS_TENANT_IN_TENANT` — a cross-tenant scan/sweep was started inside a tenant context; it is central code. |
 | `CrossTenantScanShapeError` | Code `PRISMA_CROSS_TENANT_SCAN_SHAPE` — the deployed scan function returned a column that was not declared as an identifier (or a NULL identifier). |
 | `InvalidTenantSchemaError` | Code `PRISMA_INVALID_SCHEMA` — tenant id without a valid schema identifier. |
-| `DatabaseNotMigratedError` | Code `PRISMA_NOT_MIGRATED` — `assertMigrated` found no `_prisma_migrations` (or a listed table) in the database it reached. |
+| `DatabaseNotMigratedError` | Code `PRISMA_NOT_MIGRATED` — `assertMigrated` found no `_prisma_migrations` (or a listed table) in the database it reached, or could not check it; `details.diagnosis` says why (see `describeDbError`). |
+| `DatabasePlaneMixedError` | Code `PRISMA_PLANE_MIXED` — a table listed in `assertMigrated({ forbiddenTables })` exists: a migration ran against the wrong plane. `details.tables` lists them. |
 | `EmptyTenantSchemaError` | Code `PRISMA_TENANT_SCHEMA_EMPTY` — the migration exited cleanly but produced no tables. |
 
 ## Common errors and solutions (FAQ)
