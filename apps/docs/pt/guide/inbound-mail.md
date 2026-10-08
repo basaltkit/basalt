@@ -318,6 +318,15 @@ async handler({ mail }) {
 
 Uma restrição de unicidade na base de dados sobre a chave faz o mesmo sem cache.
 
+A chave é estável quando o relay volta a enviar os mesmos bytes (um relay em
+Node que repete o seu `POST`). Com o Worker da Cloudflare acima, uma entrega
+falhada é repetida pelo **servidor remetente**: o Email Routing recebe a
+mensagem de novo e acrescenta cabeçalhos de trânsito novos (`Received`,
+`ARC-Seal`, `Authentication-Results`), por isso a repetição pode trazer uma
+chave diferente. Mantém o trabalho do handler atómico (uma transacção, ou
+"guardar os bytes e depois enfileirar") para que uma repetição depois de uma
+falha nunca o encontre feito a meio.
+
 ## Avisos de tamanho excessivo
 
 Quando uma mensagem passa o limite do relay, o Worker acima não a reencaminha.
