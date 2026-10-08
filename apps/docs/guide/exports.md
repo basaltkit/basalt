@@ -3,7 +3,9 @@
 `@basaltkit/exports` turns typed export definitions into files — CSV, TSV, JSON
 and NDJSON out of the box (zero dependencies), with a pluggable formatter seam
 for XLSX/PDF. It's built to run async via [`@basaltkit/queue`](/guide/queues) and
-store the result with `@basaltkit/files`.
+store the result with `@basaltkit/files`. It also reads CSV back:
+[`defineImport`/`readImport`](#importing-csv) parse a file with strict locale
+numbers and dates and a per-line error report.
 
 [[toc]]
 
@@ -228,3 +230,64 @@ exportsPlugin({
 The plain `xlsxFormatter` is unchanged (dates as ISO text, no styles). Number
 formats are display formats: the cell still holds the raw number, so Excel shows
 it with the viewer's own decimal separator.
+
+## Importing CSV
+
+The reverse path — reading what an ERP or spreadsheet exports — ships in the
+same package. `defineImport` declares the columns once; `readImport` reads a
+file (a `string`, a `Uint8Array` or an `AsyncIterable` of chunks, e.g. an upload
+stream) and returns the parsed rows plus a per-line error report for a preview
+screen. It **never throws on bad data**.
+
+```ts
+import { defineImport, readImport } from '@basaltkit/exports'
+
+const purchaseOrders = defineImport<{ number: string; quantity: number; unitPrice: number; dueDate: Date | null }>({
+  name: 'purchase-orders',
+  delimiter: ';',
+  locale: { decimal: ',', thousands: ' ', date: 'dd/mm/yyyy' },
+  maxRows: 2000,
+  columns: [
+    { key: 'number', headers: ['Número', 'Nº'], required: true },
+    { key: 'quantity', headers: ['Quantidade', 'Qtd'], required: true, parse: 'integer' },
+    { key: 'unitPrice', headers: ['Preço unitário'], required: true, parse: 'decimal' },
+    { key: 'dueDate', headers: ['Data de entrega'], parse: 'date' },
+  ],
+})
+
+const { rows, errors, warnings } = await readImport(purchaseOrders, file)
+// rows:   [{ line: 2, value: { number: 'PO-1', quantity: 1000, unitPrice: 1250.5, dueDate: Date } }, …]
+// errors: [{ line: 7, column: 'unitPrice', code: 'AMBIGUOUS_DECIMAL', message: '"12.5" is ambiguous: …' }]
+```
+
+- **Headers by name**, in any order, with synonyms; matching ignores case,
+  accents and repeated whitespace (`PREÇO  UNITÁRIO` matches `Preço unitário`).
+  A missing `required` column or two headers mapping to one column fail the
+  file; an unknown header is a warning (`unknownColumns: 'error'` to reject it).
+- **Strict numbers.** The separator that is not the decimal one is accepted
+  only as a thousands separator in groups of three. With a comma decimal,
+  `1.250,50` is 1250.5 and `1 408 278,55` is 1408278.55, but `12.5` is
+  `AMBIGUOUS_DECIMAL` — never silently read as 125 or 12.5, which is how a
+  price ends up off by a factor of 1 000. `'integer'` refuses a fraction.
+- **Dates** are `'dd/mm/yyyy'` or ISO (`yyyy-mm-dd`, or a timestamp with an
+  offset), validated against the calendar (`31/02/2026` is `INVALID_DATE`),
+  and come back as UTC midnight. For anything else pass a function as `parse`;
+  a throw becomes `INVALID_VALUE` with its message.
+- **Per-row errors.** Cells are trimmed; an empty optional cell is `null`, an
+  empty required cell is `REQUIRED`. A row with any error, or the wrong number of
+  fields (`COLUMN_COUNT`), is left out of `rows`, and each bad cell gets its own
+  `{ line, column, code, message }` — `line` is the physical line of the file,
+  counted across line breaks inside quoted fields. `maxErrors` (default 1 000)
+  caps the report.
+- **Fails closed on a malformed file.** An unterminated quote, text after a
+  closing quote, a quote inside an unquoted field, invalid UTF-8, a field longer
+  than `maxFieldLength`, or more than `maxRows` data rows (default 10 000,
+  checked while streaming, before the rest is read) returns that single error
+  and **no rows** — a truncated file is never half-imported.
+
+The low-level reader is exported too: `parseDelimited(input, { delimiter,
+quote, bom, maxRows, maxFieldLength })` is an RFC 4180 async iterator of
+`{ line, cells }` that throws `DelimitedParseError` (`code`
+`CSV_UNTERMINATED_QUOTE`, …, with `reason` and `line`). A leading BOM is
+stripped (`bom: 'forbid'` rejects it), and what `createCsvFormatter` writes
+reads back unchanged.
