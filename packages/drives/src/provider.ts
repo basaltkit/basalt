@@ -205,6 +205,17 @@ export interface DriveListOptions {
   cursor?: string | undefined
   /** Page-size hint. An adapter may clamp it to what its API allows. */
   limit?: number | undefined
+  /**
+   * `true` lists the whole subtree (a crawl), `false` only the folder's direct
+   * children (a browse). Omitted, the adapter's own configured default applies
+   * — which differs per adapter, so pass it whenever the shape matters.
+   *
+   * An adapter that cannot honour `true` must throw `DriveUnsupportedError`
+   * (capability `recursiveList`) rather than return children only. Through
+   * `Drives.listItems` the mode is bound into the page cursor: a continuation
+   * that omits it keeps the original mode, one that changes it is refused.
+   */
+  recursive?: boolean | undefined
 }
 
 /** What an adapter needs to build a consent URL. */

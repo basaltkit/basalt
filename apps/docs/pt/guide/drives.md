@@ -152,8 +152,10 @@ const app = createApp({
       providers: [/* um adaptador — ver "Escrever um adaptador" */],
       keys: [{ id: '2026-09', key: env.DRIVES_ENCRYPTION_KEY }],
       secret: env.APP_SECRET,
-      store: prismaDriveConnectionStore(db),
-      ledger: prismaDriveImportLedger(db),
+      // As tuas implementações duráveis — ver "Escrever um store durável".
+      // Omitidos, ambos usam stores em memória (só para testes e demos).
+      store: yourDriveConnectionStore,
+      ledger: yourDriveImportLedger,
     }),
   ],
 })
@@ -171,6 +173,41 @@ export const env = defineEnv({
   DRIVES_ENCRYPTION_KEY: secret({ minLength: 32 }),
 })
 ```
+
+### Chaves e rotação
+
+::: warning O id do tenant faz parte de cada segredo cifrado
+Cada credencial é cifrada com o seu `(tenantId, connectionId, provider)` como
+dados associados do AES-GCM. **Mudar o id de um tenant torna impossível decifrar
+todos os segredos cifrados com o id antigo** — essas ligações precisam de novo
+consentimento. Usa um id de tenant imutável (um UUID) para as ligações, nunca um
+slug ou um subdomínio que um cliente possa mudar.
+:::
+
+Uma ligação activa volta a ser cifrada com a primeira chave no próximo refresh.
+Uma ligação adormecida nunca faz refresh, por isso uma rotação que tem de
+terminar corre o `rotateSecrets()` sobre todos os tenants:
+
+1. Acrescenta a chave nova à frente: `keys: [{ id: '2026-12', key: NEW }, { id: '2026-09', key: OLD }]`, e faz deploy.
+2. Volta a cifrar tudo o que ainda está numa chave antiga. Os ids de tenant vêm
+   da tua própria tabela de tenants — o contrato do store não tem listagem
+   entre tenants, de propósito:
+
+   ```ts
+   const tenantIds = (await db.tenant.findMany({ select: { id: true } })).map((t) => t.id)
+   const { resealed, skippedConflicts, remainingOnOldKeys } = await drives.rotateSecrets({ tenantIds })
+   ```
+
+   Cada escrita é um compare-and-set; uma linha que um refresh concorrente
+   reescreveu conta em `skippedConflicts` e não é sobrescrita (o refresh já a
+   cifrou com a chave nova). Corre-o num job ou na CLI, não num pedido: com um
+   tenant no contexto, todos os ids têm de ser iguais a ele. Numa app
+   single-tenant, chama-o sem argumentos.
+3. Quando `remainingOnOldKeys === 0`, remove a chave antiga e faz deploy. Se não
+   for zero, repete o passo 2.
+
+O `DriveSecretBox#keyIdOf(secret)` diz-te que chave cifrou um valor guardado sem
+o decifrar, para os teus próprios relatórios.
 
 ## Rotas
 
@@ -245,6 +282,17 @@ pedido num sítio que a camada neutra não vê, fornece-os tu com
 `notifications.rawBody: (request) => Buffer` — nunca re-serializando um objecto
 já analisado.
 
+::: warning Duas cópias do `@basaltkit/http`
+O `@basaltkit/drives` depende do `@basaltkit/http`, e um gestor de pacotes pode
+instalar uma segunda cópia, aninhada, ao lado da que o teu adaptador usa. Antes
+do `@basaltkit/http` 2.7.1 o marcador do `rawBody()` era privado da cópia que o
+criou, por isso o adaptador fazia parse da entrega como JSON e a rota de
+notificações falhava fechada. Mantém o `@basaltkit/http` do adaptador na
+**2.7.1 ou posterior** (o `pnpm why @basaltkit/http` mostra as cópias). Uma
+instalação que não use notificações push pode montar o `driveRoutes()` sem
+`notifications`: fica só com o fluxo de ligação, sem nenhuma rota `rawBody()`.
+:::
+
 ## Ligar uma conta
 
 O `driveRoutes()` acima faz isto por ti. A fachada por baixo também é pública,
@@ -312,6 +360,107 @@ vez de te deixar inferi-lo a partir de um booleano:
 O `revoked: boolean` continua lá e continua a significar
 `revocation === 'revoked'`, mas não consegue separar os dois últimos — e são
 esses os dois que exigem acções diferentes de quem opera.
+
+### Ordem do disconnect, e o veto
+
+O `disconnect()` executa os passos sempre pela mesma ordem:
+
+| Passo | A linha existe? | Notas |
+| --- | --- | --- |
+| 1. `drive:disconnecting` | sim | um handler que lança **veta**: nada é revogado, a linha mantém-se, o erro propaga-se |
+| 2. revogar no fornecedor | sim | melhor esforço, a não ser com `{ revoke: false }` |
+| 3. cancelar a subscrição push | sim | melhor esforço |
+| 4. apagar a linha e as credenciais | — | |
+| 5. `drive:disconnected` | **não** | a linha já desapareceu; o payload traz tudo o que precisas |
+
+Faz a cascata dos teus dados no `drive:disconnecting`, onde a ligação ainda pode
+ser consultada, e recusa quando ainda não é seguro:
+
+```ts
+hooks.on('drive:disconnecting', async ({ tenantId, connectionId }) => {
+  if (await db.importJob.count({ where: { tenantId, connectionId, status: 'running' } })) {
+    throw new Error('Ainda há importações a correr nesta drive; tenta daqui a pouco.')
+  }
+  await db.driveFolderMapping.deleteMany({ where: { tenantId, connectionId } })
+})
+```
+
+Um veto é também a forma como um handler com um bug podia impedir um
+utilizador de alguma vez retirar uma autorização a um terceiro. Para o caminho
+de um operador ("revoga isto já"), passa `{ force: true }`: o erro do handler
+vai para o `onHookError` (uma opção do `drivesPlugin`/`Drives`;
+`process.emitWarning` quando não está definida) e o disconnect continua.
+
+```ts
+await drives.disconnect(connection.id, { force: true })
+```
+
+## Listar: navegar vs percorrer
+
+O `listItems()` responde a duas perguntas diferentes, e os adaptadores não
+concordam sobre qual delas respondem por omissão. Diz qual queres com
+`recursive`:
+
+```ts
+// Um explorador de ficheiros: os filhos directos de uma pasta.
+await drives.listItems(connection.id, { folderId, recursive: false })
+// Uma importação ou auditoria: a subárvore inteira.
+await drives.listItems(connection.id, { recursive: true })
+```
+
+| Fornecedor | Por omissão (sem `recursive`) | `recursive: false` | `recursive: true` |
+| --- | --- | --- | --- |
+| Google Drive | subárvore (`listMode: 'recursive'`); uma ligação sem âmbito lista a conta inteira de forma plana | filhos directos (da raiz da conta quando sem âmbito) | subárvore, percorrida pasta a pasta |
+| Dropbox | subárvore (opção `recursive: true`) | filhos directos | subárvore |
+| OneDrive / SharePoint | filhos directos | filhos directos | **`DRIVE_UNSUPPORTED`** (`recursiveList`) — o Graph não tem listagem recursiva; usa o feed de alterações (`syncConnection`) para enumerar uma árvore |
+
+Omitir `recursive` mantém exactamente o default do construtor de cada
+adaptador. O modo fica ligado ao cursor devolvido: uma continuação que omite
+`recursive` mantém o modo do cursor, e uma que indique um modo diferente é
+recusada com `DRIVE_ACCESS_DENIED`, a mesma recusa de um cursor forjado. A
+Microsoft recusa `recursive: true` em vez de devolver só um nível em silêncio,
+porque quem pediu uma travessia acreditaria, de outra forma, que tinha visto a
+árvore toda.
+
+## Saúde da ligação
+
+Cada vista de ligação traz três campos de saúde, todos em milissegundos epoch
+como o `lastSyncedAt`:
+
+| Campo | Marcado por |
+| --- | --- |
+| `lastSucceededAt` | uma sincronização que persistiu uma página, e um `drives.check()` com sucesso |
+| `lastFailedAt` | uma sincronização falhada (melhor esforço: omitido num abort, ou quando outra escrita alterou a linha entretanto), um `drives.check()` falhado, e o refresh que encontrou a autorização morta |
+| `lastErrorCode` | o **código** de erro dessa falha (`DRIVE_CREDENTIALS_INVALID`, `DRIVE_RATE_LIMITED`, …) — nunca uma mensagem |
+
+Deliberadamente **não** são marcados num `listItems()`/`download()` normal com
+sucesso: seguir a saúde não acrescenta nenhuma escrita ao caminho quente, nem
+um incremento de revisão que possa competir com um refresh de token. Quando
+precisas de uma resposta fresca, faz uma sondagem:
+
+```ts
+const { ok, code } = await drives.check(connection.id)
+// lista um item na raiz; nunca lança por uma falha do fornecedor
+```
+
+Uma página de definições pode derivar um estado a partir da vista sem nenhuma
+chamada extra:
+
+```ts
+function health(c: DriveConnectionView, now = Date.now()): 'ok' | 'stale' | 'reconnect' {
+  if (c.status === 'invalid') return 'reconnect'
+  const success = c.lastSucceededAt ?? 0
+  if ((c.lastFailedAt ?? 0) > success) return c.lastErrorCode === 'DRIVE_CREDENTIALS_INVALID' ? 'reconnect' : 'stale'
+  return now - success > 24 * 60 * 60_000 ? 'stale' : 'ok'
+}
+```
+
+**Não há contagem decrescente para a expiração das credenciais**, de propósito.
+Os access tokens são renovados por ti e a sua expiração não diz nada sobre a
+ligação; os refresh tokens, na maioria, não têm duração publicada (o Google
+revoga-os com uma mudança de password ou inactividade, os da Microsoft
+deslizam com o uso, os do Dropbox não expiram). Uma data que não podemos saber
+só ensinaria os utilizadores a desconfiar da que podem.
 
 ## Ligar o Dropbox
 
@@ -628,6 +777,42 @@ segmento é validado, e `/`, `?`, `#`, `%`, `.`, `..` e espaços são recusados 
 `DRIVE_ACCESS_DENIED`. Um `folderId` pode estreitar uma chamada a uma pasta mas
 nunca nomear outra drive.
 
+### Colunas do SharePoint
+
+Os ficheiros de uma biblioteca de documentos são itens de lista com colunas
+(processo, cliente, estado…). O adaptador pode trazer as que indicares em cada
+listagem, `getItem` e página do feed de alterações, sem um pedido por ficheiro:
+
+```ts
+import { microsoftDrive, sharePointFieldsOf } from '@basaltkit/drives-microsoft'
+
+microsoftDrive({ clientId, clientSecret, listItemFields: ['Matter', 'ClientName', 'DocStatus'] })
+
+const page = await drives.listItems(connection.id)
+for (const item of page.items) {
+  const columns = sharePointFieldsOf(item) // { Matter: 'ACME v. Globex', DocStatus: 'Signed' } | undefined
+}
+```
+
+- Os nomes são os nomes **internos** das colunas, validados no arranque. Não há
+  "todas": um item de lista traz ids de autores, estado de workflows e tudo o
+  que o site acrescentou, e o `raw` é persistido pelos sinks.
+- Os valores são achatados para primitivos em `item.raw.listItemFields`: um
+  valor de lookup ou de metadados geridos passa a ser o seu rótulo, uma pessoa
+  o seu email, e uma coluna multi-valor os rótulos unidos com `"; "`. Outras
+  formas são descartadas. No máximo 64 colunas, 1 KB por valor.
+- Um OneDrive pessoal não tem item de lista, por isso a chave simplesmente não
+  aparece. Com a opção por definir, o `raw` continua a ser exactamente
+  `{ driveId }`.
+- É exclusivo da Microsoft, por isso vive no adaptador e não no contrato das
+  drives.
+
+::: warning Dados não verificados
+Os valores das colunas são o que os utilizadores do tenant escreveram no
+SharePoint. Valida-os como qualquer outro input de utilizador antes de decidirem
+alguma coisa — em que processo um documento é arquivado, quem o pode ver.
+:::
+
 ### Quatro coisas que a Microsoft faz de forma diferente
 
 **O refresh token roda, sempre.** O antigo morre no instante em que um novo é
@@ -897,6 +1082,99 @@ const documentSink: DriveSink = async ({ item, content, connection, version }) =
 }
 ```
 
+## Escrever um store durável
+
+O `@basaltkit/drives` só traz o `MemoryDriveConnectionStore` e o
+`MemoryDriveImportLedger`. Em produção precisas do teu próprio
+`DriveConnectionStore` e `DriveImportLedger`: as apps modelam estas linhas de
+formas demasiado diferentes (uma tabela ou duas, uma coluna `tenantId` ou um
+schema por tenant) para uma única implementação servir. O que todos os stores
+têm de partilhar é o comportamento de que o motor depende:
+
+- **Compare-and-set.** `update(tenantId, id, patch, expectedRevision)` só se
+  aplica quando a `revision` guardada ainda é igual a `expectedRevision`, e
+  devolve `null` (sem mudar nada) caso contrário. Cada escrita incrementa a
+  `revision`. A proteção contra a corrida no refresh depende disto: um store
+  que ignora o argumento não é seguro com mais do que um worker, porque dois
+  workers a fazer refresh de uma ligação Microsoft ao mesmo tempo guardam um
+  refresh token que o fornecedor já retirou.
+- **`undefined` limpa, ausente mantém.** Uma chave do patch presente com
+  `undefined` limpa a coluna (`{ cursor: undefined }` descarta o cursor de
+  sincronização); uma chave ausente deixa-a como está.
+- **Âmbito de tenant em todas as queries.** O `tenantId` faz parte de cada
+  leitura, atualização e remoção — nunca procures uma linha só pelo `id`.
+- **Um ledger idempotente.** `record()` faz upsert em
+  `(tenantId, connectionId, externalId)`.
+
+Uma implementação de referência do store de ligações em Prisma:
+
+```ts
+import type { DriveConnection, DriveConnectionPatch, DriveConnectionStore } from '@basaltkit/drives'
+
+export class PrismaDriveConnectionStore implements DriveConnectionStore {
+  constructor(private readonly db: PrismaClient) {}
+
+  async create(record: DriveConnection) {
+    await this.db.driveConnection.create({ data: toRow(record) })
+  }
+
+  async find(tenantId: string, id: string) {
+    const row = await this.db.driveConnection.findFirst({ where: { id, tenantId } })
+    return row ? fromRow(row) : null
+  }
+
+  async list(tenantId: string, filter: { provider?: string; status?: string } = {}) {
+    const rows = await this.db.driveConnection.findMany({
+      where: { tenantId, ...(filter.provider ? { provider: filter.provider } : {}), ...(filter.status ? { status: filter.status } : {}) },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    })
+    return rows.map(fromRow)
+  }
+
+  async update(tenantId: string, id: string, patch: DriveConnectionPatch, expectedRevision?: number) {
+    // `toPatch` converte uma chave presente com `undefined` em `null` (limpa a
+    // coluna) e ignora as chaves ausentes.
+    const data = { ...toPatch(patch), revision: { increment: 1 }, updatedAt: Date.now() }
+    const r = await this.db.driveConnection.updateMany({
+      where: { id, tenantId, ...(expectedRevision !== undefined ? { revision: expectedRevision } : {}) },
+      data,
+    })
+    if (r.count === 0) return null // inexistente, de outro tenant, ou compare-and-set perdido
+    return this.find(tenantId, id)
+  }
+
+  async delete(tenantId: string, id: string) {
+    await this.db.driveConnection.deleteMany({ where: { id, tenantId } })
+  }
+}
+```
+
+É o `updateMany` com a revisão na cláusula `where` que torna a escrita num
+compare-and-set atómico; um par ler-e-depois-`update` não o é. Guarda `scopes`,
+`account` e `watch` como colunas JSON e o `secret` como texto — já vem cifrado.
+Os campos de saúde (`lastSucceededAt`, `lastFailedAt`, `lastErrorCode`) são
+colunas opcionais que têm de ser persistidas; a suite de contrato verifica-o.
+
+Depois valida a implementação com a mesma suite de conformidade que os stores
+em memória passam. Vem no subpath só para testes `@basaltkit/drives/testing` e
+funciona com qualquer runner que tenha `describe` e `it`:
+
+```ts
+import { describe, it } from 'vitest'
+import { runDriveStoreContract } from '@basaltkit/drives/testing'
+
+runDriveStoreContract(async () => {
+  await db.driveImport.deleteMany()
+  await db.driveConnection.deleteMany()
+  return { store: new PrismaDriveConnectionStore(db), ledger: new PrismaDriveImportLedger(db) }
+}, { describe, it })
+```
+
+Cobre o compare-and-set com uma revisão desatualizada, o incremento da revisão,
+a regra de `undefined` limpar, o isolamento de tenant em
+`find`/`list`/`update`/`delete`, e a idempotência do ledger. A factory corre
+antes de cada caso e tem de devolver stores vazios.
+
 ## Escrever um adaptador
 
 Só `name`, `allowedHosts`, `authorization`, `list` e `download` são
@@ -1101,6 +1379,46 @@ endereçar a ligação de outro tenant. No Dropbox essa procura é necessariamen
 por id de conta entre tenants — segura porque o id veio de um payload que o
 segredo da aplicação assinou, e continua a ser a tua consulta e não uma
 varredura de tabela da framework.
+:::
+
+## Diagnosticar erros do fornecedor
+
+Um `DRIVE_PROVIDER_ERROR`, `DRIVE_ACCESS_DENIED` ou `DRIVE_CREDENTIALS_INVALID`
+traz o código de vocabulário fixo do fornecedor em `details` (`summary`/`reason`,
+por exemplo `insufficientPermissions`, ou `http_400` quando o fornecedor não
+mandou nenhum). A **explicação legível** do fornecedor — normalmente a
+correcção — viaja à parte, no canal só de log `internalDetails.providerMessage`:
+
+```ts
+import { internalDetailsOf } from '@basaltkit/http'
+
+fastifyPlugin({
+  routes,
+  onError: ({ error, status }) => {
+    // p.ex. "…does not have the required scope 'files.metadata.read'…"
+    logger.warn({ status, provider: internalDetailsOf(error)?.providerMessage }, 'drive call failed')
+  },
+})
+```
+
+O reporter por omissão dos três adaptadores já regista o `internalDetails`;
+num job, lê `(error as DriveProviderError).internalDetails?.providerMessage`.
+**Nunca** está na resposta HTTP, em `details`, nos payloads dos hooks nem no
+registo de auditoria: é texto livre escrito pelo fornecedor, e as mensagens do
+Graph podem citar o URL do pedido. Os adaptadores só lêem campos de mensagem
+estruturados (`error.message`/`error_description` do Google e do Graph,
+`user_message.text` do Dropbox, o `required_scope` de um erro `missing_scope`,
+ou um corpo `400 text/plain` do Dropbox), e o `providerMessageOf()` remove
+depois caracteres de controlo/bidi, substitui tudo o que pareça URL, bearer, JWT
+ou token, e trunca a 500 caracteres.
+
+::: tip Os scopes do Dropbox vivem em dois sítios
+O `dropboxDrive()` pede `account_info.read files.metadata.read files.content.read`
+por omissão, mas o Dropbox só concede um scope que esteja **também activo no
+separador Permissions da app** na App Console. Se não estiver, o consentimento
+passa, a conta aparece, e a primeira listagem falha com um `400` cujo
+`providerMessage` diz qual é o scope em falta. Se passares os teus próprios
+`scopes`, mantém os três.
 :::
 
 ## Segurança

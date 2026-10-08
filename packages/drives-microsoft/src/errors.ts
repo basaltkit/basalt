@@ -4,6 +4,7 @@ import {
   DriveCursorResetError,
   DriveItemNotFoundError,
   DriveProviderError,
+  providerMessageOf,
   type GuardedResponse,
 } from '@basaltkit/drives'
 
@@ -63,6 +64,29 @@ export function errorCode(body: string, status: number): string {
   return `http_${status}`
 }
 
+/**
+ * Graph's `error.message` (or the identity platform's `error_description`), for
+ * the log-only `internalDetails.providerMessage` channel only.
+ *
+ * {@link errorCode} keeps it out of `details` because Graph's messages are free
+ * text that can quote the request — on a download path a pre-signed URL. The
+ * internal channel never reaches a response, and `providerMessageOf` still
+ * replaces anything URL- or token-shaped before it is logged.
+ */
+export function providerMessage(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: unknown } | string; error_description?: unknown }
+    const error = parsed?.error
+    if (typeof error === 'object' && error !== null && typeof error.message === 'string') {
+      return providerMessageOf(error.message)
+    }
+    if (typeof parsed?.error_description === 'string') return providerMessageOf(parsed.error_description)
+  } catch {
+    /* not JSON */
+  }
+  return undefined
+}
+
 export interface GraphFailureContext {
   provider: string
   connectionId: string
@@ -91,15 +115,16 @@ export async function graphFailure(response: GuardedResponse, context: GraphFail
 
 export function toGraphError(status: number, body: string, context: GraphFailureContext): Error {
   const code = errorCode(body, status)
+  const internal = { providerMessage: providerMessage(body) }
 
   if (status === 401) {
     // `InvalidAuthenticationToken` is routine (an access token that expired
     // early, or clock skew) and the engine answers it with exactly one reactive
     // refresh before condemning the connection — the right behaviour whether
     // the grant is gone or not.
-    return new DriveCredentialsInvalidError(context.connectionId, `the provider answered 401 (${code}).`)
+    return new DriveCredentialsInvalidError(context.connectionId, `the provider answered 401 (${code}).`, internal)
   }
-  if (status === 403) return new DriveAccessDeniedError(context.provider, code)
+  if (status === 403) return new DriveAccessDeniedError(context.provider, code, internal)
   if (status === 404) return new DriveItemNotFoundError(context.provider, context.externalId ?? code)
   if (status === 410) {
     // `resyncRequired` is the documented one; any other 410 on the change feed
@@ -112,13 +137,13 @@ export function toGraphError(status: number, body: string, context: GraphFailure
   }
   if (status === 423) {
     // Locked: checked out, virus-scanned, or being co-authored. Transient.
-    return new DriveProviderError(context.provider, code, status, true)
+    return new DriveProviderError(context.provider, code, status, true, internal)
   }
   if (status === 507) {
     // The drive is full. Terminal for this operation; retrying makes it worse.
-    return new DriveProviderError(context.provider, code, status, false)
+    return new DriveProviderError(context.provider, code, status, false, internal)
   }
   // 5xx (and 509, Graph's bandwidth ceiling) never reached a decision, so they
   // are the class worth retrying. Everything else is a decision.
-  return new DriveProviderError(context.provider, code, status, status >= 500)
+  return new DriveProviderError(context.provider, code, status, status >= 500, internal)
 }

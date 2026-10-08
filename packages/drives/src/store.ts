@@ -55,6 +55,22 @@ export interface DriveConnection {
   watch?: DriveConnectionWatch | undefined
   lastSyncedAt?: number | undefined
   /**
+   * Connection health, epoch milliseconds like {@link lastSyncedAt}.
+   *
+   * Stamped only where a write already happens or was asked for — a completed
+   * sync page, `drives.check()`, and the credentials-invalid transition —
+   * never on an ordinary successful call, so health tracking adds no write to
+   * the hot path (and no extra revision bump to race a refresh).
+   */
+  lastSucceededAt?: number | undefined
+  /** When a sync, a `check()` or a refresh last failed. See {@link lastSucceededAt}. */
+  lastFailedAt?: number | undefined
+  /**
+   * The error **code** of that failure (`DRIVE_CREDENTIALS_INVALID`,
+   * `DRIVE_RATE_LIMITED`, …) — never a message, which can quote provider text.
+   */
+  lastErrorCode?: string | undefined
+  /**
    * Optimistic-concurrency marker, bumped on every write.
    *
    * It exists for one specific failure: two workers refreshing the same
@@ -117,6 +133,9 @@ export interface DriveConnectionPatch {
   cursor?: string | undefined
   watch?: DriveConnectionWatch | undefined
   lastSyncedAt?: number | undefined
+  lastSucceededAt?: number | undefined
+  lastFailedAt?: number | undefined
+  lastErrorCode?: string | undefined
   rootId?: string | undefined
 }
 

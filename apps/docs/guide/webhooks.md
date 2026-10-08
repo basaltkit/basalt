@@ -509,6 +509,11 @@ IPv4-mapped (`[::ffff:127.0.0.1]`, which URL parsing rewrites to
 (`2002::/16`) — is judged by that IPv4 address, and Teredo, local-use NAT64,
 discard and documentation ranges are refused.
 
+The same guard is available for your own outbound requests as a **streaming**
+client — `createGuardedFetch()` — which hands the body back (capped) instead of
+discarding it, so it can download. See
+[Outbound HTTP & SSRF](/guide/security#outbound-http-ssrf).
+
 ### Port policy
 
 The public-address check does not help when the target is someone else's
@@ -809,6 +814,9 @@ and `basalt:events`, and drains the outbox once on shutdown (best-effort).
 | `webhookOutboxDispatch` | `(webhooks, options?) => OutboxDispatch` | Adapts a `WebhookManager` into an outbox dispatch; throws only on transient failures, with stable delivery ids |
 | `pinnedFetch` | `(url, init) => Promise<Response>` | `fetch`-compatible client over the pinned transport — the delegate for a custom `fetchImpl` |
 | `deriveDeliveryId` | `(idempotencyKey, endpointId) => string` | The deterministic delivery `id` used by the outbox / `idempotencyKey` |
+| `createGuardedFetch` | `(options) => (url, init?) => Promise<GuardedResponse>` | Streaming SSRF-guarded client: per-hop revalidation + IP pinning, byte cap mid-stream, no auto-redirect, no decompression; throws `GuardedFetchError` (`SSRF_BLOCKED` · `BODY_TOO_LARGE` · `TIMEOUT` · `TOO_MANY_REDIRECTS`) |
+| `hostAllowed` | `(host, allowed) => boolean` | The allowlist predicate: exact host, or `.suffix` for subdomains only |
+| `capStream` | `(source, maxBytes, exceeded?) => Readable` | Wraps a stream so it errors past `maxBytes`, destroying the source |
 
 ## Failure modes & troubleshooting
 

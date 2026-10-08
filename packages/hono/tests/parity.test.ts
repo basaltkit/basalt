@@ -14,6 +14,7 @@ import {
   rateLimitKeyParitySuite,
   rateLimitWarningParitySuite,
   rawBodyParitySuite,
+  crossCopyParitySuite,
   sendWith,
   streamParitySuite,
   uploadParitySuite,
@@ -70,6 +71,7 @@ const driver: ParityDriver = {
 
 uploadParitySuite('hono', driver)
 rawBodyParitySuite('hono', driver)
+crossCopyParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
 rateLimitWarningParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)

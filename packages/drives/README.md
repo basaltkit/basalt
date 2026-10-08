@@ -104,11 +104,15 @@ const app = createApp({
     filesPlugin({ disk: 'documents', validate: { sniff: true } }),
     drivesPlugin({
       providers: [dropboxDrive({ clientId: env.DROPBOX_APP_KEY, clientSecret: env.DROPBOX_APP_SECRET })],
-      // First key seals; the rest stay readable, so rotation is a rolling change.
+      // First key seals; the rest stay readable, so rotation is a rolling change
+      // (finish one with drives.rotateSecrets({ tenantIds })). The tenant id is
+      // bound into every sealed secret: never rename a tenant id.
       keys: [{ id: '2026-09', key: env.DRIVES_ENCRYPTION_KEY }],
       secret: env.APP_SECRET,
-      store: prismaDriveConnectionStore(db),
-      ledger: prismaDriveImportLedger(db),
+      // Your durable implementations. Omitted, both are in-memory (tests only).
+      // Validate them with `runDriveStoreContract` from `@basaltkit/drives/testing`.
+      store: yourDriveConnectionStore,
+      ledger: yourDriveImportLedger,
     }),
   ],
 })
@@ -244,6 +248,12 @@ the neutral layer cannot see, supply them yourself with
 object.
 
 
+> **`@basaltkit/http` floor.** Keep the adapter's `@basaltkit/http` at 2.7.1 or
+> later: before it, a second nested copy of `@basaltkit/http` (this package
+> depends on it) made the `rawBody()` notification route invisible to the
+> adapter, which then failed closed. Without `notifications`, `driveRoutes()`
+> mounts the connect flow only.
+
 ## Reference
 
 ### `Drives`
@@ -255,9 +265,11 @@ object.
 | `connect(input)` | Stores a connection from tokens you already hold (service account, device code) |
 | `list(filter?)` | The tenant's connections, credentials stripped |
 | `get(id, tenantId?)` | One connection, or `DRIVE_CONNECTION_NOT_FOUND` |
-| `disconnect(id, options?)` | Revokes at the provider (default), unsubscribes, deletes the row |
+| `disconnect(id, options?)` | Emits `drive:disconnecting` (a throw vetoes unless `force: true`), revokes at the provider (default), unsubscribes, deletes the row, emits `drive:disconnected` |
+| `check(id, options?)` | Health probe: lists one item at the root, stamps `lastSucceededAt` or `lastFailedAt` + `lastErrorCode`, returns `{ ok, code? }` without throwing for a provider failure |
 | `forgetImports(id, tenantId?)` | Drops the dedup ledger so a later sync re-imports |
-| `listItems(id, options?)` | One page of a folder. The returned `cursor` is MAC-bound to the tenant and connection; a cursor this engine did not issue is refused with `DRIVE_ACCESS_DENIED` |
+| `rotateSecrets({ tenantIds? })` | Re-seals stored credentials under the active key (compare-and-set per row); returns `{ resealed, skippedConflicts, remainingOnOldKeys }`. Drop the old key only when `remainingOnOldKeys === 0` |
+| `listItems(id, options?)` | One page of a folder. `recursive: true` lists the subtree, `false` direct children; omitted, the adapter's default (Microsoft refuses `true` with `DRIVE_UNSUPPORTED`). The returned `cursor` is MAC-bound to the tenant, connection and listing mode; a cursor this engine did not issue is refused with `DRIVE_ACCESS_DENIED` |
 | `getItem(id, externalId, options?)` | One item's metadata |
 | `download(id, item, options?)` | The bytes, as a stream. Consume or destroy it |
 | `upload(id, input, options?)` | Writes a file back, when the adapter supports it |
@@ -281,6 +293,12 @@ Every call resolves its tenant like `@basaltkit/files`: the context tenant wins,
 >
 > Skip it if `default` was ever a real tenant in that database. An authorization started before the upgrade fails its callback once (its `state` names the old key); the user just connects again.
 
+> **Tenant ids are immutable for drives.** Every sealed secret binds its
+> `tenantId` as AES-GCM associated data, so renaming a tenant id makes its
+> connections undecryptable. Use an immutable id, not a slug.
+> `DriveSecretBox#keyIdOf(secret)` reports which key sealed a stored value
+> without decrypting it.
+
 ### Functions
 
 | Function | What it does |
@@ -295,7 +313,7 @@ Every call resolves its tenant like `@basaltkit/files`: the context tenant wins,
 | `verifyHmacSignature(input)` | Constant-time HMAC over a **raw** body |
 | `contentVersion(item)` | The content identity used for dedup |
 | `withRetry(fn, policy?)` | Backoff honouring `Retry-After` |
-| `createDriveFetch(options)` | The guarded, SSRF-validated, capped HTTP client |
+| `createDriveFetch(options)` | The guarded, SSRF-validated, capped HTTP client — `@basaltkit/webhooks`' public `createGuardedFetch` plus the provider allowlist, `DRIVE_*` errors and rate-limit hints. For your own untrusted URLs use `createGuardedFetch` directly |
 
 ### Storage strategies
 
@@ -312,7 +330,7 @@ documents; the engine guarantees no byte is fetched.
 
 ### Hooks
 
-`drive:connected` · `drive:disconnected` · `drive:credentials_refreshed` ·
+`drive:connected` · `drive:disconnecting` · `drive:disconnected` · `drive:credentials_refreshed` ·
 `drive:credentials_invalid` · `drive:sync_started` · `drive:sync_completed` ·
 `drive:sync_failed` · `drive:item_imported` · `drive:item_skipped`
 
@@ -331,6 +349,14 @@ why it is false, because the reasons need different responses:
 
 Branching on the boolean alone cannot separate the last two, and they are the
 two that matter.
+
+`disconnect()` order is fixed: `drive:disconnecting` (row still present; a
+throwing handler vetoes — no revoke, row kept, error propagated) → revoke →
+unwatch → delete → `drive:disconnected` (row already gone). Cascade from
+`drive:disconnecting`. `disconnect(id, { force: true })` proceeds past a veto
+and reports the handler's error to the `onHookError` option
+(`process.emitWarning` by default), so a buggy hook cannot block a user from
+withdrawing a grant.
 
 ### Limits worth knowing before you design around them
 
@@ -358,6 +384,13 @@ cursor aged out; the engine drops it and the next run re-primes) ·
 `DRIVE_UNSUPPORTED` ·
 `DRIVE_NOTIFICATION_INVALID` · `DRIVE_SECRET_MALFORMED` ·
 `DRIVE_SECRET_KEY_UNKNOWN` · `DRIVE_SECRET_KEY_INVALID`
+
+`DRIVE_PROVIDER_ERROR`, `DRIVE_ACCESS_DENIED` and `DRIVE_CREDENTIALS_INVALID`
+may also carry the vendor's own explanation on the log-only
+`internalDetails.providerMessage` channel (read it with `internalDetailsOf()`
+from `@basaltkit/http`, or in an adapter's `onError`). It is sanitised by
+`providerMessageOf()` and never serialised into a response, `details`, a hook
+payload or the audit trail.
 
 ## Writing a provider adapter
 
