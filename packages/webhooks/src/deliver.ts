@@ -35,6 +35,44 @@ export function deriveDeliveryId(idempotencyKey: string, endpointId: string): st
 
 let unpinnedFetchWarned = false
 
+/** Default prefix of the delivery headers (`x-basalt-event`, `x-basalt-delivery`, `x-basalt-signature`). */
+export const DEFAULT_WEBHOOK_HEADER_PREFIX = 'x-basalt'
+
+const HEADER_PREFIX_PATTERN = /^[a-z][a-z0-9-]{0,31}$/
+
+/** Names of the three headers a delivery carries, for a given prefix. */
+export interface WebhookHeaderNames {
+  /** `<prefix>-event` — the event name. */
+  event: string
+  /** `<prefix>-delivery` — the delivery id (also `id` in the signed body). */
+  delivery: string
+  /** `<prefix>-signature` — `t=<unix>,v1=<hmac>`. */
+  signature: string
+}
+
+/**
+ * The header names a deliverer configured with `headerPrefix` sends — and the
+ * ones its receiver reads. Use the same prefix on both ends:
+ *
+ * ```ts
+ * const names = webhookHeaderNames('x-acme')
+ * verifySignature(request.headers[names.signature] as string, body.bytes, secret)
+ * ```
+ *
+ * The prefix is lower-case, starts with a letter and has at most 32 characters
+ * of `[a-z0-9-]`; anything else throws a `TypeError` (header names are
+ * case-insensitive on the wire, and a lower-case prefix matches the lower-cased
+ * header maps every adapter exposes).
+ */
+export function webhookHeaderNames(prefix: string = DEFAULT_WEBHOOK_HEADER_PREFIX): WebhookHeaderNames {
+  if (typeof prefix !== 'string' || !HEADER_PREFIX_PATTERN.test(prefix)) {
+    throw new TypeError(
+      `webhooks: headerPrefix must match ${String(HEADER_PREFIX_PATTERN)} (lower-case, starts with a letter, max 32 chars); got ${JSON.stringify(prefix)}`,
+    )
+  }
+  return { event: `${prefix}-event`, delivery: `${prefix}-delivery`, signature: `${prefix}-signature` }
+}
+
 /**
  * Minimum length of a webhook signing secret. Shorter (or empty/unset) secrets
  * are refused on both ends: the deliverer won't sign with one and
@@ -135,9 +173,16 @@ export function verifySignature(header: string, body: string | Uint8Array, secre
 export interface DeliveryResult {
   endpointId: string
   ok: boolean
+  /** HTTP status of the last response received, when one was. */
   status?: number
   attempts: number
   error?: string
+  /**
+   * Wall-clock time the whole delivery took, in ms — every attempt, DNS
+   * resolution and backoff included. Set by the bundled deliverer; absent on
+   * results a delivery never started for (e.g. a fan-out refusal).
+   */
+  durationMs?: number
   /**
    * On a failure: `true` when retrying later may succeed (network error,
    * timeout, `5xx`, `408`/`429`, unexpected error), `false` when it is permanent
@@ -145,6 +190,31 @@ export interface DeliveryResult {
    * webhook outbox only re-queues an entry for retryable failures.
    */
   retryable?: boolean
+}
+
+/**
+ * One delivery attempt, reported through `onAttempt` — enough for an app to
+ * keep its own delivery log (the deliverer stores nothing itself, and never
+ * reads the response body).
+ */
+export interface WebhookAttempt {
+  deliveryId: string
+  endpointId: string
+  /** The endpoint's tenant; absent for a tenant-agnostic endpoint. */
+  tenantId?: string
+  event: string
+  /** 1-based attempt number within this delivery. */
+  attempt: number
+  /** True when the receiver answered `2xx`. */
+  ok: boolean
+  /** HTTP status received, when a response arrived. */
+  status?: number
+  /** Duration of this attempt (DNS resolution + request), in ms. */
+  durationMs: number
+  /** Why the attempt failed (`HTTP 503`, `redirect refused`, a network error, …). */
+  error?: string
+  /** When the attempt started. */
+  at: Date
 }
 
 /** Per-call options for {@link WebhookDeliverer.deliver}. */
@@ -209,6 +279,21 @@ export interface WebhookDelivererOptions {
   /** Clock in seconds, for deterministic tests. */
   now?: () => number
   /**
+   * Prefix of the delivery headers: `<prefix>-event`, `<prefix>-delivery` and
+   * `<prefix>-signature`. Default {@link DEFAULT_WEBHOOK_HEADER_PREFIX}
+   * (`x-basalt`). Lower-case, `[a-z][a-z0-9-]{0,31}`; validated at
+   * construction. Receivers read the same names with {@link webhookHeaderNames}.
+   */
+  headerPrefix?: string
+  /**
+   * Called after every delivery attempt (including one whose deadline ran out
+   * while resolving the host), e.g. to persist a delivery log. Deliveries
+   * refused before any attempt (no secret, blocked URL) are reported only in
+   * the {@link DeliveryResult}. Not awaited, and must not throw: an exception
+   * or rejection is logged and swallowed, never changing the delivery.
+   */
+  onAttempt?: (attempt: WebhookAttempt) => void | Promise<void>
+  /**
    * SSRF guard for the delivery URL. By default every delivery is refused if the
    * URL scheme isn't http(s) or the host is/resolves to a private, loopback,
    * link-local, CGNAT, ULA or reserved address. Set `ssrf.allowPrivateHosts:
@@ -259,6 +344,7 @@ export class WebhookDeliverer {
   private readonly unpinnedFetch: boolean
   private readonly sleep: (ms: number) => Promise<void>
   private readonly now: () => number
+  private readonly headerNames: WebhookHeaderNames
 
   constructor(private readonly options: WebhookDelivererOptions = {}) {
     if (options.secret !== undefined && (typeof options.secret !== 'string' || options.secret.length < MIN_WEBHOOK_SECRET_LENGTH)) {
@@ -267,6 +353,10 @@ export class WebhookDeliverer {
       )
     }
     if (options.ssrf !== false) assertAllowedPortsOption(options.ssrf?.allowedPorts)
+    this.headerNames = webhookHeaderNames(options.headerPrefix ?? DEFAULT_WEBHOOK_HEADER_PREFIX)
+    if (options.onAttempt !== undefined && typeof options.onAttempt !== 'function') {
+      throw new TypeError('webhooks: onAttempt must be a function')
+    }
     this.maxRetries = options.maxRetries ?? 3
     this.backoffMs = options.backoffMs ?? 500
     this.timeoutMs = options.timeoutMs ?? 10_000
@@ -367,9 +457,25 @@ export class WebhookDeliverer {
     return pinnedRequest(new URL(url), init, pinned)
   }
 
+  /** Reports one attempt to `onAttempt`; a throwing/rejecting hook never affects the delivery. */
+  private reportAttempt(attempt: WebhookAttempt): void {
+    const hook = this.options.onAttempt
+    if (!hook) return
+    const report = (error: unknown): void => console.error('[basalt:webhooks] onAttempt hook failed:', error)
+    try {
+      const pending = hook(attempt)
+      if (pending && typeof (pending as Promise<void>).then === 'function') (pending as Promise<void>).then(undefined, report)
+    } catch (error) {
+      report(error)
+    }
+  }
+
   async deliver(endpoint: WebhookEndpoint, event: string, data: unknown, options: DeliverOptions = {}): Promise<DeliveryResult> {
+    const startedAt = performance.now()
+    const elapsed = (since: number): number => Math.max(0, Math.round(performance.now() - since))
+    const done = (result: DeliveryResult): DeliveryResult => ({ ...result, durationMs: elapsed(startedAt) })
     const { secrets, refused } = this.signingSecrets(endpoint)
-    if (refused) return { endpointId: endpoint.id, ok: false, attempts: 0, error: refused, retryable: false }
+    if (refused) return done({ endpointId: endpoint.id, ok: false, attempts: 0, error: refused, retryable: false })
     const timestamp = this.now()
     // A delivery id (stable across this delivery's retries — and across later
     // re-deliveries when the caller passes a derived one) and the endpoint id are
@@ -384,7 +490,23 @@ export class WebhookDeliverer {
       sentAt: new Date(timestamp * 1000).toISOString(),
     })
 
+    const tenantId = typeof endpoint.tenantId === 'string' && endpoint.tenantId !== '' ? endpoint.tenantId : undefined
     let attempts = 0
+    let attemptStart = startedAt
+    let attemptAt = new Date()
+    const attempted = (outcome: { ok: boolean; status?: number; error?: string }): void =>
+      this.reportAttempt({
+        deliveryId,
+        endpointId: endpoint.id,
+        ...(tenantId !== undefined ? { tenantId } : {}),
+        event,
+        attempt: attempts,
+        ok: outcome.ok,
+        ...(outcome.status !== undefined ? { status: outcome.status } : {}),
+        durationMs: elapsed(attemptStart),
+        ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+        at: attemptAt,
+      })
     let lastStatus: number | undefined
     let lastError: string | undefined
     // SSRF guard (unless explicitly disabled): resolve+validate the URL and
@@ -403,6 +525,8 @@ export class WebhookDeliverer {
       // flush waiting on it) past `timeoutMs`.
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+      attemptStart = performance.now()
+      attemptAt = new Date()
       try {
         // Resolve on the first attempt — and again before every retry when a
         // custom fetchImpl doesn't honour the pin (it re-resolves on its own, so
@@ -417,11 +541,12 @@ export class WebhookDeliverer {
           } catch (error) {
             if (error instanceof WebhookUrlBlockedError) {
               const message = error.dnsDerived ? DNS_BLOCKED_ERROR : error.message
-              return { endpointId: endpoint.id, ok: false, attempts, error: message, retryable: false }
+              return done({ endpointId: endpoint.id, ok: false, attempts, error: message, retryable: false })
             }
             if (controller.signal.aborted) {
               attempts += 1 // the attempt spent its whole deadline resolving
               lastError = DNS_TIMEOUT_ERROR
+              attempted({ ok: false, error: DNS_TIMEOUT_ERROR })
               if (attempt < this.maxRetries) await this.sleep(this.backoffMs * 2 ** attempt)
               continue
             }
@@ -432,13 +557,13 @@ export class WebhookDeliverer {
         try {
           const headers: Record<string, string> = {
             'content-type': 'application/json',
-            'x-basalt-event': event,
-            'x-basalt-delivery': deliveryId,
+            [this.headerNames.event]: event,
+            [this.headerNames.delivery]: deliveryId,
           }
           // Signed with the time of THIS attempt: a retry after a long backoff must
           // still fall inside the receiver's replay tolerance. During a rotation
           // grace window the header carries one `v1=` per secret (current first).
-          if (secrets.length > 0) headers['x-basalt-signature'] = signPayload(body, secrets, this.now())
+          if (secrets.length > 0) headers[this.headerNames.signature] = signPayload(body, secrets, this.now())
 
           // `redirect: 'manual'` so a 3xx can't bounce the request to an internal
           // address (or a refused port) that bypassed the SSRF check on the
@@ -452,19 +577,26 @@ export class WebhookDeliverer {
           } catch {
             // a locked/consumed body is already being handled by its owner
           }
-          if (response.ok) return { endpointId: endpoint.id, ok: true, status: response.status, attempts }
+          if (response.ok) {
+            attempted({ ok: true, status: response.status })
+            return done({ endpointId: endpoint.id, ok: true, status: response.status, attempts })
+          }
           // A redirect is refused, not followed (opaqueredirect ⇒ status 0).
           if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
-            return { endpointId: endpoint.id, ok: false, status: response.status, attempts, error: 'redirect refused', retryable: false }
+            attempted({ ok: false, status: response.status, error: 'redirect refused' })
+            return done({ endpointId: endpoint.id, ok: false, status: response.status, attempts, error: 'redirect refused', retryable: false })
           }
           // 4xx is a client error — do not retry inline. 408/429 are worth a
           // later retry (outbox), every other 4xx is permanent.
           if (response.status < 500) {
             const retryable = response.status === 408 || response.status === 429
-            return { endpointId: endpoint.id, ok: false, status: response.status, attempts, error: `HTTP ${response.status}`, retryable }
+            attempted({ ok: false, status: response.status, error: `HTTP ${response.status}` })
+            return done({ endpointId: endpoint.id, ok: false, status: response.status, attempts, error: `HTTP ${response.status}`, retryable })
           }
+          attempted({ ok: false, status: response.status, error: `HTTP ${response.status}` })
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error)
+          attempted({ ok: false, error: lastError })
         }
       } finally {
         clearTimeout(timer)
@@ -472,13 +604,13 @@ export class WebhookDeliverer {
       if (attempt < this.maxRetries) await this.sleep(this.backoffMs * 2 ** attempt)
     }
 
-    return {
+    return done({
       endpointId: endpoint.id,
       ok: false,
       attempts,
       ...(lastStatus !== undefined ? { status: lastStatus } : {}),
       ...(lastError !== undefined ? { error: lastError } : {}),
       retryable: true,
-    }
+    })
   }
 }

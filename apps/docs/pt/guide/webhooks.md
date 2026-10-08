@@ -176,6 +176,63 @@ deliverer ignora um secret anterior sem expiração, ou depois de ela passar. O
 `webhooks-sqlite` acrescenta as colunas sozinho. O `webhooks-prisma` precisa dos
 dois campos no teu schema (`basalt prisma:sync`) antes da primeira rotação.
 
+### Selar secrets em repouso
+
+Por omissão o secret de assinatura de um endpoint é guardado tal como chega,
+por isso um dump da base de dados contém a chave de todos os clientes. Passa um
+`secretBox` e o manager sela cada secret antes da escrita no store e abre-o
+mesmo antes de uma entrega — os stores não dão por nada e persistem a string que
+recebem:
+
+```ts
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { webhooksPlugin, WebhookSecretNotSealedError, type WebhookSecretBox } from '@basaltkit/webhooks'
+
+const key = Buffer.from(process.env.WEBHOOK_SEAL_KEY!, 'base64') // 32 bytes
+const aad = (c: { endpointId: string; tenantId?: string | null }) => Buffer.from(`${c.endpointId}\0${c.tenantId ?? ''}`)
+
+const secretBox: WebhookSecretBox = {
+  seal(plain, context) {
+    const iv = randomBytes(12)
+    const cipher = createCipheriv('aes-256-gcm', key, iv).setAAD(aad(context))
+    const data = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()])
+    return `v1:${Buffer.concat([iv, cipher.getAuthTag(), data]).toString('base64url')}`
+  },
+  open(sealed, context) {
+    if (!sealed.startsWith('v1:')) throw new WebhookSecretNotSealedError() // uma linha legada em claro
+    const raw = Buffer.from(sealed.slice(3), 'base64url')
+    const decipher = createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12)).setAAD(aad(context))
+    decipher.setAuthTag(raw.subarray(12, 28))
+    return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8')
+  },
+}
+
+webhooksPlugin({ store, secretBox })
+```
+
+- **Traz a tua própria criptografia.** O `@basaltkit/webhooks` não traz cifra
+  nenhuma: a box pode ser uma chamada a um KMS, um vault, ou o esboço AES-GCM
+  acima — qualquer objeto com `seal(plain, context)` e `open(sealed, context)`
+  (síncronos ou assíncronos). Um envelope que já uses noutro lado (por exemplo o
+  que o teu armazenamento de ficheiros usa para selar chaves) é igualmente válido.
+- **Associa o contexto.** O `context` é `{ endpointId, tenantId }`. Metê-lo no
+  texto cifrado (additional data do AES-GCM, encryption context de um KMS)
+  significa que um secret selado copiado para a linha de outro endpoint deixa de
+  abrir.
+- **O que é selado.** O `register()` sela o secret que gera ou recebe, o
+  `rotateSecret()` sela o secret novo e o anterior. Ambos continuam a **devolver
+  o texto em claro** — o único momento em que o entregas ao cliente. O `list()`
+  nunca devolve secrets, com ou sem box.
+- **Linhas legadas.** As linhas escritas antes de ativares a box guardam texto em
+  claro. Continuam a entregar: um valor para o qual o `isSealed(value)` opcional
+  devolve `false`, ou cujo `open()` lança `WebhookSecretNotSealedError`, é usado
+  tal como está. O próximo `rotateSecret()` (ou novo `register()`) do endpoint
+  escreve-o selado.
+- **Falhas.** Qualquer outro erro do `open()` faz falhar a entrega desse endpoint
+  (`error: 'could not open the endpoint signing secret'`, `retryable: true`, para
+  que o outbox volte a tentar depois de uma falha do KMS); a causa é registada
+  apenas com o id do endpoint. Um secret anterior já expirado nunca é aberto.
+
 ## Fazer dispatch de eventos
 
 `dispatch(event, data, tenantId?)` encontra todos os endpoints subscritos (os do
@@ -256,6 +313,19 @@ retry depois de um backoff longo continue dentro da tolerância do recetor; o co
 (com o seu `id` e `sentAt`) é idêntico em todas as tentativas. O `endpointId` identifica a subscrição para a qual foi
 assinado. Ambos estão dentro do corpo assinado, por isso nenhum pode ser alterado
 sem partir a assinatura.
+
+O prefixo `x-basalt` é o default. Produtos white-label podem escolher o seu com
+`headerPrefix` (minúsculas, `[a-z][a-z0-9-]{0,31}`, validado quando o deliverer
+é construído): `headerPrefix: 'x-acme'` envia `x-acme-event`, `x-acme-delivery`
+e `x-acme-signature`. Um recetor lê os mesmos nomes com
+`webhookHeaderNames(prefix)`:
+
+```ts
+import { verifySignature, webhookHeaderNames } from '@basaltkit/webhooks'
+
+const names = webhookHeaderNames('x-acme') // { event, delivery, signature }
+const ok = verifySignature(request.headers[names.signature] as string, body.bytes, secret)
+```
 
 ## Dispatch automático a partir de eventos de domínio
 
@@ -541,6 +611,32 @@ Para retries duráveis e distribuídos que sobrevivem a um restart a meio da
 entrega, conduz `dispatch()` a partir de `@basaltkit/queue` em vez de depender do
 loop de retry em processo — vê [Filas e jobs](/pt/guide/queues).
 
+### Telemetria de entrega
+
+Cada resultado traz `durationMs`: o tempo real da entrega inteira, com todas as
+tentativas, a resolução DNS e o backoff incluídos. O `status` é o estado HTTP da
+última resposta recebida.
+
+Para um registo por tentativa — o que uma página de integrações mostra a um
+cliente — passa `onAttempt`. É chamado depois de cada tentativa com
+`{ deliveryId, endpointId, tenantId?, event, attempt, ok, status?, durationMs, error?, at }`:
+
+```ts
+webhooksPlugin({
+  store,
+  onAttempt: (a) =>
+    deliveryLog.insert({ ...a, at: a.at.toISOString() }), // a tua tabela, a tua retenção
+})
+```
+
+O hook não é aguardado, e um throw ou uma rejeição são registados e engolidos —
+um registo avariado nunca altera uma entrega. Uma entrega recusada antes de
+qualquer tentativa (sem secret de assinatura, URL bloqueado pela guarda SSRF,
+tecto de fan-out) não produz tentativa; aparece apenas no `DeliveryResult`. O
+Basalt não guarda nenhum registo de entregas próprio e nunca lê o corpo da
+resposta (é descartado sem ser lido, ver acima), por isso não há excerto de
+resposta para registar.
+
 ### A guarda SSRF
 
 Os URLs dos endpoints são fornecidos por clientes, por isso cada URL de entrega é
@@ -746,6 +842,40 @@ As colunas `previousSecret` / `previousSecretExpiresAt` do modelo guardam uma
 quando um endpoint está em rotação, por isso um schema anterior a elas continua
 a funcionar até chamares o `rotateSecret()` — sincroniza e migra antes disso.
 
+### Schema por tenant
+
+Com [schema por tenant](/pt/guide/database-per-tenant) os endpoints de cada
+tenant vivem no seu próprio schema. Dá ao store Prisma um cliente que se resolve
+a cada chamada em vez de um fixo — não é preciso nenhum modo especial do store:
+
+```ts
+import { tenantClient } from '@basaltkit/prisma'
+import type { PrismaClient } from '@prisma/client'
+
+const webhooks = prismaWebhookStore(tenantClient<PrismaClient>())
+webhooksPlugin({ store: webhooks.store, secretBox })
+```
+
+Dentro de um pedido, `register()` / `list()` / `dispatch()` chegam ao schema do
+tenant ativo (o endpoint continua associado a esse tenant, o que o schema torna
+redundante mas inofensivo). Fora do caminho do pedido, cada chamada tem de
+correr dentro do contexto do tenant — caso contrário o `db()` lança
+`DB_UNAVAILABLE`:
+
+```ts
+// um job de fila com { tenantId, event, data } vindo do pedido que o emitiu
+await tenancy.run(job.tenantId, () =>
+  hooks.dispatch(job.event, job.data, { tenantId: job.tenantId, idempotencyKey: job.id }),
+)
+```
+
+O `webhookOutboxPlugin` **não** serve este cenário: o seu relay faz de propósito
+o dispatch de cada entrada num contexto novo, sem tenant, onde um store
+`tenantClient()` não se consegue resolver. Conduz as entregas a partir de um job
+de fila como acima (o `idempotencyKey` mantém o `id` da entrega estável entre
+retries), ou mantém as tabelas de webhooks no schema central com um cliente
+normal.
+
 ### Qual backend?
 
 | Store | Pacote | Usar quando |
@@ -797,7 +927,7 @@ rotações são cortes imediatos.
 
 ### `webhooksPlugin(options)`
 
-Tudo exceto `store`, `deliverer`, `events` e as três opções de fan-out é reencaminhado para o
+Tudo exceto `store`, `deliverer`, `events`, `secretBox` e as três opções de fan-out é reencaminhado para oTudo exceto `store`, `deliverer`, `events` e as três opções de fan-out é reencaminhado para o
 `WebhookDeliverer` que constrói (e ignorado se passares o teu próprio
 `deliverer`).
 
@@ -809,6 +939,7 @@ Tudo exceto `store`, `deliverer`, `events` e as três opções de fan-out é ree
 | `maxEndpointsPerDispatch` | `number \| false` | `100` | Máximo de endpoints ativos de um âmbito (tenant, ou sem tenant) por evento; acima disso, esse âmbito é recusado por inteiro ([tecto de fan-out](#tecto-de-fan-out)) |
 | `dispatchConcurrency` | `number` | `16` | Entregas que um `dispatch` corre ao mesmo tempo |
 | `onFanOutExceeded` | `(info) => void` | `console.warn` | Chamado uma vez por âmbito recusado, com `{ event, tenantId, endpoints, limit }`. Nunca pode lançar |
+| `secretBox` | `WebhookSecretBox` | — (guardado tal como chega) | Sela os secrets dos endpoints antes da escrita no store e abre-os em cada entrega ([selar secrets em repouso](#selar-secrets-em-repouso)) |
 | `secret` | `string` | — | Secret HMAC de assinatura por predefinição (mín. 16 caracteres) para endpoints sem tenant. Os endpoints de tenant usam sempre o seu |
 | `allowSharedSecret` | `boolean` | `false` | Opt-out: assinar um endpoint de tenant sem secret próprio com o `secret` por predefinição (senão é recusado) |
 | `allowUnsigned` | `boolean` | `false` | Opt-out: enviar sem assinatura quando não há secret nenhum (senão é recusado) |
@@ -820,6 +951,8 @@ Tudo exceto `store`, `deliverer`, `events` e as três opções de fan-out é ree
 | `fetchImplPinsAddress` | `boolean` | `false` | Declara que o teu `fetchImpl` respeita `PINNED_ADDRESS` (ex. embrulha o `pinnedFetch`): silencia o aviso de ligação sem fixação e salta a revalidação antes de cada retry |
 | `sleep` | `(ms) => Promise<void>` | `setTimeout` | Sleep de backoff injetável (testes) |
 | `now` | `() => number` | `Date.now()/1000` | Relógio injetável em **segundos**, usado no timestamp da assinatura |
+| `headerPrefix` | `string` | `'x-basalt'` | Prefixo dos headers `-event` / `-delivery` / `-signature`; minúsculas `[a-z][a-z0-9-]{0,31}`, validado na construção |
+| `onAttempt` | `(attempt: WebhookAttempt) => void \| Promise<void>` | — | Chamado depois de cada tentativa ([telemetria de entrega](#telemetria-de-entrega)); não é aguardado, os erros são registados e engolidos |
 
 ### `SsrfGuardOptions` (a opção `ssrf`)
 
@@ -866,6 +999,7 @@ shutdown (best-effort).
 | `matchesEvent` | `(patterns, event) => boolean` | O comparador de padrões, para o `forEvent` de um store próprio |
 | `webhookOutboxDispatch` | `(webhooks, options?) => OutboxDispatch` | Adapta um `WebhookManager` a um dispatch de outbox; só lança em falhas transitórias, com ids de entrega estáveis |
 | `pinnedFetch` | `(url, init) => Promise<Response>` | Cliente compatível com `fetch` sobre o transporte fixado — o delegado de um `fetchImpl` próprio |
+| `webhookHeaderNames` | `(prefix = 'x-basalt') => { event, delivery, signature }` | Os nomes de header que um deliverer com esse `headerPrefix` envia — lê-os no recetor; lança `TypeError` para um prefixo inválido |
 | `deriveDeliveryId` | `(idempotencyKey, endpointId) => string` | O `id` de entrega determinístico usado pelo outbox / `idempotencyKey` |
 
 ## Modos de falha e resolução de problemas
