@@ -116,9 +116,13 @@ listing (no rate-limit consumption, no audit or denial records):
 - any key whose plugin registers an `http:route-visibility` check —
   `teamsPlugin` hides `meta.teamRole` tools from callers without that role in the
   current tenant; `permissionsPlugin` hides `meta.can` tools whose permission(s)
-  the caller does not hold (RBAC, in the current scope — the guard's own question).
+  the caller does not hold (RBAC, in the current scope — the guard's own question);
+  `apiKeysPlugin` hides `meta.scopes` tools the caller's API key does not cover (and
+  `meta.apiKey: false` tools from key holders); `authPlugin` hides `meta.mfa: true`
+  (or `requireMfa: true`) tools from a signed-in session without a second factor.
 
-Not filtered (listed, refused on call): `mfa`, `scopes`, `subscribed`/`feature`,
+Not filtered (listed, refused on call): `subscribed`/`feature` (an entitlement read per
+tool, possibly metered), a `requireMfa` function policy (never called on a listing),
 audiences, rate limits, handler-level checks (e.g. a policy the handler runs on a
 resource) and `meta.can` resource requirements decided by a policy (their loader
 never runs on a listing). Visibility is never authorization —

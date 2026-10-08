@@ -335,10 +335,15 @@ auditoria ou de recusa:
 | a rota tem `meta.auth` e o chamador não tem `ctx().user` | embutido, quando um guard reivindica `auth` (ex.: `authPlugin`); com uma dispensa de auth na edge nada é escondido |
 | a rota tem `meta.teamRole` e o chamador não tem esse papel (ou um superior) no tenant atual | a verificação de visibilidade do `teamsPlugin` (uma leitura de membership) |
 | a rota tem `meta.can` e ao chamador falta uma das suas permissões (RBAC, scope atual; o `superAdmin` passa sempre) | a verificação de visibilidade do `permissionsPlugin` (leituras de grants — nenhum registo `permission:denied`) |
+| a rota tem `meta.scopes` e a API key do chamador não tem todos os scopes (ou não há chave); ou a rota tem `meta.apiKey: false` e o chamador tem uma chave | a verificação de visibilidade do `apiKeysPlugin` (só lê `ctx().apiKey` — nenhum hook `auth:apikey_rejected`) |
+| a rota tem `meta.mfa: true` (ou aplica-se `authPlugin({ requireMfa: true })`) e a sessão do chamador autenticado não tem segundo fator (`ctx().amr` sem `'mfa'`) | a verificação de visibilidade do `authPlugin` (só lê o `ctx()` — nenhuma leitura do store de MFA) |
 | qualquer chave cujo plugin registe uma verificação em `http:route-visibility` | o `RouteVisibilityCheck` desse plugin |
 
-**Não filtrado** — listado, e recusado na chamada: `mfa`, `scopes`,
-`subscribed`/`feature`, audiências, rate limits e tudo o que um handler verifique
+**Não filtrado** — listado, e recusado na chamada: `subscribed`/`feature`
+(decidi-los exige uma leitura de entitlement por tool, e uma verificação de
+entitlement pode medir uso — algo que uma listagem não pode fazer), um requisito
+de MFA vindo de uma política `requireMfa` *função* (código da app sem contrato de
+pureza, por isso nunca é chamada numa listagem), audiências, rate limits e tudo o que um handler verifique
 por si (ex.: uma policy que corre sobre um recurso carregado com
 `authorize(user, permission, resource)` — numa listagem não há recurso), e um
 [requisito de recurso do `meta.can`](/pt/guide/authorization#politicas-no-guard-requisitos-de-recurso)
@@ -426,7 +431,7 @@ texto é o mesmo corpo de erro que o HTTP teria devolvido (ex.:
 | `415` do `POST /mcp` | O corpo não foi enviado como `Content-Type: application/json` | Envia `application/json` (os clientes MCP fazem-no) |
 | `400` `Mcp-Session-Id header required` | Chegou uma mensagem que não é `initialize` sem sessão | Envia primeiro `initialize` e repete o seu `Mcp-Session-Id` (os clientes da spec fazem-no), ou `mcpRoutes({ sessions: false })` |
 | `404` `Session not found` | A sessão expirou, foi despejada ou terminada, o processo reiniciou, respondeu outra réplica — ou foi apresentada por outro chamador | Volta a inicializar; atrás de réplicas usa sticky sessions |
-| Uma tool falta no `tools/list` mas pode ser chamada | O chamador falha estaticamente o seu `meta.auth`/`meta.teamRole`/`meta.can` (a listagem esconde-a) | Esperado; `mcpRoutes({ listVisibleOnly: false })` lista tudo |
+| Uma tool falta no `tools/list` mas pode ser chamada | O chamador falha estaticamente o seu `meta.auth`/`meta.teamRole`/`meta.can`/`meta.scopes`/`meta.mfa` (a listagem esconde-a) | Esperado; `mcpRoutes({ listVisibleOnly: false })` lista tudo |
 | Por stdio, `-32000` `Too many requests in flight` | Mais de `maxConcurrentRequests` chamadas em simultâneo na ligação | Espera pelas respostas, ou aumenta `serveMcpStdio(app, { maxConcurrentRequests })` |
 | Uma tool lê um header que chega `undefined` | O header não está na allowlist de headers encaminhados | `mcpPlugin({ forwardHeaders: ['x-my-header'] })` |
 | O Claude Desktop mostra um servidor morto/quebrado | Algo imprimiu no stdout — ele é o canal JSON-RPC | `logLevel: 'silent'`, remove `console.log`; vê a checklist de stdio acima |

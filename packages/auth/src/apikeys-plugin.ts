@@ -1,5 +1,5 @@
 import { BasaltError, createToken, definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
-import type { RequestEnricher, RouteGuard } from '@basaltkit/http'
+import type { RequestEnricher, RouteGuard, RouteVisibilityCheck } from '@basaltkit/http'
 import { ApiKeys, ScopeRequiredError, scopesSatisfy, type ApiKeyContext, type ApiKeysOptions } from './apikeys.js'
 import { publicUser } from './auth.js'
 import type { UserSource } from './stores.js'
@@ -205,6 +205,21 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
         }
       }
       metadata.add('http:guards', guard)
+
+      // Visibility (e.g. MCP `tools/list`): hide a route whose `meta.scopes`
+      // the caller's key does not cover, or that refuses keys (`meta.apiKey:
+      // false`) when the caller holds one. Pure — it reads ctx().apiKey, the
+      // value the guard reads, and never emits `auth:apikey_rejected`.
+      const visibility: RouteVisibilityCheck = ({ route, context }) => {
+        const meta = route.meta as Record<string, unknown> | undefined
+        const key = context['apiKey'] as ApiKeyContext | undefined
+        if (key && meta?.['apiKey'] === false) return false
+        const required = meta?.['scopes']
+        if (!Array.isArray(required) || required.length === 0) return true
+        const granted = key?.scopes ?? []
+        return (required as string[]).every((scope) => scopesSatisfy(granted, [scope]))
+      }
+      metadata.add('http:route-visibility', visibility)
       // Claim `meta.scopes` for the adapters' boot-time guarded-meta check —
       // a scope-gated route without this plugin would serve unchecked.
       metadata.add('http:guarded-meta', 'scopes')
