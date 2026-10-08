@@ -74,12 +74,12 @@ Entrou no `main` depois da publicação da 1.12, tudo opt-in e sem quebras:
   `replayAfterGuards: true` passa a verificação para depois dos guards da rota,
   para que um caller revogado receba `401`/`403` em vez do sucesso em cache. As
   duas vão passar a default numa futura major — vê
-  [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-idempotencyplugin).
+  [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).
 - **Cabeçalhos por rota.** `meta.headers` aplica cabeçalhos de resposta
   estáticos (por exemplo `X-Robots-Tag: noindex` num link de partilha público) em
   todas as respostas que a rota produz, incluindo os erros dos guards, da
   validação e do handler — vê
-  [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-meta-headers).
+  [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-headers).
 - **Webhooks operáveis.** `secretBox` sela os secrets de assinatura dos endpoints
   em repouso, `onAttempt` e `DeliveryResult.durationMs` reportam cada tentativa
   de entrega, `headerPrefix` muda o nome dos headers `x-basalt-*`, e
