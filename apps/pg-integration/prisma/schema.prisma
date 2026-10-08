@@ -227,10 +227,27 @@ model Comment {
   resolvedBy   String?
   editedAt     DateTime?
   createdAt    DateTime
+  anchor       String?
+  deletedAt    DateTime?
+  deletedBy    String?
+  deleteReason String?
 
   @@id([tenantId, id])
   @@index([tenantId, resourceType, resourceId])
   @@map("comments")
+}
+
+model CommentRevision {
+  tenantId  String
+  id        String
+  commentId String
+  body      String
+  at        DateTime
+  by        String?
+
+  @@id([tenantId, id])
+  @@index([tenantId, commentId, at])
+  @@map("comment_revisions")
 }
 
 

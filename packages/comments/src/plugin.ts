@@ -1,18 +1,31 @@
 import { createToken, ctx, definePlugin, BasaltError, type Container, ensureMetadata } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
-import { Comments, type CommentsOptions } from './comments.js'
+import { assertRevisionStore, Comments, type CommentsOptions } from './comments.js'
 import type { Comment } from './store.js'
 
+/**
+ * `actorId` is who did it: the author for `created`/`mentioned`, the resolver
+ * for `resolved`, otherwise the explicit actor or `ctx().user.id`. Absent when
+ * a call runs outside a request with no actor given (a job, a script).
+ */
 declare module '@basaltkit/core' {
   interface BasaltHooks {
-    'comment:created': { comment: Comment }
-    'comment:updated': { comment: Comment }
-    'comment:deleted': { tenantId: string; id: string; resourceType: string; resourceId: string }
-    'comment:resolved': { comment: Comment }
-    'comment:reopened': { comment: Comment }
+    'comment:created': { comment: Comment; actorId?: string }
+    'comment:updated': { comment: Comment; actorId?: string }
+    'comment:deleted': {
+      tenantId: string
+      id: string
+      resourceType: string
+      resourceId: string
+      /** `true` when the comment was kept as a tombstone (`deletion: 'soft'`). */
+      soft?: boolean
+      actorId?: string
+    }
+    'comment:resolved': { comment: Comment; actorId?: string }
+    'comment:reopened': { comment: Comment; actorId?: string }
     /** One per mentioned user — wire to notifications. */
-    'comment:mentioned': { comment: Comment; userId: string }
+    'comment:mentioned': { comment: Comment; userId: string; actorId?: string }
   }
 }
 
@@ -24,6 +37,8 @@ export function commentsPlugin(options: CommentsPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:comments',
     register({ container, hooks }) {
+      // Fail at boot, not on the first edit, when revisions cannot be kept.
+      if (options.revisions === true && options.store) assertRevisionStore(options.store)
       // 'tenancy:active' is tenancyPlugin's marker: how a generic package
       // learns the app is multi-tenant without importing @basaltkit/tenancy.
       const metadata = ensureMetadata(container)
@@ -135,12 +150,21 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
       method: 'POST',
       url: '/comments',
       meta,
-      body: resource.extend({ body: z.string().min(1), parentId: z.string().optional() }),
+      body: resource.extend({
+        body: z.string().min(1),
+        parentId: z.string().optional(),
+        anchor: z.record(z.string(), z.unknown()).optional(),
+      }),
       async handler({ body, reply }) {
         await assertAllowed('create', { resourceType: body.resourceType, resourceId: body.resourceId })
         const created = await comments()
           .on(body.resourceType, body.resourceId)
-          .add({ authorId: currentUser().id, body: body.body, ...(body.parentId ? { parentId: body.parentId } : {}) })
+          .add({
+            authorId: currentUser().id,
+            body: body.body,
+            ...(body.parentId ? { parentId: body.parentId } : {}),
+            ...(body.anchor ? { anchor: body.anchor } : {}),
+          })
         return reply.code(201).send(created)
       },
     }),
@@ -152,7 +176,7 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
       body: z.object({ body: z.string().min(1) }),
       async handler({ params, body }) {
         await assertOnComment(params.id, 'edit')
-        return comments().edit(params.id, body.body)
+        return comments().edit(params.id, body.body, { actorId: currentUser().id })
       },
     }),
     route({
@@ -162,7 +186,7 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
       params: z.object({ id: z.string() }),
       async handler({ params, reply }) {
         await assertOnComment(params.id, 'delete')
-        await comments().remove(params.id)
+        await comments().remove(params.id, { by: currentUser().id })
         return reply.code(204).send()
       },
     }),
@@ -183,7 +207,7 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
       params: z.object({ id: z.string() }),
       async handler({ params }) {
         await assertOnComment(params.id, 'reopen')
-        return comments().reopen(params.id)
+        return comments().reopen(params.id, { actorId: currentUser().id })
       },
     }),
   ]
