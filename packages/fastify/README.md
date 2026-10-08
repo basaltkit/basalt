@@ -241,7 +241,11 @@ createApp({ plugins: [fastifyPlugin({ routes }), idempotencyPlugin({ fingerprint
 ```
 
 It covers Basalt `route()` definitions. Unlike the earlier Fastify-only hook, it does not
-cover handlers registered directly on the Fastify instance.
+cover handlers registered directly on the Fastify instance: a raw `fastify.post(...)` that
+relied on it is no longer protected — declare it with `route()` and pass it to
+`fastifyPlugin({ routes })`. The check now also runs after the enrichers (a suspended tenant
+gets its `403`, not a replay), and a refusal raised before the handler (a guard's
+`401`/`403`, a `429`) is never stored.
 
 ### Edge plugins (security, health, metrics, tracing, OpenAPI)
 

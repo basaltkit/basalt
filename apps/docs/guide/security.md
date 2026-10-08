@@ -451,16 +451,29 @@ idempotencyPlugin({
   This holds for every handler shape — one that returns its payload is replayed
   exactly like one that calls `reply.send()`.
 - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
-- `5xx` responses, `stream()` downloads and `sse()` streams are **not** cached,
-  so genuine failures stay retryable. A client error the route throws (`4xx`)
-  is recorded and replayed like any other response.
-- Keys are scoped by **caller credentials + tenant + method + route**, hashed
-  with SHA-256 before they reach the store. The credentials are every header in
-  `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`,
-  `x-api-key`) and the tenant is `x-tenant-id` + `host`, so one user's cached
-  response can never be replayed to another (no cross-user/tenant leak), and the
-  same key on two endpoints can't collide. If you authenticate with another
-  header, add it to `credentialHeaders`.
+- Only the **handler's own** outcome is recorded. A refusal raised before the
+  handler ran — a guard's `401`/`403`, the rate limiter's `429`, a validation
+  `400` — releases the key, so a client that honours `Retry-After` (or signs in
+  again) gets its operation run on the retry.
+- `5xx` responses, the retry-later statuses `408`, `425` and `429` (even from
+  the handler), `stream()` downloads and `sse()` streams are **not** cached, so
+  genuine failures stay retryable. Any other client error the handler throws
+  (`4xx`) is recorded and replayed byte-for-byte.
+- Keys are scoped by **caller credentials + tenant headers + method + route
+  pattern**, hashed with SHA-256 before they reach the store. The credentials
+  are every header in `credentialHeaders` (default `authorization`,
+  `x-session-id`, `cookie`, `x-api-key`), so one credential's cached response is
+  never replayed to another credential. If you authenticate with another header,
+  add it to `credentialHeaders`.
+- **What the scope does not cover.** The tenant part is only the raw
+  `x-tenant-id` and `host` headers — not a tenant resolved from a path segment
+  (`/t/:tenant/...`) or a token claim — and the route is its *pattern*, not the
+  concrete path params. The same credential reusing one key on
+  `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and
+  `/orders/2/pay`, receives the **first** response. Have clients mint a fresh
+  key per operation (and per tenant), and bind the key to the URL so such a
+  reuse is refused with `422`:
+  `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
 - Requests with **no** credential header are not cached or replayed by default
   (a stranger who guessed the key would otherwise get the response). Opt in with
   `allowAnonymous: true` only for public endpoints with nothing private in them.
@@ -468,7 +481,8 @@ idempotencyPlugin({
   `MemoryIdempotencyStore` sweeps expired entries and is capped by `maxEntries`
   (default 10 000). `RedisIdempotencyStore` shares replays across instances.
 - It covers the routes Basalt serves (`route()` definitions). A handler you
-  register on the underlying framework by hand is not covered.
+  register on the underlying framework by hand — a raw `fastify.post(...)` — is
+  not covered: declare it with `route()`.
 
 **Bind the key to the request — `fingerprint`.** Without it, a client that
 reuses a key for a *different* request (a bug, or a retry after the user edited
@@ -476,14 +490,22 @@ the form) silently receives the first request's result. `fingerprint: 'body'`
 stores a SHA-256 of the body with the record — canonical JSON with sorted keys
 for a parsed body, the exact bytes for a [`rawBody()`](/guide/adapters#raw-request-bodies-webhook-signatures)
 route — and answers a mismatch with `422 IDEMPOTENCY_KEY_REUSED`, also while
-the first request is still running. `upload()` routes are not fingerprinted by
+the first request is still running. `'body'` covers the body only, not the
+query string or the path params. `upload()` routes are not fingerprinted by
 `'body'`; pass a function (`({ route, request }) => string | undefined`) to
-fingerprint them, or anything else, your way.
+fingerprint them, or anything else (the URL, a header), your way.
+
+During a rolling deploy with `fingerprint` on, `RedisIdempotencyStore` writes
+in-flight reservations as `pending:<fingerprint>`, which an instance still on an
+older release misreads: roll the new release out first, then turn `fingerprint`
+on.
 
 **Where the check runs — `replayAfterGuards`.** By default the check runs after
-the enrichers and **before** the route guards: a caller whose token was revoked
-since the first request still receives the cached success, as long as it
-presents the same credential header. With `replayAfterGuards: true` it runs
+the enrichers and **before** the route guards. Running after the enrichers means
+the tenant is resolved first: a suspended tenant gets its `403`, not a replay.
+Running before the guards means a caller whose token was revoked since the first
+request still receives the cached success, as long as it presents the same
+credential header. With `replayAfterGuards: true` it runs
 after the guards and request validation, just before the handler — the revoked
 caller gets the guard's `401`/`403`, and a request that fails validation never
 reserves the key. A `rawBody()` route fingerprinted by `'body'` is always
