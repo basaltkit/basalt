@@ -98,6 +98,18 @@ describe('findUnguardedRoutes (BK-025)', () => {
     expect(findUnguardedRoutes(rows, { require: [] })).toEqual([])
   })
 
+  it('counts only auth: true as auth — the one value authPlugin enforces', () => {
+    const odd = describeRoutes([
+      { method: 'GET', url: '/a', meta: { auth: 'session', can: 'x' } },
+      { method: 'GET', url: '/b', meta: { auth: { strategy: 'jwt' }, can: 'x' } },
+    ])
+    expect(odd.map((row) => row.auth)).toEqual(['session', '{"strategy":"jwt"}'])
+    expect(findUnguardedRoutes(odd, { require: ['auth'] }).map(({ row, missing }) => [row.url, missing])).toEqual([
+      ['/a', ['auth']],
+      ['/b', ['auth']],
+    ])
+  })
+
   it('honours the allow predicate', () => {
     const offenders = findUnguardedRoutes(rows, {
       require: ['auth'],

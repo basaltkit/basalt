@@ -715,7 +715,7 @@ setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 `subscribed`, `feature`). Duas formas de transformar isso num controlo:
 
 ```bash
-# CI: termina com 1 quando uma rota não declara nem auth nem can (opt-outs explícitos passam)
+# CI: termina com 1 quando uma rota não declara auth e can (opt-outs explícitos passam)
 pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
 pnpm basalt routes --json > routes.json   # a tabela inteira, para rever ou comparar
 ```
@@ -734,7 +734,8 @@ it('todas as rotas declaram auth + can', async () => {
 ```
 
 `auth: false` (ou `public: true`) é um opt-out intencional e satisfaz os dois
-requisitos; `can: false` satisfaz `can`. **Só verifica o meta das rotas**: um
+requisitos; `can: false` satisfaz `can`. Só `auth: true` conta como `auth` — é o
+único valor que o `authPlugin` aplica. **Só verifica o meta das rotas**: um
 rate limit global, tenancy por URL (`tenancyPlugin({ required: { except } })`),
 hooks ou middleware da app, e as rotas de borda que os plugins montam sozinhos
 (`healthPlugin`, `metricsPlugin`, `openapiPlugin`) não aparecem — um resultado

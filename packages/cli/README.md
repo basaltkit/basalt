@@ -269,7 +269,8 @@ pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
 
 - `--require` is mandatory (`auth`, `can`, or both). An explicit opt-out is
   intentional and never reported: `auth: false` (or `public: true`) satisfies
-  both, and `can: false` satisfies `can`.
+  both, and `can: false` satisfies `can`. Only `auth: true` counts as `auth` —
+  the one value `authPlugin` enforces.
 - `--allow` takes comma-separated globs: `*` matches within one path segment,
   `**` across segments; a leading method (`'POST /webhooks/*'`) restricts it to
   that method.

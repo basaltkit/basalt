@@ -698,7 +698,7 @@ setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 `subscribed`, `feature`). Two ways to turn that into a gate:
 
 ```bash
-# CI: exit 1 when a route declares neither auth nor can (explicit opt-outs pass)
+# CI: exit 1 when a route does not declare both auth and can (explicit opt-outs pass)
 pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
 pnpm basalt routes --json > routes.json   # the whole table, for review or diffing
 ```
@@ -717,7 +717,8 @@ it('every route declares auth + can', async () => {
 ```
 
 `auth: false` (or `public: true`) is an intentional opt-out and satisfies both
-requirements; `can: false` satisfies `can`. **This checks route meta only**: an
+requirements; `can: false` satisfies `can`. Only `auth: true` counts as `auth` — it is the
+one value `authPlugin` enforces. **This checks route meta only**: an
 app-wide rate limit, URL-based tenancy (`tenancyPlugin({ required: { except } })`),
 app hooks or middleware, and the edge routes plugins mount themselves (`healthPlugin`,
 `metricsPlugin`, `openapiPlugin`) are invisible to it — a clean run means "every

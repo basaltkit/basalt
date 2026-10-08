@@ -34,6 +34,9 @@ ARG PNPM_VERSION=11
 
 FROM node:\${NODE_VERSION}-slim AS build
 ARG PNPM_VERSION
+# Non-interactive pnpm: without it \`pnpm prune\` in a workspace (a --ui app's
+# web/) aborts with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY.
+ENV CI=true
 WORKDIR /app
 RUN npm install -g pnpm@\${PNPM_VERSION}
 COPY . .

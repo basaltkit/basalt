@@ -34,8 +34,10 @@ export interface RouteRow {
   method: string
   url: string
   /**
-   * `meta.auth` as declared: `true` (session required), `false` (explicit
-   * public opt-out), a string for a named strategy, `null` when undeclared.
+   * `meta.auth` as declared: `true` (session required — the only value
+   * `authPlugin` enforces), `false` (explicit public opt-out), `null` when
+   * undeclared. Any other value is shown as a string; it is NOT enforced, so
+   * {@link findUnguardedRoutes} does not count it as `auth`.
    */
   auth: boolean | string | null
   /**
@@ -109,9 +111,11 @@ function describeRoute(route: RouteTableEntry): RouteRow {
 
 function authOf(value: unknown): boolean | string | null {
   if (value === undefined || value === null) return null
-  if (typeof value === 'boolean' || typeof value === 'string') return value
-  // Any other declared value is a protection request the guard interprets.
-  return true
+  if (typeof value === 'boolean') return value
+  // `authPlugin` enforces `auth: true` only: anything else is displayed as
+  // declared, never normalised to `true` (that would claim a protection the
+  // guard does not apply).
+  return display(value)
 }
 
 function canOf(value: unknown): string[] | null {
@@ -166,7 +170,8 @@ function display(value: unknown): string {
 /**
  * Routes whose meta does not declare the guards in `require`. An explicit
  * opt-out is intentional and never reported: `auth: false` / `public: true`
- * satisfies both `auth` and `can`, and `can: false` satisfies `can`.
+ * satisfies both `auth` and `can`, and `can: false` satisfies `can`. Only
+ * `auth: true` satisfies `auth` — the one value `authPlugin` enforces.
  *
  * This checks route META only — see the module comment for what it cannot see.
  */
@@ -176,7 +181,7 @@ export function findUnguardedRoutes(rows: readonly RouteRow[], options: FindUngu
     if (row.public || options.allow?.(row)) continue
     const missing: RouteRequirement[] = []
     for (const requirement of options.require) {
-      if (requirement === 'auth' && row.auth === null) missing.push('auth')
+      if (requirement === 'auth' && row.auth !== true) missing.push('auth')
       if (requirement === 'can' && row.can === null) missing.push('can')
     }
     if (missing.length > 0) offenders.push({ row, missing })
