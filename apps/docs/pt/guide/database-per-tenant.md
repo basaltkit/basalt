@@ -571,6 +571,12 @@ commandsPlugin([
 ])
 ```
 
+Para ver em que estado está cada tenant sem mudar nada — migrações pendentes,
+falhadas ou com drift, com a correção de cada uma — regista
+`dbStatusCommand(...)` ao lado e corre `basalt db:status` (sai com 1 quando um
+plano está atrasado, por isso pode travar um deploy). Vê
+[Operações de base de dados](./database-operations).
+
 ## Seeding e trabalho em segundo plano
 
 Fora de um pedido HTTP não há tenant no contexto, por isso `db()` lançaria. Entra num
