@@ -178,6 +178,15 @@ function checkPlaneConfigs(
   for (const [name, target] of Object.entries(targets)) {
     const schemaPath = resolve(target.schemaPath)
     const configPath = join(dirname(schemaPath), 'prisma.config.ts')
+    if (planeConfigs.has(configPath)) {
+      // Two planes in one directory would share one config — and one migration
+      // history, which is exactly the mix this check exists to prevent.
+      io.log(
+        `! [${name}] shares ${relative(process.cwd(), dirname(schemaPath)) || '.'} with another plane: give each ` +
+          'plane its own directory, so each has its own prisma.config.ts and migrations.',
+      )
+      continue
+    }
     planeConfigs.add(configPath)
     // The plane's schema sits at the project root: its config is the root one.
     if (configPath === root) continue

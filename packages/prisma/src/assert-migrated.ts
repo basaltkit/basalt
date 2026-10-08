@@ -266,15 +266,28 @@ async function assertNoForbiddenTables(client: RawQueryClient, identity: Identit
   )
 }
 
-/** A schema holding `table` that the current role cannot use, if any (pg_catalog is readable by everyone). */
+/**
+ * A schema holding `table` that the current role cannot use, if any (pg_catalog
+ * is readable by everyone). Only the schema the lookup would actually have
+ * hit counts — the qualified one, or one named in the configured
+ * `search_path` (the raw setting: the effective path silently drops schemas
+ * without USAGE). Another schema that merely has a table of that name — a
+ * tenant schema's own `_prisma_migrations`, say — says nothing about this one.
+ */
 async function schemaWithoutUsage(client: RawQueryClient, table: string): Promise<string | undefined> {
-  const name = table.includes('.') ? table.split('.').pop()! : table
+  const parts = table.split('.')
+  const name = parts.pop()!
+  const schema = parts.length > 0 ? parts.join('.') : undefined
+  const inScope = schema
+    ? 'n.nspname = $2'
+    : "n.nspname = ANY(SELECT CASE WHEN s = '$user' THEN current_user::text ELSE s END FROM " +
+      "unnest(string_to_array(replace(replace(current_setting('search_path'), '\"', ''), ' ', ''), ',')) AS s)"
   try {
     const row = first(
       await client.$queryRawUnsafe(
         'SELECT n.nspname AS schema FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace ' +
-          "WHERE c.relname = $1 AND NOT has_schema_privilege(n.oid, 'USAGE') LIMIT 1",
-        name,
+          `WHERE c.relname = $1 AND ${inScope} AND NOT has_schema_privilege(n.oid, 'USAGE') LIMIT 1`,
+        ...(schema ? [name, schema] : [name]),
       ),
     )
     return typeof row?.['schema'] === 'string' ? row['schema'] : undefined
