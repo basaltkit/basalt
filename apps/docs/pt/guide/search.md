@@ -223,6 +223,10 @@ página dois continua onde a um acabou.
 
 Quem não usa o gancho fica na mesma: uma chamada ao driver, o mesmo comportamento.
 
+O `authorize` é a ferramenta para resultados do motor. Para listagens e contagens
+na base de dados, pede antes à política a sua forma de lista — vê
+[As políticas decidem um objeto, não uma lista](/pt/guide/authorization#as-politicas-decidem-um-objeto-nao-uma-lista).
+
 ## Reconstruir um índice
 
 Uma regra alimentada por eventos só conhece o que foi criado depois de a regra
