@@ -19,6 +19,7 @@ Four pieces, in the order they run:
 | `TenantSource` | once a resolver produced a ref | Loads the tenant record (`find` / `findByDomain`). An unknown ref from an **authoritative** resolver ends resolution with no tenant; from a fallback it moves on to the next fallback |
 | `ctx().tenant` | for the rest of the request | The resolved open record — `undefined` when nothing matched |
 | `tenancy:switched` | on every entry into a tenant | Lets cache, storage and the db client re-attach their per-tenant instance |
+| `tenancy:exited` | when a `tenancy.run()` callback settles | Releases what a `tenancy:switched` listener took (the leased database client) |
 | `tenancy:created` | once, after a new tenant is created **and provisioned** | Welcome email, audit entry, notifying a panel — a listener may assume the tenant's storage exists |
 
 Outside a request there is no resolver, so you enter a tenant explicitly with

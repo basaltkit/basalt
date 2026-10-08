@@ -570,6 +570,12 @@ commandsPlugin([
 ])
 ```
 
+To check where every tenant stands without changing anything — pending,
+failed or drifted migrations, with the fix for each — register
+`dbStatusCommand(...)` next to it and run `basalt db:status` (it exits 1 when a
+plane is behind, so it can gate a deploy). See
+[Database operations](./database-operations).
+
 ## Seeding & background work
 
 Outside an HTTP request there's no tenant in context, so `db()` would throw.
