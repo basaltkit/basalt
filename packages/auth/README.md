@@ -504,7 +504,7 @@ const app = await createApp({
     fastifyPlugin({
       routes: [
         ...authRoutes(),
-        ...apiKeyRoutes(), // POST/GET /apikeys, DELETE /apikeys/:id
+        ...apiKeyRoutes(), // POST/GET /apikeys, PATCH/DELETE /apikeys/:id, POST /apikeys/:id/rotate
         route({
           method: 'GET',
           url: '/reports',
@@ -579,7 +579,7 @@ lock go (the memory bound is absolute).
 
 ### Hooks (events)
 
-The application can react to authentication events: `auth:registered`, `auth:register_existing_email`, `auth:register_refused` (a registration policy refused a new account: `{ email, tenantId?, source: 'register' | 'social' }`), `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
+The application can react to authentication events: `auth:registered`, `auth:register_existing_email`, `auth:register_refused` (a registration policy refused a new account: `{ email, tenantId?, source: 'register' | 'social' }`), `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`, `auth:apikey_rotated`, `auth:apikey_updated` (changed field names only).
 
 ## API reference
 
@@ -636,7 +636,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 
 - `authRoutes({ register?, password?, rateLimit? })`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them. `POST /auth/logout` takes an optional `{ refreshToken }`: with none (or no body) it ends the cookie / `x-session-id` session and expires the cookie — a cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`). `register: 'open' | 'closed' | RegisterPolicy` sets who may sign up (default: the plugin's `registerPolicy`, open without one): `'closed'` answers a static `404 AUTH_REGISTRATION_CLOSED`; a refusing policy answers the same `202` as a success and creates nothing.
 - Every `authRoutes()`, `mfaRoutes()` and `oauthRoutes()` route declares `meta.account: true` (about the caller, not a tenant's data — `@basaltkit/teams`' membership guard lets non-members through) and, except MFA disable, `meta.mfa: false` (reachable under `requireMfa`). `ACCOUNT_META` exports the pair for your own profile routes.
-- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
+- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys[?includeExpired=true]`, `PATCH /apikeys/:id`, `POST /apikeys/:id/rotate`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user, anything else is 404). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds, `allowedIps` (addresses/CIDRs) and `meta`; expired keys are rejected and omitted from listings unless `includeExpired=true`. `PATCH` changes `name`, `scopes`, `expiresAt` (`null` = never), `allowedIps` and `meta` in one write; rotate takes an optional `graceMs` (0 by default, at most 30 days) and returns the new key once. An expired or revoked key cannot be renewed or rotated. Service keys (`ApiKeys.issue({ serviceId })`, no user, scopes only) are programmatic-only.
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
 - `oauthRoutes({ callbackBaseUrl, successRedirect?, bindingCookie?, rateLimit? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider (rate-limited by default).
 

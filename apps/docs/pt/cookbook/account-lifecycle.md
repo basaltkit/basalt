@@ -234,6 +234,9 @@ Apenas o hash SHA-256 e um pequeno prefixo de exibição são guardados; uma bas
 dados vazada não rende chaves utilizáveis. `GET /apikeys` lista-as (sem hash, sem
 texto simples); `DELETE /apikeys/:id` revoga. Um `*` nos scopes de uma chave
 concede tudo.
+`POST /apikeys/:id/rotate` substitui um segredo divulgado e `PATCH /apikeys/:id`
+altera o nome, os scopes, a expiração ou a [allowlist de IPs](/pt/guide/auth#apikeys-allowlist) —
+vê [Rodar uma chave](/pt/guide/auth#apikeys-rotation).
 
 ## 7. Convites de equipa
 

@@ -147,6 +147,24 @@ apiKeysPlugin({ store: s.apiKeys, users: s.users })
 webauthnPlugin({ config, verifier, credentials: s.passkeys }) // precisa do modelo AuthPasskey
 ```
 
+::: warning Atualizar para o auth-prisma 3.0
+O 3.0 guarda o [ciclo de vida das API keys](#apikeys-rotation): `AuthApiKey`
+(`auth_api_keys`) ganha `serviceId`, `previousHash` (único),
+`previousHashExpiresAt`, `rotatedAt`, `allowedIps` e `meta`. O Prisma seleciona
+todas as colunas de um modelo, por isso, assim que o cliente é regenerado,
+**todas** as consultas de API keys falham até a base de dados ter as colunas.
+Copia o modelo de `@basaltkit/auth-prisma/schema.prisma` à mão (o
+`basalt prisma:sync` só acrescenta modelos em falta, nunca campos novos a um
+modelo existente), corre `prisma generate` e depois
+`prisma migrate dev --name add_api_key_lifecycle` — com schema-per-tenant, em
+todos os schemas de tenant (`basalt tenant:migrate`). Todas as colunas novas são
+anuláveis ou têm por padrão uma lista vazia, por isso as chaves existentes
+continuam a funcionar. Enquanto as colunas não existirem, os pedidos com API key
+falham com `AUTH_API_KEY_SCHEMA_OUTDATED`, cuja mensagem traz os `ALTER TABLE`
+exatos para PostgreSQL e MySQL (também exportados como
+`API_KEY_LIFECYCLE_MIGRATION_SQL`). O `auth-sqlite` acrescenta as colunas sozinho.
+:::
+
 ::: warning Atualizar para o auth-prisma 2.0
 O 2.0 acrescenta dois modelos: `AuthAccountLink` (`auth_account_links`, as ligações
 de contas OAuth/OIDC) e `AuthPasskey` (`auth_passkeys`, credenciais WebAuthn).
@@ -1056,7 +1074,9 @@ verificação de email funciona de forma idêntica: hook `auth:verify_requested`
 utilizador autenticado através de `apiKeyRoutes()`, e guardadas apenas como um hash
 SHA-256 mais um prefixo curto de exibição — o texto simples é mostrado exatamente
 uma vez. Podem ter uma expiração opcional; chaves expiradas são rejeitadas pelo
-servidor e omitidas das listagens.
+servidor e omitidas das listagens (a menos que as peças). Uma chave pode ser
+[rodada](#apikeys-rotation), agir como um [serviço](#apikeys-service) em vez de
+um utilizador, e ser restringida a uma [allowlist de IPs](#apikeys-allowlist).
 
 O guard do plugin impõe três fronteiras em cada pedido autenticado por chave
 (`403` em cada caso, com um evento `auth:apikey_rejected`):
@@ -1074,7 +1094,7 @@ O guard do plugin impõe três fronteiras em cada pedido autenticado por chave
   permissivo.
 - **Rotas só de sessão.** Uma rota com `meta.apiKey: false` recusa qualquer chave
   (`AUTH_APIKEY_NOT_ALLOWED`). `apiKeyRoutes()` e `mfaRoutes()` declaram-no, por isso
-  uma chave nunca pode criar, listar ou revogar chaves, nem alterar o MFA.
+  uma chave nunca pode criar, listar, alterar, rodar ou revogar chaves, nem alterar o MFA.
 - **As listagens seguem as mesmas regras.** O plugin regista uma verificação de
   visibilidade sem efeitos secundários, por isso o
   [`tools/list` do MCP](/pt/guide/mcp#what-tools-list-shows) esconde as tools com
@@ -1093,13 +1113,13 @@ const app = await createApp({
     fastifyPlugin({
       routes: [
         ...authRoutes(),
-        ...apiKeyRoutes(), // POST /apikeys, GET /apikeys, DELETE /apikeys/:id (só sessão de login)
+        ...apiKeyRoutes(), // POST/GET /apikeys, PATCH/DELETE /apikeys/:id, POST /apikeys/:id/rotate (só sessão de login)
         route({
           method: 'GET',
           url: '/reports',
           meta: { scopes: ['reports:read'] }, // precisa de uma chave com este scope (ou `*`)
           async handler() {
-            const key = ctx().apiKey // { id, scopes, tenantId?, userId? }
+            const key = ctx().apiKey // { id, scopes, tenantId?, userId?, serviceId? }
             return { ok: true, keyId: key?.id }
           },
         }),
@@ -1186,6 +1206,161 @@ para as regras de ordem e de cabeçalhos. O documento OpenAPI anuncia estas rota
 com um esquema `apiKeyAuth` e `x-required-scopes` — passa
 `openapiPlugin({ apiKey: { header } })` se mudaste o header da chave
 ([esquemas de segurança OpenAPI](/pt/guide/openapi#security-schemes-sessions-and-api-keys)).
+
+### Rodar uma chave {#apikeys-rotation}
+
+`rotate()` substitui o segredo de uma chave e mantém o seu id, por isso o dono,
+os scopes, o `serviceId` e o rasto de auditoria ficam iguais. O novo texto
+simples é devolvido uma vez:
+
+```ts
+const { record, key } = await apiKeys.rotate(id)                          // o segredo antigo morre já
+const next = await apiKeys.rotate(id, { graceMs: 24 * 60 * 60 * 1000 })   // o segredo antigo funciona mais um dia
+```
+
+- **`graceMs` é 0 por padrão**, por isso a resposta a uma chave divulgada é um
+  simples `rotate()`. Uma janela de tolerância dá tempo a uma frota para adotar o
+  novo segredo. Tem um teto de `MAX_API_KEY_ROTATION_GRACE_MS` (30 dias, o mesmo
+  da [rotação de secrets dos webhooks](/pt/guide/webhooks)) e nunca dura mais do
+  que o `expiresAt` da própria chave ou uma revogação.
+- **No máximo dois segredos vivos.** Rodar outra vez durante uma janela de
+  tolerância descarta de imediato o segredo mais antigo.
+- **Compare-and-set.** Duas rotações concorrentes não podem ambas devolver uma
+  chave: a que perde recebe `409 AUTH_APIKEY_CONFLICT` (relê a chave e tenta de novo).
+- Uma chave revogada ou expirada não pode ser rodada de volta à vida
+  (`404 AUTH_APIKEY_NOT_FOUND`): emite uma nova.
+
+Por HTTP, `POST /apikeys/:id/rotate` com um `{ "graceMs": 3600000 }` opcional
+responde `201` com a informação da chave mais a nova `key`. O evento é
+`auth:apikey_rotated` (com `graceUntil` quando foi dada uma janela), que os
+padrões do `auditPlugin` registam.
+
+### Expiração e chaves expiradas {#apikeys-expiry}
+
+`update()` altera `name`, `scopes`, `expiresAt`, `allowedIps` e `meta` numa
+única escrita no store, depois de validar tudo; `null` limpa um campo.
+`setExpiry(id, expiresAt | null)` é o atalho para a expiração:
+
+```ts
+await apiKeys.setExpiry(id, Date.now() + 90 * 24 * 60 * 60 * 1000) // um inteiro futuro (ms)
+await apiKeys.setExpiry(id, null)                                    // nunca expira
+await apiKeys.update(id, { name: 'CI (prod)', scopes: ['reports:read'] })
+```
+
+**Uma chave expirada está morta**, tal como uma revogada: `rotate`, `update` e
+`setExpiry` respondem todos `404 AUTH_APIKEY_NOT_FOUND`, por isso ninguém pode
+renovar uma chave para além da sua política de expiração. Emite uma nova. Um
+`expiresAt` no passado ou não inteiro dá `400 AUTH_APIKEY_EXPIRATION_INVALID`;
+para matar uma chave já, revoga-a.
+
+`list()` omite as chaves expiradas, a menos que as peças com
+`apiKeys.list({ userId, includeExpired: true })` ou
+`GET /apikeys?includeExpired=true`, para que uma UI possa mostrar "expirou
+ontem". As chaves revogadas nunca são listadas. `list()` reaplica ele próprio o
+filtro `tenantId` / `userId` / `serviceId`, por isso um store próprio que ignore
+um deles nunca alarga o resultado. Por HTTP, `PATCH /apikeys/:id` aceita
+`{ name?, scopes?, expiresAt?: number | null, allowedIps?: string[] | null, meta?: object | null }`
+e emite `auth:apikey_updated` com os **nomes** dos campos alterados (nunca os valores).
+
+### Chaves de serviço {#apikeys-service}
+
+Uma chave age como um utilizador (`userId`) ou como um serviço não humano
+(`serviceId`), nunca as duas coisas (`400 AUTH_APIKEY_INPUT_INVALID`). O
+`serviceId` é um id opaco teu (1–128 caracteres imprimíveis, sem espaços) e é
+imutável:
+
+```ts
+const { key } = await apiKeys.issue({
+  name: 'ERP sync',
+  serviceId: 'erp-sync',
+  tenantId: tenant.id,
+  scopes: ['invoices:read'],
+})
+
+route({
+  method: 'GET',
+  url: '/invoices',
+  meta: { scopes: ['invoices:read'] },
+  async handler() {
+    ctx().apiKey?.serviceId // 'erp-sync'; ctx().user nunca é definido para uma chave de serviço
+  },
+})
+```
+
+Uma chave de serviço é autorizada **apenas pelos seus scopes e pela ligação ao
+tenant**. Nunca define `ctx().user`, por isso as rotas protegidas por
+`meta.auth` ou `meta.can` recusam-na (falham fechadas); dá às rotas de serviço um
+`meta.scopes`. O seu id sobrevive à rotação, e `list({ serviceId })` encontra as
+chaves de um serviço. `apiKeyRoutes()` nunca cria nem gere chaves de serviço (não
+têm utilizador, por isso estão fora do âmbito de qualquer chamador): emite-as
+com `ApiKeys` atrás da tua própria verificação de permissões.
+
+Por padrão, o rasto de auditoria não regista ator para uma chave de serviço.
+Para a atribuir, dá ao `auditPlugin` um
+[resolver `actor`](/pt/guide/persistence#attributing-non-human-callers) que
+devolve o formato de id da tua app:
+
+```ts
+auditPlugin({
+  store,
+  actor: (c) => c?.user?.id ?? (c?.apiKey?.serviceId ? `svc:${c.apiKey.serviceId}` : undefined),
+})
+```
+
+### Allowlist de IPs e metadados {#apikeys-allowlist}
+
+`allowedIps` restringe onde uma chave funciona: endereços IPv4/IPv6 ou redes
+CIDR, no máximo 32 (`API_KEY_ALLOWED_IPS_MAX`). Ausente ou vazio significa
+qualquer endereço.
+
+```ts
+await apiKeys.issue({ name: 'Escritório', scopes: ['*'], allowedIps: ['203.0.113.0/24', '2001:db8::/64'] })
+await apiKeys.update(id, { allowedIps: null }) // levanta a restrição
+```
+
+- As entradas são validadas e canonicalizadas na emissão e na atualização. O
+  IPv6 passa a minúsculas e `::ffff:a.b.c.d` passa a IPv4. Um CIDR que não é um
+  endereço de rede (`10.0.0.5/8`, normalmente uma gralha) ou que traz um zone id
+  é recusado (`400 AUTH_APIKEY_INPUT_INVALID`).
+- O IP do pedido é normalizado da mesma forma (parênteses retos e `%zone`
+  removidos, IPv4-mapped para IPv4), por isso o `::ffff:127.0.0.1` do Express e o
+  `127.0.0.1` do Fastify correspondem ambos a `127.0.0.0/8`.
+- Uma chave genuína usada a partir de um endereço fora da lista é **sempre**
+  recusada com `403 AUTH_APIKEY_IP_NOT_ALLOWED`, diga o `rejectInvalid` o que
+  disser, e emite `auth:apikey_rejected` com `reason: 'ip_not_allowed'`. Nada é
+  definido em `ctx()` e o `lastUsedAt` não é tocado.
+- **Falha fechada:** uma chave com allowlist é recusada num pedido sem IP
+  resolúvel. A allowlist vê o IP que o teu adapter resolveu. Atrás de um proxy,
+  configura o [proxy de confiança](/pt/guide/adapters) (Fastify `trustProxy`,
+  Express `trust proxy`, Hono `getClientIp`), ou todos os pedidos parecem vir do
+  proxy. Num runtime Hono que não expõe o endereço do socket e não tem
+  `getClientIp` (alguns runtimes edge), as chaves com allowlist são recusadas,
+  embora funcionem em Node.
+
+`meta` são metadados planos da app, como quem pediu a chave, um ticket ou o nome
+de uma conta de serviço. Tem no máximo 20 entradas (`API_KEY_META_LIMITS`), com
+chaves de `A-Z a-z 0-9 _ . -` até 40 caracteres (nunca `__proto__`,
+`constructor` ou `prototype`) e valores string até 500 caracteres. É devolvido
+nas listagens, e nunca é usado para autorização nem copiado para hooks.
+
+### Escrever o teu próprio `ApiKeyStore` {#apikeys-custom-store}
+
+O store em memória, o `auth-sqlite` e o `auth-prisma` implementam tudo o que
+está acima. Um `ApiKeyStore` próprio continua a funcionar sem alterações; as
+chamadas de ciclo de vida (`rotate`, `update`, `setExpiry`, e as rotas `PATCH` e
+de rotação) respondem então `501 AUTH_APIKEY_STORE_UNSUPPORTED`. Para as
+suportar, implementa o `update(id, patch, { ifHash? })` opcional:
+
+- aplica o patch de forma atómica, e só a um registo **não revogado** (`null`
+  limpa um campo; ignora os campos de identidade);
+- quando é dado `ifHash`, aplica-o só se o `hash` atual do registo ainda for
+  igual;
+- devolve o registo atualizado, ou `null` quando nada correspondeu.
+
+Implementar `update` compromete também o store com a tolerância de rotação: o
+`findByHash` tem de devolver também o registo cujo `previousHash` corresponde. O
+`ApiKeys` volta a verificar ele próprio a janela de tolerância, a revogação, a
+expiração e os filtros da listagem, por isso nunca confia isso ao store.
 
 ## Bloqueio por força bruta
 
@@ -1296,7 +1471,7 @@ ambos.
 | --- | --- | --- | --- |
 | `store` | `ApiKeyStore` | em memória | Onde vivem os hashes das chaves — durável em produção, ou as chaves morrem no redeploy |
 | `header` | `string` | `'x-api-key'` | Header alternativo ao `Authorization: Bearer mk_…`. Duas chaves **diferentes** (uma em cada) → `400 AUTH_APIKEY_AMBIGUOUS`, nunca uma a ganhar em silêncio |
-| `users` | `UserSource` | — | Quando definido, uma chave com `userId` também preenche `ctx().user`, para que as rotas protegidas por scopes leiam o utilizador que age |
+| `users` | `UserSource` | — | Quando definido, uma chave com `userId` também preenche `ctx().user`, para que as rotas protegidas por scopes leiam o utilizador que age. Uma chave de serviço (`serviceId`) nunca o faz |
 | `allowTenantlessKeys` | `boolean` | `false` | Deixa chaves emitidas sem tenant agir em pedidos com tenant (só chaves de plataforma de confiança) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Deixa uma chave sem `*` alcançar rotas `meta.auth`/`can`/`teamRole`/`audience` que não declaram `meta.scopes` |
 | `rejectInvalid` | `boolean` | `false` | Uma chave apresentada que não verifica → `401 AUTH_APIKEY_INVALID` + `WWW-Authenticate: Bearer error="invalid_token"`, em vez de continuar como anónimo |
@@ -1364,8 +1539,13 @@ autenticar os utilizadores.
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | Uma chave usada fora do tenant em que foi emitida (ou uma chave sem tenant num pedido com tenant) |
 | `ApiKeyNotAllowedError` | `AUTH_APIKEY_NOT_ALLOWED` | 403 | Uma chave usada numa rota só de sessão (`meta.apiKey: false`: gestão de chaves, MFA) |
 | `ApiKeyAmbiguousError` | `AUTH_APIKEY_AMBIGUOUS` | 400 | Duas chaves diferentes no mesmo pedido (`Authorization: Bearer mk_…` e o header da chave) |
-| `ApiKeyForbiddenError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `DELETE /apikeys/:id` para uma chave fora do âmbito tenant/utilizador de quem chama — um 404, nunca um 403, para que os ids das chaves não possam ser sondados |
-| `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: a `auth_api_keys` da base de dados não tem uma coluna (normalmente `expiresAt`, acrescentada no 1.5.0) — migra-a, em todos os schemas de tenant com schema-per-tenant |
+| `ApiKeyNotFoundError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `PATCH`, `DELETE` ou `POST …/rotate` em `/apikeys/:id` para uma chave fora do âmbito tenant/utilizador de quem chama — um 404, nunca um 403, para que os ids das chaves não possam ser sondados. Também `rotate` / `update` / `setExpiry` numa chave desconhecida, revogada ou expirada |
+| `ApiKeyExpirationError` | `AUTH_APIKEY_EXPIRATION_INVALID` | 400 | `expiresAt` no passado ou não inteiro (ms), na emissão ou na atualização |
+| `ApiKeyInputError` | `AUTH_APIKEY_INPUT_INVALID` | 400 | Uma entrada de `allowedIps` inválida, `meta` acima dos limites, `userId` junto com `serviceId`, um `serviceId` mal formado, ou `graceMs` fora de 0–30 dias |
+| `ApiKeyConflictError` | `AUTH_APIKEY_CONFLICT` | 409 | Uma rotação ou revogação concorrente alterou a chave primeiro — relê e tenta de novo |
+| `ApiKeyStoreUnsupportedError` | `AUTH_APIKEY_STORE_UNSUPPORTED` | 501 | Rodar, atualizar ou definir a expiração com um `ApiKeyStore` próprio sem `update` — vê [o teu próprio store](#apikeys-custom-store) |
+| `ApiKeyIpNotAllowedError` | `AUTH_APIKEY_IP_NOT_ALLOWED` | 403 | Uma chave válida usada a partir de um endereço fora da sua `allowedIps`, ou sem IP de cliente resolúvel |
+| `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: a `auth_api_keys` da base de dados não tem uma coluna (`expiresAt`, acrescentada no 1.5.0, ou as colunas de ciclo de vida do 3.0.0) — migra-a, em todos os schemas de tenant com schema-per-tenant |
 | `WebAuthnChallengeError` | `WEBAUTHN_CHALLENGE_INVALID` | 400 | O desafio da passkey expirou ou já foi usado (são de uso único) |
 | `WebAuthnVerificationError` | `WEBAUTHN_VERIFICATION_FAILED` | 400 | O verifier rejeitou a resposta do browser |
 | `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | O `finishRegistration` recebeu um `userId` diferente daquele para quem o desafio foi emitido, ou uma autenticação iniciada para um utilizador recebeu a passkey de outro |
@@ -1423,8 +1603,10 @@ autenticar os utilizadores.
 | `auth:verify_requested` · `auth:email_verified` | `{ user, token }` · `{ user }` | **Envia o token por email** — nunca é devolvido por HTTP |
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Envia o token por email**; o segundo confirma a alteração |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Notificação de segurança |
-| `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Trilho de auditoria |
-| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alertas — `reason` é `invalid`, `tenant_mismatch`, `not_allowed` ou `scope`; `prefix` é o prefixo de apresentação de uma chave inválida, nunca a chave. Não auditado por padrão |
+| `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId?, serviceId? }` · `{ id }` | Trilho de auditoria |
+| `auth:apikey_rotated` | `{ id, tenantId?, userId?, serviceId?, graceUntil? }` | Trilho de auditoria — `graceUntil` é quando o segredo substituído deixa de funcionar |
+| `auth:apikey_updated` | `{ id, tenantId?, userId?, serviceId?, changes }` | Trilho de auditoria — `changes` nomeia os campos (`name`, `scopes`, `expiresAt`, `allowedIps`, `meta`), nunca os valores |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alertas — `reason` é `invalid`, `ip_not_allowed`, `tenant_mismatch`, `not_allowed` ou `scope`; `prefix` é o prefixo de apresentação de uma chave inválida, nunca a chave. Não auditado por padrão |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | Alertas de força bruta de MFA e de bloqueio |
 | `auth:refresh_reused` | `{ userId, familyId }` | Alertas de roubo de token — um refresh token consumido voltou |
 | `auth:social_account_adopted` | `{ user }` | Um login social verificado assumiu uma conta não verificada; as credenciais antigas e as ligações de contas foram revogadas |

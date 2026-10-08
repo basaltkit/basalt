@@ -97,6 +97,20 @@ Shipped to `main` after the 1.12 release, all non-breaking:
   ARC only from servers you list. It ships with a reference Cloudflare Email
   Routing Worker — see [Inbound mail](/guide/inbound-mail).
 
+- **API key lifecycle.** `ApiKeys.rotate()` replaces a key's secret and keeps its
+  id, with an optional grace window (up to 30 days) for the old secret;
+  `update()` / `setExpiry()` change a key in one write; `list({ includeExpired })`
+  shows expired keys. Keys can act as a **service** (`serviceId`, scopes only,
+  never `ctx().user`), carry an **IP allowlist** (`403 AUTH_APIKEY_IP_NOT_ALLOWED`,
+  fail-closed) and flat `meta`. `apiKeyRoutes()` adds `PATCH /apikeys/:id` and
+  `POST /apikeys/:id/rotate`. `auditPlugin({ actor })` can attribute service
+  callers, and MCP sessions now bind to a userless key's id. *(`@basaltkit/auth`
+  4.2, `audit` 3.1, `mcp` 5.1, `auth-sqlite` 2.1 — auto-migrated.)* **One
+  exception to "non-breaking": `@basaltkit/auth-prisma` 3.0 needs a database
+  migration** (`add_api_key_lifecycle`) — see
+  [Upgrading to auth-prisma 3.0](/guide/auth#prisma-—-basaltkit-auth-prisma) and
+  [API keys](/guide/auth#apikeys-rotation).
+
 ## Highlights
 
 ### Promises the code now keeps

@@ -262,42 +262,132 @@ export interface ApiKeyRecord {
   expiresAt?: number
   lastUsedAt?: number
   revokedAt?: number
+  /**
+   * The non-human actor this key acts as (opaque and app-defined, e.g.
+   * `erp-sync`). Mutually exclusive with `userId`; immutable once issued.
+   */
+  serviceId?: string
+  /**
+   * SHA-256 of the secret the last rotation replaced. It keeps verifying until
+   * `previousHashExpiresAt`. Never exposed in {@link ApiKeyInfo}.
+   */
+  previousHash?: string
+  /** When the pre-rotation secret stops verifying (ms). Absent: it already does not. */
+  previousHashExpiresAt?: number
+  /** Time of the last rotation (ms). */
+  rotatedAt?: number
+  /**
+   * Client addresses allowed to use the key: canonical IPv4/IPv6 addresses or
+   * CIDR networks. Absent or empty means any address.
+   */
+  allowedIps?: string[]
+  /** Flat app metadata (who requested the key, a ticket, a label). Never used for authorization. */
+  meta?: Record<string, string>
 }
 
-/** What a listing exposes — never the hash. */
-export type ApiKeyInfo = Omit<ApiKeyRecord, 'hash'>
+/** What a listing exposes — never a hash, current or previous. */
+export type ApiKeyInfo = Omit<ApiKeyRecord, 'hash' | 'previousHash'>
 
+/**
+ * Narrows a listing. A store may use it to filter early, but `ApiKeys.list`
+ * re-applies every field itself: a store that ignores one never widens a result.
+ */
 export interface ApiKeyFilter {
   tenantId?: string
   userId?: string
+  serviceId?: string
+}
+
+/**
+ * The mutable fields of a key, as `ApiKeyStore.update` receives them. `null`
+ * clears a field. Identity (`id`, `tenantId`, `userId`, `serviceId`,
+ * `createdAt`) is not part of it, and drivers ignore it at runtime too: moving
+ * a key to another owner would be a privilege transfer.
+ */
+export interface ApiKeyPatch {
+  name?: string
+  scopes?: string[]
+  expiresAt?: number | null
+  hash?: string
+  prefix?: string
+  previousHash?: string | null
+  previousHashExpiresAt?: number | null
+  rotatedAt?: number
+  allowedIps?: string[] | null
+  meta?: Record<string, string> | null
+}
+
+/** Options of {@link ApiKeyStore.update}. */
+export interface ApiKeyUpdateOptions {
+  /** Compare-and-set: apply only while the record's current `hash` still equals this value. */
+  ifHash?: string
 }
 
 export interface ApiKeyStore {
   create(record: ApiKeyRecord): Promise<void>
+  /**
+   * The record whose `hash` equals `hash`. A store that implements
+   * {@link update} MUST also return the record whose `previousHash` equals it
+   * (rotation grace); `ApiKeys` re-checks the grace window itself.
+   */
   findByHash(hash: string): Promise<ApiKeyRecord | null>
   findById(id: string): Promise<ApiKeyRecord | null>
   /** Active (non-revoked) keys matching the filter. */
   list(filter: ApiKeyFilter): Promise<ApiKeyRecord[]>
   touch(id: string, at: number): Promise<void>
   revoke(id: string, at: number): Promise<void>
+  /**
+   * Applies `patch` atomically to a NON-revoked record — with `ifHash`, only
+   * while its current hash still equals it. Returns the updated record, or
+   * `null` when nothing matched (unknown, revoked, or the precondition failed).
+   *
+   * Optional, so stores written before it keep compiling; without it
+   * `ApiKeys.update`/`setExpiry`/`rotate` throw 501
+   * `AUTH_APIKEY_STORE_UNSUPPORTED`. Implementing it commits the store to the
+   * `previousHash` lookup in {@link findByHash}.
+   */
+  update?(id: string, patch: ApiKeyPatch, options?: ApiKeyUpdateOptions): Promise<ApiKeyRecord | null>
 }
+
+/** The fields an {@link ApiKeyPatch} may change — drivers apply nothing else. */
+export const API_KEY_PATCH_FIELDS = [
+  'name',
+  'scopes',
+  'expiresAt',
+  'hash',
+  'prefix',
+  'previousHash',
+  'previousHashExpiresAt',
+  'rotatedAt',
+  'allowedIps',
+  'meta',
+] as const satisfies readonly (keyof ApiKeyPatch)[]
+
+/** A detached copy, as a database returns: callers never alias the stored row. */
+const copyApiKey = (record: ApiKeyRecord): ApiKeyRecord => ({
+  ...record,
+  scopes: [...record.scopes],
+  ...(record.allowedIps !== undefined ? { allowedIps: [...record.allowedIps] } : {}),
+  ...(record.meta !== undefined ? { meta: { ...record.meta } } : {}),
+})
 
 export class MemoryApiKeyStore implements ApiKeyStore {
   private readonly records = new Map<string, ApiKeyRecord>()
 
   async create(record: ApiKeyRecord): Promise<void> {
-    this.records.set(record.id, record)
+    this.records.set(record.id, copyApiKey(record))
   }
 
   async findByHash(hash: string): Promise<ApiKeyRecord | null> {
     for (const record of this.records.values()) {
-      if (record.hash === hash) return record
+      if (record.hash === hash || record.previousHash === hash) return copyApiKey(record)
     }
     return null
   }
 
   async findById(id: string): Promise<ApiKeyRecord | null> {
-    return this.records.get(id) ?? null
+    const record = this.records.get(id)
+    return record ? copyApiKey(record) : null
   }
 
   async list(filter: ApiKeyFilter): Promise<ApiKeyRecord[]> {
@@ -306,9 +396,25 @@ export class MemoryApiKeyStore implements ApiKeyStore {
       if (record.revokedAt !== undefined) continue
       if (filter.tenantId !== undefined && record.tenantId !== filter.tenantId) continue
       if (filter.userId !== undefined && record.userId !== filter.userId) continue
-      out.push(record)
+      if (filter.serviceId !== undefined && record.serviceId !== filter.serviceId) continue
+      out.push(copyApiKey(record))
     }
     return out
+  }
+
+  async update(id: string, patch: ApiKeyPatch, options: ApiKeyUpdateOptions = {}): Promise<ApiKeyRecord | null> {
+    const record = this.records.get(id)
+    if (!record || record.revokedAt !== undefined) return null
+    if (options.ifHash !== undefined && record.hash !== options.ifHash) return null
+    const target = record as unknown as Record<string, unknown>
+    for (const field of API_KEY_PATCH_FIELDS) {
+      if (!Object.hasOwn(patch, field)) continue
+      const value = patch[field]
+      if (value === undefined) continue
+      if (value === null) delete target[field]
+      else target[field] = Array.isArray(value) ? [...value] : typeof value === 'object' ? { ...value } : value
+    }
+    return copyApiKey(record)
   }
 
   async touch(id: string, at: number): Promise<void> {

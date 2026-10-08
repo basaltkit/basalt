@@ -151,6 +151,13 @@ things up yourself.
   their idle clock on their next use. New rows record their creation time, and
   nothing updates it while `sessionIdleTtl` is off, so turning the option on
   later signs out sessions older than the window once.
+- **API key lifecycle** (`@basaltkit/auth` 4.2: rotation grace, service keys,
+  IP allowlist, metadata). `migrate()` adds the `service_id`, `previous_hash`,
+  `previous_hash_expires_at`, `rotated_at`, `allowed_ips` and `meta` columns to
+  an existing `auth_api_keys` table, along with a unique index on `previous_hash`.
+  It runs on every boot and is idempotent. Existing keys keep working unchanged,
+  and no manual migration is needed. `SqliteApiKeyStore` implements
+  `ApiKeyStore.update` as one atomic `UPDATE`.
 - `node:sqlite` is synchronous; the methods stay `async` to honor the contracts,
   so there's no behavioral difference for callers.
 
