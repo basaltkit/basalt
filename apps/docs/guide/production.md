@@ -121,7 +121,11 @@ checks at boot that `_prisma_migrations` exists (`{ tables: [...] }` checks thos
 tables too) and refuses to start otherwise, naming the database and host it
 reached — never the credentials (`PRISMA_NOT_MIGRATED`). It catches a shell that
 exported another project's `DATABASE_URL` at startup instead of as a P2021 on
-the first request. Off by default.
+the first request. `{ forbiddenTables: [...] }` does the opposite check — tables
+that must **not** be there, such as tenant tables recreated in the central
+database — and refuses with `PRISMA_PLANE_MIXED`
+([guard against the wrong plane](/guide/multi-tenant-pattern#guard-against-the-wrong-plane)).
+Off by default.
 
 `@basaltkit/prisma` is for **your** domain data. The framework's own stateful
 domains — auth, teams, subscriptions, permissions, comments, audit, activity and

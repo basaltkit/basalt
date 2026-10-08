@@ -18,6 +18,17 @@ export interface AssertMigratedOptions {
    * accepted. Default: only `_prisma_migrations` is checked.
    */
   tables?: string[]
+  /**
+   * Tables that must NOT exist here — the other plane's. With a schema (or a
+   * database) per tenant, a root `prisma migrate dev` that diffs both planes
+   * recreates every tenant table in the central database: empty, unreachable,
+   * and a place for a stray write to land. Listing the tenant tables here
+   * (`auth_users`, `team_memberships`, …) makes the boot refuse such a
+   * database with `DatabasePlaneMixedError` (`PRISMA_PLANE_MIXED`) naming
+   * them. Same name rules as `tables`; checked the same way, so it works on
+   * PostgreSQL, MySQL and SQLite. Default: none.
+   */
+  forbiddenTables?: string[]
 }
 
 /**
@@ -28,6 +39,17 @@ export interface AssertMigratedOptions {
 export class DatabaseNotMigratedError extends BasaltError {
   constructor(message: string, diagnosis?: DbErrorDiagnosis) {
     super('PRISMA_NOT_MIGRATED', message, diagnosis ? { details: { diagnosis: { ...diagnosis } } } : undefined)
+  }
+}
+
+/**
+ * The database holds tables of the other plane (`assertMigrated({ forbiddenTables })`):
+ * typically tenant tables recreated in the central database by a root-level
+ * `prisma migrate dev`. `details.tables` lists them.
+ */
+export class DatabasePlaneMixedError extends BasaltError {
+  constructor(message: string, tables: string[]) {
+    super('PRISMA_PLANE_MIXED', message, { details: { tables: [...tables] } })
   }
 }
 
@@ -177,7 +199,10 @@ export async function assertMigrated(client: RawQueryClient, options: AssertMigr
       )
     }
   }
-  if (missing.length === 0) return
+  if (missing.length === 0) {
+    await assertNoForbiddenTables(client, identity, options.forbiddenTables ?? [])
+    return
+  }
   // PostgreSQL hides a schema the role has no USAGE on from the search_path:
   // the tables are there, but an unqualified lookup says "does not exist".
   // That is the classic aftermath of a recreated `public` (grants gone), and
@@ -211,6 +236,33 @@ export async function assertMigrated(client: RawQueryClient, options: AssertMigr
   throw new DatabaseNotMigratedError(
     `${capitalize(identity.label)} is missing expected tables: ${missing.join(', ')}. ${hint}`,
     diagnosis,
+  )
+}
+
+/** Throws {@link DatabasePlaneMixedError} when any of `tables` exists. */
+async function assertNoForbiddenTables(client: RawQueryClient, identity: Identity, tables: string[]): Promise<void> {
+  const present: string[] = []
+  for (const table of tables) {
+    const quoted = quoteTable(table, identity.dialect)
+    try {
+      await client.$queryRawUnsafe(`SELECT COUNT(*) AS count FROM ${quoted}`)
+      present.push(table)
+    } catch (error) {
+      if (isMissingTable(error)) continue
+      const reason = redactCredentials(error instanceof Error ? error.message : String(error))
+      throw new DatabaseNotMigratedError(
+        `Could not verify that ${identity.label} holds none of assertMigrated.forbiddenTables: ${reason}`,
+        describeDbError(error, identity.role ? { role: identity.role } : {}),
+      )
+    }
+  }
+  if (present.length === 0) return
+  throw new DatabasePlaneMixedError(
+    `${capitalize(identity.label)} holds tables of the other plane: ${present.join(', ')}. ` +
+      'A migration ran against the wrong plane — typically `prisma migrate dev` with a root config that ' +
+      'reaches both schemas. Migrate each plane with its own prisma.config.ts, keep the root config ' +
+      'generate-only, and drop these tables once you have checked they hold no rows.',
+    present,
   )
 }
 

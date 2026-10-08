@@ -35,6 +35,7 @@ export {
   assertMigrated,
   redactCredentials,
   DatabaseNotMigratedError,
+  DatabasePlaneMixedError,
   type AssertMigratedOptions,
 } from './assert-migrated.js'
 export { readReplica, type ReadReplicaOptions } from './replicas.js'
@@ -131,6 +132,8 @@ export {
 } from './migrate-command.js'
 export {
   prismaSyncCommand,
+  planeConfigTs,
+  generateOnlyRootConfigTs,
   type PrismaSyncTarget,
   type PrismaSyncCommandOptions,
   extractSchemaBlocks,
