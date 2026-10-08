@@ -833,6 +833,13 @@ export interface AuditRequestInfo {
 export type AuditRequestContextResolver = (context: RequestContext | undefined) => AuditRequestInfo | undefined
 
 /**
+ * Resolves who acts in a request, as the `actorId` an entry records. The
+ * default is `ctx().user?.id`. Return `undefined` for "no actor" (the entry
+ * then has none, unless a manual `record()` supplies `scope.actorId`).
+ */
+export type AuditActorResolver = (context: RequestContext | undefined) => string | undefined
+
+/**
  * The keyed form of `integrity: 'hash-chain'`. Every new entry is an
  * HMAC-SHA256 under `key`, and its hash records `keyId`
  * (`v2:hmac-sha256:<keyId>:<hex>`), so rotating the key does not invalidate
@@ -911,6 +918,16 @@ export interface AuditOptions {
    * pseudonyms. Without it a random per-process key is used (warned once).
    */
   fieldPolicyKey?: PseudonymizationKey
+  /**
+   * Who acts in a request, as recorded in `actorId`. Default: `ctx().user?.id`,
+   * so a request without a user (a service API key, a job) records no actor.
+   * Opt in to attribute non-human callers, in your app's own id format — for
+   * a service key: `(c) => c?.user?.id ?? (c?.apiKey?.serviceId ? 'svc:' + c.apiKey.serviceId : undefined)`.
+   * The resolved value is the request actor everywhere: a manual `record()`
+   * whose `scope.actorId` differs from it throws, exactly as for a user.
+   * Changing it changes what new entries record; existing entries are untouched.
+   */
+  actor?: AuditActorResolver
 }
 
 export interface AuditVerifyOptions {
@@ -1232,6 +1249,9 @@ function erasedFieldsHold(entry: AuditEntry, marker: AuditRedactionMarker): bool
 
 const defaultRequestContext: AuditRequestContextResolver = (context) => context?.client
 
+/** The default actor: the request's user, as before the `actor` option existed. */
+const defaultActor: AuditActorResolver = (context) => (context?.['user'] as { id?: string } | undefined)?.id
+
 const clip = (value: unknown, max: number): string | undefined =>
   typeof value === 'string' && value.length > 0 ? value.slice(0, max) : undefined
 
@@ -1248,6 +1268,7 @@ export class Audit {
   /** Every key verification may use, by id (the signer's included). Empty = unkeyed chain. */
   private readonly verifyKeys: ReadonlyMap<string, AuditIntegrityKey>
   private readonly requestContext: AuditRequestContextResolver | undefined
+  private readonly actor: AuditActorResolver
   private readonly fieldPolicies: ReadonlyMap<string, CompiledFieldPolicy>
   private readonly fieldPolicyKey: PseudonymizationKey | undefined
   /** Per-chain in-process mutex: appends to one chain run one at a time. */
@@ -1294,6 +1315,10 @@ export class Audit {
     }
     this.requestContext =
       options.requestContext === true ? defaultRequestContext : options.requestContext || undefined
+    if (options.actor !== undefined && typeof options.actor !== 'function') {
+      throw new TypeError('Audit: options.actor must be a function (context) => string | undefined')
+    }
+    this.actor = options.actor ?? defaultActor
     const fields = compileFieldPolicies(options.fieldPolicies, options.fieldPolicyKey)
     this.fieldPolicies = fields.policies
     this.fieldPolicyKey = fields.key
@@ -1991,9 +2016,8 @@ export class Audit {
 
   private build(source: AuditEntry['source'], event: string, payload: unknown, scope?: AuditRecordScope): AuditEntry {
     const context = tryCtx()
-    const user = context?.['user'] as { id?: string } | undefined
     const tenant = context?.['tenant'] as { id?: string } | undefined
-    const { actorId, tenantId } = resolveRecordScope(user?.id, tenant?.id, scope)
+    const { actorId, tenantId } = resolveRecordScope(this.resolveActor(context), tenant?.id, scope)
     return Object.freeze({
       id: randomUUID(),
       source,
@@ -2005,6 +2029,16 @@ export class Audit {
       ...this.requestFields(context, event),
       at: Date.now(),
     })
+  }
+
+  /** The request actor: the default `ctx().user?.id`, or the `actor` option's value (validated). */
+  private resolveActor(context: RequestContext | undefined): string | undefined {
+    if (this.actor === defaultActor) return defaultActor(context)
+    const actor = this.actor(context)
+    if (actor !== undefined && !isScopeId(actor)) {
+      throw new TypeError(`audit: the actor resolver must return undefined or a non-empty string of at most ${MAX_SCOPE_ID} printable characters`)
+    }
+    return actor
   }
 
   /** Applies the event's {@link AuditFieldPolicy}, if it has one (before the redactor). */
@@ -2147,6 +2181,9 @@ export interface AuditPluginOptions {
 
   /** Keys the pseudonyms of `fieldPolicies`: see {@link AuditOptions.fieldPolicyKey}. */
   fieldPolicyKey?: PseudonymizationKey
+
+  /** Who acts in a request (default `ctx().user?.id`): see {@link AuditOptions.actor}. */
+  actor?: AuditActorResolver
 }
 
 /**
@@ -2229,6 +2266,7 @@ export function auditPlugin(options: AuditPluginOptions = {}) {
         ...(options.requestContext !== undefined ? { requestContext: options.requestContext } : {}),
         ...(options.fieldPolicies !== undefined ? { fieldPolicies: options.fieldPolicies } : {}),
         ...(options.fieldPolicyKey !== undefined ? { fieldPolicyKey: options.fieldPolicyKey } : {}),
+        ...(options.actor !== undefined ? { actor: options.actor } : {}),
       }
       container.singleton(
         AUDIT,

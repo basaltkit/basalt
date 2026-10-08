@@ -261,16 +261,23 @@ function isJsonContentType(request: HttpRequest): boolean {
 const PRINCIPAL_KEY = randomBytes(32)
 
 /**
- * The identity a session is bound to: the authenticated user (in its tenant),
- * or — without one — the request's `Authorization` header, fingerprinted. An
- * `x-api-key` that the auth plugins accepted already resolved a user; one they
- * didn't is not an identity, so it doesn't bind the session.
+ * The identity a session is bound to: the authenticated user (in its tenant);
+ * else the verified API key (`ctx().apiKey.id`, in its tenant), so two
+ * userless keys sent through `x-api-key` never share a session; else the
+ * request's `Authorization` header, fingerprinted. An unverified key is not an
+ * identity, so it doesn't bind the session.
  */
 function principalOf(context: Record<string, unknown>, request: HttpRequest): string {
   const user = context['user'] as { id?: unknown } | undefined
   const tenant = context['tenant'] as { id?: unknown } | undefined
   if (user && (typeof user.id === 'string' || typeof user.id === 'number')) {
     return `user:${JSON.stringify([tenant?.id ?? null, user.id])}`
+  }
+  // Read by duck-typing, like `user`: @basaltkit/auth sets it, mcp does not
+  // depend on it.
+  const apiKey = context['apiKey'] as { id?: unknown } | undefined
+  if (apiKey && typeof apiKey.id === 'string' && apiKey.id.length > 0) {
+    return `apikey:${JSON.stringify([tenant?.id ?? null, apiKey.id])}`
   }
   const authorization = headerValue(request.headers['authorization']) ?? ''
   return `anon:${createHmac('sha256', PRINCIPAL_KEY).update(authorization).digest('base64url')}`
