@@ -384,9 +384,9 @@ export class PrismaUserSource implements UserSource {
    * A concurrent insert of the same canonical email loses on the index (P2002)
    * and gets the same error.
    */
-  async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {
+  async create(data: { email: string; passwordHash: string; emailVerified?: boolean }): Promise<AuthUser> {
     const email = data.email.trim().toLowerCase()
-    const row = { id: randomUUID(), email, passwordHash: data.passwordHash, emailVerified: false }
+    const row = { id: randomUUID(), email, passwordHash: data.passwordHash, emailVerified: data.emailVerified === true }
     assertColumnLengths(PKG, this.limits, 'AuthUser', row)
     if (await this.findByEmail(email)) throw new EmailTakenError()
     try {

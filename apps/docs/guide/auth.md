@@ -189,7 +189,7 @@ import type { UserSource, AuthUser, UserPatch } from '@basaltkit/auth'
 const users: UserSource = {
   async findByEmail(email) { /* SELECT … WHERE email = ? */ return null },
   async findById(id) { /* SELECT … WHERE id = ? */ return null },
-  async create(data) { // data = { email, passwordHash } — hash already computed
+  async create(data) { // data = { email, passwordHash, emailVerified? } — hash already computed; persist emailVerified (default false)
     return { id: crypto.randomUUID(), ...data } as AuthUser
   },
   async update(id, patch: UserPatch) { /* UPDATE … */ return null },
@@ -247,7 +247,7 @@ fastifyPlugin({ routes: [...appRoutes, ...authRoutes(), ...mfaRoutes(), ...apiKe
 
 | Endpoint | Body | Notes |
 | --- | --- | --- |
-| `POST /auth/register` | `{ email, password }` | Always `202 { ok: true }` — enumeration-safe (see below) |
+| `POST /auth/register` | `{ email, password }` | Always `202 { ok: true }` — enumeration-safe (see below). With `register: 'closed'`, `404`; see [Registration policy](#registration-policy) |
 | `POST /auth/login` | `{ email, password, mfaCode? }` | → `{ user, accessToken, refreshToken }` |
 | `POST /auth/refresh` | `{ refreshToken }` | new token pair; kills the family on reuse |
 | `POST /auth/logout` | `{ refreshToken? }` (body optional) | `204`; revokes the refresh family when given, and ends the cookie / `x-session-id` session and expires the cookie. A cookie-only SPA sends no body. A cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`) |
@@ -292,6 +292,49 @@ tokens are emailed via the `auth:verify_requested` /
 password reset revokes every session and refresh token.
 :::
 
+### Registration policy {#registration-policy}
+
+`POST /auth/register` serves every plane. On a tenant host that usually should
+not mean "anyone who types the company's address gets an account there": the
+canonical multi-tenant pattern makes registration on a tenant host
+**invite-only**. Say who may sign up with `authRoutes({ register })`, or once
+for every self-service path with `authPlugin({ registerPolicy })`:
+
+```ts
+import { authPlugin, authRoutes } from '@basaltkit/auth'
+
+// Once: applies to the register route AND to a first social / SSO login.
+authPlugin({ users, secret, registerPolicy: ({ email, tenantId }) => tenantId === undefined || allowList.has(email) })
+// …or per route:
+authRoutes({ register: 'closed' }) // static 404 AUTH_REGISTRATION_CLOSED
+```
+
+| `register` | Behaviour |
+| --- | --- |
+| omitted (default) | The `registerPolicy` of `authPlugin()`, or open when there is none |
+| `'open'` | Anyone, even when `authPlugin()` has a `registerPolicy` |
+| `'closed'` | `404 AUTH_REGISTRATION_CLOSED` for **every** request. No body is read, so the answer says nothing about any address |
+| `(input) => boolean` | Asked with the canonical `email` and the request's `tenantId` (`ctx().tenant?.id`, `undefined` on the apex) |
+
+A predicate that refuses answers the **same `202 { ok: true }`** as a successful
+signup, creates nothing, does the same hashing work, and emits
+`auth:register_refused` (`{ email, tenantId?, source: 'register' }`) for your
+audit log or an out-of-band email. A `404` for "not invited" next to a `202` for
+"invited" would turn the route into an oracle for who the company invited. A
+policy that throws fails the request (fail closed).
+
+`registerPolicy` on `authPlugin()` also gates the **create** branch of a social /
+SSO login (`Auth.socialLogin`). That flow is already authenticated by the
+provider, so the refusal is explicit: `RegistrationClosedError`
+(`404 AUTH_REGISTRATION_CLOSED`) plus `auth:register_refused` with
+`source: 'social'`. Logins into existing accounts and the trusted
+`auth.register()` are never gated.
+
+For the usual "invite-only on tenant hosts", `@basaltkit/teams` ships the
+policy: `teamsInviteGate(teams)` admits the apex and, on a tenant, only an
+address with a pending, unexpired invitation to that tenant. See
+[Teams: invite-only registration](/guide/teams#invite-only-registration).
+
 ### The register → login → refresh flow (HTTP)
 
 ```bash
@@ -328,6 +371,30 @@ const { user: u, tokens } = await auth.login('ada@example.com', 'secretpassword1
 const next = await auth.refresh(tokens.refreshToken) // → new { accessToken, refreshToken }
 await auth.revoke(next.refreshToken) // logout for token-based clients
 ```
+
+### Creating accounts from trusted flows {#trusted-account-creation}
+
+`auth.register()` is the trusted, server-side way to create an account
+(seeding, a back-office, a sign-up flow that proved the address before creating
+the account). Never hash a password and insert a row yourself. When the flow has
+already proved the address (the "open a company" link was clicked from that
+inbox), create the account verified:
+
+```ts
+const owner = await auth.register(email, password, { emailVerified: true })
+```
+
+The flag is persisted with the row (`UserSource.create({ email, passwordHash,
+emailVerified })`), so `auth:registered` already carries `emailVerified: true`
+and a mail hook decides on its own: unverified, send the verification link;
+verified, don't. A provider-verified social login creates its account the same
+way.
+
+The public `POST /auth/register` never creates a verified account: an
+`emailVerified` field in the body is ignored. A custom `UserSource` written
+before `create()` took the flag is patched through `update()`; with no
+`update()`, asking for a verified account fails with `UserUpdateUnsupportedError`
+instead of silently creating it unverified.
 
 ## Refresh rotation with reuse detection
 
@@ -1077,6 +1144,8 @@ the plugin supplies:
 | `csrf` (plugin) | `{ trustedOrigins?: string[] } \| false` | on | Cookie-session CSRF check on unsafe methods — see [Cookie sessions and CSRF](#cookie-sessions-and-csrf) |
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Per-IP budget that catches password *spraying* (one attempt across many accounts), which a per-email counter misses. Only applies when the caller passes the client ip — `authRoutes()` does |
 | `enumerationSafeRegister` | `boolean` | `true` | Keeps `POST /auth/register` from revealing that an email already has an account. `false` restores `409 AUTH_EMAIL_TAKEN` |
+| `registerPolicy` | `({ email, tenantId? }) => boolean \| Promise<boolean>` | — (open) | Who may create a **new** account through `POST /auth/register` and a first social / SSO login. See [Registration policy](#registration-policy) |
+| `register` (`authRoutes`) | `'open' \| 'closed' \| RegisterPolicy` | `registerPolicy` above | Per-route override for `POST /auth/register` |
 | `tokenVersions` | `TokenVersionStore` | — (off) | Opt-in access-token **revocation**: tokens carry a `tv` claim that `resetPassword`/`revokeAllTokens` bump, killing outstanding tokens before their TTL. Costs one store read per authenticated request |
 | `accountLinks` | `AccountLinkStore` | in-memory | OAuth/OIDC account links (provider + subject → account) — durable in production, or links are forgotten on restart |
 | `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy?: { v1Keys?, plaintext? } }` | — (plaintext) | Encrypts TOTP secrets at rest (AES-256-GCM, HKDF keys with ids, bound to the user); non-envelope values are refused unless `legacy` opts in. See [Encrypting TOTP secrets at rest](#mfa-encryption) |
@@ -1162,7 +1231,8 @@ users in.
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` on an account whose MFA is on — disable it with a code first |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | A `meta.auth` route got a cross-site, cookie-only state-changing request |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset, and for creating a verified account when `create()` drops `emailVerified` |
+| `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, or a `registerPolicy` refused the first social / SSO login of an address |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars outside an explicit `NODE_ENV=development`/`test` |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`), or a key without `*` hit an identity-gated route that declares no `meta.scopes` |
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | A key used outside the tenant it was issued in (or a tenantless key on a tenant-scoped request) |
@@ -1219,6 +1289,7 @@ users in.
 | --- | --- | --- |
 | `auth:registered` | `{ user }` | Welcome email, provisioning |
 | `auth:register_existing_email` | `{ email }` | The out-of-band "you already have an account" email — the signal the HTTP response deliberately withholds |
+| `auth:register_refused` | `{ email, tenantId?, source }` | A [registration policy](#registration-policy) refused a new account (`source`: `'register'` or `'social'`); nothing was created |
 | `auth:login` · `auth:login_failed` | `{ user }` · `{ email }` | Audit trail, alerting |
 | `auth:logout` | `{ user }` | Audit trail |
 | `auth:verify_requested` · `auth:email_verified` | `{ user, token }` · `{ user }` | **Email the token** — it is never returned over HTTP |

@@ -630,12 +630,12 @@ Um store é um punhado de métodos async. Para suportar utilizadores de auth com
 base de dados existente, implementa `UserSource`:
 
 ```ts
-import type { UserSource, AuthUser, UserPatch } from '@basaltkit/auth'
+import type { UserSource, AuthUser, UserPatch, NewUser } from '@basaltkit/auth'
 
 class PrismaUserSource implements UserSource {
   async findByEmail(email: string): Promise<AuthUser | null> { /* … */ }
   async findById(id: string): Promise<AuthUser | null> { /* … */ }
-  async create(data: { email: string; passwordHash: string }): Promise<AuthUser> { /* … */ }
+  async create(data: NewUser): Promise<AuthUser> { /* … persiste data.emailVerified ?? false */ }
   async update(id: string, patch: UserPatch): Promise<AuthUser | null> { /* … */ }
 }
 ```

@@ -7,6 +7,7 @@ import {
   MfaEnrollmentRequiredError,
   MfaStepUpRequiredError,
   type AuthOptions,
+  type RegisterPolicy,
 } from './auth.js'
 import { publicUser } from './auth.js'
 import type { PublicUser } from './stores.js'
@@ -31,6 +32,14 @@ declare module '@basaltkit/core' {
      * revealing existence in the HTTP response. Only the email is provided.
      */
     'auth:register_existing_email': { email: string }
+    /**
+     * A {@link RegisterPolicy} refused to create an account. Nothing was created.
+     * `source: 'register'` came through the public register route, which still
+     * answered its usual 202 (so the response reveals nothing); `'social'` was
+     * a social / SSO first login, refused with `AUTH_REGISTRATION_CLOSED`.
+     * `tenantId` is the tenant the attempt happened on (absent on the apex).
+     */
+    'auth:register_refused': { email: string; tenantId?: string; source: 'register' | 'social' }
     'auth:login': { user: PublicUser }
     'auth:login_failed': { email: string }
     'auth:logout': { user: PublicUser }
