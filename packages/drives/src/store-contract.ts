@@ -19,7 +19,8 @@ import type { DriveConnection, DriveConnectionStore, DriveImportLedger, DriveImp
  * - a patch key present with `undefined` **clears** the column, an absent key
  *   leaves it alone;
  * - **tenant isolation** on `find`, `list`, `update` and `delete`;
- * - ledger writes are idempotent per `(tenantId, connectionId, externalId)`.
+ * - ledger writes are idempotent per `(tenantId, connectionId, externalId)`;
+ * - a store that declares `persistsHealth: true` round-trips the health fields.
  *
  * It is runner-agnostic: pass your runner's `describe` and `it` (vitest, jest,
  * `node:test`); assertions are thrown as plain `AssertionError`s.
@@ -158,8 +159,10 @@ export function runDriveStoreContract(
         assert.equal(reread?.rootId, 'root')
       })
 
-      it('persists health fields (lastSucceededAt, lastFailedAt, lastErrorCode)', async () => {
+      it('persists health fields (lastSucceededAt, lastFailedAt, lastErrorCode) when it declares persistsHealth', async () => {
         const { store } = await factory()
+        // Opt-in: a store without `persistsHealth` never receives these keys.
+        if (store.persistsHealth !== true) return
         await store.create(row())
         await store.update('tenant-a', 'conn-1', { lastFailedAt: 5_000, lastErrorCode: 'DRIVE_CREDENTIALS_INVALID' })
         await store.update('tenant-a', 'conn-1', { lastSucceededAt: 6_000 })
