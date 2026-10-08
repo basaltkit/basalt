@@ -1549,8 +1549,11 @@ export function crossCopyParitySuite(adapter: string, driver: ParityDriver): voi
 
 /**
  * Idempotency on every adapter (BK-084e): the stage lives in the shared route
- * pipeline, so a key replays, conflicts and refuses a reused body identically
- * on Fastify, Express and Hono.
+ * pipeline, so a key replays, conflicts and refuses a reused request
+ * identically on Fastify, Express and Hono. From `@basaltkit/http` 3 the
+ * defaults are strict: keys are bound to params, query and body
+ * (`fingerprint: 'request'`) and replays happen after the guards
+ * (`replayAfterGuards: true`).
  */
 export function idempotencyParitySuite(adapter: string, driver: ParityDriver): void {
   describe(`${adapter}: idempotency parity (BK-084e)`, () => {
@@ -1619,6 +1622,34 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
           return { charge: runs, length: body.bytes.length }
         },
       }),
+      route({
+        method: 'POST',
+        url: '/accounts/:id/charge',
+        body: z.object({ amount: z.number() }),
+        handler: ({ body, request }) => {
+          runs += 1
+          return { charge: runs, account: request.params['id'], amount: body.amount }
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/touch',
+        handler: () => {
+          runs += 1
+          return { charge: runs }
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/upload',
+        body: upload({ maxBytes: 64 * 1024, maxFiles: 1 }),
+        async handler({ body }) {
+          runs += 1
+          let size = 0
+          for await (const file of body.files) for await (const chunk of file.stream) size += (chunk as Buffer).length
+          return { charge: runs, size }
+        },
+      }),
     ]
     const json = (value: unknown) => Buffer.from(JSON.stringify(value))
     const headers = (key: string, extra: Record<string, string> = {}) => ({
@@ -1647,12 +1678,58 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
       expect(runs).toBe(1)
     })
 
-    it('without fingerprinting, a different body under the same key replays the first result (current default)', async () => {
+    it('by default a different body under the same key is refused 422 IDEMPOTENCY_KEY_REUSED', async () => {
       const send = await boot()
+      await send({ method: 'POST', url: '/charge', headers: headers('k2'), body: json({ amount: 10 }) })
+      const reused = await send({ method: 'POST', url: '/charge', headers: headers('k2'), body: json({ amount: 99 }) })
+      expect(reused.status).toBe(422)
+      expect(codeOf(reused)).toBe('IDEMPOTENCY_KEY_REUSED')
+      expect(runs).toBe(1)
+    })
+
+    it('fingerprint: false restores the 2.x replay of the first result for a different body', async () => {
+      const send = await boot({ fingerprint: false })
       await send({ method: 'POST', url: '/charge', headers: headers('k2'), body: json({ amount: 10 }) })
       const reused = await send({ method: 'POST', url: '/charge', headers: headers('k2'), body: json({ amount: 99 }) })
       expect(reused.status).toBe(201)
       expect(reused.json).toEqual({ charge: 1, amount: 10 })
+    })
+
+    it('by default the same key and body on another resource or query string is refused 422', async () => {
+      const send = await boot()
+      const first = await send({ method: 'POST', url: '/accounts/1/charge', headers: headers('kp'), body: json({ amount: 10 }) })
+      expect(first.status).toBe(200)
+      const otherAccount = await send({ method: 'POST', url: '/accounts/2/charge', headers: headers('kp'), body: json({ amount: 10 }) })
+      expect(otherAccount.status).toBe(422)
+      expect(codeOf(otherAccount)).toBe('IDEMPOTENCY_KEY_REUSED')
+
+      await send({ method: 'POST', url: '/charge?a=1&b=2', headers: headers('kq'), body: json({ amount: 10 }) })
+      const otherQuery = await send({ method: 'POST', url: '/charge?a=2&b=2', headers: headers('kq'), body: json({ amount: 10 }) })
+      expect(otherQuery.status).toBe(422)
+      expect(codeOf(otherQuery)).toBe('IDEMPOTENCY_KEY_REUSED')
+      // Same params and query, keys in another order: the same request.
+      const reordered = await send({ method: 'POST', url: '/charge?b=2&a=1', headers: headers('kq'), body: json({ amount: 10 }) })
+      expect(reordered.status).toBe(201)
+      expect(reordered.headers['idempotent-replayed']).toBe('true')
+      expect(runs).toBe(2)
+    })
+
+    it("fingerprint: 'body' does not bind params: the same body on another resource replays", async () => {
+      const send = await boot({ fingerprint: 'body' })
+      await send({ method: 'POST', url: '/accounts/1/charge', headers: headers('kb'), body: json({ amount: 10 }) })
+      const otherAccount = await send({ method: 'POST', url: '/accounts/2/charge', headers: headers('kb'), body: json({ amount: 10 }) })
+      expect(otherAccount.status).toBe(200)
+      expect(otherAccount.headers['idempotent-replayed']).toBe('true')
+      expect(otherAccount.json).toEqual({ charge: 1, account: '1', amount: 10 })
+    })
+
+    it('by default a reordered same body replays', async () => {
+      const send = await boot()
+      await send({ method: 'POST', url: '/charge', headers: headers('k3d'), body: json({ amount: 10, note: 'a' }) })
+      const reordered = await send({ method: 'POST', url: '/charge', headers: headers('k3d'), body: Buffer.from('{"note":"a","amount":10}') })
+      expect(reordered.status).toBe(201)
+      expect(reordered.headers['idempotent-replayed']).toBe('true')
+      expect(runs).toBe(1)
     })
 
     it("fingerprint: 'body' refuses a different body under the same key with 422, and replays a reordered same body", async () => {
@@ -1668,7 +1745,7 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
     })
 
     it('a concurrent repeat gets 409 with the same body and 422 with a different one', async () => {
-      const send = await boot({ fingerprint: 'body' })
+      const send = await boot()
       gate.release = undefined
       const first = send({ method: 'POST', url: '/slow', headers: headers('k4'), body: json({ amount: 10 }) })
       while (!gate.release) await new Promise((resolve) => setTimeout(resolve, 5))
@@ -1683,21 +1760,79 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
       expect(runs).toBe(1)
     })
 
-    it('by default a replay runs before the guards; replayAfterGuards answers a revoked caller 401', async () => {
+    it('by default a replay runs after the guards: a revoked caller gets 401; replayAfterGuards: false replays', async () => {
       let send = await boot()
-      await send({ method: 'POST', url: '/charge', headers: headers('k5'), body: json({ amount: 10 }) })
-      revoked.add('Bearer user-1')
-      const legacy = await send({ method: 'POST', url: '/charge', headers: headers('k5'), body: json({ amount: 10 }) })
-      expect(legacy.status).toBe(201) // the cached success, despite the revoked token
-      await driver.close()
-
-      send = await boot({ replayAfterGuards: true })
       await send({ method: 'POST', url: '/charge', headers: headers('k6'), body: json({ amount: 10 }) })
       revoked.add('Bearer user-1')
       const guarded = await send({ method: 'POST', url: '/charge', headers: headers('k6'), body: json({ amount: 10 }) })
       expect(guarded.status).toBe(401)
       expect(guarded.headers['idempotent-replayed']).toBeUndefined()
       expect(runs).toBe(1)
+      await driver.close()
+
+      send = await boot({ replayAfterGuards: false })
+      await send({ method: 'POST', url: '/charge', headers: headers('k5'), body: json({ amount: 10 }) })
+      revoked.add('Bearer user-1')
+      const legacy = await send({ method: 'POST', url: '/charge', headers: headers('k5'), body: json({ amount: 10 }) })
+      expect(legacy.status).toBe(201) // the 2.x order: the cached success, despite the revoked token
+      expect(legacy.headers['idempotent-replayed']).toBe('true')
+    })
+
+    it('by default a request that fails validation does not reserve the key; replayAfterGuards: false records it', async () => {
+      let send = await boot()
+      const invalid = await send({ method: 'POST', url: '/charge', headers: headers('kv'), body: json({ amount: 'x' }) })
+      expect(invalid.status).toBe(400)
+      const valid = await send({ method: 'POST', url: '/charge', headers: headers('kv'), body: json({ amount: 10 }) })
+      expect(valid.status).toBe(201)
+      expect(valid.headers['idempotent-replayed']).toBeUndefined()
+      expect(runs).toBe(1)
+      await driver.close()
+
+      send = await boot({ replayAfterGuards: false, fingerprint: false })
+      await send({ method: 'POST', url: '/charge', headers: headers('kv2'), body: json({ amount: 'x' }) })
+      const replayed = await send({ method: 'POST', url: '/charge', headers: headers('kv2'), body: json({ amount: 10 }) })
+      expect(replayed.status).toBe(400)
+      expect(replayed.headers['idempotent-replayed']).toBe('true')
+      expect(runs).toBe(0)
+    })
+
+    it('a keyed POST without a body replays under the defaults', async () => {
+      const send = await boot()
+      const keyed = { authorization: 'Bearer user-1', 'idempotency-key': 'kn' }
+      const first = await send({ method: 'POST', url: '/touch', headers: keyed })
+      const second = await send({ method: 'POST', url: '/touch', headers: keyed })
+      expect(first.status).toBe(200)
+      expect(second.status).toBe(200)
+      expect(second.headers['idempotent-replayed']).toBe('true')
+      expect(second.json).toEqual({ charge: 1 })
+      expect(runs).toBe(1)
+    })
+
+    it('a keyed upload() route replays without the body being bound or hanging', async () => {
+      const send = await boot()
+      const file = (data: string) => multipart([{ name: 'doc', filename: 'a.pdf', type: 'application/pdf', data }])
+      const up = (key: string, body: Buffer) =>
+        send({
+          method: 'POST',
+          url: '/upload',
+          headers: { authorization: 'Bearer user-1', 'idempotency-key': key, 'content-type': contentType() },
+          body,
+        })
+      const first = await up('ku', file('hello'))
+      const again = await up('ku', file('hello'))
+      expect(first.status).toBe(200)
+      expect(first.json).toEqual({ charge: 1, size: 5 })
+      expect(again.status).toBe(200)
+      expect(again.headers['idempotent-replayed']).toBe('true')
+      expect(again.json).toEqual({ charge: 1, size: 5 })
+      // The stream is the handler's: 'request' binds only params + query here.
+      const other = await up('ku', file('a different file'))
+      expect(other.status).toBe(200)
+      expect(other.headers['idempotent-replayed']).toBe('true')
+      expect(runs).toBe(1)
+      // The server is still serving after the unread replays.
+      const fresh = await up('ku2', file('xyz'))
+      expect(fresh.json).toEqual({ charge: 2, size: 3 })
     })
 
     it('does not cache a 5xx: the retry runs the handler again', async () => {
@@ -1720,7 +1855,7 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
     })
 
     it('fingerprints a rawBody() route on its exact bytes', async () => {
-      const send = await boot({ fingerprint: 'body' })
+      const send = await boot()
       const bytes = Buffer.from('{"b":1, "a":2}')
       const first = await send({ method: 'POST', url: '/hook', headers: headers('k9'), body: bytes })
       const again = await send({ method: 'POST', url: '/hook', headers: headers('k9'), body: bytes })
