@@ -471,6 +471,41 @@ por isso o recetor continua a funcionar quer já tenha trocado de segredo quer
 não. Esquemas desconhecidos (ex. `v0=`) são ignorados; um `t` duplicado é
 rejeitado.
 
+### Verificar bytes raw
+
+`verifySignature` e `signPayload` aceitam o corpo como `string` **ou** como bytes
+(`Buffer` / `Uint8Array`). O HMAC corre sobre `${t}.` seguido dos bytes do corpo —
+uma string é primeiro codificada em UTF-8 — por isso uma string e o `Buffer` dos
+seus bytes UTF-8 produzem a mesma assinatura, e as assinaturas de strings
+existentes não mudam.
+
+Passa os bytes quando o corpo pode não ser UTF-8 válido (um e-mail
+`message/rfc822` reencaminhado, um payload binário): descodificá-los primeiro
+para string substitui as sequências inválidas e o HMAC deixa de bater. Um
+recetor Basalt recebe esses bytes exatos, em todos os adapters, a partir de uma
+[rota `rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook):
+
+```ts
+import { rawBody, route } from '@basaltkit/http'
+import { verifySignature } from '@basaltkit/webhooks'
+
+route({
+  method: 'POST',
+  url: '/hooks/basalt',
+  body: rawBody({ maxBytes: 256 * 1024 }),
+  async handler({ body, request, reply }) {
+    const ok = verifySignature(
+      request.headers['x-basalt-signature'] as string,
+      body.bytes, // o Buffer exatamente como chegou
+      process.env.WEBHOOK_SECRET!,
+    )
+    if (!ok) return reply.code(400).send({ error: 'assinatura inválida' })
+    const event = JSON.parse(body.text())
+    // …
+  },
+})
+```
+
 ## Semântica de entrega
 
 - O `timeoutMs` é um prazo por tentativa que cobre **a resolução do host e o
@@ -819,8 +854,8 @@ shutdown (best-effort).
 
 | Export | Assinatura | Porquê |
 | --- | --- | --- |
-| `signPayload` | `(body, secret \| secrets[], timestampSeconds) => string` | Constrói `t=…,v1=…` — assina um payload à mão; um `v1` por secret quando recebe vários (o atual primeiro) |
-| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Verificação em tempo constante num recetor; `true` se qualquer `v1` bater; `false` para um secret com menos de 16 caracteres; só lança `RangeError` para uma tolerância/relógio inválidos |
+| `signPayload` | `(body: string \| Uint8Array, secret \| secrets[], timestampSeconds) => string` | Constrói `t=…,v1=…` — assina um payload à mão; um `v1` por secret quando recebe vários (o atual primeiro) |
+| `verifySignature` | `(header, body: string \| Uint8Array, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Verificação em tempo constante num recetor; `true` se qualquer `v1` bater; `false` para um secret com menos de 16 caracteres; só lança `RangeError` para uma tolerância/relógio inválidos |
 | `generateWebhookSecret` | `() => string` | Um secret `whsec_…` novo (32 bytes aleatórios) |
 | `MIN_WEBHOOK_SECRET_LENGTH` | `16` | Comprimento mínimo do secret, aplicado nos dois lados |
 | `assertDeliverableUrl` | `(url, options?) => Promise<void>` | Rejeita um URL inseguro para SSRF no momento do registo; lança `WebhookUrlBlockedError` |

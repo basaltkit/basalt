@@ -57,15 +57,33 @@ export function generateWebhookSecret(): string {
  * what the deliverer does during a secret rotation's grace window, so a
  * receiver still verifying with the previous secret keeps accepting.
  */
-export function signPayload(body: string, secret: string | readonly string[], timestampSeconds: number): string {
+export function signPayload(body: string | Uint8Array, secret: string | readonly string[], timestampSeconds: number): string {
   const secrets = typeof secret === 'string' ? [secret] : secret
   if (secrets.length === 0) throw new TypeError('signPayload(): at least one secret is required')
-  const signatures = secrets.map((key) => `v1=${createHmac('sha256', key).update(`${timestampSeconds}.${body}`).digest('hex')}`)
+  const signatures = secrets.map((key) => `v1=${hmacHex(key, String(timestampSeconds), body)}`)
   return `t=${timestampSeconds},${signatures.join(',')}`
 }
 
 /**
- * Verifies a signature header (for tests and receiver SDKs). The header may
+ * HMAC-SHA256 over `${timestamp}.` followed by the body bytes. A string body is
+ * UTF-8 encoded, so a string and the `Buffer`/`Uint8Array` of its UTF-8 bytes
+ * produce the same signature — and a raw request body (`rawBody()` route) can be
+ * verified byte-for-byte without a lossy decode.
+ */
+function hmacHex(secret: string, timestamp: string, body: string | Uint8Array): string {
+  const hmac = createHmac('sha256', secret)
+  hmac.update(`${timestamp}.`)
+  if (typeof body === 'string') hmac.update(body, 'utf8')
+  else if (body instanceof Uint8Array) hmac.update(body)
+  else throw new TypeError('webhook signature body must be a string or a Uint8Array')
+  return hmac.digest('hex')
+}
+
+/**
+ * Verifies a signature header (for tests and receiver SDKs). `body` is the raw
+ * request body exactly as received — a string, or the bytes (`Buffer` /
+ * `Uint8Array`, e.g. from a `rawBody()` route) — never a re-serialised parse of
+ * it. The header may
  * carry several `v1=` entries — a sender rotating its secret signs with both the
  * new and the old one — and is valid when ANY of them matches, as Stripe
  * receivers do. Unknown schemes are ignored; a malformed header (no/duplicate
@@ -77,7 +95,7 @@ export function signPayload(body: string, secret: string | readonly string[], ti
  * value would otherwise make every timestamp "fresh" and silently disable
  * replay protection. That is a configuration bug, never a verdict on a request.
  */
-export function verifySignature(header: string, body: string, secret: string, toleranceSeconds = 300, nowSeconds = Math.floor(Date.now() / 1000)): boolean {
+export function verifySignature(header: string, body: string | Uint8Array, secret: string, toleranceSeconds = 300, nowSeconds = Math.floor(Date.now() / 1000)): boolean {
   if (typeof toleranceSeconds !== 'number' || !Number.isFinite(toleranceSeconds) || toleranceSeconds < 0) {
     throw new RangeError(`verifySignature(): toleranceSeconds must be a finite number >= 0 (got ${String(toleranceSeconds)})`)
   }
@@ -103,7 +121,8 @@ export function verifySignature(header: string, body: string, secret: string, to
   const timestamp = Number(rawTimestamp)
   if (!rawTimestamp || !Number.isFinite(timestamp) || provided.length === 0) return false
   if (Math.abs(nowSeconds - timestamp) > toleranceSeconds) return false
-  const expected = Buffer.from(createHmac('sha256', secret).update(`${rawTimestamp}.${body}`).digest('hex'))
+  if (typeof body !== 'string' && !(body instanceof Uint8Array)) return false
+  const expected = Buffer.from(hmacHex(secret, rawTimestamp, body))
   // Check every candidate (no early exit) so timing doesn't reveal which one matched.
   let valid = false
   for (const candidate of provided) {
