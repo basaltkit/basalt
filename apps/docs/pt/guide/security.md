@@ -1013,7 +1013,12 @@ setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 
 `basalt routes` lista cada rota com as guardas que **declara**: `auth`, `can`,
 `rateLimit`, `tenant` e as outras chaves guardadas (`mfa`, `teamRole`, `scopes`,
-`subscribed`, `feature`). Duas formas de transformar isso num controlo:
+`subscribed`, `feature`). A coluna `tenant` mostra `required` (`meta.tenant: true`),
+`exempt` (`meta.tenant: false`), `central-only` (`meta.tenant: 'never'` — a rota
+rejeita qualquer pedido que resolva um tenant), `central` (`meta.central: true`), ou
+fica vazia quando a rota herda o default da app; verifica `row.tenant ===
+'central-only'` para fixar uma rota de consola ao plano central. Duas formas de
+transformar isso num controlo:
 
 ```bash
 # CI: termina com 1 quando uma rota não declara auth e can (opt-outs explícitos passam)

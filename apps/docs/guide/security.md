@@ -986,7 +986,12 @@ setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 
 `basalt routes` lists every route with the guards it **declares**: `auth`, `can`,
 `rateLimit`, `tenant` and the other guarded keys (`mfa`, `teamRole`, `scopes`,
-`subscribed`, `feature`). Two ways to turn that into a gate:
+`subscribed`, `feature`). The `tenant` column reads `required` (`meta.tenant: true`),
+`exempt` (`meta.tenant: false`), `central-only` (`meta.tenant: 'never'` — the route
+rejects any request that resolves a tenant), `central` (`meta.central: true`), or is
+blank when the route inherits the app-wide default; assert on `row.tenant ===
+'central-only'` to pin a console route to the central plane. Two ways to turn that
+into a gate:
 
 ```bash
 # CI: exit 1 when a route does not declare both auth and can (explicit opt-outs pass)

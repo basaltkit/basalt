@@ -372,7 +372,15 @@ enters the tenant; deliveries run after it, so they never hold the tenant's
 pooled database client. With endpoints per tenant, also pass
 `webhookOutboxPlugin({ tenantOnly: true })`, which captures only events emitted
 inside a tenant context. A dispatch for a tenant that no longer exists rejects
-with `TENANT_NOT_FOUND` (an outbox entry dead-letters).
+with `TENANT_NOT_FOUND`, an invalid id with `TENANT_ID_INVALID` (an outbox entry
+dead-letters after `maxAttempts`).
+
+This is on by default whenever `tenancyPlugin` is registered, whatever the
+store's layout: each such dispatch costs one `TenantSource.find`, fires the
+`tenancy:switched`/`tenancy:exited` hooks and, under schema- or
+database-per-tenant, leases the tenant's pooled Prisma client for the lookup
+(`PRISMA_POOL_EXHAUSTED` under saturation). With central webhook tables, pass
+`webhooksPlugin({ runInTenant: false })`.
 
 ## How it connects to other modules
 

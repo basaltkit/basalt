@@ -274,7 +274,10 @@ As rotas não autenticadas que fazem hash, enviam email ou aceitam tentativas �
 declaram `meta.rateLimit: { limit: 10, windowMs: 60_000 }` (por ip de cliente e
 rota), imposto quando o rate limiter do `securityPlugin` está ligado. Altera-o ou
 remove-o com `authRoutes({ rateLimit: { limit, windowMs } })` /
-`authRoutes({ rateLimit: false })`. Independentemente disso, o `Auth` envia no
+`authRoutes({ rateLimit: false })`. Sem `securityPlugin({ rateLimit })` nada o
+aplica, e o adapter imprime um `console.warn` no arranque com o nome destas rotas
+(o arranque não é recusado) — regista o limiter, ou silencia o aviso com
+`allowUnguardedMeta: ['rateLimit']` no adapter. Independentemente disso, o `Auth` envia no
 máximo 3 emails de reposição e 3 de verificação por conta a cada 15 minutos
 (`emailRequestThrottle`): pedidos a mais continuam a responder `200` mas não criam
 token, por isso os endpoints não servem para inundar um utilizador de emails nem

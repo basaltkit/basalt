@@ -212,7 +212,7 @@ const res = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/l
 | `AiMcpProductionError` / `WorkspaceEscapeError` / `ALLOW_PRODUCTION_ENV` | classes / `string` | The guard errors (match with `instanceof`) and the override variable name. |
 | `AI_MCP_VERSION` | `string` | Version reported in `serverInfo`. |
 
-`AiMcpOptions` (= `SessionOptions`):
+`AiMcpOptions` (`SessionOptions` plus `onError`):
 
 | Option | Type | Default | Purpose |
 |---|---|---|---|
@@ -222,6 +222,7 @@ const res = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/l
 | `createProvider` | `() => AIProvider` | built from `env` | Inject a mock provider — no network, no keys. |
 | `allowUnconfirmedApply` | `boolean` | `false` | Let `basalt_make` apply without an elicitation confirmation. Default: refuse (fail closed). |
 | `allowProduction` | `boolean` | `false` | Start even when `NODE_ENV=production`. Default: refuse (`AiMcpProductionError`). |
+| `onError` | `(error, message) => void` | none (the `basalt-ai-mcp` bin passes a stderr logger) | Receives the original error when a handler throws; the client only gets `INTERNAL_ERROR` / `Internal error`. Forwarded to `@basaltkit/mcp-core`. |
 
 `StartOptions` adds `input` / `output` (stdio stream injection, defaulting to
 `process.stdin` / `process.stdout`). `HttpStartOptions` adds every `ServeHttpOptions`
@@ -241,7 +242,7 @@ POST cancel a long `basalt_make`/`basalt_plan`. `principal` decides who owns a s
 | `AiMcpProductionError` | — (`error.name`) | — | The server was built with `NODE_ENV=production` and no `allowProduction` / `--allow-production` / `BASALT_AI_MCP_ALLOW_PRODUCTION=1`. The bin prints it and exits `1`. |
 | *(failed tool result)* | — (`isError: true`) | — | Every user-facing failure: missing/invalid arguments, no AI provider, a clash without `force`, an unconfirmed elicitation, a cancelled call, or any workflow error. The message is in `content`. |
 | *(JSON-RPC)* | `INVALID_PARAMS` (`-32602`) | 200 | Unknown tool/resource/prompt name, or a missing required protocol parameter — raised by `@basaltkit/mcp-core`, not here. |
-| *(JSON-RPC)* | `INTERNAL_ERROR` (`-32603`) | 200 | An exception escaped a handler. Tools convert their own failures to results, so this is rare. |
+| *(JSON-RPC)* | `INTERNAL_ERROR` (`-32603`) | 200 | An exception escaped a handler. Tools convert their own failures to results, so this is rare. The client gets the generic text `Internal error`; the real cause goes to `onError` (the bin writes it to stderr). |
 
 Symptoms:
 

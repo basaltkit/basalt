@@ -8,10 +8,12 @@ The webhook outbox now works when endpoints live per tenant (a store over `tenan
 - New `tenantOnly` option on `webhookOutboxPlugin`: capture only events emitted inside a tenant context. Set it when endpoints live per tenant.
 - New exported type `TenantRunner`, declared structurally (no dependency on `@basaltkit/tenancy`).
 
-Behaviour notes. With `tenancyPlugin` registered, every dispatch scoped by an explicit `tenantId` outside a tenant context now runs its lookup inside `tenancy.run`. That applies to shared-schema apps too:
+Behaviour change — on by default. With `tenancyPlugin` registered, every dispatch scoped by an explicit `tenantId` outside a tenant context now runs its endpoint lookup inside `tenancy.run`, whatever the store's layout (shared schema and central webhook tables included). Per such dispatch:
 
-- one `TenantSource.find` per such dispatch;
-- `tenancy:switched` and `tenancy:exited` hooks fire per such dispatch;
-- a dispatch for a tenant that no longer exists rejects with `TENANT_NOT_FOUND` before any delivery, so its outbox entries dead-letter instead of being delivered.
+- one `TenantSource.find` call. A transient failure of it (the tenant directory is unreachable) rejects the dispatch, and an outbox entry is retried like any failed delivery;
+- `tenancy:switched` and `tenancy:exited` hooks fire, so every listener runs. Under schema- or database-per-tenant, `prismaPlugin` leases the tenant's pooled client for the duration of the lookup, even when the webhook store is central (a plain client) and never uses it: the lease can open or evict a pool slot, waits up to `acquireTimeoutMs` when the pool is saturated, and then fails with `PRISMA_POOL_EXHAUSTED`;
+- a tenant that no longer exists rejects with `TENANT_NOT_FOUND`, and an id that fails the tenant-id grammar rejects with `TENANT_ID_INVALID`, both before any delivery. The outbox relay retries such an entry and dead-letters it after `maxAttempts` instead of delivering it.
 
-Opt out with `webhooksPlugin({ runInTenant: false })`. The fix needs `@basaltkit/tenancy` with the `'tenancy:run'` signal (this release's minor). With an older tenancy, behaviour is unchanged. A `WebhookManager` you construct yourself gets no runner unless you pass `runInTenant`.
+Set `webhooksPlugin({ runInTenant: false })` when the webhook tables are central (shared schema, or a plain client under schema- or database-per-tenant). The lookup does not need the tenant there, and opting out removes the per-dispatch `find`, hooks and pool lease. A deleted tenant's endpoints then keep receiving deliveries until you remove them. Keep the default when endpoints live per tenant (`tenantClient()`).
+
+The fix needs `@basaltkit/tenancy` with the `'tenancy:run'` signal (this release's minor). With an older tenancy, behaviour is unchanged. A `WebhookManager` you construct yourself gets no runner unless you pass `runInTenant`.

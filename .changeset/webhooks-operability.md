@@ -8,4 +8,4 @@ Operable webhooks (BK-084), all opt-in:
 - **Attempt telemetry** — `DeliveryResult.durationMs` (whole delivery) and an `onAttempt` deliverer option called after every attempt with `{ deliveryId, endpointId, tenantId?, event, attempt, ok, status?, durationMs, error?, at }`. Not awaited; a throwing hook is logged and swallowed. No delivery-log store and no response-body capture.
 - **Header prefix** — `headerPrefix` deliverer option (default `x-basalt`, validated `[a-z][a-z0-9-]{0,31}`) and a `webhookHeaderNames(prefix)` helper for receivers.
 
-Docs: sealing, telemetry, header prefix and a schema-per-tenant recipe (`prismaWebhookStore(tenantClient())`, and why the outbox relay does not fit that layout).
+Docs: sealing, telemetry, header prefix and a schema-per-tenant recipe (`prismaWebhookStore(tenantClient())`). The outbox relay supports per-tenant endpoints through `runInTenant` and `webhookOutboxPlugin({ tenantOnly: true })`, which ship in this release too.

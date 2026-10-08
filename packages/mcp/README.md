@@ -74,7 +74,10 @@ await createApp({
   `meta.mcp: { redactErrorDetails }`; `false` sends them as HTTP would. An
   error's log-only `internalDetails` never enter a tool result: they go to
   `mcpPlugin({ reportError })` (default: the console reporter, same policy as
-  the HTTP adapters; `false` to silence). A body the handler sends itself
+  the HTTP adapters; `false` to silence). An error that escapes a tool's own
+  handling (a bug) answers `INTERNAL_ERROR` with the text `Internal error`; the
+  original goes to `mcpPlugin({ onError })` (default `reportMcpInternalError`,
+  one line on stderr; `false` to silence). A body the handler sends itself
   (`reply.code(4xx).send(body)`) is its response contract and is not redacted.
 - **Cancellation**: `notifications/cancelled` answers the call as cancelled at
   once; a handler can stop early by checking `toolSignal(request)?.aborted`.

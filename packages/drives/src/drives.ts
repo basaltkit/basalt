@@ -767,6 +767,8 @@ export class Drives {
       if (options.signal?.aborted) throw error
       result = { ok: false, code: errorCodeOf(error) }
     }
+    // A store that does not persist health gets no write at all.
+    if (this.store.persistsHealth !== true) return result
     const at = this.now()
     try {
       await this.store.update(

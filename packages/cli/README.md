@@ -276,6 +276,11 @@ pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
   that method.
 - `--json` combines with `--unguarded` to print the offenders with a `missing`
   array.
+- The `tenant` column shows the route's tenancy declaration: `required`
+  (`meta.tenant: true`), `exempt` (`meta.tenant: false`), `central-only`
+  (`meta.tenant: 'never'` — a request that resolves a tenant is rejected),
+  `central` (`meta.central: true`), or blank when the route inherits the
+  app-wide default.
 
 **It checks route meta only.** An app-wide rate limit (`securityPlugin({ rateLimit })`),
 URL-based tenancy (`tenancyPlugin({ required: { except } })`), app hooks or

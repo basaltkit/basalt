@@ -64,8 +64,19 @@ webhooksPlugin({ store: webhooks.store, secret: process.env.WEBHOOK_SECRET })
 ```
 
 Under schema- or database-per-tenant, either keep the webhook tables central
-(pass the plain client — the simplest option, everything works unchanged) or
-keep each tenant's endpoints in its own database through `tenantClient()`:
+(pass the plain client — the simplest option) or keep each tenant's endpoints in
+its own database through `tenantClient()`.
+
+With central tables, pass `webhooksPlugin({ runInTenant: false })`. By default,
+when `tenancyPlugin` is registered, every off-request dispatch scoped by a
+`tenantId` runs its endpoint lookup inside `tenancy.run`: one `TenantSource.find`,
+the `tenancy:switched`/`tenancy:exited` hooks, and a lease on the tenant's pooled
+Prisma client (which can fail with `PRISMA_POOL_EXHAUSTED` under saturation) —
+none of which a central store needs. An unknown or invalid tenant id also
+rejects (`TENANT_NOT_FOUND` / `TENANT_ID_INVALID`), so its outbox entries
+dead-letter.
+
+With per-tenant tables, keep the default:
 
 ```ts
 import { tenantClient } from '@basaltkit/prisma'

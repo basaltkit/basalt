@@ -164,3 +164,53 @@ describe('mcpRoutes rate-limit meta (A-2)', () => {
     expect(r!.meta?.['rateLimit']).toBeUndefined()
   })
 })
+
+describe('McpServer onError (internal errors)', () => {
+  // Every route tool converts its own failures to `isError` results, so an
+  // internal error is a bug that escaped it. Simulate one by replacing a tool's
+  // invoke inside the core (white-box: no public path throws there).
+  function breakTool(server: McpServer): void {
+    const core = (server as unknown as { core: { tools: Map<string, { invoke: () => never }> } }).core
+    core.tools.get('get_hello')!.invoke = () => {
+      throw new Error('escaped bug: /secret/path')
+    }
+  }
+  const call = { jsonrpc: '2.0' as const, id: 1, method: 'tools/call', params: { name: 'get_hello', arguments: {} } }
+
+  it('reports the original error to onError and keeps it from the client', async () => {
+    const seen: Array<{ error: unknown; method: string }> = []
+    const server = new McpServer({
+      routes,
+      container,
+      onError: (error, message) => seen.push({ error, method: message.method }),
+    })
+    breakTool(server)
+    const res = await server.handleMessage(call)
+    expect(res?.error).toMatchObject({ code: RPC_ERRORS.INTERNAL_ERROR, message: 'Internal error' })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.method).toBe('tools/call')
+    expect(String(seen[0]!.error)).toMatch(/escaped bug/)
+  })
+
+  it('writes to stderr by default, and onError: false silences it', async () => {
+    const writes: string[] = []
+    const original = process.stderr.write.bind(process.stderr)
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      writes.push(String(chunk))
+      return true
+    }) as typeof process.stderr.write
+    try {
+      const loud = new McpServer({ routes, container })
+      const quiet = new McpServer({ routes, container, onError: false })
+      breakTool(loud)
+      breakTool(quiet)
+      await loud.handleMessage(call)
+      expect(writes.join('')).toMatch(/\[basalt:mcp\] internal error in tools\/call — Error: escaped bug/)
+      writes.length = 0
+      await quiet.handleMessage(call)
+      expect(writes.join('')).toBe('')
+    } finally {
+      process.stderr.write = original
+    }
+  })
+})

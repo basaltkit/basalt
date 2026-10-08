@@ -271,6 +271,9 @@ The unauthenticated routes that hash, mail or guess — `register`, `login`,
 `meta.rateLimit: { limit: 10, windowMs: 60_000 }` (per client ip and route),
 enforced when `securityPlugin`'s rate limiter is on. Override or drop it with
 `authRoutes({ rateLimit: { limit, windowMs } })` / `authRoutes({ rateLimit: false })`.
+Without `securityPlugin({ rateLimit })` nothing enforces it, and the adapter prints
+one `console.warn` at boot naming these routes (the boot is not refused) — register
+the limiter, or silence it with `allowUnguardedMeta: ['rateLimit']` on the adapter.
 Independently of that, `Auth` sends at most 3 reset and 3 verification emails per
 account every 15 minutes (`emailRequestThrottle`): extra requests still answer
 `200` but mint no token, so the endpoints can't mail-bomb a user or keep
