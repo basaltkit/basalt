@@ -10,6 +10,7 @@ import {
 import { HttpError, RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 import { idempotencyStageOf, RecordingReply, type IdempotencyTicket } from './idempotency.js'
+import { applyRouteHeaders } from './route-headers.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
 import { isSseResponse } from './sse.js'
 import { isStreamResponse } from './stream.js'
@@ -163,6 +164,9 @@ export async function runRoute(
   return runWithContext(context, async () => {
     let ticket: IdempotencyTicket | undefined
     try {
+      // The route's static headers go on first, so every response it produces
+      // carries them — a guard's 401, a validation 400 and a thrown 500 too.
+      applyRouteHeaders(definition, reply)
       const scoped = context.container
       // Fail closed: guards that cannot run must never be silently skipped.
       if (!scoped && (pipeline.guards?.length ?? 0) > 0) {

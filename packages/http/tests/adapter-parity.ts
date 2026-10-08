@@ -1393,3 +1393,96 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
     })
   })
 }
+
+/**
+ * Route-scoped static headers (BK-085): `meta.headers` is set as soon as the
+ * route matches, so it is on every response the route produces — success and
+ * the errors raised by guards, validation or the handler — on every adapter.
+ */
+export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: route meta.headers parity (BK-085)`, () => {
+    afterEach(() => driver.close())
+    const shareHeaders = { 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store' }
+    const routes = [
+      route({
+        method: 'POST',
+        url: '/share/:id',
+        params: z.object({ id: z.string() }),
+        body: z.object({ password: z.string() }),
+        meta: { signedIn: true, headers: shareHeaders },
+        handler: ({ params }) => ({ id: params.id }),
+      }),
+      route({
+        method: 'GET',
+        url: '/share/boom',
+        meta: { headers: shareHeaders },
+        handler: () => {
+          throw new Error('kaboom')
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/share/override',
+        meta: { headers: shareHeaders },
+        handler: ({ reply }) => {
+          reply.header('Cache-Control', 'private, max-age=60')
+          return { ok: true }
+        },
+      }),
+      route({ method: 'GET', url: '/plain', handler: () => ({ ok: true }) }),
+    ]
+    const boot = () => driver.boot(routes, [identity([]), securityPlugin({ headers: true })])
+    const json = (value: unknown) => Buffer.from(JSON.stringify(value))
+    const expectShareHeaders = (res: ParityResponse) => {
+      expect(res.headers['x-robots-tag']).toBe('noindex')
+      expect(res.headers['cache-control']).toBe('no-store')
+    }
+
+    it('are on a 200, and override a global security header', async () => {
+      const send = await boot()
+      const res = await send({
+        method: 'POST',
+        url: '/share/s1',
+        headers: { 'x-user': 'u1', 'content-type': 'application/json' },
+        body: json({ password: 'p' }),
+      })
+      expect(res.status).toBe(200)
+      expectShareHeaders(res) // Cache-Control: no-store wins over the securityPlugin default
+    })
+
+    it("are on a guard's 401, a validation 400 and a thrown 500", async () => {
+      const send = await boot()
+      const unauthorized = await send({ method: 'POST', url: '/share/s1', headers: { 'content-type': 'application/json' }, body: json({ password: 'p' }) })
+      expect(unauthorized.status).toBe(401)
+      expectShareHeaders(unauthorized)
+      const invalid = await send({ method: 'POST', url: '/share/s1', headers: { 'x-user': 'u1', 'content-type': 'application/json' }, body: json({}) })
+      expect(invalid.status).toBe(400)
+      expectShareHeaders(invalid)
+      const thrown = await send({ method: 'GET', url: '/share/boom' })
+      expect(thrown.status).toBe(500)
+      expectShareHeaders(thrown)
+    })
+
+    it('a handler can still override one, and other routes are untouched', async () => {
+      const send = await boot()
+      const overridden = await send({ method: 'GET', url: '/share/override' })
+      expect(overridden.headers['cache-control']).toBe('private, max-age=60')
+      expect(overridden.headers['x-robots-tag']).toBe('noindex')
+      const plain = await send({ method: 'GET', url: '/plain' })
+      expect(plain.headers['x-robots-tag']).toBeUndefined()
+    })
+
+    it('an invalid meta.headers refuses the boot', async () => {
+      const bad = [
+        route({ method: 'GET', url: '/crlf', meta: { headers: { 'X-Note': 'a\r\nSet-Cookie: x=1' } }, handler: () => 'x' }),
+        route({ method: 'GET', url: '/cookie', meta: { headers: { 'Set-Cookie': 'a=1' } }, handler: () => 'x' }),
+        route({ method: 'GET', url: '/number', meta: { headers: { 'X-Count': 1 } }, handler: () => 'x' }),
+      ]
+      const booting = driver.boot(bad, [])
+      await expect(booting).rejects.toBeInstanceOf(InvalidRouteMetaError)
+      await booting.catch((error: InvalidRouteMetaError) => {
+        expect(error.problems.map((p) => p.route)).toEqual(['GET /crlf', 'GET /cookie', 'GET /number'])
+      })
+    })
+  })
+}

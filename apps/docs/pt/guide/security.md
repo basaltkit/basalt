@@ -151,6 +151,36 @@ desativar tudo. Uma rota que pode ser guardada em cache define o seu próprio
 `Cache-Control`, que substitui o valor por omissão — fá-lo nas rotas `meta.etag`
 (p. ex. `private, no-cache`), já que `no-store` impede o browser de revalidar.
 
+### Cabeçalhos por rota — `meta.headers`
+
+Algumas rotas precisam de cabeçalhos que o resto da API não precisa: um link de
+partilha público que os motores de busca não devem indexar, um download que
+nunca deve ir para cache. Declara-os na rota:
+
+```ts
+route({
+  method: 'POST',
+  url: '/s/:token',
+  meta: { headers: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  handler: /* … */,
+})
+```
+
+O pipeline aplica-os logo que a rota é encontrada, antes dos enrichers e dos
+guards, por isso estão em **todas** as respostas que a rota produz — o `200`, o
+`401`/`403` de um guard, um `400` de validação, um `500` lançado — nos três
+adapters. Um cabeçalho posto com `reply.header()` só chegaria ao caminho de
+sucesso. Substituem um cabeçalho global com o mesmo nome (aqui o
+`Cache-Control` do `securityPlugin`), e um handler continua a poder sobrepor-se
+a um deles com `reply.header()`.
+
+Os valores são verificados no arranque (`InvalidRouteMetaError`): strings sem
+CR, LF ou outros caracteres de controlo, e nunca `Set-Cookie`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, cabeçalhos hop-by-hop ou `X-Request-Id`,
+que pertencem à resposta ou ao adapter. Um pedido que nunca chega à rota — um
+`404`, um `429` de rate limit ou um corpo malformado rejeitado pelo parser da
+framework — leva apenas os cabeçalhos globais.
+
 ## Limites de recursos & resistência a DoS
 
 Para além de headers e rate limits, conexões longas e lentas podem esgotar um

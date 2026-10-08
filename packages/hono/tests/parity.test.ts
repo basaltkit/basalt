@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
   errorDetailsParitySuite,
+  routeHeadersParitySuite,
   idempotencyParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
@@ -66,6 +67,7 @@ uploadParitySuite('hono', driver)
 rawBodyParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)
+routeHeadersParitySuite('hono', driver)
 idempotencyParitySuite('hono', driver)
 streamParitySuite('hono', driver)
 corsPreflightParitySuite('hono', driver)

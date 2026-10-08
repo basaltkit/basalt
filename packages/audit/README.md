@@ -373,6 +373,22 @@ A **phone-shaped** value is one in international form: a leading `+` and 8–15 
 auditPlugin({ redact: createPiiMinimizingRedactor({ key: process.env.AUDIT_PII_KEY! }) })
 ```
 
+The match is on the key, not the value, so a flag like `passwordProtected: true` or `mfaEnabled: false` is masked too. When such booleans belong in the trail, wrap the default redactor rather than weakening it — a boolean carries no secret:
+
+```ts
+import { auditPlugin, isSensitiveKey, redactSensitive, type AuditRedactor } from '@basaltkit/audit'
+
+const keepBooleanFlags: AuditRedactor = (payload) => {
+  const redacted = redactSensitive(payload)
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return redacted
+  // Top-level booleans under a secret-looking key are restored; everything else stays masked.
+  const flags = Object.entries(payload).filter(([k, v]) => typeof v === 'boolean' && isSensitiveKey(k))
+  return { ...(redacted as Record<string, unknown>), ...Object.fromEntries(flags) }
+}
+
+auditPlugin({ redact: keepBooleanFlags })
+```
+
 IP-address keys (`ip`, `ipAddress`, `clientIp`, `remoteAddr`, `x-forwarded-for`, matched exactly — not `zip` or `recipient`) count as PII too, and so does the entry's own `ip` field when `requestContext` is on.
 
 Every value under a PII key is pseudonymized whatever its shape — a number, a list, or a nested object (each scalar leaf; secret-looking keys inside are still masked). The key must be a string or `Uint8Array` secret of at least 16 bytes (128 bits); keep it out of the audit database. With the key, the same value always maps to the same pseudonym, so entries stay correlatable; without it, a pseudonym cannot be reversed by hashing candidate emails or phone numbers. If no key is configured (`createPiiMinimizingRedactor()` or the `piiMinimizingRedactor` constant), a random per-process key is used and a warning is logged: pseudonyms are still irreversible but no longer correlate across restarts.

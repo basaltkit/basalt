@@ -313,6 +313,7 @@ run on every call.
 | `teamRole` | plugin-specific | `@basaltkit/teams` guard | Requires a team-membership rank. Boot-checked. |
 | `rateLimit` | `{ limit: number; windowMs: number; key?: RateLimitKey }` | `securityPlugin` | Per-route bucket at a stricter threshold, per IP (default), `'user'`, `'tenant'`, `'user+tenant'` or `(ctx) => id`. |
 | `etag` | `true` | the shared pipeline | Strong `ETag` + `304` on `If-None-Match`, for `GET`/`HEAD`. |
+| `headers` | `Record<string, string>` | the shared pipeline | Static response headers set as soon as the route matches — on its errors (guard `401`, validation `400`, thrown `500`) too. Boot-checked: no control characters; not `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, hop-by-hop or `x-request-id`. |
 | `summary` · `description` · `tags` · `operationId` | `string` · `string` · `string[]` · `string` | `openapiPlugin` | Operation metadata in the generated document. |
 
 `meta.can` accepts a permission string (`'projects:delete'`) **or** a non-empty array of
