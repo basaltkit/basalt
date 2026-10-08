@@ -18,7 +18,9 @@ async function boot(extra: Partial<AuthPluginOptions> = {}) {
   const app = await createApp({
     plugins: [authPlugin({ users, secret, hasher: fastHasher, ...extra }), apiKeysPlugin()],
   }).boot()
-  app.hooks.onAny((name) => hooks.push(String(name)))
+  app.hooks.onAny((name) => {
+    hooks.push(String(name))
+  })
   return { container: app.container as Container, hooks, close: () => app.shutdown() }
 }
 
