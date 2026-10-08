@@ -97,7 +97,7 @@ The receiver verifies with `verifySignature(header, canonical, secret, tolerance
 **Validation, in order:**
 
 1. Content-Type essence not allowed: **415** `INBOUND_MAIL_UNSUPPORTED_TYPE`.
-2. `from`/`to` must be single addresses: no CR, LF, NUL or comma, at most 320 characters, `to` non-empty and containing `@`. `oversize`, when present, must be a positive integer, and then the body must be empty. Any failure: **400** `INBOUND_MAIL_MALFORMED`.
+2. `from`/`to` must be single addresses in printable ASCII (no CR, LF, NUL, comma or other control character; SMTPUTF8 addresses are not supported in v1, because HTTP header values are not reliably UTF-8 across stacks), at most 320 characters, `to` non-empty and containing `@`. `oversize`, when present, must be a positive integer, and then the body must be empty. Any failure: **400** `INBOUND_MAIL_MALFORMED`.
 3. Signature missing, stale or wrong: **401** `INBOUND_MAIL_UNAUTHORIZED`, with a generic message that never says which check failed.
 
 ### 3.1 Golden vector
