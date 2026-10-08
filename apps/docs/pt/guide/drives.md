@@ -430,7 +430,7 @@ como o `lastSyncedAt`:
 | Campo | Marcado por |
 | --- | --- |
 | `lastSucceededAt` | uma sincronização que persistiu uma página, e um `drives.check()` com sucesso |
-| `lastFailedAt` | uma sincronização falhada, um `drives.check()` falhado, e o refresh que encontrou a autorização morta |
+| `lastFailedAt` | uma sincronização falhada (melhor esforço: omitido num abort, ou quando outra escrita alterou a linha entretanto), um `drives.check()` falhado, e o refresh que encontrou a autorização morta |
 | `lastErrorCode` | o **código** de erro dessa falha (`DRIVE_CREDENTIALS_INVALID`, `DRIVE_RATE_LIMITED`, …) — nunca uma mensagem |
 
 Deliberadamente **não** são marcados num `listItems()`/`download()` normal com
