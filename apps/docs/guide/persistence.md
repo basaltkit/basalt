@@ -869,6 +869,7 @@ configured on the plugin that consumes it — see [Auth](/guide/auth),
 | `EventValidationError` | `EVENT_INVALID` | The event's schema rejected the payload before any listener (including the outbox capture) ran |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | `OUTBOX` (or any store token) resolved without the plugin that registers it |
 | `ERR_UNKNOWN_BUILTIN_MODULE` on `import 'node:sqlite'` | — | A `*-sqlite` package on Node 22.x without `--experimental-sqlite`. Use Node 24, or add the flag; the packages declare `engines.node >= 22.5.0` |
+| `TenantPoolExhaustedError` (503, body says only "Service unavailable.") | `PRISMA_POOL_EXHAUSTED` | Database-per-tenant: every one of the pool's `max` clients stayed in use for `acquireTimeoutMs`. The `leased`/`recentlyUsed` counts are in the server log, never in the response. Raise `max` to the distinct tenants active within a few seconds — see [Database-per-tenant](/guide/database-per-tenant) |
 
 - **"It worked in dev and forgot everything after the deploy"** — a store is
   still on its in-memory default. The defaults are silent by design; grep your
@@ -888,6 +889,14 @@ configured on the plugin that consumes it — see [Auth](/guide/auth),
 - **A durable store still returns nothing for a tenant** — the store is durable,
   not tenant-routed. For database-per-tenant you must route it through the
   active tenant's client; see [Database-per-tenant](/guide/database-per-tenant).
+- **Database-per-tenant: a query fails, or connections pile up, after the
+  response was sent** — work that outlives the request still uses `ctx().db`,
+  whose lease ended with the response. `await` it before replying, or run it in
+  `tenancy.run()` / `DB_POOL.use()`.
+- **Database-per-tenant: every request is slow and the database sees a stream
+  of new connections** — more distinct tenants than `max` take turns, so the
+  pool closes and opens a client per request (it no longer answers 503). Raise
+  `max` and watch how often your `forTenant` factory runs.
 
 ## What to do before going to production
 
