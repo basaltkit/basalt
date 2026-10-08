@@ -143,9 +143,17 @@ export function upload(options: UploadOptions): ZodType<UploadBody> {
 export function uploadOptionsOf(schema: unknown): ResolvedUploadOptions | undefined {
   if (typeof schema !== 'object' || schema === null) return undefined
   const mark = (schema as { [UPLOAD_MARK]?: unknown })[UPLOAD_MARK]
-  return typeof mark === 'object' && mark !== null && Number.isSafeInteger((mark as ResolvedUploadOptions).maxBytes)
-    ? (mark as ResolvedUploadOptions)
-    : undefined
+  // Shape-checked in full, since any copy (of any version) could have written
+  // it: a marker missing one limit must not reach the parser as "no limit".
+  // Unrecognised, the route is not treated as an upload and fails closed.
+  if (typeof mark !== 'object' || mark === null) return undefined
+  const m = mark as Partial<ResolvedUploadOptions>
+  const limits = [m.maxBytes, m.maxFiles, m.maxFileBytes, m.maxFields, m.maxFieldBytes, m.maxHeaderBytes]
+  if (!limits.every((n) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0)) return undefined
+  if (m.allowedTypes !== undefined && !(Array.isArray(m.allowedTypes) && m.allowedTypes.every((t) => typeof t === 'string'))) {
+    return undefined
+  }
+  return mark as ResolvedUploadOptions
 }
 
 /** True when a route's `body` is an {@link upload} declaration — adapters skip their own body parsing for it. */
