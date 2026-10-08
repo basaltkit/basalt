@@ -105,6 +105,18 @@ await runWithContext({ user: { id: 'u1' }, tenant: { id: 'acme' } }, async () =>
 
 `record` returns the created entry (already frozen).
 
+Outside a request (a script, a CLI command) there is no context, so the entry
+goes to the system chain with no actor. Wrap the work in `runWithContext` as
+above, or pass an explicit scope as the third argument:
+
+```ts
+await audit.record('report.generated', { rows }, { tenantId: 'acme', actorId: 'job:nightly' })
+```
+
+The scope can only **narrow**: inside a context with a tenant (or a user), a
+different `scope.tenantId` (or `scope.actorId`) throws a `TypeError`. Queue jobs
+need neither: `@basaltkit/queue` restores the dispatcher's tenant and user.
+
 ### Querying the trail
 
 `trail(query)` returns entries **most recent first**:
@@ -289,13 +301,15 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `onCaptureError` | `(error, { source, event }) => void` | No | logs | Called when a bridged hook/event capture fails; the emitting operation continues. |
 | `integrity` | `'none' \| 'hash-chain' \| { mode: 'hash-chain', key?, keyId?, verifyKeys? }` | No | `'none'` | Hash-chains every entry per tenant so `verify()` detects tampering, and registers `audit:verify`. With `key` (>= 128 bits) the hash is HMAC-SHA256 and records `keyId` (default `auditKeyId(key)`); `verifyKeys` holds retired keys (bare, or `{ id, key }`) so a rotation keeps history verifiable. Needs a store with the chain methods. See "Verifiable trail". |
 | `requestContext` | `boolean \| (ctx) => { ip?, userAgent? }` | No | off | Records the client `ip` / `userAgent`. `true` registers an HTTP enricher (all adapters) filling `ctx().client`. IP is PII — see "Request context". |
+| `fieldPolicies` | `Record<string, { omit?: string[]; pseudonymize?: string[] }>` | No | none | Per-event personal-data policy, keyed by exact event/hook name, applied before the redactor and before hashing. See "Personal data per event". |
+| `fieldPolicyKey` | `string \| Uint8Array` | No | random per process | Keys the `pseudonymize` pseudonyms (>= 128 bits). |
 
 ### `class Audit`
 
 | Method | Signature | Description |
 |---|---|---|
-| `constructor` | `new Audit(store, redact?, tenancyActive?, options?: AuditOptions)` | Creates the facade over a store. `options` takes `integrity` and `requestContext` (as in the plugin). |
-| `record` | `(event: string, payload?: unknown) => Promise<AuditEntry>` | Manual entry (`source: 'manual'`), enriched from context. Returns the entry (with `seq`/`hash` when chained). |
+| `constructor` | `new Audit(store, redact?, tenancyActive?, options?: AuditOptions)` | Creates the facade over a store. `options` takes `integrity`, `requestContext`, `fieldPolicies` and `fieldPolicyKey` (as in the plugin). |
+| `record` | `(event: string, payload?: unknown, scope?: { tenantId?, actorId? }) => Promise<AuditEntry>` | Manual entry (`source: 'manual'`), enriched from context. `scope` attributes an entry recorded outside a request and can only narrow (a value differing from the context throws). Returns the entry (with `seq`/`hash` when chained). |
 | `trail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | Query, most recent first, tenant-scoped (see above). |
 | `systemTrail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | System-only cross-tenant read. |
 | `verify` | `(options?: { tenantId?, from?, to?, expectedHead?, legacyUntil? }) => Promise<AuditVerifyResult>` | Verifies one hash chain and the tenant's rows outside it: `{ ok, tenantId, checked, unchained, unverified, firstBrokenAt?, entryId?, reason?, head? }`. `reason` is one of `hash-mismatch`, `prev-hash-mismatch`, `sequence-gap`, `sequence-duplicate`, `missing-predecessor`, `unchained-entry`, `truncated`, `head-mismatch`, `unknown-key`. Tenant-scoped like `trail()`. |
@@ -379,6 +393,33 @@ Every value under a PII key is pseudonymized whatever its shape — a number, a 
 
 Both walk **6 levels deep**. Anything deeper is replaced with `'[truncated]'` — not passed through. Payloads are arbitrary and the default subscription is `events: ['**']`, so returning the raw subtree meant a secret nested seven levels down reached the trail in cleartext. If your payloads are deeply nested, flatten them before recording rather than relying on depth.
 
+### Personal data per event
+
+The redactors decide by key name and value shape, so they cannot know that the
+`notes` of one event is health data. Because the trail is append-only and the
+hash chain covers the payload, a value that reaches it cannot be erased later
+without breaking `verify()`. Declare per event what must not be stored:
+
+```ts
+auditPlugin({
+  fieldPolicies: {
+    'customer.created': { omit: ['notes', 'address.street'], pseudonymize: ['email', 'fullName'] },
+    'order.placed': { pseudonymize: ['items[].buyer.phone'] },
+  },
+  fieldPolicyKey: process.env.AUDIT_PII_KEY!,
+})
+```
+
+Keys are exact event or hook names. Paths are dotted, arrays are walked
+transparently (`items[].x` spells it out), and absent paths are ignored. `omit`
+removes the field; `pseudonymize` replaces every scalar under it with a
+`pii_<hmac>` pseudonym, the same one `createPiiMinimizingRedactor` produces under
+the same key. A path in both lists is omitted. The policy runs on a copy, for
+`record()`, hooks and events, before the redactor and before hashing. Invalid
+policies (unknown option, empty or `__proto__`/`constructor` segment, more than
+8 segments) throw a `TypeError` at configuration time. Without `fieldPolicyKey`
+a random per-process key is used and a warning is logged once.
+
 ### `patternMatches(pattern: string, name: string): boolean`
 
 Wildcard matcher over `:` and `.` segments — exported for reuse. `*` = one segment; `**` = one or more; `'**'` matches everything.
@@ -398,7 +439,7 @@ patternMatches('auth:**', 'billing:paid')    // false
 ## Common errors and solutions (FAQ)
 
 **Entries come back with empty `actorId`/`tenantId`.**
-There was no active context at record time. Make sure the code runs inside `runWithContext({ user, tenant }, …)` — in HTTP, this is established by the middleware.
+There was no active context at record time. Make sure the code runs inside `runWithContext({ user, tenant }, …)` — in HTTP, this is established by the middleware. Outside a request (a script, a CLI command), you can instead pass `audit.record(event, payload, { tenantId, actorId })`; see "Manual records".
 
 **Domain events aren't being recorded.**
 Either `eventsPlugin()` isn't registered (`auditPlugin` only subscribes to the bus if `container.has(EVENTS)`), or you passed `events: []`, or the patterns don't match the event names.

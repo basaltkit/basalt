@@ -183,14 +183,17 @@ export interface AuditStore {
  */
 function frozenPayload(payload: unknown): unknown {
   if (payload === null || typeof payload !== 'object') return payload
-  let copy: unknown
+  return deepFreeze(clonePayload(payload))
+}
+
+/** A deep copy of an object payload: `structuredClone`, or its JSON form when it holds something uncloneable. */
+function clonePayload(payload: object): unknown {
   try {
-    copy = structuredClone(payload)
+    return structuredClone(payload)
   } catch {
     const json = JSON.stringify(payload)
-    copy = json === undefined ? undefined : (JSON.parse(json) as unknown)
+    return json === undefined ? undefined : (JSON.parse(json) as unknown)
   }
-  return deepFreeze(copy)
 }
 
 function deepFreeze<T>(value: T): T {
@@ -439,6 +442,10 @@ function warnUnkeyed(): void {
 }
 function unkeyedFallback(): Buffer {
   if (!warnedUnkeyed) warnUnkeyed()
+  return processKey()
+}
+/** The random per-process pseudonymization key (no warning: callers warn in their own words). */
+function processKey(): Buffer {
   return (ephemeralKey ??= randomBytes(32))
 }
 
@@ -511,10 +518,9 @@ function pseudonymizeAll(value: unknown, depth: number, options: PiiRedactionOpt
  * The key is validated up front (>= 128 bits); without one, pseudonyms use a
  * random per-process key and a warning is logged.
  *
- * TODO(PII F3 follow-up): the default capture set still persists whatever the
- * emitting code puts in the payload. A fuller minimization pass would let callers
- * declare per-event field policies; kept out of the default here to avoid changing
- * existing capture/redaction behavior.
+ * It works on key names and value shapes, so it cannot know that `notes` or
+ * `fullName` of one particular event is personal data: declare that per event
+ * with `fieldPolicies` (see {@link AuditFieldPolicy}), which runs before it.
  */
 export function createPiiMinimizingRedactor(options: PiiRedactionOptions = {}): AuditRedactor {
   // Validate (or warn) at configuration time, not on the first captured entry.
@@ -528,6 +534,150 @@ export function createPiiMinimizingRedactor(options: PiiRedactionOptions = {}): 
  * not stable across restarts). Prefer {@link createPiiMinimizingRedactor} with a key.
  */
 export const piiMinimizingRedactor: AuditRedactor = (payload) => redactSensitiveAndPii(payload)
+
+/**
+ * What to do with the personal data of one event's payload, by dotted path
+ * (`customer.email`, `items.name`). Arrays are walked transparently: `items.name`
+ * reaches the `name` of every element of `items`, and a segment may be written
+ * `items[].name` to say so. Paths absent from a payload are ignored.
+ *
+ * - `omit`: the field is removed before the entry is stored or hashed.
+ * - `pseudonymize`: every scalar under the field is replaced by its keyed
+ *   HMAC pseudonym (`pii_<hex>`, see {@link pseudonymize}), so entries stay
+ *   correlatable without storing the value.
+ *
+ * A path listed in both is omitted.
+ */
+export interface AuditFieldPolicy {
+  omit?: string[]
+  pseudonymize?: string[]
+}
+
+/** {@link AuditFieldPolicy} per event or hook name (an exact name, not a pattern). */
+export type AuditFieldPolicies = Record<string, AuditFieldPolicy>
+
+/** Deepest path a field policy may name. */
+const MAX_FIELD_POLICY_DEPTH = 8
+/** Longest path a field policy may name. */
+const MAX_FIELD_POLICY_PATH = 256
+/** How many nested levels a field policy walks before dropping the branch. */
+const MAX_FIELD_POLICY_WALK = 32
+
+interface CompiledFieldPolicy {
+  omit: string[][]
+  pseudonymize: string[][]
+}
+
+let warnedUnkeyedFieldPolicy = false
+
+/**
+ * Validates `fieldPolicies` once, at configuration time, and splits each path
+ * into its segments. A typo (`omitt`), an empty or prototype segment, or an
+ * absurdly deep path is a `TypeError` here rather than a silent no-op later.
+ */
+function compileFieldPolicies(
+  policies: AuditFieldPolicies | undefined,
+  key: PseudonymizationKey | undefined,
+): { policies: ReadonlyMap<string, CompiledFieldPolicy>; key: PseudonymizationKey | undefined } {
+  if (key !== undefined) assertPseudonymKey(key)
+  const compiled = new Map<string, CompiledFieldPolicy>()
+  if (policies === undefined) return { policies: compiled, key }
+  if (policies === null || typeof policies !== 'object' || Array.isArray(policies)) {
+    throw new TypeError('Audit `fieldPolicies` must be an object keyed by event name')
+  }
+  let pseudonymizes = false
+  for (const [event, policy] of Object.entries(policies)) {
+    if (event.length === 0) throw new TypeError('Audit `fieldPolicies` keys must be non-empty event names')
+    if (policy === null || typeof policy !== 'object' || Array.isArray(policy)) {
+      throw new TypeError(`Audit fieldPolicies["${event}"] must be an object { omit?, pseudonymize? }`)
+    }
+    for (const field of Object.keys(policy)) {
+      if (field !== 'omit' && field !== 'pseudonymize') {
+        throw new TypeError(`Audit fieldPolicies["${event}"] has an unknown option "${field}" (expected omit, pseudonymize)`)
+      }
+    }
+    const paths = (field: 'omit' | 'pseudonymize'): string[][] => {
+      const list: unknown = policy[field]
+      if (list === undefined) return []
+      if (!Array.isArray(list)) throw new TypeError(`Audit fieldPolicies["${event}"].${field} must be an array of paths`)
+      return list.map((path: unknown) => fieldPath(event, field, path))
+    }
+    const entry = { omit: paths('omit'), pseudonymize: paths('pseudonymize') }
+    if (entry.pseudonymize.length > 0) pseudonymizes = true
+    compiled.set(event, entry)
+  }
+  if (pseudonymizes && key === undefined && !warnedUnkeyedFieldPolicy) {
+    warnedUnkeyedFieldPolicy = true
+    console.warn(
+      '[basalt:audit] fieldPolicies pseudonymize without `fieldPolicyKey`: using a random per-process key, so pseudonyms ' +
+        'will not correlate across restarts. Pass `fieldPolicyKey` (>= 128 bits; the same key as createPiiMinimizingRedactor ' +
+        'gives the same pseudonyms).',
+    )
+  }
+  return { policies: compiled, key }
+}
+
+function fieldPath(event: string, field: string, path: unknown): string[] {
+  const where = `Audit fieldPolicies["${event}"].${field}`
+  if (typeof path !== 'string' || path.length === 0 || path.length > MAX_FIELD_POLICY_PATH) {
+    throw new TypeError(`${where}: each path must be a non-empty string of at most ${MAX_FIELD_POLICY_PATH} characters`)
+  }
+  const segments = path.split('.').map((segment) => (segment.endsWith('[]') ? segment.slice(0, -2) : segment))
+  if (segments.length > MAX_FIELD_POLICY_DEPTH) {
+    throw new TypeError(`${where}: path "${path}" is deeper than ${MAX_FIELD_POLICY_DEPTH} segments`)
+  }
+  for (const segment of segments) {
+    if (segment.length === 0) throw new TypeError(`${where}: path "${path}" has an empty segment`)
+    if (PROTO_KEYS.has(segment)) throw new TypeError(`${where}: path "${path}" names a prototype key`)
+  }
+  return segments
+}
+
+/**
+ * Applies one event's policy to a deep copy of the payload (the caller's object
+ * is never touched): omitted fields are deleted, pseudonymized ones replaced.
+ */
+function applyFieldPolicy(payload: unknown, policy: CompiledFieldPolicy, key: PseudonymizationKey): unknown {
+  if (payload === null || typeof payload !== 'object') return payload
+  const copy = clonePayload(payload)
+  for (const path of policy.omit) {
+    walkFieldPath(copy, path, 0, 0, (parent, name) => {
+      delete parent[name]
+    })
+  }
+  for (const path of policy.pseudonymize) {
+    walkFieldPath(copy, path, 0, 0, (parent, name) => {
+      parent[name] = pseudonymizeAll(parent[name], 0, { key })
+    })
+  }
+  return copy
+}
+
+/** Calls `fn(parent, lastSegment)` for every own field the path reaches, through arrays. */
+function walkFieldPath(
+  node: unknown,
+  path: readonly string[],
+  index: number,
+  walked: number,
+  fn: (parent: Record<string, unknown>, name: string) => void,
+): void {
+  if (node === null || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    // Object levels are bounded by the path; only nested arrays can go deeper.
+    // Past the bound the branch is dropped (fail closed), as the redactors do.
+    for (let i = 0; i < node.length; i++) {
+      const element: unknown = node[i]
+      if (element !== null && typeof element === 'object' && walked >= MAX_FIELD_POLICY_WALK) node[i] = TRUNCATED
+      else walkFieldPath(element, path, index, walked + 1, fn)
+    }
+    return
+  }
+  const record = node as Record<string, unknown>
+  const name = path[index]!
+  if (!Object.hasOwn(record, name)) return
+  if (index === path.length - 1) fn(record, name)
+  else walkFieldPath(record[name], path, index + 1, walked + 1, fn)
+}
 
 /** Client information of the originating request. */
 export interface AuditRequestInfo {
@@ -590,6 +740,20 @@ export interface AuditOptions {
    * `createPiiMinimizingRedactor` to store a pseudonym instead.
    */
   requestContext?: boolean | AuditRequestContextResolver
+  /**
+   * Per-event personal-data policy ({@link AuditFieldPolicy}), keyed by the
+   * exact event or hook name. Applied to `record()`, hooks and events BEFORE the
+   * redactor and before hashing, so an omitted field never reaches the store or
+   * the chain. Use it for personal data: the trail is append-only and the hash
+   * chain covers the payload, so erasing a value later would break verification.
+   */
+  fieldPolicies?: AuditFieldPolicies
+  /**
+   * Keys the `pseudonymize` fields of {@link fieldPolicies} (>= 128 bits). The
+   * same key as `createPiiMinimizingRedactor({ key })` yields the same
+   * pseudonyms. Without it a random per-process key is used (warned once).
+   */
+  fieldPolicyKey?: PseudonymizationKey
 }
 
 export interface AuditVerifyOptions {
@@ -700,6 +864,57 @@ const MAX_UNVERIFIED = 100
 /** Largest timestamp a `Date` can hold (ECMAScript time value bound). */
 const MAX_TIMESTAMP = 8.64e15
 
+/** Longest `actorId` / `tenantId` accepted in a {@link AuditRecordScope}. */
+const MAX_SCOPE_ID = 256
+
+/**
+ * Explicit attribution of a manual entry — see {@link Audit.record}. Narrowing
+ * only: it may restate the context's tenant/user, never replace them.
+ */
+export interface AuditRecordScope {
+  /** Tenant whose chain the entry joins. Must equal the context tenant when there is one. */
+  tenantId?: string
+  /** Actor of the entry. Must equal the context user when there is one. */
+  actorId?: string
+}
+
+/** A non-empty, bounded string without control characters. */
+function isScopeId(value: unknown): value is string {
+  // eslint-disable-next-line no-control-regex
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_SCOPE_ID && !/[\u0000-\u001f\u007f]/.test(value)
+}
+
+/**
+ * The `actorId` / `tenantId` of a manual entry: the context's, restated or
+ * supplied (when the context has none) by `scope`. A scope that differs from
+ * the context throws — `record()` must not let code running for tenant A write
+ * into tenant B's chain, or attribute an action to someone else.
+ */
+function resolveRecordScope(
+  ctxActorId: string | undefined,
+  ctxTenantId: string | undefined,
+  scope: AuditRecordScope | undefined,
+): { actorId: string | undefined; tenantId: string | undefined } {
+  if (scope === undefined) return { actorId: ctxActorId, tenantId: ctxTenantId }
+  if (scope === null || typeof scope !== 'object' || Array.isArray(scope)) {
+    throw new TypeError('audit.record: scope must be an object { tenantId?, actorId? }')
+  }
+  const { tenantId, actorId } = scope
+  if (tenantId !== undefined && !isScopeId(tenantId)) {
+    throw new TypeError(`audit.record: scope.tenantId must be a non-empty string of at most ${MAX_SCOPE_ID} printable characters`)
+  }
+  if (actorId !== undefined && !isScopeId(actorId)) {
+    throw new TypeError(`audit.record: scope.actorId must be a non-empty string of at most ${MAX_SCOPE_ID} printable characters`)
+  }
+  if (ctxTenantId !== undefined && tenantId !== undefined && tenantId !== ctxTenantId) {
+    throw new TypeError('audit.record: scope.tenantId cannot differ from the request tenant')
+  }
+  if (ctxActorId !== undefined && actorId !== undefined && actorId !== ctxActorId) {
+    throw new TypeError('audit.record: scope.actorId cannot differ from the request user')
+  }
+  return { actorId: ctxActorId ?? actorId, tenantId: ctxTenantId ?? tenantId }
+}
+
 const defaultRequestContext: AuditRequestContextResolver = (context) => context?.client
 
 const clip = (value: unknown, max: number): string | undefined =>
@@ -714,6 +929,8 @@ export class Audit {
   /** Every key verification may use, by id (the signer's included). Empty = unkeyed chain. */
   private readonly verifyKeys: ReadonlyMap<string, AuditIntegrityKey>
   private readonly requestContext: AuditRequestContextResolver | undefined
+  private readonly fieldPolicies: ReadonlyMap<string, CompiledFieldPolicy>
+  private readonly fieldPolicyKey: PseudonymizationKey | undefined
   /** Per-chain in-process mutex: appends to one chain run one at a time. */
   private readonly chainLocks = new Map<string, Promise<void>>()
 
@@ -749,11 +966,24 @@ export class Audit {
     }
     this.requestContext =
       options.requestContext === true ? defaultRequestContext : options.requestContext || undefined
+    const fields = compileFieldPolicies(options.fieldPolicies, options.fieldPolicyKey)
+    this.fieldPolicies = fields.policies
+    this.fieldPolicyKey = fields.key
   }
 
-  /** Manual entry — for actions no hook covers. */
-  async record(event: string, payload?: unknown): Promise<AuditEntry> {
-    return this.append(this.build('manual', event, payload))
+  /**
+   * Manual entry — for actions no hook covers.
+   *
+   * `actorId` and `tenantId` come from the active context (`ctx().user.id`,
+   * `ctx().tenant.id`). Outside a request — a script, a CLI command, a job that
+   * did not restore a context — pass `scope` to attribute the entry explicitly;
+   * the entry then joins that tenant's hash chain. `scope` can only NARROW: when
+   * the context already has a tenant (or a user), a different `scope.tenantId`
+   * (or `scope.actorId`) throws a `TypeError` instead of writing into another
+   * tenant's chain. Never forward client input into `scope`.
+   */
+  async record(event: string, payload?: unknown, scope?: AuditRecordScope): Promise<AuditEntry> {
+    return this.append(this.build('manual', event, payload, scope))
   }
 
   /** @internal used by the plugin's hook/event taps. */
@@ -1096,21 +1326,28 @@ export class Audit {
     }
   }
 
-  private build(source: AuditEntry['source'], event: string, payload: unknown): AuditEntry {
+  private build(source: AuditEntry['source'], event: string, payload: unknown, scope?: AuditRecordScope): AuditEntry {
     const context = tryCtx()
     const user = context?.['user'] as { id?: string } | undefined
     const tenant = context?.['tenant'] as { id?: string } | undefined
+    const { actorId, tenantId } = resolveRecordScope(user?.id, tenant?.id, scope)
     return Object.freeze({
       id: randomUUID(),
       source,
       event,
-      payload: frozenPayload(this.redact(payload, event)),
-      actorId: user?.id,
-      tenantId: tenant?.id,
+      payload: frozenPayload(this.redact(this.minimize(payload, event), event)),
+      actorId,
+      tenantId,
       requestId: context?.requestId,
       ...this.requestFields(context, event),
       at: Date.now(),
     })
+  }
+
+  /** Applies the event's {@link AuditFieldPolicy}, if it has one (before the redactor). */
+  private minimize(payload: unknown, event: string): unknown {
+    const policy = this.fieldPolicies.get(event)
+    return policy === undefined ? payload : applyFieldPolicy(payload, policy, this.fieldPolicyKey ?? processKey())
   }
 
   /**
@@ -1233,6 +1470,12 @@ export interface AuditPluginOptions {
    * resolves them from the context itself. Off by default — IP is PII.
    */
   requestContext?: boolean | AuditRequestContextResolver
+
+  /** Per-event personal-data policy: see {@link AuditOptions.fieldPolicies}. */
+  fieldPolicies?: AuditFieldPolicies
+
+  /** Keys the pseudonyms of `fieldPolicies`: see {@link AuditOptions.fieldPolicyKey}. */
+  fieldPolicyKey?: PseudonymizationKey
 }
 
 /**
@@ -1254,6 +1497,8 @@ export interface AuditPluginOptions {
 const DEFAULT_HOOK_PATTERNS = ['auth:**', 'billing:**', 'tenancy:created', 'permission:**']
 
 export function auditPlugin(options: AuditPluginOptions = {}) {
+  // Fail at configuration time, not on the first resolution of AUDIT.
+  compileFieldPolicies(options.fieldPolicies, options.fieldPolicyKey)
   const hookPatterns = options.hooks ?? DEFAULT_HOOK_PATTERNS
   const eventPatterns = options.events ?? ['**']
   const onCaptureError =
@@ -1277,6 +1522,8 @@ export function auditPlugin(options: AuditPluginOptions = {}) {
       const auditOptions: AuditOptions = {
         ...(options.integrity !== undefined ? { integrity: options.integrity } : {}),
         ...(options.requestContext !== undefined ? { requestContext: options.requestContext } : {}),
+        ...(options.fieldPolicies !== undefined ? { fieldPolicies: options.fieldPolicies } : {}),
+        ...(options.fieldPolicyKey !== undefined ? { fieldPolicyKey: options.fieldPolicyKey } : {}),
       }
       container.singleton(
         AUDIT,
