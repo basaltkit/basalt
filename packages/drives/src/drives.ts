@@ -744,7 +744,8 @@ export class Drives {
    *
    * It never throws for a provider-side failure — that is the answer, returned
    * as `{ ok: false, code }`. It does throw for a caller mistake (an unknown
-   * connection, a tenant mismatch). The stamp is best effort: a store error
+   * connection, a tenant mismatch), and rethrows when the caller's `signal`
+   * aborted, without stamping anything. The stamp is best effort: a store error
    * while writing it does not change the result.
    */
   async check(
@@ -761,6 +762,9 @@ export class Drives {
       )
       result = { ok: true }
     } catch (error) {
+      // The caller gave up: that says nothing about the connection, so it is
+      // neither an answer nor something to stamp.
+      if (options.signal?.aborted) throw error
       result = { ok: false, code: errorCodeOf(error) }
     }
     const at = this.now()

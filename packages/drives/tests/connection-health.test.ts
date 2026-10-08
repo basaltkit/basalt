@@ -27,6 +27,22 @@ describe('connection health', () => {
     expect(stored.lastErrorCode).toBe('DRIVE_RATE_LIMITED')
   })
 
+  it('check() rethrows a caller abort and stamps nothing', async () => {
+    const h = harness()
+    const view = await connect(h, { tenantId: 'acme' })
+    const controller = new AbortController()
+    const original = h.fake.list.bind(h.fake)
+    h.fake.list = async () => {
+      controller.abort()
+      throw new Error('aborted')
+    }
+    await expect(h.drives.check(view.id, { tenantId: 'acme', signal: controller.signal })).rejects.toThrow()
+    h.fake.list = original
+    const stored = (await h.store.find('acme', view.id))!
+    expect(stored.lastFailedAt).toBeUndefined()
+    expect(stored.lastSucceededAt).toBeUndefined()
+  })
+
   it('check() still throws for a caller mistake', async () => {
     const h = harness()
     await expect(h.drives.check('missing', { tenantId: 'acme' })).rejects.toThrow(DriveConnectionNotFoundError)
