@@ -47,7 +47,7 @@ model TenantDomain {
 }
 ```
 
-Then `prisma generate` and go. The four verification columns are needed by `PrismaDomainStore` only; upgrading from a version without them is an additive migration (`prisma migrate dev`). `PrismaTenantSource` keeps working on a database not yet migrated.
+Then `prisma generate` and go. The four verification columns are needed by `PrismaDomainStore` only; upgrading from a version without them is an additive migration (`prisma migrate dev`). `PrismaTenantSource` keeps working on a database not yet migrated as long as the client was generated from the old model; a client generated from the new model reads the new columns, so migrate before you deploy it.
 
 ## Verified custom domains — `PrismaDomainStore`
 
