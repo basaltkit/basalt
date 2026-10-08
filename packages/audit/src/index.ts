@@ -1605,6 +1605,46 @@ export class Audit {
     return undefined
   }
 
+  /**
+   * Checks that the erasure an `audit:redacted` entry attests is still in
+   * place: its entry must still be redacted, and its marker must name this
+   * attestation or a later one for the same entry. `undefined` when it holds;
+   * otherwise what is wrong (an un-erasure, or a rollback to an older state).
+   */
+  private async attestationProblem(attestation: AuditEntry): Promise<string | undefined> {
+    const claim = attestation.payload as Record<string, unknown> | null
+    const entryId = claim !== null && typeof claim === 'object' ? claim['entryId'] : undefined
+    if (typeof entryId !== 'string') return 'attestation payload malformed'
+    if (typeof this.store.get !== 'function') {
+      return 'the store has no get() method, so the entry an attestation vouches for cannot be read — implement AuditStore.get()'
+    }
+    const target = await this.store.get(entryId)
+    if (target === undefined) return 'the entry this attestation vouches for is missing'
+    const marker: unknown = target.redaction
+    if (marker === undefined || marker === null) return 'the entry this attestation vouches for is no longer redacted'
+    if (!isRedactionMarker(marker)) return 'the entry this attestation vouches for has a malformed redaction marker'
+    if (marker.attestationId === attestation.id) return undefined
+    // A newer redaction moved the marker on: it must be a later attestation of
+    // the same entry (that one is checked against the entry's current state).
+    const newer = await this.store.get(marker.attestationId)
+    const newerClaim = newer?.payload as Record<string, unknown> | null | undefined
+    if (
+      newer === undefined ||
+      newer.event !== AUDIT_REDACTED_EVENT ||
+      newer.source !== 'manual' ||
+      newer.tenantId !== attestation.tenantId ||
+      newerClaim === null ||
+      typeof newerClaim !== 'object' ||
+      newerClaim['entryId'] !== entryId ||
+      newer.seq === undefined ||
+      attestation.seq === undefined ||
+      newer.seq <= attestation.seq
+    ) {
+      return 'the entry this attestation vouches for was rolled back to an older state'
+    }
+    return undefined
+  }
+
   private erasureStore(): AuditStore & Required<Pick<AuditStore, 'get' | 'redact'>> {
     const store = this.store
     if (typeof store.get !== 'function' || typeof store.redact !== 'function') {
@@ -1786,6 +1826,13 @@ export class Audit {
         } else {
           const hashCheck = checkAuditHash(entry, this.verifyKeys)
           if (hashCheck !== 'ok') return broken(hashCheck)
+          if (entry.event === AUDIT_REDACTED_EVENT && entry.source === 'manual') {
+            // The other direction: an erasure it attests must still be in place.
+            // A row restored to its original content (from a backup) matches its
+            // original hash again, so only its attestation can reveal it.
+            const problem = await this.attestationProblem(entry)
+            if (problem !== undefined) return broken('redaction-mismatch', problem)
+          }
         }
         if (expectedHead !== undefined && entry.seq === expectedHead.seq && entry.hash !== expectedHead.hash) {
           return broken('head-mismatch')

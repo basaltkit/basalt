@@ -395,6 +395,9 @@ const { changed, residual } = await audit.redact(entryId, {
   chain. It binds the entry's `id`, `seq` and `hash`, the erased fields, a digest
   of the new state and `reasonRef`, and never the erased data. `verify` checks the
   redacted entry through it, and any mismatch fails as `redaction-mismatch`.
+  It also checks each attestation the other way: its entry must still be
+  redacted at that state or a later one. Restoring an erased row from a backup,
+  or rolling it back to an older redaction, fails too.
   The result counts redacted entries in `redacted`.
 - **Scope** mirrors `trail()`. Inside a tenant context only that tenant's
   entries are reachable, and any other id is `AuditEntryNotFoundError` (404).
