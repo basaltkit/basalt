@@ -215,7 +215,18 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
         const key = context['apiKey'] as ApiKeyContext | undefined
         if (key && meta?.['apiKey'] === false) return false
         const required = meta?.['scopes']
-        if (!Array.isArray(required) || required.length === 0) return true
+        if (!Array.isArray(required) || required.length === 0) {
+          // Same rule as the guard: a narrow key (no `*`) never reaches an
+          // identity-gated route that declares no scopes. Tenant binding is
+          // NOT mirrored — the tenant may only resolve from the tool route's
+          // own params, which a listing does not have.
+          return !(
+            key &&
+            options.allowNarrowKeysOnUnscopedRoutes !== true &&
+            !key.scopes.includes('*') &&
+            IDENTITY_GATED_META.some((k) => meta?.[k] !== undefined && meta?.[k] !== false)
+          )
+        }
         const granted = key?.scopes ?? []
         return (required as string[]).every((scope) => scopesSatisfy(granted, [scope]))
       }

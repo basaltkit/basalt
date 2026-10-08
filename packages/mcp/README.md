@@ -118,7 +118,8 @@ listing (no rate-limit consumption, no audit or denial records):
   current tenant; `permissionsPlugin` hides `meta.can` tools whose permission(s)
   the caller does not hold (RBAC, in the current scope — the guard's own question);
   `apiKeysPlugin` hides `meta.scopes` tools the caller's API key does not cover (and
-  `meta.apiKey: false` tools from key holders); `authPlugin` hides `meta.mfa: true`
+  `meta.apiKey: false` tools from key holders, and identity-gated tools without
+  `meta.scopes` from narrow keys); `authPlugin` hides `meta.mfa: true`
   (or `requireMfa: true`) tools from a signed-in session without a second factor.
 
 Not filtered (listed, refused on call): `subscribed`/`feature` (an entitlement read per

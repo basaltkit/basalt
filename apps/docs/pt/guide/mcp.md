@@ -335,7 +335,7 @@ auditoria ou de recusa:
 | a rota tem `meta.auth` e o chamador não tem `ctx().user` | embutido, quando um guard reivindica `auth` (ex.: `authPlugin`); com uma dispensa de auth na edge nada é escondido |
 | a rota tem `meta.teamRole` e o chamador não tem esse papel (ou um superior) no tenant atual | a verificação de visibilidade do `teamsPlugin` (uma leitura de membership) |
 | a rota tem `meta.can` e ao chamador falta uma das suas permissões (RBAC, scope atual; o `superAdmin` passa sempre) | a verificação de visibilidade do `permissionsPlugin` (leituras de grants — nenhum registo `permission:denied`) |
-| a rota tem `meta.scopes` e a API key do chamador não tem todos os scopes (ou não há chave); ou a rota tem `meta.apiKey: false` e o chamador tem uma chave | a verificação de visibilidade do `apiKeysPlugin` (só lê `ctx().apiKey` — nenhum hook `auth:apikey_rejected`) |
+| a rota tem `meta.scopes` e a API key do chamador não tem todos os scopes (ou não há chave); ou a rota tem `meta.apiKey: false` e o chamador tem uma chave; ou a rota é restrita por identidade (`meta.auth`/`can`/`teamRole`/`audience`) sem `meta.scopes` e a chave do chamador é estreita (sem `*`) | a verificação de visibilidade do `apiKeysPlugin` (só lê `ctx().apiKey` — nenhum hook `auth:apikey_rejected`) |
 | a rota tem `meta.mfa: true` (ou aplica-se `authPlugin({ requireMfa: true })`) e a sessão do chamador autenticado não tem segundo fator (`ctx().amr` sem `'mfa'`) | a verificação de visibilidade do `authPlugin` (só lê o `ctx()` — nenhuma leitura do store de MFA) |
 | qualquer chave cujo plugin registe uma verificação em `http:route-visibility` | o `RouteVisibilityCheck` desse plugin |
 

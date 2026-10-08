@@ -324,7 +324,7 @@ limit and writes no audit or denial record:
 | the route has `meta.auth` and the caller has no `ctx().user` | built in, when a guard claims `auth` (e.g. `authPlugin`); under an edge-auth waiver nothing is hidden |
 | the route has `meta.teamRole` and the caller does not hold that role (or a higher one) in the current tenant | `teamsPlugin`'s visibility check (one membership read) |
 | the route has `meta.can` and the caller lacks one of its permissions (RBAC, current scope; `superAdmin` short-circuits) | `permissionsPlugin`'s visibility check (grant reads — no `permission:denied` record) |
-| the route has `meta.scopes` and the caller's API key does not hold every scope (or there is no key); or the route has `meta.apiKey: false` and the caller holds a key | `apiKeysPlugin`'s visibility check (reads `ctx().apiKey` only — no `auth:apikey_rejected` hook) |
+| the route has `meta.scopes` and the caller's API key does not hold every scope (or there is no key); or the route has `meta.apiKey: false` and the caller holds a key; or the route is identity-gated (`meta.auth`/`can`/`teamRole`/`audience`) with no `meta.scopes` and the caller's key is narrow (no `*`) | `apiKeysPlugin`'s visibility check (reads `ctx().apiKey` only — no `auth:apikey_rejected` hook) |
 | the route has `meta.mfa: true` (or `authPlugin({ requireMfa: true })` applies) and the signed-in caller's session has no second factor (`ctx().amr` lacks `'mfa'`) | `authPlugin`'s visibility check (reads `ctx()` only — no MFA-store lookup) |
 | any key whose plugin registers a check in `http:route-visibility` | that plugin's `RouteVisibilityCheck` |
 

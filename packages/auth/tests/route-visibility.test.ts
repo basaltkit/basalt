@@ -60,6 +60,20 @@ describe('apiKeysPlugin visibility (meta.scopes)', () => {
       await close()
     }
   })
+
+  it('hides an identity-gated route without meta.scopes from a narrow key, like the guard', async () => {
+    const { container, hooks, close } = await boot()
+    try {
+      const gated = r({ auth: true })
+      expect(await isRouteVisible(gated, { user, apiKey: key(['reports:read']) }, container)).toBe(false)
+      expect(await isRouteVisible(gated, { user, apiKey: key(['*']) }, container)).toBe(true)
+      expect(await isRouteVisible(gated, { user }, container)).toBe(true)
+      expect(await isRouteVisible(r({}), { apiKey: key(['reports:read']) }, container)).toBe(true)
+      expect(hooks).toEqual([])
+    } finally {
+      await close()
+    }
+  })
 })
 
 describe('authPlugin visibility (meta.mfa)', () => {

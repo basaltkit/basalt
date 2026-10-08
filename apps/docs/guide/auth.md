@@ -961,7 +961,8 @@ The plugin's guard enforces three boundaries on every key-authenticated request
 - **Listings follow the same rules.** The plugin registers a side-effect-free
   visibility check, so the [MCP `tools/list`](/guide/mcp#what-tools-list-shows)
   hides `meta.scopes` tools the key does not cover and `meta.apiKey: false` tools
-  from key holders — without emitting `auth:apikey_rejected`.
+  from key holders, and identity-gated routes without `meta.scopes` from narrow
+  keys — without emitting `auth:apikey_rejected`.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'
