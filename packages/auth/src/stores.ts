@@ -22,10 +22,24 @@ export interface PublicUser {
 /** Fields the email-verification / password-reset flows update on a user. */
 export type UserPatch = Partial<Pick<AuthUser, 'passwordHash' | 'emailVerified'>>
 
+/** What {@link UserSource.create} receives. */
+export interface NewUser {
+  email: string
+  passwordHash: string
+  /** Create the account already verified. Default `false`. */
+  emailVerified?: boolean
+}
+
 export interface UserSource {
   findByEmail(email: string): Promise<AuthUser | null>
   findById(id: string): Promise<AuthUser | null>
-  create(data: { email: string; passwordHash: string }): Promise<AuthUser>
+  /**
+   * Creates an account. `emailVerified` is set only by trusted server-side
+   * flows (`Auth.register(…, { emailVerified: true })`, a provider-verified
+   * social login) and must be persisted with the row; omitted means `false`.
+   * The public register route never passes it.
+   */
+  create(data: NewUser): Promise<AuthUser>
   /** Required for email verification and password reset. Returns the updated user. */
   update?(id: string, patch: UserPatch): Promise<AuthUser | null>
   /**
@@ -91,8 +105,13 @@ export class MemoryUserSource implements UserSource {
     return out
   }
 
-  async create(data: { email: string; passwordHash: string }): Promise<AuthUser> {
-    const user: AuthUser = { id: randomUUID(), emailVerified: false, ...data }
+  async create(data: NewUser): Promise<AuthUser> {
+    const user: AuthUser = {
+      id: randomUUID(),
+      email: data.email,
+      passwordHash: data.passwordHash,
+      emailVerified: data.emailVerified === true,
+    }
     this.users.set(user.id, user)
     return user
   }

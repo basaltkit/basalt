@@ -237,8 +237,15 @@ The guard is what breaks the chain; prefixing platform permissions is hygiene,
 not protection.
 :::
 
-Registration on tenant hosts is closed: people join a tenant by invitation, not
-by finding its subdomain. Return 404 from `/auth/register` when a tenant resolved.
+Registration on tenant hosts is invite-only: people join a tenant by invitation,
+not by finding its subdomain. Declare it once with
+`authPlugin({ registerPolicy: teamsInviteGate(…) })` (see
+[Teams: invite-only registration](/guide/teams#invite-only-registration)): a
+refused signup answers the same `202` as an admitted one, so the route is not an
+oracle for who was invited, and a first social login is refused too. Add
+`teamsPlugin({ acceptOnVerifiedEmail: true })` so the invitee who confirms the
+address is already a member. If your tenants never sign up on their host at all,
+`authRoutes({ register: 'closed' })` answers a static 404.
 Registration on the apex is either closed too (staff are created from the CLI)
 or open but unprivileged — an apex account with no platform role can do nothing.
 
@@ -411,9 +418,9 @@ one that adds the platform console.
 - [ ] `tenantDb()` requires a tenant; `centralDb()` refuses one
 - [ ] no `catch { return central }` anywhere
 - [ ] platform routes declare `platform: true` and a guard 404s them on a tenant host
-- [ ] `/auth/register` is 404 on tenant hosts
+- [ ] `/auth/register` is invite-only on tenant hosts (`registerPolicy: teamsInviteGate(…)`) or `register: 'closed'`
 - [ ] one `authPlugin`; no operator model, no second session table
-- [ ] users created through `AUTH`, never inserted with a hand-made hash
+- [ ] users created through `AUTH`, never inserted with a hand-made hash (`register(…, { emailVerified: true })` when the flow already proved the address)
 - [ ] MFA policy answers for platform roles
 - [ ] tenant roles seeded under the tenant id in `onProvision`; platform roles under `GLOBAL_SCOPE` (imported) via the central store
 - [ ] `can:` on routes; role-name checks justified in a comment
