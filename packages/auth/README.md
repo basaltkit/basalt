@@ -130,14 +130,15 @@ const myRoute = route({
 The module doesn't impose any database. You provide an object that fulfills the `UserSource` interface:
 
 ```ts
-import type { UserSource, AuthUser, UserPatch } from '@basaltkit/auth'
+import type { UserSource, AuthUser, UserPatch, NewUser } from '@basaltkit/auth'
 
 const users: UserSource = {
   async findByEmail(email) { /* SELECT ... WHERE email = ? */ return null },
   async findById(id) { /* SELECT ... WHERE id = ? */ return null },
-  async create(data) {
-    // data = { email, passwordHash } — the hash is already computed
-    return { id: 'new-id', ...data } as AuthUser
+  async create(data: NewUser) {
+    // data = { email, passwordHash, emailVerified? } — the hash is already computed;
+    // persist emailVerified (omitted = false) with the row
+    return { id: 'new-id', email: data.email, passwordHash: data.passwordHash, emailVerified: data.emailVerified === true }
   },
   // Optional, but required for email verification and password reset:
   async update(id, patch: UserPatch) { /* UPDATE ... */ return null },
@@ -150,7 +151,7 @@ const users: UserSource = {
 |---|---|---|---|
 | `findByEmail(email)` | Yes | `AuthUser \| null` | Sign-in and registration lookups. Emails are case-insensitive identities. |
 | `findById(id)` | Yes | `AuthUser \| null` | Resolving the user behind a token, session or API key. |
-| `create({ email, passwordHash })` | Yes | `AuthUser` | Registration; the hash arrives already computed. |
+| `create({ email, passwordHash, emailVerified? })` | Yes | `AuthUser` | Registration; the hash arrives already computed. `emailVerified: true` comes only from trusted flows (`register(…, { emailVerified: true })`, a provider-verified social login) and must be persisted with the row. A source that drops it is patched through `update()`; without `update()` such a call throws `AUTH_UPDATE_UNSUPPORTED`. |
 | `update(id, patch)` | No | `AuthUser \| null` | Email verification and password reset need it (`AUTH_UPDATE_UNSUPPORTED` without it). |
 | `findByIds(ids)` | No | `PublicUser[]` | **Bulk contact lookup** — see below. |
 
@@ -556,7 +557,7 @@ lock go (the memory bound is absolute).
 
 ### Hooks (events)
 
-The application can react to authentication events: `auth:registered`, `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
+The application can react to authentication events: `auth:registered`, `auth:register_existing_email`, `auth:register_refused` (a registration policy refused a new account: `{ email, tenantId?, source: 'register' | 'social' }`), `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
 
 ## API reference
 
@@ -586,13 +587,15 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy? }` | No | — (plaintext) | Encrypts TOTP secrets at rest with a key ring; see *Encrypting secrets at rest*. |
 | `mfaEncryptionKey` | `string \| Buffer` | No | — | Shorthand for a one-key ring (`id: 'default'`, ≥ 32 bytes). |
 | `mfaIssuer` | `string` | No | `'Basalt'` | Name shown in the authenticator app. |
+| `registerPolicy` | `RegisterPolicy` (`({ email, tenantId? }) => boolean \| Promise<boolean>`) | No | — (open) | Who may create a NEW account through `POST /auth/register` (refusal = same `202`, `auth:register_refused`) and the create branch of `socialLogin` (refusal = `RegistrationClosedError`). Logins into existing accounts and `register()` are never gated. `@basaltkit/teams`' `teamsInviteGate(teams)` = invite-only on tenant hosts. |
 | `hooks` | `HookBus` | No | — | Only on the `Auth` class; the plugin injects it. |
 
 `Auth` class methods:
 
 | Method | Description |
 |---|---|
-| `register(email, password)` | Creates the account; throws `EmailTakenError` if the email already exists. |
+| `register(email, password, { emailVerified? })` | Trusted, server-side creation; throws `EmailTakenError` if the email already exists; never gated by `registerPolicy`. `emailVerified: true` creates the account already verified (only for a flow that proved the address — never from a request body). |
+| `registerSafely(email, password, { policy?, tenantId? })` | What `POST /auth/register` calls: enumeration-safe, asks the registration policy first (`policy: null` = open); never creates a verified account. |
 | `login(email, password, mfaCode?)` | Returns `{ user, tokens, amr }`; applies throttle and MFA. |
 | `attempt(email, password)` | Checks credentials without side effects; `null` on failure. |
 | `refresh(refreshToken)` | New token pair; detects reuse and revokes the family. |
@@ -603,12 +606,12 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `requestPasswordReset(email)` / `resetPassword(token, newPassword)` | Password recovery. |
 | `enrollMfa(userId)` / `activateMfa(userId, code)` / `disableMfa(userId, code)` | MFA lifecycle. |
 | `isMfaEnabled(userId)` / `mfaStatus(userId)` / `verifyMfaCode(userId, code)` | MFA state and verification. |
-| `socialLogin(email, { emailVerified?, mfaCode?, mfa?, identity?, subjectConflict? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; with `identity: { provider, subject }` the account link decides, otherwise it links to an existing account only with a provider-verified email; honours MFA; returns `{ user, tokens }`. |
+| `socialLogin(email, { emailVerified?, mfaCode?, mfa?, identity?, subjectConflict?, tenantId? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; with `identity: { provider, subject }` the account link decides, otherwise it links to an existing account only with a provider-verified email; honours MFA; creating a new account asks `registerPolicy` (for `tenantId`, default `ctx().tenant?.id`) and is refused with `RegistrationClosedError`; returns `{ user, tokens }`. |
 | `reencryptMfaSecret(userId)` | Re-seals a stored TOTP secret under the active `mfaEncryption` key (rotation / legacy migration): `'resealed'`, `'current'` or `'none'`. |
 
 ### Ready-made routes
 
-- `authRoutes()`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them. `POST /auth/logout` takes an optional `{ refreshToken }`: with none (or no body) it ends the cookie / `x-session-id` session and expires the cookie — a cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`).
+- `authRoutes({ register?, password?, rateLimit? })`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them. `POST /auth/logout` takes an optional `{ refreshToken }`: with none (or no body) it ends the cookie / `x-session-id` session and expires the cookie — a cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`). `register: 'open' | 'closed' | RegisterPolicy` sets who may sign up (default: the plugin's `registerPolicy`, open without one): `'closed'` answers a static `404 AUTH_REGISTRATION_CLOSED`; a refusing policy answers the same `202` as a success and creates nothing.
 - Every `authRoutes()`, `mfaRoutes()` and `oauthRoutes()` route declares `meta.account: true` (about the caller, not a tenant's data — `@basaltkit/teams`' membership guard lets non-members through) and, except MFA disable, `meta.mfa: false` (reachable under `requireMfa`). `ACCOUNT_META` exports the pair for your own profile routes.
 - `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
@@ -658,6 +661,7 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 |---|---|---|
 | `InvalidCredentialsError` | `AUTH_INVALID_CREDENTIALS` | 401 |
 | `EmailTakenError` | `AUTH_EMAIL_TAKEN` | 409 |
+| `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 (`authRoutes({ register: 'closed' })`, or a `registerPolicy` refused a first social / SSO login) |
 | `RefreshInvalidError` / `RefreshReusedError` | `AUTH_REFRESH_INVALID` / `AUTH_REFRESH_REUSED` | 401 |
 | `AuthRequiredError` | `AUTH_REQUIRED` | 401 |
 | `TokenInvalidError` / `TokenExpiredError` | `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` | 401 |
