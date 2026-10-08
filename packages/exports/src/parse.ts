@@ -48,7 +48,7 @@ export type DelimitedInput = string | Uint8Array | AsyncIterable<string | Uint8A
 
 const DEFAULT_MAX_FIELD_LENGTH = 1_048_576
 
-async function* textChunks(input: DelimitedInput): AsyncGenerator<string> {
+async function* textChunks(input: DelimitedInput, currentLine: () => number): AsyncGenerator<string> {
   if (typeof input === 'string') {
     yield input
     return
@@ -59,7 +59,7 @@ async function* textChunks(input: DelimitedInput): AsyncGenerator<string> {
     try {
       return decoder.decode(bytes, { stream })
     } catch {
-      throw new DelimitedParseError('INVALID_ENCODING', 1, 'the file is not valid UTF-8.')
+      throw new DelimitedParseError('INVALID_ENCODING', currentLine(), 'the file is not valid UTF-8.')
     }
   }
   if (input instanceof Uint8Array) {
@@ -133,7 +133,7 @@ export async function* parseDelimited(
     return { line: recordLine, cells: done }
   }
 
-  for await (let chunk of textChunks(input)) {
+  for await (let chunk of textChunks(input, () => line)) {
     if (first && chunk.length > 0) {
       first = false
       if (chunk.charCodeAt(0) === 0xfeff) {

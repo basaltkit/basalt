@@ -65,6 +65,14 @@ describe('DelimitedFormatter bom/locale', () => {
     expect(csv.toString()).toBe('V\r\nNaN\r\n1,5e+21\r\n1e-7')
   })
 
+  it('rejects a locale whose separators collide or contain digits', () => {
+    expect(() => createCsvFormatter({ locale: { decimal: ',', thousands: ',' } })).toThrow(TypeError)
+    expect(() => createCsvFormatter({ locale: { decimal: '.', thousands: '0' } })).toThrow(TypeError)
+    expect(() => createCsvFormatter({ locale: { decimal: ',', thousands: '' } })).toThrow(TypeError)
+    expect(() => createCsvFormatter({ locale: { decimal: ';' as ',' } })).toThrow(TypeError)
+    expect(() => createCsvFormatter({ locale: { decimal: ',', thousands: '.' } })).not.toThrow()
+  })
+
   it('rejects an invalid delimiter', () => {
     expect(() => createCsvFormatter({ delimiter: '"' })).toThrow(TypeError)
     expect(() => createCsvFormatter({ delimiter: ';;' })).toThrow(TypeError)

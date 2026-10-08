@@ -54,6 +54,7 @@ export type ImportIssueCode =
   | 'MISSING_COLUMN'
   | 'DUPLICATE_COLUMN'
   | 'UNKNOWN_COLUMN'
+  // report-level — the error list was truncated at `maxErrors` (rows are unaffected)
   | 'TOO_MANY_ERRORS'
   // row-level — the row is left out
   | 'COLUMN_COUNT'
@@ -121,7 +122,8 @@ class CellError extends Error {
   }
 }
 
-const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// `-` is escaped too: the separators are joined into a character class.
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')
 
 /**
  * Strict locale number parsing. The separator that is NOT the decimal one is
@@ -136,18 +138,20 @@ function parseNumber(text: string, locale: LocaleSpec, integer: boolean): number
   if (locale.thousands) {
     separators.add(locale.thousands)
     // a space separator also accepts the non-breaking spaces spreadsheets write
-    if (/^\s$/.test(locale.thousands)) for (const s of [' ', ' ', ' ']) separators.add(s)
+    if (/^\s$/.test(locale.thousands)) for (const s of [' ', '\u00A0', '\u202F']) separators.add(s)
   }
   separators.delete(decimal)
   const sep = `[${[...separators].map(escapeRegExp).join('')}]`
   const dec = escapeRegExp(decimal)
   const fraction = integer ? '' : `(?:${dec}\\d+)?`
   const plain = new RegExp(`^[-+]?\\d+${fraction}$`)
-  const grouped = new RegExp(`^[-+]?\\d{1,3}(${sep})\\d{3}(?:\\1\\d{3})*${fraction}$`)
+  // A thousands group never starts with 0: `0.250` with a comma decimal is a
+  // mistyped 0,25, not 250.
+  const grouped = new RegExp(`^[-+]?[1-9]\\d{0,2}(${sep})\\d{3}(?:\\1\\d{3})*${fraction}$`)
   const kind = integer ? 'INVALID_INTEGER' : 'INVALID_DECIMAL'
 
   if (!plain.test(text) && !grouped.test(text)) {
-    if (!integer && new RegExp(sep).test(text) && /^[-+]?[\d\s.,  ]+$/.test(text)) {
+    if (!integer && new RegExp(sep).test(text) && /^[-+]?[\d\s.,]+$/.test(text)) {
       throw new CellError(
         'AMBIGUOUS_DECIMAL',
         `"${text}" is ambiguous: "${other}" is only accepted as a thousands separator in groups of three, and the decimal separator is "${decimal}".`,
@@ -221,6 +225,9 @@ function parseCell(text: string, parser: ImportParser, locale: LocaleSpec): unkn
  * ready for a preview screen. Cells are trimmed; an empty optional cell is `null`.
  */
 export async function readImport<T>(definition: ImportDefinition<T>, input: DelimitedInput): Promise<ImportResult<T>> {
+  // A definition built without defineImport gets the same up-front checks (a
+  // header claimed by two columns would otherwise map silently to the last one).
+  defineImport(definition)
   const locale: LocaleSpec = definition.locale ?? { decimal: '.', date: 'iso' }
   const maxRows = definition.maxRows ?? 10_000
   const maxErrors = definition.maxErrors ?? 1_000

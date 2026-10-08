@@ -200,7 +200,9 @@ qualquer. Com `format: 'csv-pt'` regista-se ao lado do de omissão em vez de o
 substituir. O `stream()` emite os mesmos bytes, BOM incluído.
 
 Para XLSX, o `createXlsxFormatter` escreve **células de data verdadeiras**
-(números de série do Excel com um formato de data, a partir do instante UTC) e
+(números de série do Excel com um formato de data, a partir do instante UTC;
+uma data anterior a 1900-03-01, que os números de série do Excel não representam
+correctamente, fica como texto ISO) e
 aplica formatos de número por coluna, larguras, um nome de folha e um cabeçalho
 fixo. As dicas ficam na definição da exportação:
 
@@ -272,7 +274,8 @@ const { rows, errors, warnings } = await readImport(purchaseOrders, file)
   separador de milhares, em grupos de três. Com vírgula decimal, `1.250,50` é
   1250,5 e `1 408 278,55` é 1408278,55, mas `12.5` é `AMBIGUOUS_DECIMAL` — nunca
   lido em silêncio como 125 ou 12,5, que é como um preço acaba errado por um
-  factor de 1 000. O `'integer'` recusa casas decimais.
+  factor de 1 000. Um grupo nunca começa por `0` (`0.250` também é ambíguo, não
+  250). O `'integer'` recusa casas decimais.
 - **Datas** em `'dd/mm/yyyy'` ou ISO (`yyyy-mm-dd`, ou um timestamp com
   offset), validadas contra o calendário (`31/02/2026` é `INVALID_DATE`), e
   devolvidas como meia-noite UTC. Para outra coisa qualquer passa uma função em
@@ -294,5 +297,6 @@ O leitor de baixo nível também é exportado: `parseDelimited(input, { delimite
 quote, bom, maxRows, maxFieldLength })` é um iterador assíncrono RFC 4180 de
 `{ line, cells }` que lança `DelimitedParseError` (`code`
 `CSV_UNTERMINATED_QUOTE`, …, com `reason` e `line`). Um BOM inicial é removido
-(`bom: 'forbid'` recusa-o), e o que o `createCsvFormatter` escreve volta a ser
-lido sem alterações.
+(`bom: 'forbid'` recusa-o). O que o `createCsvFormatter` escreve volta a ser
+lido com o mesmo `delimiter` e `locale`: números e datas dão os mesmos valores,
+e o texto a que a protecção contra fórmulas acrescentou um `'` mantém-no.

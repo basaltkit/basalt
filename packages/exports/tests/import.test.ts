@@ -128,6 +128,14 @@ describe('parseDelimited (RFC 4180)', () => {
     expect((await parseError(new Uint8Array([0x61, 0xff, 0x62]))).reason).toBe('INVALID_ENCODING')
   })
 
+  it('reports invalid UTF-8 in a later chunk at the line reached so far', async () => {
+    async function* chunks(): AsyncGenerator<Uint8Array> {
+      yield new TextEncoder().encode('a\nb\nc\n')
+      yield new Uint8Array([0xff])
+    }
+    expect(await parseError(chunks())).toMatchObject({ reason: 'INVALID_ENCODING', line: 4 })
+  })
+
   it('validates the delimiter and quote', async () => {
     await expect(parse('a', { delimiter: ';;' })).rejects.toThrow(TypeError)
     await expect(parse('a', { delimiter: '"' })).rejects.toThrow(TypeError)
@@ -186,6 +194,31 @@ describe('defineImport / readImport', () => {
       [6, 'unitPrice', 'INVALID_DECIMAL'],
       [7, 'unitPrice', 'AMBIGUOUS_DECIMAL'],
     ])
+  })
+
+  it('never reads a thousands group that starts with 0 (0.250 is a mistyped 0,25)', async () => {
+    const csv = 'Número;Qtd;Preço unitário\nA;1;0.250\nB;1;-0.250\nC;1;0,250\nD;1;10.250'
+    const result = await readImport(purchaseOrders, csv)
+    expect(result.rows.map((r) => [r.value.number, r.value.unitPrice])).toEqual([
+      ['C', 0.25],
+      ['D', 10250],
+    ])
+    expect(result.errors.map((e) => [e.line, e.code])).toEqual([
+      [2, 'AMBIGUOUS_DECIMAL'],
+      [3, 'AMBIGUOUS_DECIMAL'],
+    ])
+  })
+
+  it("accepts a '-' thousands separator literally (escaped in the character class)", async () => {
+    const def = defineImport<{ v: number }>({
+      name: 'x',
+      delimiter: ';',
+      locale: { decimal: ',', thousands: '-' },
+      columns: [{ key: 'v', headers: ['v'], parse: 'decimal' }],
+    })
+    const result = await readImport(def, 'v\n1-250,5\n1_250,5')
+    expect(result.rows.map((r) => r.value.v)).toEqual([1250.5])
+    expect(result.errors).toMatchObject([{ line: 3, code: 'INVALID_DECIMAL' }])
   })
 
   it('applies the same strictness to a dot decimal', async () => {
@@ -318,6 +351,17 @@ describe('defineImport / readImport', () => {
         columns: [{ key: 'd', headers: ['d'], parse: 'date' }],
       }),
     ).toThrow(/function parser/)
+  })
+
+  it('readImport applies the definition checks to a definition not built with defineImport', async () => {
+    const raw = {
+      name: 'x',
+      columns: [
+        { key: 'a' as const, headers: ['Número'] },
+        { key: 'b' as const, headers: ['NUMERO'] },
+      ],
+    }
+    await expect(readImport<{ a: string; b: string }>(raw, 'Numero\n1')).rejects.toThrow(/claimed by both/)
   })
 
   it('round-trips what createCsvFormatter writes', async () => {
