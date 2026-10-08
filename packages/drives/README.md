@@ -379,6 +379,13 @@ cursor aged out; the engine drops it and the next run re-primes) ·
 `DRIVE_NOTIFICATION_INVALID` · `DRIVE_SECRET_MALFORMED` ·
 `DRIVE_SECRET_KEY_UNKNOWN` · `DRIVE_SECRET_KEY_INVALID`
 
+`DRIVE_PROVIDER_ERROR`, `DRIVE_ACCESS_DENIED` and `DRIVE_CREDENTIALS_INVALID`
+may also carry the vendor's own explanation on the log-only
+`internalDetails.providerMessage` channel (read it with `internalDetailsOf()`
+from `@basaltkit/http`, or in an adapter's `onError`). It is sanitised by
+`providerMessageOf()` and never serialised into a response, `details`, a hook
+payload or the audit trail.
+
 ## Writing a provider adapter
 
 An adapter is translation, not logic. Only `name`, `allowedHosts`,

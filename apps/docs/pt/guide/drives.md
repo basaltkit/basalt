@@ -1334,6 +1334,46 @@ segredo da aplicação assinou, e continua a ser a tua consulta e não uma
 varredura de tabela da framework.
 :::
 
+## Diagnosticar erros do fornecedor
+
+Um `DRIVE_PROVIDER_ERROR`, `DRIVE_ACCESS_DENIED` ou `DRIVE_CREDENTIALS_INVALID`
+traz o código de vocabulário fixo do fornecedor em `details` (`summary`/`reason`,
+por exemplo `insufficientPermissions`, ou `http_400` quando o fornecedor não
+mandou nenhum). A **explicação legível** do fornecedor — normalmente a
+correcção — viaja à parte, no canal só de log `internalDetails.providerMessage`:
+
+```ts
+import { internalDetailsOf } from '@basaltkit/http'
+
+fastifyPlugin({
+  routes,
+  onError: ({ error, status }) => {
+    // p.ex. "…does not have the required scope 'files.metadata.read'…"
+    logger.warn({ status, provider: internalDetailsOf(error)?.providerMessage }, 'drive call failed')
+  },
+})
+```
+
+O reporter por omissão dos três adaptadores já regista o `internalDetails`;
+num job, lê `(error as DriveProviderError).internalDetails?.providerMessage`.
+**Nunca** está na resposta HTTP, em `details`, nos payloads dos hooks nem no
+registo de auditoria: é texto livre escrito pelo fornecedor, e as mensagens do
+Graph podem citar o URL do pedido. Os adaptadores só lêem campos de mensagem
+estruturados (`error.message`/`error_description` do Google e do Graph,
+`user_message.text` do Dropbox, o `required_scope` de um erro `missing_scope`,
+ou um corpo `400 text/plain` do Dropbox), e o `providerMessageOf()` remove
+depois caracteres de controlo/bidi, substitui tudo o que pareça URL, bearer, JWT
+ou token, e trunca a 500 caracteres.
+
+::: tip Os scopes do Dropbox vivem em dois sítios
+O `dropboxDrive()` pede `account_info.read files.metadata.read files.content.read`
+por omissão, mas o Dropbox só concede um scope que esteja **também activo no
+separador Permissions da app** na App Console. Se não estiver, o consentimento
+passa, a conta aparece, e a primeira listagem falha com um `400` cujo
+`providerMessage` diz qual é o scope em falta. Se passares os teus próprios
+`scopes`, mantém os três.
+:::
+
 ## Segurança
 
 - **Apenas `https:`** por omissão. Alargar é uma opção `allowedSchemes`

@@ -6,6 +6,7 @@ import {
   DriveProviderError,
   DriveRateLimitedError,
   parseRetryAfter,
+  providerMessageOf,
   type GuardedResponse,
 } from '@basaltkit/drives'
 
@@ -126,6 +127,28 @@ export function errorReason(body: string, status: number): string {
   return `http_${status}`
 }
 
+/**
+ * Google's own human-readable explanation of a failure, for the log-only
+ * `internalDetails.providerMessage` channel — never `details`, where
+ * {@link errorReason} keeps only the fixed vocabulary.
+ *
+ * Allow-listed sources: the API's `error.message`, or the OAuth endpoints'
+ * `error_description`. Never a raw body. Passed through `providerMessageOf`.
+ */
+export function providerMessage(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: unknown } | string; error_description?: unknown }
+    const error = parsed?.error
+    if (typeof error === 'object' && error !== null && typeof error.message === 'string') {
+      return providerMessageOf(error.message)
+    }
+    if (typeof parsed?.error_description === 'string') return providerMessageOf(parsed.error_description)
+  } catch {
+    /* not JSON — an HTML page from a proxy is never carried */
+  }
+  return undefined
+}
+
 export interface GoogleFailureContext {
   provider: string
   connectionId: string
@@ -164,22 +187,23 @@ export async function googleFailure(response: GuardedResponse, context: GoogleFa
 
 export function toGoogleError(status: number, body: string, context: GoogleFailureContext): Error {
   const reason = errorReason(body, status)
+  const internal = { providerMessage: providerMessage(body) }
 
   if (status === 401) {
     // `authError` / `invalidCredentials`. The engine answers with exactly one
     // reactive refresh before condemning the connection, which is right for
     // both a genuinely dead grant and a token that expired early.
-    return new DriveCredentialsInvalidError(context.connectionId, `the provider answered 401 (${reason}).`)
+    return new DriveCredentialsInvalidError(context.connectionId, `the provider answered 401 (${reason}).`, internal)
   }
 
   if (status === 403) {
     // The load-bearing branch. See the note at the top of this file.
     if (THROTTLE_REASONS.has(reason)) return new DriveRateLimitedError(context.retryAfterMs, context.provider)
-    if (PERMISSION_REASONS.has(reason)) return new DriveAccessDeniedError(context.provider, reason)
+    if (PERMISSION_REASONS.has(reason)) return new DriveAccessDeniedError(context.provider, reason, internal)
     // An unrecognised 403 is a provider failure, not a permission decision:
     // claiming it is a permission refusal would tell a tenant to fix something
     // that may not be theirs to fix.
-    return new DriveProviderError(context.provider, reason, status, false)
+    return new DriveProviderError(context.provider, reason, status, false, internal)
   }
 
   if (status === 429) {
@@ -201,5 +225,5 @@ export function toGoogleError(status: number, body: string, context: GoogleFailu
   }
 
   // 5xx never reached a decision, so it is the one class worth retrying.
-  return new DriveProviderError(context.provider, reason, status, status >= 500)
+  return new DriveProviderError(context.provider, reason, status, status >= 500, internal)
 }

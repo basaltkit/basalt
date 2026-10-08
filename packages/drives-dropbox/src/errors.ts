@@ -4,6 +4,7 @@ import {
   DriveCursorResetError,
   DriveItemNotFoundError,
   DriveProviderError,
+  providerMessageOf,
   type GuardedResponse,
 } from '@basaltkit/drives'
 
@@ -55,6 +56,47 @@ export function errorSummary(body: string, status: number): string {
   return `http_${status}`
 }
 
+/**
+ * Dropbox's own human-readable explanation of a failure, for the log-only
+ * `internalDetails.providerMessage` channel — never `details`.
+ *
+ * Allow-listed sources only, never an arbitrary body:
+ *
+ * - a JSON body's `user_message.text`;
+ * - a `missing_scope` error's `required_scope`, phrased as a sentence;
+ * - the **plain-text** body of a `400`, which is how Dropbox reports a
+ *   malformed call or an app that lacks a scope ("…does not have the required
+ *   scope `files.metadata.read`…") — and only when the response said
+ *   `text/plain` (or, called without a content type, did not look like HTML).
+ *
+ * Everything passes through `providerMessageOf`, which strips control/bidi
+ * characters, redacts URL/token-shaped text and truncates.
+ */
+export function providerMessage(body: string, status: number, contentType?: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as {
+      user_message?: { text?: unknown }
+      error?: { '.tag'?: unknown; required_scope?: unknown }
+    }
+    const userMessage = parsed?.user_message?.text
+    if (typeof userMessage === 'string') return providerMessageOf(userMessage)
+    const error = parsed?.error
+    if (error && typeof error === 'object' && error['.tag'] === 'missing_scope' && typeof error.required_scope === 'string') {
+      return providerMessageOf(`The app is missing the required scope "${error.required_scope}".`)
+    }
+    return undefined
+  } catch {
+    /* not JSON */
+  }
+  if (status !== 400) return undefined
+  if (contentType !== undefined) {
+    if (!/^\s*text\/plain\b/i.test(contentType)) return undefined
+  } else if (body.trimStart().startsWith('<')) {
+    return undefined
+  }
+  return providerMessageOf(body)
+}
+
 /** Reads Dropbox's own retry hint out of a 429/503 body. */
 export function retryAfterFromBody(body: string): number | undefined {
   try {
@@ -72,6 +114,8 @@ export interface DropboxFailureContext {
   connectionId: string
   /** Set when the failure is about one item, so a 409 can become a 404. */
   externalId?: string | undefined
+  /** The response's `content-type`, so a plain-text body is recognised as one. */
+  contentType?: string | undefined
 }
 
 /**
@@ -91,15 +135,20 @@ export async function dropboxFailure(
   } catch {
     response.destroy()
   }
-  throw toDropboxError(response.status, body, context)
+  const contentType = response.headers['content-type']
+  throw toDropboxError(response.status, body, {
+    ...context,
+    ...(typeof contentType === 'string' ? { contentType } : {}),
+  })
 }
 
 export function toDropboxError(status: number, body: string, context: DropboxFailureContext): Error {
   const summary = errorSummary(body, status)
+  const internal = { providerMessage: providerMessage(body, status, context.contentType) }
   if (status === 401) {
-    return new DriveCredentialsInvalidError(context.connectionId, `the provider answered 401 (${summary}).`)
+    return new DriveCredentialsInvalidError(context.connectionId, `the provider answered 401 (${summary}).`, internal)
   }
-  if (status === 403) return new DriveAccessDeniedError(context.provider, summary)
+  if (status === 403) return new DriveAccessDeniedError(context.provider, summary, internal)
   if (status === 409) {
     // Two 409s have a precise meaning the engine can act on. Everything else is
     // a terminal provider failure.
@@ -112,8 +161,8 @@ export function toDropboxError(status: number, body: string, context: DropboxFai
       // dropping it fails identically on every future run for ever.
       return new DriveCursorResetError(context.provider, 'the list_folder cursor was reset')
     }
-    return new DriveProviderError(context.provider, summary, status, false)
+    return new DriveProviderError(context.provider, summary, status, false, internal)
   }
   // 5xx never reached a decision, so it is the one class worth retrying.
-  return new DriveProviderError(context.provider, summary, status, status >= 500)
+  return new DriveProviderError(context.provider, summary, status, status >= 500, internal)
 }

@@ -1291,6 +1291,45 @@ across tenants — safe because the id came from a payload the app secret signed
 and still your query rather than a framework table scan.
 :::
 
+## Diagnosing provider errors
+
+A `DRIVE_PROVIDER_ERROR`, `DRIVE_ACCESS_DENIED` or `DRIVE_CREDENTIALS_INVALID`
+carries the vendor's fixed-vocabulary code in `details` (`summary`/`reason`,
+e.g. `insufficientPermissions`, or `http_400` when the vendor sent none). The
+vendor's **human explanation** — usually the fix — travels separately, on the
+log-only `internalDetails.providerMessage` channel:
+
+```ts
+import { internalDetailsOf } from '@basaltkit/http'
+
+fastifyPlugin({
+  routes,
+  onError: ({ error, status }) => {
+    // e.g. "…does not have the required scope 'files.metadata.read'…"
+    logger.warn({ status, provider: internalDetailsOf(error)?.providerMessage }, 'drive call failed')
+  },
+})
+```
+
+The default reporter on all three adapters already logs `internalDetails`; in
+a job, read `(error as DriveProviderError).internalDetails?.providerMessage`.
+It is **never** in the HTTP response, in `details`, in hook payloads or in the
+audit trail: it is free text the vendor wrote, and Graph's messages can quote
+the request URL. Adapters read only structured message fields (Google and
+Graph `error.message`/`error_description`, Dropbox `user_message.text`, a
+`missing_scope` error's `required_scope`, or a Dropbox `400 text/plain` body),
+and `providerMessageOf()` then strips control/bidi characters, replaces
+anything URL-, bearer-, JWT- or token-shaped, and truncates to 500 characters.
+
+::: tip Dropbox scopes live in two places
+`dropboxDrive()` requests `account_info.read files.metadata.read files.content.read`
+by default, but Dropbox only grants a scope that is **also enabled on the app's
+Permissions tab** in the App Console. If it is not, consent succeeds, the
+account shows up, and the first listing fails with a `400` whose
+`providerMessage` names the missing scope. If you pass your own `scopes`, keep
+all three.
+:::
+
 ## Security
 
 - **`https:` only** by default. Widening is a separate, explicit
