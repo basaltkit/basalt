@@ -705,7 +705,15 @@ mesma transação** que a mudança de estado, e os dois nunca podem discordar. `
 os limites de tentativas e `markPublished`/`markFailed` mantêm as semânticas em
 memória, agora duráveis.
 
-memória, agora duráveis.
+::: tip A tabela do outbox é infraestrutura do framework
+Dá ao store do outbox o cliente **normal** e nenhuma política de row-level
+security, tal como às tabelas `auth_*` e `perm_*`. O relay lê-a sem tenant no
+contexto — com RLS em schema partilhado não veria nada (ou o
+`tenancyExtension` lançaria `PRISMA_TENANT_MISSING`), e com schema por tenant
+vive no schema central. Cada entrada continua a guardar o seu `tenantId`, e o
+relay de webhooks entra nesse tenant para a pesquisa de endpoints (ver
+[Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant)).
+:::
 
 ## Webhooks de saída — `@basaltkit/webhooks-sqlite` / `@basaltkit/webhooks-prisma`
 

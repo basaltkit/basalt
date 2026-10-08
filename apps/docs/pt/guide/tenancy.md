@@ -832,6 +832,15 @@ app.hooks.on('tenancy:switched', ({ tenant }) => {
 })
 ```
 
+Um package que tem de entrar num tenant a partir de código em segundo plano, sem
+depender de `@basaltkit/tenancy`, lê a mesma função do sinal de metadata
+`'tenancy:run'` (tipo `TenantRunner`): a mesma validação do id, o mesmo
+`TenantNotFoundError`, o mesmo par `tenancy:switched`/`tenancy:exited`, sem
+verificação de `status`. Corre a partir do contexto de quem chama, por isso entra
+a partir de `runWithContext({}, ...)` quando nada do ambiente pode passar. O
+`@basaltkit/webhooks` usa-o para a pesquisa de endpoints dos dispatches fora do
+pedido — ver [Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant).
+
 ## Comandos da CLI
 
 O `tenancyPlugin` regista seis comandos no bucket da CLI, por isso aparecem assim

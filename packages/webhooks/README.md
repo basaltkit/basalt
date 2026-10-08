@@ -257,6 +257,7 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 | `maxEndpointsPerDispatch` | `number \| false` | No | `100` | Most endpoints of one scope (tenant, or tenant-agnostic) per event; over it, that scope is refused whole |
 | `dispatchConcurrency` | `number` | No | `16` | Deliveries one `dispatch` runs at once |
 | `onFanOutExceeded` | `(info) => void` | No | `console.warn` | Called once per refused scope, with `{ event, tenantId, endpoints, limit }` |
+| `runInTenant` | `TenantRunner \| false` | No | `@basaltkit/tenancy`'s `'tenancy:run'` signal, when present | Enters the tenant for the endpoint lookup (only) of an off-request `dispatch()` scoped by `tenantId`, so a store over `tenantClient()` resolves that tenant's database. `false` keeps the lookup in the caller's context |
 
 ### `class WebhookDeliverer`
 
@@ -362,6 +363,16 @@ With a tenant in the ambient request context, `register`, `list`, `unregister`
 and `dispatch` are forced to that tenant — a caller-supplied `tenantId` can
 never widen the scope. Explicit arguments / system-wide behavior apply only
 with no ambient tenant (jobs, CLI, single-tenant apps).
+
+Off the request path, a `dispatch()` scoped by an explicit `tenantId` runs its
+endpoint lookup inside `runInTenant` — wired by `webhooksPlugin` to tenancy's
+`'tenancy:run'` signal — so endpoints stored per tenant (schema- or
+database-per-tenant) are found by the webhook outbox relay too. Only the lookup
+enters the tenant; deliveries run after it, so they never hold the tenant's
+pooled database client. With endpoints per tenant, also pass
+`webhookOutboxPlugin({ tenantOnly: true })`, which captures only events emitted
+inside a tenant context. A dispatch for a tenant that no longer exists rejects
+with `TENANT_NOT_FOUND` (an outbox entry dead-letters).
 
 ## How it connects to other modules
 

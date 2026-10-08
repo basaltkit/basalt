@@ -261,6 +261,14 @@ async function mapPool<T, R>(items: readonly T[], limit: number, task: (item: T)
   return results
 }
 
+/**
+ * Enters a tenant for `fn` — structurally the `TenantRunner` that
+ * `@basaltkit/tenancy` publishes under the `'tenancy:run'` metadata key
+ * (`tenancy.run(tenantId, fn)`). Declared here, not imported: a signal, not a
+ * package dependency.
+ */
+export type TenantRunner = <T>(tenantId: string, fn: () => T | Promise<T>) => Promise<T>
+
 export interface WebhookManagerOptions extends WebhookFanOutOptions {
   /**
    * True when the app is multi-tenant. `webhooksPlugin` wires this to the
@@ -277,6 +285,17 @@ export interface WebhookManagerOptions extends WebhookFanOutOptions {
    * (secrets are stored as given). See {@link WebhookSecretBox}.
    */
   secretBox?: WebhookSecretBox
+  /**
+   * Enters a tenant for the endpoint lookup of an off-request dispatch scoped by
+   * an explicit `tenantId` (no tenant in context), so a store over
+   * `tenantClient()` can resolve that tenant's database. Only the store read
+   * runs inside it; secrets are opened and deliveries sent after it settles, so
+   * a slow endpoint never holds the tenant's pooled client. A runner failure
+   * (unknown tenant, malformed id, pool exhausted) rejects the dispatch before
+   * any delivery. `webhooksPlugin` wires it to tenancyPlugin's `'tenancy:run'`
+   * signal. Default: none (lookup in the caller's context).
+   */
+  runInTenant?: TenantRunner
 }
 
 /** Options for {@link WebhookManager.rotateSecret}. */
@@ -325,6 +344,7 @@ export class WebhookManager {
   private readonly dispatchConcurrency: number
   private readonly onFanOutExceeded: (info: WebhookFanOutExceeded) => void
   private readonly secretBox: WebhookSecretBox | undefined
+  private readonly runInTenant: TenantRunner | undefined
 
   constructor(
     private readonly store: WebhookStore,
@@ -338,6 +358,10 @@ export class WebhookManager {
       throw new TypeError('webhooks: secretBox must implement seal() and open()')
     }
     this.secretBox = box
+    if (options.runInTenant !== undefined && typeof options.runInTenant !== 'function') {
+      throw new TypeError('webhooks: runInTenant must be a function')
+    }
+    this.runInTenant = options.runInTenant
     const cap = options.maxEndpointsPerDispatch ?? DEFAULT_MAX_ENDPOINTS_PER_DISPATCH
     if (cap !== false) assertPositiveInteger('maxEndpointsPerDispatch', cap)
     this.maxEndpointsPerDispatch = cap === false ? Number.POSITIVE_INFINITY : cap
@@ -584,7 +608,8 @@ export class WebhookManager {
    * Delivers to every endpoint subscribed to `event`, fail-closed on tenancy:
    * - inside a tenant context the delivery is FORCED to that tenant's endpoints
    *   plus tenant-agnostic ones (anti-widening);
-   * - off the request path an explicit `tenantId` does the same for that tenant;
+   * - off the request path an explicit `tenantId` does the same for that tenant
+   *   (its endpoint lookup runs inside `runInTenant`, when configured);
    * - with no tenant at all only tenant-agnostic endpoints are reached — never a
    *   tenant-bound one — unless `{ allTenants: true }` asks for system fan-out.
    * The result is re-filtered here, so a store that ignores the tenant argument
@@ -596,9 +621,12 @@ export class WebhookManager {
     const tenantId = ambient ?? asTenantId(options.tenantId)
     let endpoints: WebhookEndpoint[]
     if (tenantId !== undefined) {
-      endpoints = (await this.store.forEvent(event, tenantId)).filter(
-        (e) => e.tenantId == null || e.tenantId === tenantId,
-      )
+      // Off-request (no ambient tenant), only the store read enters the tenant:
+      // a per-tenant store (tenantClient()) needs its database, the network
+      // delivery below does not and must not hold its pooled client.
+      const lookup = () => this.store.forEvent(event, tenantId)
+      const found = ambient === undefined && this.runInTenant ? await this.runInTenant(tenantId, lookup) : await lookup()
+      endpoints = found.filter((e) => e.tenantId == null || e.tenantId === tenantId)
     } else if (options.allTenants) {
       // Deliberate system fan-out: read every endpoint explicitly — `forEvent`
       // without a tenant is fail-closed (tenant-agnostic endpoints only).
@@ -663,6 +691,13 @@ export interface WebhooksPluginOptions extends WebhookDelivererOptions, WebhookF
   deliverer?: WebhookDeliverer
   /** Domain event patterns to auto-dispatch (requires @basaltkit/events). */
   events?: string[]
+  /**
+   * See {@link WebhookManagerOptions.runInTenant}. Default: tenancyPlugin's
+   * `'tenancy:run'` signal when present (resolved per dispatch, so plugin order
+   * does not matter). A function overrides it; `false` keeps the endpoint lookup
+   * in the caller's context (the pre-signal behaviour).
+   */
+  runInTenant?: TenantRunner | false
 }
 
 /**
@@ -684,12 +719,23 @@ export function webhooksPlugin(options: WebhooksPluginOptions = {}) {
       // 'tenancy:active' is tenancyPlugin's marker — a signal, not an import.
       // Resolved per call, so plugin registration order does not matter.
       const metadata = ensureMetadata(container)
+      const runInTenant: TenantRunner | undefined =
+        options.runInTenant === false
+          ? undefined
+          : (options.runInTenant ??
+            (<T,>(tenantId: string, fn: () => T | Promise<T>): Promise<T> => {
+              // 'tenancy:run' is tenancyPlugin's signal; without it (no tenancy,
+              // or an older one) the lookup runs as before, in the caller's context.
+              const run = metadata.get<TenantRunner>('tenancy:run')[0]
+              return run ? run(tenantId, fn) : Promise.resolve().then(fn)
+            }))
       const manager = new WebhookManager(store, deliverer, {
         tenancyActive: () => metadata.get('tenancy:active').length > 0,
         ...(options.maxEndpointsPerDispatch !== undefined ? { maxEndpointsPerDispatch: options.maxEndpointsPerDispatch } : {}),
         ...(options.dispatchConcurrency !== undefined ? { dispatchConcurrency: options.dispatchConcurrency } : {}),
         ...(options.onFanOutExceeded !== undefined ? { onFanOutExceeded: options.onFanOutExceeded } : {}),
         ...(options.secretBox !== undefined ? { secretBox: options.secretBox } : {}),
+        ...(runInTenant !== undefined ? { runInTenant } : {}),
       })
       container.singleton(WEBHOOKS, () => manager)
     },
