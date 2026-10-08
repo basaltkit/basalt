@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { ctx, definePlugin } from '@basaltkit/core'
+import { createApp, ctx, definePlugin } from '@basaltkit/core'
 import { route } from '@basaltkit/http'
 import {
   ApiKeyInvalidError,
@@ -159,6 +159,10 @@ describe('ApiKeys touchEveryMs (BK-083 b)', () => {
   it('refuses a negative or non-finite window at construction', () => {
     expect(() => new ApiKeys({ touchEveryMs: -1 })).toThrow(ApiKeyOptionsError)
     expect(() => new ApiKeys({ touchEveryMs: Number.NaN })).toThrow(ApiKeyOptionsError)
+  })
+
+  it('apiKeysPlugin refuses an invalid touchEveryMs at boot, not on the first request', async () => {
+    await expect(createApp({ plugins: [apiKeysPlugin({ touchEveryMs: -5 })] }).boot()).rejects.toThrow(ApiKeyOptionsError)
   })
 
   it('ApiKeyInvalidError is a 401 with a stable code', () => {

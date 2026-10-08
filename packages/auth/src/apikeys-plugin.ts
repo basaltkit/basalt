@@ -1,6 +1,6 @@
 import { BasaltError, createToken, definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
 import type { RequestEnricher, RouteGuard } from '@basaltkit/http'
-import { ApiKeys, ScopeRequiredError, apiKeyDisplayPrefix, scopesSatisfy, type ApiKeyContext, type ApiKeysOptions } from './apikeys.js'
+import { ApiKeys, ScopeRequiredError, apiKeyDisplayPrefix, resolveTouchEveryMs, scopesSatisfy, type ApiKeyContext, type ApiKeysOptions } from './apikeys.js'
 import { publicUser } from './auth.js'
 import type { UserSource } from './stores.js'
 
@@ -149,6 +149,9 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:apikeys',
     register({ container, hooks }) {
+      // The ApiKeys singleton is built lazily; fail at boot, not on the first
+      // request, on an invalid option.
+      resolveTouchEveryMs(options.touchEveryMs)
       container.singleton(API_KEYS, () => new ApiKeys({ ...options, hooks }))
       // A verified social login that adopts a never-verified account distrusts
       // whoever registered it: the keys they may have minted die with the rest

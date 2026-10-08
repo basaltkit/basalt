@@ -84,6 +84,15 @@ export class ApiKeyOptionsError extends BasaltError {
 /** Default `touchEveryMs`: one `lastUsedAt` write per key per minute. */
 export const DEFAULT_API_KEY_TOUCH_EVERY_MS = 60_000
 
+/** Resolves and validates `touchEveryMs`; throws {@link ApiKeyOptionsError}. */
+export function resolveTouchEveryMs(value: number | undefined): number {
+  const touchEveryMs = value ?? DEFAULT_API_KEY_TOUCH_EVERY_MS
+  if (typeof touchEveryMs !== 'number' || !Number.isFinite(touchEveryMs) || touchEveryMs < 0) {
+    throw new ApiKeyOptionsError(`apiKeys: touchEveryMs must be a finite number >= 0 (got ${String(touchEveryMs)}).`)
+  }
+  return touchEveryMs
+}
+
 /**
  * Issues and verifies API keys. The plaintext key is returned exactly once by
  * {@link issue}; only its SHA-256 hash is stored, so a leaked database never
@@ -99,11 +108,7 @@ export class ApiKeys {
     this.store = options.store ?? new MemoryApiKeyStore()
     this.hooks = options.hooks
     this.now = options.now ?? Date.now
-    const touchEveryMs = options.touchEveryMs ?? DEFAULT_API_KEY_TOUCH_EVERY_MS
-    if (!Number.isFinite(touchEveryMs) || touchEveryMs < 0) {
-      throw new ApiKeyOptionsError(`apiKeys: touchEveryMs must be a finite number >= 0 (got ${String(touchEveryMs)}).`)
-    }
-    this.touchEveryMs = touchEveryMs
+    this.touchEveryMs = resolveTouchEveryMs(options.touchEveryMs)
   }
 
   /** Mints a key. Returns the record plus the plaintext `key` (shown once). */
