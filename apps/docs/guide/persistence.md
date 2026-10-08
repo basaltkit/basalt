@@ -266,6 +266,43 @@ has the SQL). Then make the database enforce append-only too:
 REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
 ```
 
+#### Personal data per event (`fieldPolicies`)
+
+The trail is append-only and the hash chain covers each payload, so a value
+that reaches it cannot be erased later without breaking `verify`. Keep personal
+data out at write time. The redactors work on key names and value shapes
+(`password`, an email-looking string); they cannot know that the `notes` of one
+event is health data. Declare that per event:
+
+```ts
+auditPlugin({
+  integrity: 'hash-chain',
+  fieldPolicies: {
+    'customer.created': { omit: ['notes', 'address.street'], pseudonymize: ['email', 'fullName'] },
+    'order.placed': { pseudonymize: ['items[].buyer.phone'] },
+  },
+  fieldPolicyKey: process.env.AUDIT_PII_KEY!, // >= 128 bits
+})
+```
+
+- Keys are exact event or hook names (no wildcards). Paths are dotted; arrays are
+  walked transparently, and `items[].x` spells that out.
+- `omit` removes the field. `pseudonymize` replaces every scalar under it with a
+  keyed HMAC pseudonym (`pii_<hex>`), so entries stay correlatable. A path in
+  both is omitted.
+- The policy runs on `record()`, captured hooks and events, **before** the
+  redactor and before hashing, on a copy (your object is never mutated).
+- Use the same key as `createPiiMinimizingRedactor({ key })` to get the same
+  pseudonyms. Without `fieldPolicyKey`, a random per-process key is used and a
+  warning is logged once.
+- Policies are validated at configuration time: an unknown option, an empty or
+  prototype (`__proto__`, `constructor`) segment, or a path deeper than 8
+  segments throws a `TypeError`.
+
+Erasing a value that is already in the chain (a "right to erasure" request) is
+not supported yet; it needs a chain format that hashes a payload digest, which
+is planned as a separate RFC.
+
 #### Recording outside a request (jobs, scripts)
 
 An entry takes its `actorId` and `tenantId` from the active context. Outside a

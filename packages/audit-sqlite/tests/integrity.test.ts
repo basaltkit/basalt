@@ -161,4 +161,18 @@ describe('SqliteAuditStore — keyed chain across a key rotation', () => {
     const withoutOld = new Audit(new SqliteAuditStore(db), undefined, undefined, { integrity: { mode: 'hash-chain', key: keyB, keyId: 'b' } })
     expect(await withoutOld.verify()).toMatchObject({ ok: false, firstBrokenAt: 1, reason: 'hash-mismatch' })
   })
+
+  it('fieldPolicies: omitted and pseudonymized values never reach the database, and the chain verifies', async () => {
+    const db = openAuditDatabase()
+    const audit = new Audit(new SqliteAuditStore(db), undefined, undefined, {
+      integrity: 'hash-chain',
+      fieldPolicies: { 'customer.created': { omit: ['notes'], pseudonymize: ['email'] } },
+      fieldPolicyKey: 'k'.repeat(32),
+    })
+    await audit.record('customer.created', { id: 'c1', email: 'ana@example.com', notes: 'allergic to peanuts' })
+    const raw = db.prepare('SELECT payload FROM audit_entries').all() as Array<{ payload: string }>
+    expect(raw[0]!.payload).not.toMatch(/peanuts|ana@example\.com/)
+    expect(JSON.parse(raw[0]!.payload)).toEqual({ id: 'c1', email: expect.stringMatching(/^pii_[0-9a-f]{32}$/) })
+    expect(await audit.verify()).toMatchObject({ ok: true, checked: 1 })
+  })
 })
