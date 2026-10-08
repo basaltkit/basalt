@@ -642,7 +642,15 @@ import { env } from './env.js'
 const app = await buildApp({
   logLevel: env.LOG_LEVEL,
   pretty: env.NODE_ENV === 'development',
-}).boot()
+})
+  .boot()
+  .catch((error: unknown) => {
+    // A database failure diagnosed by @basaltkit/prisma (permission denied, not
+    // migrated, unreachable…) carries its one-line fix: print it above the stack.
+    const diagnosis = (error as { details?: { diagnosis?: { cause?: string; fix?: string } } } | null)?.details?.diagnosis
+    if (diagnosis) console.error('Cannot start: ' + diagnosis.cause + '\\nFix: ' + diagnosis.fix)
+    throw error
+  })
 
 const server = app.container.get(FASTIFY)
 await server.listen({ port: env.PORT, host: env.HOST })

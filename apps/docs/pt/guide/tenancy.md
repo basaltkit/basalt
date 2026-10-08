@@ -19,7 +19,7 @@ Quatro peças, pela ordem em que correm:
 | `TenantSource` | assim que um resolver produz uma referência | Carrega o registo do tenant (`find` / `findByDomain`). Uma referência desconhecida de um resolver **autoritativo** termina a resolução sem tenant; de um resolver de recurso passa ao seguinte |
 | `ctx().tenant` | no resto do pedido | O registo aberto resolvido — `undefined` quando nada correspondeu |
 | `tenancy:switched` | em cada entrada num tenant | Permite à cache, ao storage e ao db client reanexar a sua instância por tenant |
-| `tenancy:created` | `{ tenant }` — emitido quando um tenant novo é criado **e provisionado**, portanto um listener pode assumir que o storage dele existe. Não dispara se o `onProvision` lançar |
+| `tenancy:exited` | quando o callback de um `tenancy.run()` termina | Liberta o que um listener de `tenancy:switched` tomou (o cliente de base de dados em lease) |
 | `tenancy:created` | uma vez, depois de um tenant novo ser criado **e provisionado** | Email de boas-vindas, entrada de auditoria, notificar um painel — um listener pode assumir que o storage do tenant já existe |
 
 Fora de um pedido não há resolver, por isso entras num tenant explicitamente com
@@ -1024,7 +1024,9 @@ consulta falhar — o claim mantém-se e o `add()` lança `DOMAIN_TAKEN`.
 
 | Hook | Payload |
 | --- | --- |
-| `tenancy:switched` | `{ tenant }` — emitido em cada entrada num contexto de tenant, pelo enricher HTTP e pelo `tenancy.run()` |
+| `tenancy:switched` | `{ tenant, via }` — emitido em cada entrada num contexto de tenant, pelo enricher HTTP (`via: 'http'`) e pelo `tenancy.run()` (`via: 'run'`) |
+| `tenancy:exited` | `{ tenant }` — emitido quando o callback de um `tenancy.run()` assenta (resolvido ou com erro), ainda dentro do contexto desse tenant, para que um listener liberte o que tomou em `tenancy:switched` (o prismaPlugin devolve o cliente em lease). Não é emitido para pedidos HTTP — para esses, um enricher devolve um disposer |
+| `tenancy:created` | `{ tenant }` — emitido quando um tenant novo é criado **e provisionado**, portanto um listener pode assumir que o storage dele existe. Não dispara se o `onProvision` lançar |
 | `tenancy:destroyed` | `{ tenant }` — emitido pelo `tenancy.destroy()` depois de o `onDeprovision` correr e o registo ser apagado da source |
 
 Os registos duráveis de tenants e as opções de base de dados por tenant estão em

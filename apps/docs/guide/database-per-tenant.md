@@ -75,18 +75,46 @@ prismaPlugin({
   forTenant: (tenantId) => new PrismaClient({ datasourceUrl: urlFor(tenantId) }),
   destroy: (client) => client.$disconnect(),
   max: 20, // at most 20 tenant clients open at once — never exceeded
-  idleMs: 30_000, // a client handed to a request counts as in use this long
+  idleMs: 1_000, // grace period: an idle tenant keeps its slot this long (default)
   acquireTimeoutMs: 10_000, // how long a new tenant waits for a free slot
 })
 ```
 
-The pool only ever closes an **idle** client (least-recently-used first). A
-client handed to a request counts as in use for `idleMs` — keep it above your
-longest request — so it is never disconnected under a running query. When all
-`max` clients are in use, a request for a new tenant waits up to
-`acquireTimeoutMs` and then fails with `TenantPoolExhaustedError` (503): size
-`max` for the tenants active *at the same time*. Work that can outlive
-`idleMs` holds the client with a lease instead:
+Every HTTP request and every `tenancy.run()` **leases** its tenant's client for
+exactly its own duration — a streamed download or an event stream included —
+and returns it when the response has ended (finished, failed, or abandoned by
+the client) or the run's callback settles. The pool only ever closes an
+**idle** client (least-recently-used first), so a client is never disconnected
+under a running query, however long the request takes.
+
+Sizing the pool:
+
+- **`max`** is the number of tenants **in use at the same time** — requests or
+  jobs in flight for distinct tenants — not the number of tenants you have, nor
+  the number seen recently. Each open client holds its own connections, so
+  `max` × the client's connection limit must fit your database.
+- **`idleMs`** is only a grace period: how long a tenant keeps its client after
+  its last request, so a burst of requests for the same tenant does not
+  reconnect each time. The plugin's default is 1 s. Raising it trades slots for
+  fewer reconnects; it never protects a request (the lease does).
+- **`acquireTimeoutMs`**: when all `max` clients are leased, a request for a new
+  tenant waits this long for one to be released, then fails with
+  `TenantPoolExhaustedError` (503 `PRISMA_POOL_EXHAUSTED`). Its `details` say
+  what held the slots — `leased` (genuinely busy: raise `max`) versus
+  `recentlyUsed` (inside the grace window: lower `idleMs`) — and the message
+  gives the matching advice.
+
+::: info Before BK-077
+The plugin used to hand clients out with `pool.get()`, which counts a client as
+in use for `idleMs` after the call (30 s by default) instead of leasing it. The
+11th distinct tenant within 30 s then waited 10 s and got a 503 although nothing
+was running. A standalone `TenantClientPool` (and `DB_POOL.get()`) keeps that
+time-based behaviour and its 30 s default; only the pool `prismaPlugin` builds
+leases and defaults to 1 s.
+:::
+
+Your own work outside a request or `tenancy.run()` holds the client with a
+lease too:
 
 ```ts
 await app.container.get(DB_POOL).use(tenantId, async (client) => {
@@ -566,6 +594,12 @@ commandsPlugin([
   }),
 ])
 ```
+
+To check where every tenant stands without changing anything — pending,
+failed or drifted migrations, with the fix for each — register
+`dbStatusCommand(...)` next to it and run `basalt db:status` (it exits 1 when a
+plane is behind, so it can gate a deploy). See
+[Database operations](./database-operations).
 
 ## Seeding & background work
 

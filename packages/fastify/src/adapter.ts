@@ -8,6 +8,8 @@ import {
   runRoute,
   toErrorResponse,
   reportHttpError,
+  RequestDisposers,
+  type RequestDisposer,
   consoleSink,
   type HttpErrorReporter,
   type HttpLogSink,
@@ -331,6 +333,35 @@ function toNeutralRequest(request: FastifyRequest): HttpRequest {
   }
 }
 
+/**
+ * The sink for the disposers enrichers return: they run once, when the Node
+ * response has finished or closed — whichever comes first, and also for a
+ * hijacked event stream, a streamed body, an error response or a client that
+ * went away. Listeners are attached only when a disposer shows up, so routes
+ * without one pay nothing.
+ */
+function disposeOnResponseEnd(
+  reply: FastifyReply,
+  onError: (error: unknown) => void,
+): (disposer: RequestDisposer) => void {
+  let disposers: RequestDisposers | undefined
+  return (disposer) => {
+    if (!disposers) {
+      disposers = new RequestDisposers(onError)
+      const run = (): void => void disposers!.run()
+      const res = reply.raw
+      // Already over (the client left while an enricher was awaiting): 'close'
+      // has fired and will not again — run now, and add() runs late arrivals.
+      if (res.writableFinished || res.destroyed) run()
+      else {
+        res.once('finish', run)
+        res.once('close', run)
+      }
+    }
+    disposers.add(disposer)
+  }
+}
+
 function wrapHandler(
   definition: BasaltRoute,
   container: Container | undefined,
@@ -340,6 +371,13 @@ function wrapHandler(
 ) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const neutralReply = new FastifyReplyAdapter(reply)
+    const onDispose = disposeOnResponseEnd(reply, (error) => {
+      try {
+        report(onError, error, 500, 'REQUEST_DISPOSER_FAILED', request)
+      } catch {
+        /* a broken reporter must not crash the process */
+      }
+    })
 
     try {
       const neutral = toNeutralRequest(request)
@@ -354,6 +392,7 @@ function wrapHandler(
           ...(container ? { container } : {}),
           enrichers,
           guards,
+          onDispose,
         },
       )
 

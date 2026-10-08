@@ -195,7 +195,8 @@ pedido, por ordem:
    **container scoped** novo (`createScope()`).
 2. **Enrichers** correm (`http:enrichers`) — constroem o contexto: a tenancy
    define `ctx().tenant`, a auth define `ctx().user`. Um enricher recebe
-   `{ request, context, container }`.
+   `{ request, context, container }` e pode devolver um disposer, executado uma
+   vez quando a resposta terminou ([abaixo](#escrever-o-teu-proprio-guard-ou-enricher)).
 3. **Guards** correm (`http:guards`) — autorizam: um guard recebe
    `{ route, request, context, container }`, lê o `meta` da rota e rejeita
    **lançando**. A auth lê `meta.auth`, as permissions leem `meta.can`, os
@@ -319,6 +320,26 @@ export const approvalPlugin = definePlugin({
   },
 })
 ```
+
+Um enricher que **toma** algo para o pedido — um cliente de base de dados em
+lease, um lock, um span — devolve um disposer em vez de esperar que alguém
+limpe. O adapter executa-o exactamente uma vez quando a resposta terminou de
+facto: depois de o corpo ser enviado (incluindo um download `stream()` ou um
+stream `sse()`), depois de uma resposta de erro, quando um enricher ou guard
+posterior rejeitou o pedido, ou quando o cliente se foi embora. Os disposers
+correm do último registado para o primeiro; um que falhe é reportado
+(`REQUEST_DISPOSER_FAILED`) e nunca altera a resposta.
+
+```ts
+const enricher: RequestEnricher = async ({ context }) => {
+  const lease = await pool.acquire(context.tenant!.id)
+  ;(context as { db?: unknown }).db = lease.client
+  return () => lease.release() // RequestDisposer — corre uma vez, em todos os adapters
+}
+```
+
+O `prismaPlugin` faz exactamente isto em database-per-tenant
+([dimensionar o pool](/pt/guide/database-per-tenant#o-pool-de-clientes-por-tenant)).
 
 Regras do jogo: os enrichers **constroem** contexto, os guards **decidem** —
 mantém os dois separados; os guards têm de ser baratos (correm em cada pedido

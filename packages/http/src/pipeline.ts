@@ -37,7 +37,60 @@ export type RequestEnricher = (info: {
    * because enrichers written before this existed do not read it.
    */
   route?: BasaltRoute
-}) => void | Promise<void>
+}) => void | RequestDisposer | Promise<void | RequestDisposer>
+
+/**
+ * Cleanup an enricher hands back for the end of its request — e.g. returning a
+ * leased database client to its pool. The adapter runs it exactly once, after
+ * the response has finished, was abandoned by the client (abort/close) or
+ * failed, including a streamed (`stream()`) or event-stream (`sse()`) body
+ * that outlives the handler. Disposers run last-registered first.
+ */
+export type RequestDisposer = () => void | Promise<void>
+
+/**
+ * The per-request list of {@link RequestDisposer}s an adapter keeps. `run()`
+ * is once-guarded, so it can be wired to every way a response can end
+ * ('finish', 'close', an aborted stream). A disposer added AFTER the request
+ * already ended (the client went away while an enricher was still awaiting)
+ * runs immediately rather than leaking.
+ */
+export class RequestDisposers {
+  private readonly pending: RequestDisposer[] = []
+  private done = false
+
+  /** `onError` receives a disposer's failure; it is never rethrown. */
+  constructor(private readonly onError?: (error: unknown) => void) {}
+
+  add(disposer: RequestDisposer): void {
+    if (this.done) void this.invoke(disposer)
+    else this.pending.push(disposer)
+  }
+
+  /** True once `run()` was called. */
+  get ran(): boolean {
+    return this.done
+  }
+
+  /** Runs every disposer once, last-registered first. Never throws. */
+  async run(): Promise<void> {
+    if (this.done) return
+    this.done = true
+    while (this.pending.length > 0) await this.invoke(this.pending.pop()!)
+  }
+
+  private async invoke(disposer: RequestDisposer): Promise<void> {
+    try {
+      await disposer()
+    } catch (error) {
+      try {
+        this.onError?.(error)
+      } catch {
+        /* a broken reporter must not break the response */
+      }
+    }
+  }
+}
 
 /**
  * Runs after enrichers, with access to the route definition (and its `meta`).
@@ -60,6 +113,13 @@ export interface RoutePipeline {
   container?: Container
   enrichers?: RequestEnricher[]
   guards?: RouteGuard[]
+  /**
+   * Where the disposers enrichers return are handed. Adapters pass one and run
+   * the disposers when the response has really ended (a streamed body outlives
+   * `runRoute`). Without it, `runRoute` runs them itself when it returns or
+   * throws — right for callers whose result is complete at that point.
+   */
+  onDispose?: (disposer: RequestDisposer) => void
 }
 
 const headerValue = (request: HttpRequest, name: string): string | undefined => {
@@ -154,6 +214,10 @@ export async function runRoute(
   const rawOptions = rawBodyOptionsOf(definition.body)
   const rawSession = rawOptions ? new RawBodySession(request, rawOptions) : undefined
 
+  // No sink from the caller: the disposers are run here, when the route is done.
+  const local = pipeline.onDispose ? undefined : new RequestDisposers()
+  const onDispose = pipeline.onDispose ?? ((disposer: RequestDisposer) => local!.add(disposer))
+
   return runWithContext(context, async () => {
     try {
       const scoped = context.container
@@ -165,8 +229,10 @@ export async function runRoute(
         )
       }
       if (scoped) {
-        for (const enrich of pipeline.enrichers ?? [])
-          await enrich({ route: definition, request, context, container: scoped })
+        for (const enrich of pipeline.enrichers ?? []) {
+          const disposer = await enrich({ route: definition, request, context, container: scoped })
+          if (typeof disposer === 'function') onDispose(disposer)
+        }
         for (const guard of pipeline.guards ?? [])
           await guard({ route: definition, request, context, container: scoped, reply })
       }
@@ -184,6 +250,7 @@ export async function runRoute(
     } finally {
       session?.release(reply)
       rawSession?.release(reply)
+      await local?.run()
     }
   })
 }

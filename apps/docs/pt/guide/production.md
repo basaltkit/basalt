@@ -95,6 +95,12 @@ autorização. Cobre exatamente as chaves em `GUARDED_META_KEYS`; um valor
 `false`/`undefined` numa rota é uma desativação explícita e nunca é assinalado. Ver
 [Autorização](/pt/guide/authorization) e [Adaptadores](/pt/guide/adapters).
 
+Com `prismaPlugin({ assertMigrated: true })` o boot recusa também uma base
+inacessível, por migrar, ou que o role da app não pode usar — e diz qual, com a
+correcção (um `GRANT` em falta, um baseline, `migrate deploy`). Os significados,
+um `db:status` só de leitura para a CI e uma receita pós-deploy idempotente para
+grants e extensões estão em [Operações de base de dados](/pt/guide/database-operations).
+
 ## Persistência
 
 O desenvolvimento corre sobre stores em memória, por isso não há nada a instalar.
@@ -118,7 +124,11 @@ verifica no arranque que `_prisma_migrations` existe (`{ tables: [...] }` verifi
 também essas tabelas) e recusa arrancar caso contrário, indicando a base de dados
 e o host a que chegou — nunca as credenciais (`PRISMA_NOT_MIGRATED`). Apanha uma
 shell que exportou o `DATABASE_URL` de outro projeto no arranque, em vez de um
-P2021 no primeiro pedido. Desligado por omissão.
+P2021 no primeiro pedido. `{ forbiddenTables: [...] }` faz a verificação
+oposta — tabelas que **não** podem lá estar, como tabelas de tenant recriadas na
+base central — e recusa com `PRISMA_PLANE_MIXED`
+([proteger contra o plano errado](/pt/guide/multi-tenant-pattern#proteger-contra-o-plano-errado)).
+Desligado por omissão.
 
 `@basaltkit/prisma` é para os dados de domínio **teus**. Os próprios domínios com
 estado do framework — auth, teams, subscriptions, permissions, comments, audit,

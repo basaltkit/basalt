@@ -5,7 +5,7 @@ import {
   BasaltError,
   tryCtx,
 } from '@basaltkit/core'
-import { TenantClientPool } from './pool.js'
+import { TenantClientPool, type TenantClientLease } from './pool.js'
 import type { ShardRouter } from './sharding.js'
 import { schemaUrl, tenantSchema, assertSchemaPerTenantSupported } from './schema.js'
 import { assertMigrated, type AssertMigratedOptions } from './assert-migrated.js'
@@ -35,6 +35,7 @@ export {
   assertMigrated,
   redactCredentials,
   DatabaseNotMigratedError,
+  DatabasePlaneMixedError,
   type AssertMigratedOptions,
 } from './assert-migrated.js'
 export { readReplica, type ReadReplicaOptions } from './replicas.js'
@@ -110,11 +111,29 @@ export {
   type CommandIo,
 } from './command.js'
 export {
+  describeDbError,
+  type DbErrorDiagnosis,
+  type DescribeDbErrorOptions,
+} from './describe-db-error.js'
+export {
+  dbStatusCommand,
+  parseMigrateStatus,
+  prismaStatusArgs,
+  npxPrismaRunner,
+  type DbStatusCommandConfig,
+  type MigrationState,
+  type MigrationStatus,
+  type PrismaCliRunner,
+  type PrismaStatusTarget,
+} from './status-command.js'
+export {
   tenantMigrateCommand,
   type TenantMigrateCommandConfig,
 } from './migrate-command.js'
 export {
   prismaSyncCommand,
+  planeConfigTs,
+  generateOnlyRootConfigTs,
   type PrismaSyncTarget,
   type PrismaSyncCommandOptions,
   extractSchemaBlocks,
@@ -189,6 +208,9 @@ export function tenantClient<T extends object = Record<string, unknown>>(): T {
   })
 }
 
+/** `idleMs` of the pool prismaPlugin builds — see PrismaPluginOptions.idleMs. */
+const PLUGIN_POOL_IDLE_MS = 1_000
+
 export const DB = createToken<unknown>('db')
 export const DB_POOL = createToken<TenantClientPool<unknown>>('db:pool')
 
@@ -230,9 +252,13 @@ export interface PrismaPluginOptions<TClient = unknown> {
   /** Max simultaneously open per-tenant clients. Default: 10 */
   max?: number
   /**
-   * Per-tenant pool: how long (ms) a client handed to a request stays "in use"
-   * and cannot be evicted. Keep it above your longest request. Default: 30_000.
-   * See `TenantClientPoolOptions.idleMs`.
+   * Per-tenant pool: how long (ms) a client stays reserved for its tenant
+   * after its last use, before it may be evicted for another tenant — a grace
+   * period, not a request budget. HTTP requests and `tenancy.run()` hold their
+   * client with a lease for exactly their duration, however long that is, so
+   * this only decides how quickly an idle tenant's slot is reused. Default:
+   * 1_000 (the standalone `TenantClientPool` keeps 30_000 for its time-based
+   * `get()` callers). See `TenantClientPoolOptions.idleMs`.
    */
   idleMs?: number
   /**
@@ -281,7 +307,12 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
             create: createTenantClient,
             ...(options.destroy ? { destroy: options.destroy } : {}),
             ...(options.max !== undefined ? { max: options.max } : {}),
-            ...(options.idleMs !== undefined ? { idleMs: options.idleMs } : {}),
+            // Requests and tenancy.run() lease their client for exactly their
+            // duration, so the idle window is only a grace period. With the
+            // pool's 30s default, every tenant served in the last 30s kept its
+            // slot: the (max+1)th distinct tenant in that window waited, then
+            // got a 503 PRISMA_POOL_EXHAUSTED, while nothing was in use.
+            idleMs: options.idleMs ?? PLUGIN_POOL_IDLE_MS,
             ...(options.acquireTimeoutMs !== undefined
               ? { acquireTimeoutMs: options.acquireTimeoutMs }
               : {}),
@@ -305,26 +336,97 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
         return options.client
       }
 
+      // The pooled path LEASES: a client in use by a request or a
+      // tenancy.run() can never be evicted, and is returned the moment that
+      // work ends — so the pool's capacity is the number of tenants active at
+      // the same time, not the number seen within `idleMs`. Leases are kept
+      // per context object: tenancy.run() spreads the surrounding context into
+      // a NEW one, so a nested run gets its own and the outer context — and
+      // its `db` — are left untouched.
+      const leased = pool !== undefined && resolveClient === undefined
+      const leases = new WeakMap<object, Map<string, TenantClientLease<TClient>>>()
+      const leaseInto = async (
+        slot: Map<string, TenantClientLease<TClient>>,
+        tenantId: string,
+      ): Promise<TClient> => {
+        const held = slot.get(tenantId)
+        if (held) return held.client
+        const lease = await pool!.acquire(tenantId)
+        slot.set(tenantId, lease)
+        return lease.client
+      }
+      const releaseAll = (slot: Map<string, TenantClientLease<TClient>>): void => {
+        for (const lease of slot.values()) lease.release()
+        slot.clear()
+      }
+
       // HTTP requests: attach the client to the request context.
       ensureMetadata(container).add(
         'http:enrichers',
         async ({ context }: { context: { tenant?: { id: string }; db?: unknown } }) => {
-          const client = await clientFor(context.tenant?.id)
-          if (client !== undefined) context.db = client
+          if (!leased) {
+            const client = await clientFor(context.tenant?.id)
+            if (client !== undefined) context.db = client
+            return undefined
+          }
+          // Created before acquiring, so a 'tenancy:switched' from an
+          // enricher that runs after this one leases into the same slot and
+          // is released by the same disposer.
+          let slot = leases.get(context)
+          if (!slot) {
+            slot = new Map()
+            leases.set(context, slot)
+          }
+          const tenantId = context.tenant?.id
+          if (tenantId === undefined) {
+            if (options.client !== undefined) context.db = options.client
+          } else {
+            context.db = await leaseInto(slot, tenantId)
+          }
+          // Run by the adapter once the response has ended — finished,
+          // streamed out, failed or abandoned by the client.
+          const own = slot
+          return () => releaseAll(own)
         },
       )
 
       // tenancy.run() / workers: attach when execution enters a tenant.
       hooks.on('tenancy:switched', async (payload) => {
-        const { tenant } = payload as { tenant: { id: string } }
+        const { tenant, via } = payload as { tenant: { id: string }; via?: 'run' | 'http' }
         const context = tryCtx()
         if (!context) return
+        if (leased) {
+          let slot = leases.get(context)
+          if (!slot && via === 'run') {
+            // Released on 'tenancy:exited', which run() always emits.
+            slot = new Map()
+            leases.set(context, slot)
+          }
+          if (slot) {
+            context.db = await leaseInto(slot, tenant.id)
+            return
+          }
+          // The tenancy request enricher ran before ours: our enricher leases
+          // for this request when it runs — taking one here too would be a
+          // second, never-released lease.
+          if (via === 'http') return
+          // Emitted by something that never says when the context ends
+          // (older tenancy, a hand-rolled emit): the time-based hand-out.
+        }
         const client = await clientFor(tenant.id)
         // tenancy.run() copies the surrounding context, so `db` may still be
         // the OUTER tenant's client. With no client for this tenant, drop it:
         // db() then fails closed instead of writing into the other database.
         if (client !== undefined) context.db = client
         else delete context.db
+      })
+
+      hooks.on('tenancy:exited', () => {
+        const context = tryCtx()
+        const slot = context ? leases.get(context) : undefined
+        if (!slot) return
+        releaseAll(slot)
+        leases.delete(context!)
       })
     },
     async boot() {
