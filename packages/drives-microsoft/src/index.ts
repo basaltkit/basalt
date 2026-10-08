@@ -480,6 +480,10 @@ export class MicrosoftDrive implements DriveProvider {
   // ------------------------------------------------------------- operations
 
   async list(session: DriveSession, options: DriveListOptions): Promise<DrivePage<DriveItem>> {
+    // Graph's `/children` is one level and there is no recursive listing short
+    // of `/delta`. Refusing is better than silently answering a crawl with a
+    // browse: the caller would believe it had seen the whole subtree.
+    if (options.recursive === true) throw new DriveUnsupportedError(this.name, 'recursiveList')
     // A cursor is a whole `@odata.nextLink`, kept opaque. See `cursor.ts` for
     // why that is a wrapper rather than the raw URL, and why the guard
     // re-validates it even though we produced it.

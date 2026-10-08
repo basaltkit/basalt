@@ -694,7 +694,7 @@ export class Drives {
     connectionId: string,
     options: DriveListOptions & { tenantId?: string; signal?: AbortSignal } = {},
   ): Promise<DrivePage<DriveItem>> {
-    const { tenantId, signal, cursor, ...listOptions } = options
+    const { tenantId, signal, cursor, recursive, ...listOptions } = options
     return this.withConnection(connectionId, tenantId, 'listItems', async (connection) => {
       // The cursor comes back from a caller, and an adapter's own cursor is
       // not something a caller may author: Graph's is a whole URL the adapter
@@ -704,16 +704,36 @@ export class Drives {
       // tenant and connection — and only a cursor that verifies is
       // unwrapped and passed on. Nothing about an adapter's format has to be
       // trusted for that to hold.
+      //
+      // The listing mode (`recursive`) is bound into the cursor as well: a
+      // Google walk cursor and a plain page token are different things, and a
+      // continuation must not switch between a crawl and a browse half-way. A
+      // continuation that omits `recursive` keeps the cursor's mode; one that
+      // names a different mode is refused.
       const provider = this.provider(connection.provider)
-      const inner = cursor !== undefined ? this.openListCursor(cursor, connection, provider.name) : undefined
+      let mode: ListMode = recursive === undefined ? undefined : recursive ? 'r' : 'c'
+      let inner: string | undefined
+      if (cursor !== undefined) {
+        const opened = this.openListCursor(cursor, connection, provider.name)
+        if (recursive !== undefined && opened.mode !== mode) {
+          throw new DriveAccessDeniedError(provider.name, 'the list cursor was issued for a different listing mode')
+        }
+        inner = opened.inner
+        mode = opened.mode
+      }
       const page = await this.run(
         connection,
-        (session, adapter) => adapter.list(session, { ...listOptions, ...(inner !== undefined ? { cursor: inner } : {}) }),
+        (session, adapter) =>
+          adapter.list(session, {
+            ...listOptions,
+            ...(mode !== undefined ? { recursive: mode === 'r' } : {}),
+            ...(inner !== undefined ? { cursor: inner } : {}),
+          }),
         signal ? { signal } : {},
       )
       return {
         items: page.items,
-        ...(page.cursor !== undefined ? { cursor: this.sealListCursor(page.cursor, connection) } : {}),
+        ...(page.cursor !== undefined ? { cursor: this.sealListCursor(page.cursor, connection, mode) } : {}),
       }
     })
   }
@@ -757,18 +777,22 @@ export class Drives {
   }
 
   /** The MAC over everything a list cursor is only valid for. */
-  private listCursorMac(inner: string, connection: DriveConnection): string {
+  private listCursorMac(inner: string, connection: DriveConnection, mode: ListMode): string {
     // Not the folder: every adapter's cursor already names the listing it
     // continues, and the MAC is what stops that from being rewritten. Binding
     // the folder too would refuse the common `listItems(id, { cursor })`
     // continuation that omits it.
-    return createHmac('sha256', this.cursorKey)
-      .update(JSON.stringify([connection.tenantId, connection.id, connection.provider, inner]))
-      .digest('base64url')
+    const bound: string[] = [connection.tenantId, connection.id, connection.provider, inner]
+    // The v1 payload is kept byte-for-byte for a default-mode cursor, so a
+    // cursor issued before the listing mode existed still verifies.
+    if (mode !== undefined) bound.push(mode)
+    return createHmac('sha256', this.cursorKey).update(JSON.stringify(bound)).digest('base64url')
   }
 
-  private sealListCursor(inner: string, connection: DriveConnection): string {
-    return `${LIST_CURSOR_VERSION}.${Buffer.from(inner, 'utf8').toString('base64url')}.${this.listCursorMac(inner, connection)}`
+  private sealListCursor(inner: string, connection: DriveConnection, mode: ListMode): string {
+    const body = Buffer.from(inner, 'utf8').toString('base64url')
+    const mac = this.listCursorMac(inner, connection, mode)
+    return mode === undefined ? `${LIST_CURSOR_VERSION}.${body}.${mac}` : `${LIST_CURSOR_VERSION_MODE}.${body}.${mode}.${mac}`
   }
 
   /**
@@ -783,16 +807,25 @@ export class Drives {
     cursor: string,
     connection: DriveConnection,
     provider: string,
-  ): string {
+  ): { inner: string; mode: ListMode } {
     const refuse = (): DriveAccessDeniedError =>
       new DriveAccessDeniedError(provider, 'the list cursor was not issued for this connection')
     const parts = cursor.split('.')
-    if (parts.length !== 3 || parts[0] !== LIST_CURSOR_VERSION || !/^[A-Za-z0-9_-]*$/.test(parts[1] as string)) {
+    let mode: ListMode
+    let mac: string
+    if (parts.length === 3 && parts[0] === LIST_CURSOR_VERSION) {
+      mode = undefined
+      mac = parts[2] as string
+    } else if (parts.length === 4 && parts[0] === LIST_CURSOR_VERSION_MODE && (parts[2] === 'r' || parts[2] === 'c')) {
+      mode = parts[2]
+      mac = parts[3] as string
+    } else {
       throw refuse()
     }
+    if (!/^[A-Za-z0-9_-]*$/.test(parts[1] as string)) throw refuse()
     const inner = Buffer.from(parts[1] as string, 'base64url').toString('utf8')
-    if (!safeEqual(parts[2] as string, this.listCursorMac(inner, connection))) throw refuse()
-    return inner
+    if (!safeEqual(mac, this.listCursorMac(inner, connection, mode))) throw refuse()
+    return { inner, mode }
   }
 
   /** Metadata for one item. */
@@ -860,6 +893,10 @@ export class Drives {
 
 /** Envelope version of a {@link Drives.listItems} cursor. */
 const LIST_CURSOR_VERSION = 'bkl1'
+/** Envelope version of a cursor that also binds an explicit listing mode. */
+const LIST_CURSOR_VERSION_MODE = 'bkl2'
+/** `r` recursive, `c` children, `undefined` the adapter's default. */
+type ListMode = 'r' | 'c' | undefined
 /** HKDF-style label: the app secret also signs OAuth state, and the two must never be interchangeable. */
 const LIST_CURSOR_LABEL = 'basalt:drives:list-cursor:v1'
 

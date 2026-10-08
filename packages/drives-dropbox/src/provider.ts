@@ -291,6 +291,9 @@ export class DropboxDrive implements DriveProvider {
             path: dropboxPath(options.folderId ?? session.rootId),
             limit: Math.min(Math.max(1, options.limit ?? this.pageSize), DROPBOX_MAX_PAGE_SIZE),
             includeDeleted: false,
+            // Per call when the caller says so; the constructor's `recursive`
+            // otherwise. A continuation cursor already carries the mode.
+            recursive: options.recursive ?? this.recursive,
           }
         : {}),
     })
@@ -574,7 +577,7 @@ export class DropboxDrive implements DriveProvider {
 
   private async listFolder(
     session: DriveSession,
-    input: { cursor?: string; path?: string; limit?: number; includeDeleted?: boolean },
+    input: { cursor?: string; path?: string; limit?: number; includeDeleted?: boolean; recursive?: boolean },
   ): Promise<ListFolderResult> {
     const url =
       input.cursor !== undefined
@@ -585,7 +588,7 @@ export class DropboxDrive implements DriveProvider {
         ? { cursor: input.cursor }
         : {
             path: input.path ?? '',
-            recursive: this.recursive,
+            recursive: input.recursive ?? this.recursive,
             limit: input.limit ?? this.pageSize,
             include_deleted: input.includeDeleted ?? false,
             include_media_info: false,

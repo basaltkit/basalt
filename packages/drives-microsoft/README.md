@@ -177,7 +177,7 @@ outside it. A drive-level root pays nothing.
 | `exchange` / `refresh` | `POST {authority}/oauth2/v2.0/token` |
 | `revoke` | **absent** — see [Revocation](#revocation-does-not-exist) |
 | `account` | `GET /v1.0/me` |
-| `list` | `GET {resource}/children?$top&$select`, paging on `@odata.nextLink` |
+| `list` | `GET {resource}/children?$top&$select`, paging on `@odata.nextLink`. One level only: `listItems({ recursive: true })` is refused with `DRIVE_UNSUPPORTED` (`recursiveList`) |
 | `get` | `GET {resource}?$select` |
 | `download` | `@microsoft.graph.downloadUrl`, fetched **unauthenticated** |
 | `upload` | `PUT {resource}:/{name}:/content` (≤ 4 MB) |

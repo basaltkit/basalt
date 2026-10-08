@@ -67,7 +67,7 @@ In the [Google Cloud console](https://console.cloud.google.com/apis/credentials)
 | `clientSecret` | — | Client secret. Omit for a PKCE-only public client. **Not** a webhook key — Google does not sign notifications. |
 | `scopes` | `drive.readonly` | Scopes requested at consent. |
 | `pageSize` | `100` | `files.list` / `changes.list` page size. Clamped to 1…1000. |
-| `listMode` | `'recursive'` | `'recursive'` walks a scoped folder's whole subtree; `'children'` lists one level. |
+| `listMode` | `'recursive'` | `'recursive'` walks a scoped folder's whole subtree; `'children'` lists one level. The default only — a call's `listItems({ recursive })` overrides it. |
 | `uploadMaxBytes` | `5 MB` | Hard ceiling for one upload. Cannot exceed Google's own simple-upload limit. |
 | `watchTtlMs` | `7 days` | Channel TTL to request. Google's own `expiration` wins. |
 | `includeUnscopedRemovals` | `false` | Forward hard deletions that cannot be scoped to `rootId` — see [Deletions](#deletions). |
