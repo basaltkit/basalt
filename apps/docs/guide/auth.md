@@ -152,8 +152,8 @@ webauthnPlugin({ config, verifier, credentials: s.passkeys }) // needs the AuthP
 `previousHashExpiresAt`, `rotatedAt`, `allowedIps` and `meta`. Prisma selects
 every column of a model, so once the client is regenerated **every** API-key
 query fails until the database has the columns. Copy the model from
-`@basaltkit/auth-prisma/schema.prisma` (or run `basalt prisma:sync`), run
-`prisma generate`, then `prisma migrate dev --name add_api_key_lifecycle` — with
+`@basaltkit/auth-prisma/schema.prisma` by hand (`basalt prisma:sync` only adds
+missing models, never new fields to an existing one), run `prisma generate`, then `prisma migrate dev --name add_api_key_lifecycle` — with
 schema-per-tenant, in every tenant schema (`basalt tenant:migrate`). All the new
 columns are nullable or default to an empty list, so existing keys keep working.
 Until the columns exist, API-key requests fail with
