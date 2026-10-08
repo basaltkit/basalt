@@ -859,24 +859,41 @@ Rules:
 - Every handler shape is covered: one that returns its payload is replayed exactly like
   one that sends it through `reply.send()`. A replay carries `Idempotent-Replayed: true`.
 - A repeat while the first request is still in flight → `409 IDEMPOTENCY_CONFLICT`.
-- Responses `>= 500`, `stream()` and `sse()` responses are **not** stored. A client error
-  the route throws (`4xx`) is stored and replayed.
-- Keys are scoped by **caller credentials + tenant + method + route + key**; the store only
-  sees a SHA-256 of that scope. Credentials are every header in `credentialHeaders`
-  (default `authorization`, `x-session-id`, `cookie`, `x-api-key`), the tenant is
-  `x-tenant-id` + `host`. Requests with none of the credential headers are skipped unless
-  `allowAnonymous: true`.
-- `fingerprint: 'body'` binds the key to the request: canonical JSON (sorted keys) of a
-  parsed body, the exact bytes of a `rawBody()` route. A mismatch →
-  `422 IDEMPOTENCY_KEY_REUSED`, also against a request still in flight. `upload()`
-  routes need a function: `fingerprint: ({ route, request }) => string | undefined`.
-- By default the check runs after the enrichers and **before** the guards.
+- Only the **handler's own** outcome is stored. A refusal raised before the handler ran —
+  a guard's `401`/`403`, the rate limiter's `429`, a validation `400`, an unreadable body —
+  releases the key, so the retry (after `Retry-After`, or once signed in) runs the operation.
+- Responses `>= 500`, the retry-later statuses `408`, `425` and `429` (even from the
+  handler), `stream()` and `sse()` responses are **not** stored. Any other client error the
+  handler throws or sends (`4xx`) is stored and replayed byte-for-byte.
+- Keys are scoped by **caller credentials + tenant headers + method + route pattern + key**;
+  the store only sees a SHA-256 of that scope. Credentials are every header in
+  `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`, `x-api-key`); the
+  tenant part is only the raw `x-tenant-id` + `host` headers. Requests with none of the
+  credential headers are skipped unless `allowAnonymous: true`.
+- **What the scope does not cover:** a tenant resolved another way (a path segment such as
+  `/t/:tenant/...`, a token claim) and the concrete path params. The same credential
+  reusing one key on `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and
+  `/orders/2/pay`, receives the **first** response. Have clients mint a fresh key per
+  operation (and per tenant), and bind the key to the URL with a fingerprint function so
+  such a reuse is refused with `422`:
+  `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
+- `fingerprint: 'body'` binds the key to the body: canonical JSON (sorted keys) of a parsed
+  body, the exact bytes of a `rawBody()` route — **not** the query string or the path
+  params. A mismatch → `422 IDEMPOTENCY_KEY_REUSED`, also against a request still in
+  flight. `upload()` routes need a function: `fingerprint: ({ route, request }) => string | undefined`.
+- By default the check runs after the enrichers and **before** the guards — so a replay is
+  decided after, e.g., tenant resolution: a suspended tenant gets its `403`, not the replay.
   `replayAfterGuards: true` runs it after guards and validation, just before the handler.
   A `rawBody()` route fingerprinted by `'body'` is always checked after the guards.
 - An `Idempotency-Key` longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`.
 - The reservation is an **atomic** `setPending()` before the handler runs.
 - Only Basalt `route()` definitions are covered — not handlers registered on the
-  underlying framework by hand.
+  underlying framework by hand. A raw `fastify.post(...)` (or `app.post(...)` on Express or
+  Hono) is **not** protected: declare it with `route()` and pass it to the adapter plugin.
+- Rolling deploys: with `fingerprint` on, `RedisIdempotencyStore` writes in-flight
+  reservations as `pending:<fingerprint>`; an instance running a release older than this
+  one reads that as a completed record and fails the repeat. Roll out with `fingerprint`
+  off, then turn it on. Empty responses (`204`) are stored and replayed too.
 
 `fingerprint` and `replayAfterGuards` default to off so existing apps keep their
 behaviour; a future major turns them on.
@@ -954,7 +971,7 @@ readonly field — it is a boot failure, never an HTTP response.
 |---|---|
 | `runRoute(definition, request, reply, pipeline?)` | Executes a request's full pipeline; returns the handler's value. |
 | `toErrorResponse(error)` → `ErrorResponse` | Converts any error into a standardized `{ status, body }`. |
-| `RequestEnricher` | `(info: { request, context, container, route? }) => void \| RequestDisposer \| Promise<void \| RequestDisposer>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. A returned disposer runs exactly once when the response has ended (sent, streamed out, failed or abandoned), on every adapter. |
+| `RequestEnricher` | `(info: { request, context, container, route?, reply? }) => void \| RequestDisposer \| Promise<void \| RequestDisposer>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. An enricher that answers the request itself (`reply.send()`) ends it: the remaining enrichers, the guards and the handler do not run. A returned disposer runs exactly once when the response has ended (sent, streamed out, failed or abandoned), on every adapter. |
 | `RequestDisposer` | `() => void \| Promise<void>` — cleanup an enricher returns (e.g. releasing a leased database client). |
 | `RequestDisposers` | Per-request disposer list for adapter authors: `add(disposer)`, once-guarded `run()` (last-registered first; a disposer added after `run()` runs at once). |
 | `RouteGuard` | `(info: { route, request, context, container }) => void \| Promise<void>` — rejects by throwing. Bucket `'http:guards'`. |

@@ -457,16 +457,30 @@ idempotencyPlugin({
   Vale para qualquer forma de handler — um que devolve o payload é repetido
   exactamente como um que chama `reply.send()`.
 - Uma repetição enquanto a primeira ainda está em curso → `409 IDEMPOTENCY_CONFLICT`.
-- Respostas `5xx`, downloads `stream()` e streams `sse()` **não** são colocados
-  em cache, por isso falhas genuínas continuam repetíveis. Um erro de cliente que
-  a rota lança (`4xx`) é registado e replicado como qualquer outra resposta.
-- As chaves têm escopo por **credenciais do caller + tenant + método + rota**,
-  com hash SHA-256 antes de chegarem ao store. As credenciais são todos os
-  headers em `credentialHeaders` (por omissão `authorization`, `x-session-id`,
-  `cookie`, `x-api-key`) e o tenant é `x-tenant-id` + `host`, por isso a resposta
-  em cache de um utilizador nunca pode ser replicada a outro (sem fuga entre
-  utilizadores/tenants), e a mesma chave em dois endpoints não pode colidir. Se
-  autenticas com outro header, adiciona-o a `credentialHeaders`.
+- Só é registado o resultado **do próprio handler**. Uma recusa levantada antes
+  de o handler correr — o `401`/`403` de um guard, o `429` do rate limiter, um
+  `400` de validação — liberta a chave, por isso um cliente que respeita o
+  `Retry-After` (ou volta a autenticar-se) vê a operação executada no retry.
+- Respostas `5xx`, os status de "tenta mais tarde" `408`, `425` e `429` (mesmo
+  vindos do handler), downloads `stream()` e streams `sse()` **não** são
+  colocados em cache, por isso falhas genuínas continuam repetíveis. Qualquer
+  outro erro de cliente que o handler lança (`4xx`) é registado e replicado byte
+  a byte.
+- As chaves têm escopo por **credenciais do caller + headers de tenant + método +
+  padrão da rota**, com hash SHA-256 antes de chegarem ao store. As credenciais
+  são todos os headers em `credentialHeaders` (por omissão `authorization`,
+  `x-session-id`, `cookie`, `x-api-key`), por isso a resposta em cache de uma
+  credencial nunca é replicada a outra. Se autenticas com outro header,
+  adiciona-o a `credentialHeaders`.
+- **O que o escopo não cobre.** A parte do tenant é só os headers em bruto
+  `x-tenant-id` e `host` — não um tenant resolvido a partir de um segmento do
+  path (`/t/:tenant/...`) ou de um claim do token — e a rota é o seu *padrão*,
+  não os params concretos do path. A mesma credencial a reutilizar uma chave em
+  `/t/acme/orders` e `/t/globex/orders`, ou em `/orders/1/pay` e
+  `/orders/2/pay`, recebe a **primeira** resposta. Faz os clientes gerarem uma
+  chave nova por operação (e por tenant), e associa a chave ao URL para que essa
+  reutilização seja recusada com `422`:
+  `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
 - Pedidos **sem** nenhum header de credencial não são colocados em cache nem
   replicados por omissão (senão um estranho que adivinhasse a chave receberia a
   resposta). Ativa com `allowAnonymous: true` apenas em endpoints públicos sem
@@ -476,7 +490,8 @@ idempotencyPlugin({
   `maxEntries` (por omissão 10 000). O `RedisIdempotencyStore` partilha os
   replays entre instâncias.
 - Cobre as rotas que o Basalt serve (definições `route()`). Um handler que
-  registes à mão na framework por baixo não fica coberto.
+  registes à mão na framework por baixo — um `fastify.post(...)` cru — não fica
+  coberto: declara-o com `route()`.
 
 **Associa a chave ao pedido — `fingerprint`.** Sem ele, um cliente que reutiliza
 uma chave para um pedido *diferente* (um bug, ou um retry depois de o utilizador
@@ -485,13 +500,21 @@ editar o formulário) recebe em silêncio o resultado do primeiro pedido.
 com chaves ordenadas para um corpo com parse, os bytes exatos para uma rota
 [`rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook) — e
 responde a uma diferença com `422 IDEMPOTENCY_KEY_REUSED`, também enquanto o
-primeiro pedido ainda está a correr. As rotas `upload()` não levam fingerprint
+primeiro pedido ainda está a correr. `'body'` cobre só o corpo, não a query
+string nem os params do path. As rotas `upload()` não levam fingerprint
 com `'body'`; passa uma função (`({ route, request }) => string | undefined`)
-para as cobrir, ou para qualquer outro critério teu.
+para as cobrir, ou para qualquer outro critério teu (o URL, um header).
+
+Durante um rolling deploy com `fingerprint` ligado, o `RedisIdempotencyStore`
+grava as reservas em curso como `pending:<fingerprint>`, que uma instância ainda
+numa versão anterior lê mal: faz primeiro o deploy da nova versão e só depois
+liga o `fingerprint`.
 
 **Onde corre a verificação — `replayAfterGuards`.** Por omissão a verificação
-corre depois dos enrichers e **antes** dos guards da rota: um caller cujo token
-foi revogado desde o primeiro pedido continua a receber o sucesso em cache,
+corre depois dos enrichers e **antes** dos guards da rota. Correr depois dos
+enrichers significa que o tenant é resolvido primeiro: um tenant suspenso recebe
+o seu `403`, não um replay. Correr antes dos guards significa que um caller cujo
+token foi revogado desde o primeiro pedido continua a receber o sucesso em cache,
 desde que apresente o mesmo header de credencial. Com `replayAfterGuards: true`
 corre depois dos guards e da validação do pedido, mesmo antes do handler — o
 caller revogado recebe o `401`/`403` do guard, e um pedido que falha a validação
