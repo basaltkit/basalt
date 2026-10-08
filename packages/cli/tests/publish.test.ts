@@ -41,6 +41,11 @@ describe('publish', () => {
     expect(file.indexOf('RUN pnpm install --frozen-lockfile')).toBeGreaterThan(build)
     expect(file.indexOf('RUN pnpm run build')).toBeLessThan(run)
     expect(file.indexOf('RUN pnpm prune --prod')).toBeLessThan(run)
+    // Non-interactive pnpm in the build stage: `pnpm prune` in a workspace (a
+    // --ui app's web/) otherwise aborts with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY.
+    const ci = file.indexOf('ENV CI=true')
+    expect(ci).toBeGreaterThan(build)
+    expect(ci).toBeLessThan(file.indexOf('RUN pnpm prune --prod'))
     expect(file).toContain('USER node')
     expect(file).toContain('HEALTHCHECK')
     expect(file).toContain(`CMD ["node", "--enable-source-maps", "${PRODUCTION_ENTRY}"]`)

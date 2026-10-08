@@ -329,7 +329,8 @@ boot into sorted `RouteRow`s — `{ method, url, auth, can, rateLimit, tenant, p
 `[]`; `rateLimit` reads `'10/1m per user'`; `tenant` is `'required' | 'exempt' | 'central'`).
 `findUnguardedRoutes(rows, { require: ['auth', 'can'], allow? })` returns the rows that
 do not declare the required guards, treating `auth: false` / `public: true` (and
-`can: false`, for `can`) as intentional. Both are pure and also importable from the
+`can: false`, for `can`) as intentional; only `auth: true` — the one value `authPlugin`
+enforces — satisfies `auth`. Both are pure and also importable from the
 zod-free subpath `@basaltkit/http/route-table`; `basalt routes` uses them.
 
 ```ts
