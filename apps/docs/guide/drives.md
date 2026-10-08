@@ -370,6 +370,32 @@ disconnect carries on.
 await drives.disconnect(connection.id, { force: true })
 ```
 
+## Listing: browse vs crawl
+
+`listItems()` answers two different questions, and the adapters do not agree on
+which one they answer by default. Say which one you mean with `recursive`:
+
+```ts
+// A file browser: one folder's direct children.
+await drives.listItems(connection.id, { folderId, recursive: false })
+// An import or an audit: the whole subtree.
+await drives.listItems(connection.id, { recursive: true })
+```
+
+| Provider | Default when `recursive` is omitted | `recursive: false` | `recursive: true` |
+| --- | --- | --- | --- |
+| Google Drive | subtree (`listMode: 'recursive'`); an unscoped connection lists the whole account flat | direct children (of the account root when unscoped) | subtree, walked folder by folder |
+| Dropbox | subtree (`recursive: true` option) | direct children | subtree |
+| OneDrive / SharePoint | direct children | direct children | **`DRIVE_UNSUPPORTED`** (`recursiveList`) — Graph has no recursive listing; use the change feed (`syncConnection`) to enumerate a tree |
+
+Omitting `recursive` keeps each adapter's constructor default exactly as before.
+The mode is bound into the returned cursor: a continuation that omits
+`recursive` keeps the cursor's mode, and one that names a different mode is
+refused with `DRIVE_ACCESS_DENIED`, the same refusal as a forged cursor.
+Microsoft refuses `recursive: true` rather than quietly returning one level,
+because a caller that asked for a crawl would otherwise believe it had seen the
+whole tree.
+
 ## Connection health
 
 Every connection view carries three health fields, all epoch milliseconds like

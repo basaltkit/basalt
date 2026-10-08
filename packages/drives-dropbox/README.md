@@ -64,7 +64,7 @@ In the [Dropbox App Console](https://www.dropbox.com/developers/apps):
 | `webhookSecret` | `clientSecret` | Overrides the webhook signing key. |
 | `scopes` | `account_info.read files.metadata.read files.content.read` | Scopes requested at consent. |
 | `pageSize` | `500` | `list_folder` page size. Clamped to 1…2000. |
-| `recursive` | `true` | Whether listings and the change feed walk subfolders. |
+| `recursive` | `true` | Whether listings and the change feed walk subfolders. A call's `listItems({ recursive })` overrides it for that listing. |
 | `uploadMaxBytes` | `150 MB` | Hard ceiling for one upload. Cannot exceed Dropbox's own limit. |
 
 ## What maps to what

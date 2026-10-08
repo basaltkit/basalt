@@ -171,6 +171,10 @@ export interface GoogleDriveOptions {
    *   tenant's documents. Matches the Dropbox adapter's `recursive: true`.
    * - `'children'` — one folder's direct children only, the shape a file
    *   browser wants. An import that uses it sees exactly one level.
+   *
+   * This is the default only: a call's `DriveListOptions.recursive` overrides
+   * it (`recursive: false` lists direct children, of the account root when the
+   * connection is unscoped).
    */
   listMode?: 'recursive' | 'children'
   /** Hard ceiling for one upload. Default — and maximum — 5 MB. */
@@ -430,7 +434,18 @@ export class GoogleDrive implements DriveProvider {
       await this.assertInRoot(session, assertFileId(options.folderId))
     }
     const limit = Math.min(Math.max(1, options.limit ?? this.pageSize), GOOGLE_MAX_PAGE_SIZE)
-    if (scope === undefined || this.options.listMode === 'children') {
+    if (options.recursive === false) {
+      // An explicit per-call browse: direct children only, and of the account
+      // root (`'root' in parents`) when nothing narrows it — unlike the
+      // constructor's `listMode: 'children'`, which kept the historical flat
+      // account-wide feed for an unscoped connection.
+      const page = await this.listPage(session, scope ?? 'root', limit, options.cursor)
+      return {
+        items: page.files.map(toDriveItem),
+        ...(page.nextPageToken !== undefined ? { cursor: page.nextPageToken } : {}),
+      }
+    }
+    if (scope === undefined || (options.recursive === undefined && this.options.listMode === 'children')) {
       const page = await this.listPage(session, scope, limit, options.cursor)
       return {
         items: page.files.map(toDriveItem),

@@ -39,6 +39,31 @@ describe('listing', () => {
     expect(JSON.parse(listed.body)).toMatchObject({ path: '', recursive: true })
   })
 
+  it('honours a per-call recursive flag and keeps the constructor default when it is omitted', async () => {
+    const h = harness({ server: { files: FILES } })
+    const view = await connect(h)
+    const bodies = () =>
+      h.dropbox.requests.filter((r) => r.url.endsWith('/files/list_folder')).map((r) => JSON.parse(r.body))
+
+    await h.drives.listItems(view.id, { recursive: false })
+    expect(bodies().at(-1)).toMatchObject({ recursive: false })
+    await h.drives.listItems(view.id, { recursive: true })
+    expect(bodies().at(-1)).toMatchObject({ recursive: true })
+    await h.drives.listItems(view.id)
+    expect(bodies().at(-1)).toMatchObject({ recursive: true })
+  })
+
+  it('a per-call recursive: true overrides a constructor recursive: false', async () => {
+    const h = harness({ server: { files: FILES }, provider: { recursive: false } })
+    const view = await connect(h)
+    const bodies = () =>
+      h.dropbox.requests.filter((r) => r.url.endsWith('/files/list_folder')).map((r) => JSON.parse(r.body))
+    await h.drives.listItems(view.id)
+    expect(bodies().at(-1)).toMatchObject({ recursive: false })
+    await h.drives.listItems(view.id, { recursive: true })
+    expect(bodies().at(-1)).toMatchObject({ recursive: true })
+  })
+
   it('confines a connection to its root folder', async () => {
     const h = harness({ server: { files: FILES } })
     const view = await connect(h, { rootId: '/Finance' })

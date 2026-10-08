@@ -72,6 +72,25 @@ describe('listing', () => {
     expect(h.graph.requests.some((r) => r.url.includes('$skiptoken=2'))).toBe(true)
   })
 
+  it('lists direct children for recursive: false and the default, and refuses recursive: true', async () => {
+    const h = harness({ server: { files: FILES } })
+    const view = await connect(h)
+    const before = h.graph.requests.length
+
+    await expect(h.drives.listItems(view.id, { recursive: false })).resolves.toBeDefined()
+    expect(h.graph.requests.at(-1)!.url).toContain('/children')
+    await expect(h.drives.listItems(view.id)).resolves.toBeDefined()
+
+    const sent = h.graph.requests.length
+    await expect(h.drives.listItems(view.id, { recursive: true })).rejects.toMatchObject({
+      code: 'DRIVE_UNSUPPORTED',
+      details: { capability: 'recursiveList' },
+    })
+    // Refused before any request: a crawl is never silently answered with a browse.
+    expect(h.graph.requests.length).toBe(sent)
+    expect(sent).toBeGreaterThan(before)
+  })
+
   it('refuses a cursor that points anywhere but Graph, before opening a socket', async () => {
     const h = harness({ server: { files: FILES } })
     const view = await connect(h)

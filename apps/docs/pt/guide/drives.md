@@ -384,6 +384,33 @@ vai para o `onHookError` (uma opção do `drivesPlugin`/`Drives`;
 await drives.disconnect(connection.id, { force: true })
 ```
 
+## Listar: navegar vs percorrer
+
+O `listItems()` responde a duas perguntas diferentes, e os adaptadores não
+concordam sobre qual delas respondem por omissão. Diz qual queres com
+`recursive`:
+
+```ts
+// Um explorador de ficheiros: os filhos directos de uma pasta.
+await drives.listItems(connection.id, { folderId, recursive: false })
+// Uma importação ou auditoria: a subárvore inteira.
+await drives.listItems(connection.id, { recursive: true })
+```
+
+| Fornecedor | Por omissão (sem `recursive`) | `recursive: false` | `recursive: true` |
+| --- | --- | --- | --- |
+| Google Drive | subárvore (`listMode: 'recursive'`); uma ligação sem âmbito lista a conta inteira de forma plana | filhos directos (da raiz da conta quando sem âmbito) | subárvore, percorrida pasta a pasta |
+| Dropbox | subárvore (opção `recursive: true`) | filhos directos | subárvore |
+| OneDrive / SharePoint | filhos directos | filhos directos | **`DRIVE_UNSUPPORTED`** (`recursiveList`) — o Graph não tem listagem recursiva; usa o feed de alterações (`syncConnection`) para enumerar uma árvore |
+
+Omitir `recursive` mantém exactamente o default do construtor de cada
+adaptador. O modo fica ligado ao cursor devolvido: uma continuação que omite
+`recursive` mantém o modo do cursor, e uma que indique um modo diferente é
+recusada com `DRIVE_ACCESS_DENIED`, a mesma recusa de um cursor forjado. A
+Microsoft recusa `recursive: true` em vez de devolver só um nível em silêncio,
+porque quem pediu uma travessia acreditaria, de outra forma, que tinha visto a
+árvore toda.
+
 ## Saúde da ligação
 
 Cada vista de ligação traz três campos de saúde, todos em milissegundos epoch

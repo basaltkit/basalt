@@ -59,6 +59,41 @@ describe('listing', () => {
     expect(page.cursor).toBeUndefined()
   })
 
+  it('recursive: false per call lists one level even when the adapter default is recursive', async () => {
+    const h = harness({ server: { files: TREE, pageSize: 50 } })
+    const view = await connect(h, { rootId: 'root-folder' })
+    const page = await h.drives.listItems(view.id, { recursive: false })
+    expect(page.items.map((item) => item.externalId).sort()).toEqual(['sub-folder', 'top'])
+    expect(page.cursor).toBeUndefined()
+  })
+
+  it('recursive: false on an unscoped connection lists the account root’s direct children', async () => {
+    const tree = [
+      { id: 'mine-a', name: 'a.pdf', content: 'a', parents: ['root'] },
+      { id: 'mine-folder', name: 'Folder', mimeType: FOLDER_MIME, parents: ['root'] },
+      { id: 'nested', name: 'n.pdf', content: 'n', parents: ['mine-folder'] },
+    ]
+    const h = harness({ server: { files: tree, pageSize: 50 } })
+    const view = await connect(h)
+    const page = await h.drives.listItems(view.id, { recursive: false })
+    expect(page.items.map((item) => item.externalId).sort()).toEqual(['mine-a', 'mine-folder'])
+    const q = new URL(h.google.requests.at(-1)!.url).searchParams.get('q')
+    expect(q).toContain("'root' in parents")
+  })
+
+  it('recursive: true per call walks the subtree even under listMode: children', async () => {
+    const h = harness({ server: { files: TREE, pageSize: 2 }, provider: { listMode: 'children' } })
+    const view = await connect(h, { rootId: 'root-folder' })
+    const seen: string[] = []
+    let cursor: string | undefined
+    do {
+      const page = await h.drives.listItems(view.id, cursor !== undefined ? { cursor } : { recursive: true })
+      seen.push(...page.items.map((item) => item.externalId))
+      cursor = page.cursor
+    } while (cursor !== undefined)
+    expect(seen.sort()).toEqual(['deep', 'sub-folder', 'top'])
+  })
+
   it('refuses a folder id that is not a Drive id, rather than escaping it into `q`', async () => {
     const h = harness({ server: { files: TREE } })
     const view = await connect(h)
