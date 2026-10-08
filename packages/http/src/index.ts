@@ -145,6 +145,7 @@ export { escapeHtml, scriptJson, pageCsp, cspHash, type PageCspOptions } from '.
 export {
   GUARDED_META_BUCKET,
   GUARDED_META_KEYS,
+  RATE_LIMIT_META_KEY,
   UnguardedRouteMetaError,
   assertRoutesGuarded,
   META_VALIDATORS_BUCKET,

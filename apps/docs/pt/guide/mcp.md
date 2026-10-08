@@ -354,7 +354,11 @@ Num deployment exposto, dá ao `/mcp` o seu próprio orçamento de rate limit:
 O `meta.rateLimit` próprio de uma rota-ferramenta é imposto por um guard de
 rota, por isso aplica-se também às chamadas de tools através do `/mcp`, com a
 chave no ip de quem chama o `/mcp`, que o pedido da tool herda. (Auth e guards
-correm de forma idêntica em ambos os caminhos.)
+correm de forma idêntica em ambos os caminhos.) Uma chamada de tool sem ip do
+chamador — por stdio, ou `MCP.callTool()` sem `ip` — fica com a chave da
+identidade do chamador (`ctx().user` / `ctx().tenant`) quando existe; todas as
+chamadas anónimas sem ip partilham um único balde `unknown` (falha fechada).
+Passa o `ip` (ou resolve-o no adaptador) para ter baldes por cliente.
 
 ## Referência de opções
 
@@ -417,7 +421,7 @@ texto é o mesmo corpo de erro que o HTTP teria devolvido (ex.:
 | JSON-RPC `-32602` ``tools/call `arguments` must be an object`` | O cliente enviou `arguments` como array, string, número ou `null` | Envia um objeto de argumentos nomeados conforme o input schema da tool |
 | JSON-RPC `-32603` `Internal error` | Algo lançou fora de um resultado de tool (as falhas de tool em si voltam como `isError`) | O texto é genérico de propósito; vê a causa nos logs do servidor |
 | JSON-RPC `-32601` `Method not found` | O cliente chamou um método MCP que o servidor não implementa | Só existem `initialize`, `ping`, `tools/list`, `tools/call` (mais resources/prompts quando registados) |
-| Uma chamada de tool devolve `RATE_LIMITED` mais cedo do que o esperado | O `meta.rateLimit` próprio da rota-ferramenta aplica-se também através do `/mcp` (por ip do chamador) | Aumenta o orçamento da rota, ou passa uma `key` ao `securityPlugin({ rateLimit })` |
+| Uma chamada de tool devolve `RATE_LIMITED` mais cedo do que o esperado | O `meta.rateLimit` próprio da rota-ferramenta aplica-se também através do `/mcp` (por ip do chamador; chamadas anónimas sem ip partilham um balde `unknown`) | Aumenta o orçamento da rota, passa uma `key` ao `securityPlugin({ rateLimit })`, ou garante que o ip / a identidade do chamador são resolvidos |
 | `403` `MCP_ORIGIN_FORBIDDEN` do `POST /mcp` | Um browser enviou um pedido de outra origem | Acrescenta a origem da página a `mcpRoutes({ allowedOrigins })` |
 | `415` do `POST /mcp` | O corpo não foi enviado como `Content-Type: application/json` | Envia `application/json` (os clientes MCP fazem-no) |
 | `400` `Mcp-Session-Id header required` | Chegou uma mensagem que não é `initialize` sem sessão | Envia primeiro `initialize` e repete o seu `Mcp-Session-Id` (os clientes da spec fazem-no), ou `mcpRoutes({ sessions: false })` |

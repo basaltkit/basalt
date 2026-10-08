@@ -198,4 +198,6 @@ server + client round-trips.
 endpoint so `securityPlugin` enforces a dedicated budget. A tool route's own
 `meta.rateLimit` also applies when it is invoked as a tool through `/mcp`
 (enforced as a route guard), keyed by the `/mcp` caller's ip, which the tool
-request inherits.
+request inherits. A call with no ip (stdio, `callTool()` without `ip`) is keyed by
+the caller's identity when `ctx().user` is set; anonymous ip-less calls share one
+fail-closed `unknown` bucket.

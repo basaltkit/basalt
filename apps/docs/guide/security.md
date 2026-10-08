@@ -111,8 +111,12 @@ tenancy have already set `ctx().user` / `ctx().tenant`. When the id is missing
 (an anonymous caller, no tenant resolved, or the function returns nothing), the
 bucket **falls back to the client IP**, and anonymous buckets never mix with
 signed-in ones. When the adapter could not resolve an IP either (`request.ip`
-undefined — Hono on a runtime without `getClientIp`), every such request shares
-one bucket: fail closed, rather than a bucket per spoofable header. Keyed buckets use the same
+undefined — Hono on a runtime without `getClientIp`, a hand-built `runRoute`, an
+MCP tool called over stdio or through `McpServer.callTool`), a signed-in caller
+is keyed by identity (`user:<id>|tenant:<id>`, as `'user+tenant'` would), and
+**every anonymous ip-less request shares one `unknown` bucket**: fail closed,
+rather than a bucket per spoofable header. Configure the adapter to resolve the
+client IP to get per-client buckets back. Keyed buckets use the same
 store (`MemoryRateLimitStore`, or Redis across instances). A keyed route still
 counts against the global per-IP limit on every adapter, because the pre-routing
 hook cannot know the user yet.
@@ -372,7 +376,11 @@ The full guarded set is `auth`, `can`, `teamRole`, `scopes`, `subscribed` and
 `feature` (`GUARDED_META_KEYS`). Keys that *relax* rather than protect are
 deliberately excluded — `meta.central` (skips the tenant-membership check),
 `meta.mcp` (opts a route into MCP exposure) and `meta.rateLimit` (abuse
-throttling, not an authorization boundary).
+throttling, not an authorization boundary). A `meta.rateLimit` with no limiter
+registered (no `securityPlugin({ rateLimit })`) does not refuse the boot, but
+the adapter **warns once**, naming the routes, that those budgets are not
+enforced. Silence it with `allowUnguardedMeta: ['rateLimit']` (or `true`) when
+an outer edge throttles.
 
 If protection genuinely happens at an outer edge/gateway, opt out explicitly
 with the adapter option `allowUnguardedMeta: true` (or `['auth', …]` for

@@ -250,7 +250,10 @@ request, and is never flagged.
 Route-meta keys that *relax* a check rather than request one are deliberately **not**
 guarded: `central` (skips `tenantMembershipPlugin`'s check — a missing plugin removes a
 bypass, never a check), `mcp` (opts a route into MCP exposure) and `rateLimit` (abuse
-throttling, not an authorization boundary).
+throttling, not an authorization boundary). A route that declares `meta.rateLimit` with no
+limiter registered (`securityPlugin` without `rateLimit`) does not refuse the boot, but
+the adapter **warns once** that those budgets are not enforced. Silence it with
+`allowUnguardedMeta: ['rateLimit']` (or `true`) when an outer edge throttles.
 
 **The escape hatch.** If protection genuinely happens at an outer edge (an API gateway
 that authenticates before Basalt ever sees the request), waive the check with the
@@ -676,8 +679,12 @@ route({
 
 The id is resolved in the guard, after enrichers (auth, tenancy) set `ctx()`. When it is
 missing — anonymous caller, no tenant, the function returns nothing — the bucket **falls
-back to the client IP** (never to one shared bucket; identity buckets are namespaced so
-they never collide with IP ones). The same `store` (memory/Redis) is used. A keyed route
+back to the client IP** (identity buckets are namespaced so they never collide with IP
+ones). When `request.ip` itself is unresolved — Hono without `getClientIp`, a hand-built
+`runRoute`, an MCP tool called over stdio or through `McpServer.callTool` — the guard keys
+an identified caller by `user:<id>|tenant:<id>` (as `'user+tenant'` would), and **every
+anonymous ip-less request shares one fail-closed `unknown` bucket**. Configure the adapter
+to resolve the client IP to get per-client buckets back. The same `store` (memory/Redis) is used. A keyed route
 is always charged by the guard, so on every adapter it also counts against the global
 per-IP bucket (the pre-routing hook cannot know the user). An unknown `key` string keeps
 the per-IP bucket.
