@@ -343,6 +343,10 @@ On an exposed deployment, give `/mcp` its own rate-limit budget:
 bucket. A tool route's own `meta.rateLimit` is enforced by a route guard, so it
 applies to tool calls through `/mcp` too, keyed by the `/mcp` caller's ip,
 which the tool request inherits. (Auth and guards run identically on both paths.)
+A tool call with no caller ip — over stdio, or `MCP.callTool()` without `ip` —
+is keyed by the caller's identity (`ctx().user` / `ctx().tenant`) when there is
+one; every anonymous ip-less call shares a single fail-closed `unknown` bucket.
+Pass `ip` (or resolve it in the adapter) to get per-client buckets.
 
 
 ## Options reference
@@ -406,7 +410,7 @@ Protocol errors use JSON-RPC codes:
 | JSON-RPC `-32602` ``tools/call `arguments` must be an object`` | The client sent `arguments` as an array, string, number or `null` | Send an object of named arguments matching the tool's input schema |
 | JSON-RPC `-32603` `Internal error` | Something threw outside a tool result (tool failures themselves come back as `isError`) | The text is deliberately generic; check the server logs for the cause |
 | JSON-RPC `-32601` `Method not found` | The client called an MCP method the server doesn't implement | Only `initialize`, `ping`, `tools/list`, `tools/call` (plus resources/prompts when registered) exist |
-| A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp` too (per caller ip) | Raise the route's budget, or pass a `key` to `securityPlugin({ rateLimit })` |
+| A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp` too (per caller ip; anonymous calls with no ip share one `unknown` bucket) | Raise the route's budget, pass a `key` to `securityPlugin({ rateLimit })`, or make sure the caller ip / identity is resolved |
 | `403` `MCP_ORIGIN_FORBIDDEN` from `POST /mcp` | A browser sent a cross-origin request | Add the page's origin to `mcpRoutes({ allowedOrigins })` |
 | `415` from `POST /mcp` | The body was not sent as `Content-Type: application/json` | Send `application/json` (MCP clients do) |
 | `400` `Mcp-Session-Id header required` | A message other than `initialize` arrived without a session | Send `initialize` first and echo its `Mcp-Session-Id` (spec clients do), or `mcpRoutes({ sessions: false })` |

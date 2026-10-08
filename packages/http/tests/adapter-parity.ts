@@ -29,7 +29,7 @@ import {
   type RouteGuard,
   type RouteMetaValidator,
 } from '@basaltkit/http'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { BOUNDARY, chunked, contentType, multipart } from './multipart-fixtures.js'
 
@@ -451,6 +451,32 @@ export function rateLimitKeyParitySuite(adapter: string, driver: ParityDriver): 
       expect(await get('/by-user')).toBe(200)
       expect(await get('/by-user')).toBe(429)
       expect(await get('/by-user', 'alice')).toBe(200)
+    })
+  })
+}
+
+export function rateLimitWarningParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: unenforced meta.rateLimit warns at boot (BK-046)`, () => {
+    const routes = [route({ method: 'GET', url: '/budgeted', meta: { rateLimit: { limit: 1, windowMs: 60_000 } }, handler: () => ({ ok: true }) })]
+    const warnings = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.map((call) => String(call[0])).filter((message) => message.includes('meta.rateLimit'))
+    afterEach(async () => {
+      vi.restoreAllMocks()
+      await driver.close()
+    })
+
+    it('warns once, naming the route, when no rate limiter is registered — and still serves', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const send = await driver.boot(routes, [])
+      expect(warnings(warn)).toHaveLength(1)
+      expect(warnings(warn)[0]).toContain('GET /budgeted')
+      expect((await send({ method: 'GET', url: '/budgeted' })).status).toBe(200)
+    })
+
+    it('stays quiet when securityPlugin({ rateLimit }) enforces it', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      await driver.boot(routes, [securityPlugin({ rateLimit: { limit: 1_000, windowMs: 60_000 }, headers: false })])
+      expect(warnings(warn)).toHaveLength(0)
     })
   })
 }
