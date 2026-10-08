@@ -566,15 +566,30 @@ export class Auth {
   /**
    * Creates the row with the requested verification state. A custom
    * `UserSource` written before `create()` took `emailVerified` may drop the
-   * flag: it is then set through `update()`, and with no `update()` the call
-   * fails loudly rather than leave a provider-verified account unverified.
+   * flag: it is then set through `update()`.
+   *
+   * When the source can do neither (no `update()` and a `create()` that drops
+   * the flag), `onUnsupported` decides: `'throw'` fails loudly with
+   * {@link UserUpdateUnsupportedError} (trusted `register`, whose caller asked
+   * for a verified account and must hear it did not get one); `'keep'` returns
+   * the row as it really is, unverified (social login — the row was just
+   * created by this call with an unusable password, so it is provably ours and
+   * must be linked and used, never left behind as an orphan that locks the
+   * provider account out on every later login).
    */
-  private async createUser(email: string, passwordHash: string, emailVerified: boolean): Promise<AuthUser> {
+  private async createUser(
+    email: string,
+    passwordHash: string,
+    emailVerified: boolean,
+    onUnsupported: 'throw' | 'keep' = 'throw',
+  ): Promise<AuthUser> {
+    // Decided before anything is written, so the outcome never depends on
+    // how far a half-done create got.
+    const canPatch = typeof this.users.update === 'function'
     let user = await this.users.create(emailVerified ? { email, passwordHash, emailVerified: true } : { email, passwordHash })
     if (emailVerified && user.emailVerified !== true) {
-      if (!this.users.update) throw new UserUpdateUnsupportedError()
-      user = (await this.users.update(user.id, { emailVerified: true })) ?? user
-      if (user.emailVerified !== true) throw new UserUpdateUnsupportedError()
+      if (canPatch) user = (await this.users.update!(user.id, { emailVerified: true })) ?? user
+      if (user.emailVerified !== true && onUnsupported === 'throw') throw new UserUpdateUnsupportedError()
     }
     return user
   }
@@ -658,11 +673,16 @@ export class Auth {
         throw new RegistrationClosedError()
       }
       // Created with its final verification state, so `auth:registered`
-      // reports what the account really is.
+      // reports what the account really is. A source that cannot record the
+      // verification (no `update()`, a `create()` that drops the flag) keeps
+      // the account unverified rather than fail after the row exists: a
+      // half-done first login would leave an unlinked, unverified row that
+      // every later login refuses to adopt (`AUTH_SOCIAL_LINK_REFUSED`).
       user = await this.createUser(
         email,
         await this.hasher.hash(randomBytes(32).toString('hex')),
         options.emailVerified === true,
+        'keep',
       )
       created = true
       await this.hooks?.emit('auth:registered', { user: publicUser(user) })
