@@ -315,6 +315,40 @@ O `revoked: boolean` continua lá e continua a significar
 `revocation === 'revoked'`, mas não consegue separar os dois últimos — e são
 esses os dois que exigem acções diferentes de quem opera.
 
+### Ordem do disconnect, e o veto
+
+O `disconnect()` executa os passos sempre pela mesma ordem:
+
+| Passo | A linha existe? | Notas |
+| --- | --- | --- |
+| 1. `drive:disconnecting` | sim | um handler que lança **veta**: nada é revogado, a linha mantém-se, o erro propaga-se |
+| 2. revogar no fornecedor | sim | melhor esforço, a não ser com `{ revoke: false }` |
+| 3. cancelar a subscrição push | sim | melhor esforço |
+| 4. apagar a linha e as credenciais | — | |
+| 5. `drive:disconnected` | **não** | a linha já desapareceu; o payload traz tudo o que precisas |
+
+Faz a cascata dos teus dados no `drive:disconnecting`, onde a ligação ainda pode
+ser consultada, e recusa quando ainda não é seguro:
+
+```ts
+hooks.on('drive:disconnecting', async ({ tenantId, connectionId }) => {
+  if (await db.importJob.count({ where: { tenantId, connectionId, status: 'running' } })) {
+    throw new Error('Ainda há importações a correr nesta drive; tenta daqui a pouco.')
+  }
+  await db.driveFolderMapping.deleteMany({ where: { tenantId, connectionId } })
+})
+```
+
+Um veto é também a forma como um handler com um bug podia impedir um
+utilizador de alguma vez retirar uma autorização a um terceiro. Para o caminho
+de um operador ("revoga isto já"), passa `{ force: true }`: o erro do handler
+vai para o `onHookError` (uma opção do `drivesPlugin`/`Drives`;
+`process.emitWarning` quando não está definida) e o disconnect continua.
+
+```ts
+await drives.disconnect(connection.id, { force: true })
+```
+
 ## Ligar o Dropbox
 
 O `@basaltkit/drives-dropbox` é o primeiro adaptador real, e a referência para
