@@ -340,6 +340,42 @@ migrating plaintext or `v1:` rows (an explicit `legacy` opt-in plus
 `auth.reencryptMfaSecret(userId)`) are covered in
 [Encrypting TOTP secrets at rest](/guide/auth#mfa-encryption).
 
+## Secrets at rest {#secrets-at-rest}
+
+Every secret Basalt stores encrypted — TOTP secrets (`@basaltkit/auth`'s
+`SecretBox`, envelope `bka2`) and cloud-drive OAuth tokens
+(`@basaltkit/drives`' `DriveSecretBox`, envelope `bkd1`) — goes through one
+audited primitive, `createSecretBox` from `@basaltkit/core/secret-box`:
+
+- **AES-256-GCM**, random 96-bit IV, full 128-bit tag (a shorter tag is refused);
+- **HKDF-SHA256** key derivation under a per-box label, so the same key material
+  used by two boxes yields unrelated keys;
+- a **key ring with ids**: the first key seals, every key opens, and
+  `reseal()` moves a row to the active key — rotation is rolling;
+- **AAD binding** to the owning record (user, or tenant + connection +
+  provider): a blob copied into another row fails the tag check;
+- **no plaintext path**: anything that is not an envelope of that box is refused.
+
+Use it for a secret of your own (webhook signing secrets, third-party API
+tokens) instead of hand-rolling AES:
+
+```ts
+import { createSecretBox } from '@basaltkit/core/secret-box'
+
+const box = createSecretBox({
+  keys: [{ id: '2026-10', key: env.INTEGRATIONS_KEY }], // ≥ 32 bytes; new keys go first
+  info: 'my-app:integration-tokens:v1',                 // unique per box
+  version: 'mya1',                                      // envelope tag, [a-z0-9]{1,16}
+  aadFields: 2,                                         // what each secret is bound to
+})
+const sealed = box.seal(token, [tenantId, integrationId])
+const token2 = box.open(sealed, [tenantId, integrationId]) // throws SecretBoxError otherwise
+```
+
+Failures throw `SecretBoxError` with a `failure` of `config`, `malformed`,
+`unknown-key`, `context` or `auth-failed` (never the secret or the key). The
+subpath is not re-exported from `@basaltkit/core`'s main entry.
+
 ## Shared responsibility — hardening your integration
 
 Basalt closes the vulnerabilities it *can* close on its own. Three things,
