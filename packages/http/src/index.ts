@@ -69,6 +69,23 @@ export {
   type RedisLike,
   type RedisRateLimitStoreOptions,
 } from './drivers/redis-rate-limit.js'
+export {
+  idempotencyPlugin,
+  MemoryIdempotencyStore,
+  DEFAULT_IDEMPOTENCY_CREDENTIAL_HEADERS,
+  MAX_IDEMPOTENCY_KEY_LENGTH,
+  type IdempotencyPluginOptions,
+  type IdempotencyStore,
+  type IdempotencyRecord,
+  type IdempotencyPending,
+  type IdempotencyFingerprintInput,
+  type MemoryIdempotencyStoreOptions,
+} from './idempotency.js'
+export {
+  RedisIdempotencyStore,
+  type RedisIdempotencyClient,
+  type RedisIdempotencyStoreOptions,
+} from './drivers/redis-idempotency.js'
 export { metricsPlugin, METRICS, type MetricsPluginOptions } from './metrics.js'
 export { tracingPlugin, TRACER, type TracingPluginOptions } from './tracing.js'
 export {
