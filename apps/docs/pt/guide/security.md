@@ -155,6 +155,36 @@ desativar tudo. Uma rota que pode ser guardada em cache define o seu próprio
 `Cache-Control`, que substitui o valor por omissão — fá-lo nas rotas `meta.etag`
 (p. ex. `private, no-cache`), já que `no-store` impede o browser de revalidar.
 
+### Cabeçalhos por rota — `meta.headers`
+
+Algumas rotas precisam de cabeçalhos que o resto da API não precisa: um link de
+partilha público que os motores de busca não devem indexar, um download que
+nunca deve ir para cache. Declara-os na rota:
+
+```ts
+route({
+  method: 'POST',
+  url: '/s/:token',
+  meta: { headers: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  handler: /* … */,
+})
+```
+
+O pipeline aplica-os logo que a rota é encontrada, antes dos enrichers e dos
+guards, por isso estão em **todas** as respostas que a rota produz — o `200`, o
+`401`/`403` de um guard, um `400` de validação, um `500` lançado — nos três
+adapters. Um cabeçalho posto com `reply.header()` só chegaria ao caminho de
+sucesso. Substituem um cabeçalho global com o mesmo nome (aqui o
+`Cache-Control` do `securityPlugin`), e um handler continua a poder sobrepor-se
+a um deles com `reply.header()`.
+
+Os valores são verificados no arranque (`InvalidRouteMetaError`): strings sem
+CR, LF ou outros caracteres de controlo, e nunca `Set-Cookie`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, cabeçalhos hop-by-hop ou `X-Request-Id`,
+que pertencem à resposta ou ao adapter. Um pedido que nunca chega à rota — um
+`404`, um `429` de rate limit ou um corpo malformado rejeitado pelo parser da
+framework — leva apenas os cabeçalhos globais.
+
 ## Limites de recursos & resistência a DoS
 
 Para além de headers e rate limits, conexões longas e lentas podem esgotar um
@@ -283,35 +313,70 @@ isso nenhum endpoint de auth revela que emails estão registados.
 
 Retries seguros para `POST`: um cliente que envia uma `Idempotency-Key` recebe a
 **mesma** resposta replicada num retry, por isso uma ligação caída nunca cobra um
-cartão duas vezes.
+cartão duas vezes. Corre dentro do pipeline de rotas partilhado, por isso
+comporta-se da mesma forma em **Fastify, Express e Hono**:
 
 ```ts
-import { idempotencyPlugin } from '@basaltkit/fastify'
+import { idempotencyPlugin } from '@basaltkit/http' // também reexportado por @basaltkit/fastify
 
-idempotencyPlugin() // protege POST por omissão
+idempotencyPlugin({
+  fingerprint: 'body',     // um corpo diferente sob a mesma chave → 422
+  replayAfterGuards: true, // um caller revogado recebe 401/403, não o sucesso em cache
+}) // protege POST por omissão
 ```
 
 - Repetir com a mesma chave → a resposta em cache, com `Idempotent-Replayed: true`.
   Vale para qualquer forma de handler — um que devolve o payload é repetido
   exactamente como um que chama `reply.send()`.
 - Uma repetição enquanto a primeira ainda está em curso → `409 IDEMPOTENCY_CONFLICT`.
-- Respostas `5xx` **não** são colocadas em cache, por isso falhas genuínas
-  continuam repetíveis.
+- Respostas `5xx`, downloads `stream()` e streams `sse()` **não** são colocados
+  em cache, por isso falhas genuínas continuam repetíveis. Um erro de cliente que
+  a rota lança (`4xx`) é registado e replicado como qualquer outra resposta.
 - As chaves têm escopo por **credenciais do caller + tenant + método + rota**,
   com hash SHA-256 antes de chegarem ao store. As credenciais são todos os
   headers em `credentialHeaders` (por omissão `authorization`, `x-session-id`,
   `cookie`, `x-api-key`) e o tenant é `x-tenant-id` + `host`, por isso a resposta
   em cache de um utilizador nunca pode ser replicada a outro (sem fuga entre
-  utilizadores/tenants), e a mesma chave em dois endpoints não pode colidir. O
-  replay corre antes dos guards da rota: se autenticas com outro header,
-  adiciona-o a `credentialHeaders`.
+  utilizadores/tenants), e a mesma chave em dois endpoints não pode colidir. Se
+  autenticas com outro header, adiciona-o a `credentialHeaders`.
 - Pedidos **sem** nenhum header de credencial não são colocados em cache nem
   replicados por omissão (senão um estranho que adivinhasse a chave receberia a
   resposta). Ativa com `allowAnonymous: true` apenas em endpoints públicos sem
   nada privado.
 - Chaves com mais de 255 caracteres → `400 IDEMPOTENCY_KEY_INVALID`; o
   `MemoryIdempotencyStore` remove entradas expiradas e tem um limite
-  `maxEntries` (por omissão 10 000).
+  `maxEntries` (por omissão 10 000). O `RedisIdempotencyStore` partilha os
+  replays entre instâncias.
+- Cobre as rotas que o Basalt serve (definições `route()`). Um handler que
+  registes à mão na framework por baixo não fica coberto.
+
+**Associa a chave ao pedido — `fingerprint`.** Sem ele, um cliente que reutiliza
+uma chave para um pedido *diferente* (um bug, ou um retry depois de o utilizador
+editar o formulário) recebe em silêncio o resultado do primeiro pedido.
+`fingerprint: 'body'` guarda um SHA-256 do corpo com o registo — JSON canónico
+com chaves ordenadas para um corpo com parse, os bytes exatos para uma rota
+[`rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook) — e
+responde a uma diferença com `422 IDEMPOTENCY_KEY_REUSED`, também enquanto o
+primeiro pedido ainda está a correr. As rotas `upload()` não levam fingerprint
+com `'body'`; passa uma função (`({ route, request }) => string | undefined`)
+para as cobrir, ou para qualquer outro critério teu.
+
+**Onde corre a verificação — `replayAfterGuards`.** Por omissão a verificação
+corre depois dos enrichers e **antes** dos guards da rota: um caller cujo token
+foi revogado desde o primeiro pedido continua a receber o sucesso em cache,
+desde que apresente o mesmo header de credencial. Com `replayAfterGuards: true`
+corre depois dos guards e da validação do pedido, mesmo antes do handler — o
+caller revogado recebe o `401`/`403` do guard, e um pedido que falha a validação
+nunca reserva a chave. Uma rota `rawBody()` com fingerprint `'body'` é sempre
+verificada depois dos guards, porque os seus bytes nunca são lidos antes de
+eles passarem.
+
+As duas opções estão desligadas por omissão para que as apps existentes mantenham
+o comportamento; uma futura major vai ligá-las. Um `IdempotencyStore` próprio
+continua a funcionar sem mudanças — para responder `422` em vez de `409` a uma
+repetição concorrente pode também guardar o `fingerprint` passado a
+`setPending(key, { fingerprint })` e devolver `{ pending: true, fingerprint }` no
+`get()`, como fazem os dois stores incluídos.
 
 ## Revogar access tokens
 

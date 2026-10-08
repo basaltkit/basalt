@@ -636,5 +636,7 @@ createApp({
 })
 ```
 
-A única exceção é o **`idempotencyPlugin`**, que interceta o corpo da resposta —
-esse permanece específico do Fastify por agora.
+O `idempotencyPlugin` também é neutro: corre dentro do pipeline de rotas
+partilhado, por isso replays, conflitos e as opções `fingerprint` /
+`replayAfterGuards` comportam-se de forma idêntica nos três adapters — vê
+[Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).

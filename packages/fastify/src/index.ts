@@ -48,19 +48,21 @@ export {
   type HttpServer,
 } from '@basaltkit/http'
 
-// Idempotency needs to capture the response body, which is Fastify-specific.
+// Idempotency is framework-neutral since it moved into the shared route
+// pipeline (@basaltkit/http); re-exported so existing imports keep working.
 export {
   idempotencyPlugin,
   MemoryIdempotencyStore,
+  RedisIdempotencyStore,
   DEFAULT_IDEMPOTENCY_CREDENTIAL_HEADERS,
   MAX_IDEMPOTENCY_KEY_LENGTH,
   type MemoryIdempotencyStoreOptions,
   type IdempotencyPluginOptions,
   type IdempotencyStore,
   type IdempotencyRecord,
-} from './idempotency.js'
-export {
-  RedisIdempotencyStore,
-  type RedisLike,
+  type IdempotencyPending,
+  type IdempotencyFingerprintInput,
   type RedisIdempotencyStoreOptions,
-} from './drivers/redis-idempotency.js'
+  /** @deprecated Import `RedisIdempotencyClient` from `@basaltkit/http`. */
+  type RedisIdempotencyClient as RedisLike,
+} from '@basaltkit/http'

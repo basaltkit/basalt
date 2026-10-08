@@ -6,6 +6,8 @@ import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
   errorDetailsParitySuite,
   disposerParitySuite,
+  routeHeadersParitySuite,
+  idempotencyParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
@@ -75,6 +77,8 @@ crossCopyParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
 rateLimitWarningParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)
+routeHeadersParitySuite('hono', driver)
+idempotencyParitySuite('hono', driver)
 streamParitySuite('hono', driver)
 corsPreflightParitySuite('hono', driver)
 wireParitySuite('hono', driver)
