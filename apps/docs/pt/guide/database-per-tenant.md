@@ -86,13 +86,34 @@ um event stream — e devolve-o quando a resposta termina (concluída, falhada o
 abandonada pelo cliente) ou quando o callback do run assenta. O pool só fecha
 clientes **inactivos** (o menos usado recentemente primeiro), por isso um
 cliente nunca é desligado a meio de uma query, por mais longo que seja o pedido.
+A ordem em que registas o `tenancyPlugin`, o `prismaPlugin` e os teus próprios
+enrichers não importa: o lease é feito assim que o tenant é conhecido, por isso
+um enricher entre o tenancy e o prisma (auth, por exemplo) já vê `ctx().db`, e
+um pedido segura exactamente um lease, devolvido mesmo quando um enricher ou
+guard posterior o rejeita.
+
+Os leases por pedido precisam de `@basaltkit/http` ≥ 2.8 (qualquer adapter
+dessa release) — o pipeline que avisa o plugin de que a resposta terminou. Num
+pipeline mais antigo, e para um `tenancy:switched` sem `via` (`@basaltkit/tenancy`
+< 3.2, ou um emit teu), o plugin não faz lease do que nunca conseguiria
+devolver: segura o cliente durante 30 s, como antes do BK-077, e depois
+devolve-o sozinho.
 
 Dimensionar o pool:
 
-- **`max`** é o número de tenants **em uso ao mesmo tempo** — pedidos ou jobs
-  em curso para tenants distintos — não o número de tenants que tens, nem o
-  número visto recentemente. Cada cliente aberto tem as suas próprias ligações,
-  por isso `max` × o limite de ligações do cliente tem de caber na base de dados.
+- **`max`** é o número de tenants distintos **activos em poucos segundos** —
+  pedidos ou jobs em curso, mais os servidos dentro da janela de graça — não o
+  número de tenants que tens. Cada cliente aberto tem as suas próprias
+  ligações, por isso `max` × o limite de ligações do cliente tem de caber na
+  base de dados.
+- **Sobre-subscrever faz churn.** Quando chegam à vez mais tenants distintos do
+  que `max`, um pedido já não espera por um 503: o pool fecha o cliente
+  inactivo menos usado recentemente e abre um para o tenant novo — em cada
+  pedido, se o tráfego percorrer mais tenants do que `max`. As respostas
+  continuam 200, mas cada uma paga uma ligação (centenas de ms com Prisma 7) e
+  a base de dados vê um fluxo de ligações novas. O limite de clientes abertos
+  mantém-se. Monitoriza as criações de clientes (conta as chamadas à tua
+  factory `forTenant`): um ritmo constante quer dizer que `max` é pequeno demais.
 - **`idleMs`** é só um período de graça: quanto tempo um tenant mantém o cliente
   depois do último pedido, para que uma rajada de pedidos do mesmo tenant não
   volte a ligar de cada vez. O default do plugin é 1 s. Aumentá-lo troca vagas
@@ -121,6 +142,18 @@ await app.container.get(DB_POOL).use(tenantId, async (client) => {
   // nunca despejado até este callback terminar
 })
 ```
+
+::: warning Trabalho que sobrevive à resposta
+O lease de um pedido termina com a sua resposta, e o cliente fica depois
+reservado só durante o período de graça `idleMs` (1 s). Tudo o que ainda use
+`ctx().db` depois de a resposta ter sido enviada — uma promise
+fire-and-forget, um `setTimeout`, um handler que responde antes de aguardar as
+suas escritas — corre num cliente que o pool pode fechar para outro tenant: a
+query falha, ou um cliente que volta a ligar sozinho abre ligações fora de
+`max`. Ou fazes `await` do trabalho antes de responder, ou passas-o para um
+lease próprio: `tenancy.run(tenantId, …)` (faz lease à entrada) ou
+`DB_POOL.use(tenantId, …)`. Melhor ainda, entrega-o a um job de fila.
+:::
 
 Schema-per-tenant é uma base de dados com um schema por tenant — passa o URL base e
 uma factory de cliente, e a Basalt define `?schema=tenant_<id>` por tenant para que o

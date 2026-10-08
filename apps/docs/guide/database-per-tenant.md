@@ -85,14 +85,34 @@ exactly its own duration — a streamed download or an event stream included —
 and returns it when the response has ended (finished, failed, or abandoned by
 the client) or the run's callback settles. The pool only ever closes an
 **idle** client (least-recently-used first), so a client is never disconnected
-under a running query, however long the request takes.
+under a running query, however long the request takes. The order you register
+`tenancyPlugin`, `prismaPlugin` and your own enrichers in does not matter: the
+lease is taken as soon as the tenant is known, so an enricher between tenancy
+and prisma (auth, say) already sees `ctx().db`, and a request holds exactly one
+lease, returned even when a later enricher or guard rejects it.
+
+Request leases need `@basaltkit/http` ≥ 2.8 (any adapter of that release) —
+the pipeline that tells the plugin when a response has ended. On an older
+pipeline, and for a `tenancy:switched` without `via` (`@basaltkit/tenancy` <
+3.2, or your own emit), the plugin does not lease what it could never give
+back: it holds the client for 30 s, as before BK-077, and then returns it on
+its own.
 
 Sizing the pool:
 
-- **`max`** is the number of tenants **in use at the same time** — requests or
-  jobs in flight for distinct tenants — not the number of tenants you have, nor
-  the number seen recently. Each open client holds its own connections, so
-  `max` × the client's connection limit must fit your database.
+- **`max`** is the number of distinct tenants **active within a few seconds**
+  — requests or jobs in flight, plus the ones served inside the grace window
+  — not the number of tenants you have. Each open client holds its own
+  connections, so `max` × the client's connection limit must fit your
+  database.
+- **Over-subscribing churns.** When more distinct tenants than `max` keep
+  arriving in turn, a request no longer waits for a 503: the pool closes the
+  least-recently-used idle client and opens one for the new tenant — on every
+  request, if the traffic cycles through more tenants than `max`. Responses
+  stay 200, but each pays a connect (hundreds of ms with Prisma 7) and the
+  database sees a stream of new connections. The cap on open clients still
+  holds. Monitor client creations (count calls to your `forTenant` factory):
+  a steady rate means `max` is too small.
 - **`idleMs`** is only a grace period: how long a tenant keeps its client after
   its last request, so a burst of requests for the same tenant does not
   reconnect each time. The plugin's default is 1 s. Raising it trades slots for
@@ -121,6 +141,17 @@ await app.container.get(DB_POOL).use(tenantId, async (client) => {
   // never evicted until this callback settles
 })
 ```
+
+::: warning Work that outlives the response
+A request's lease ends with its response, and the client then stays reserved
+only for the `idleMs` grace period (1 s). Anything still using `ctx().db` after
+the reply was sent — a fire-and-forget promise, a `setTimeout`, a handler that
+answers before awaiting its writes — runs on a client the pool may close for
+another tenant: the query fails, or a client that reconnects on its own opens
+connections outside `max`. Either `await` the work before replying, or move it
+into a lease of its own: `tenancy.run(tenantId, …)` (it leases on entry) or
+`DB_POOL.use(tenantId, …)`. Better still, hand it to a queue job.
+:::
 
 Schema-per-tenant is one database with a schema per tenant — pass the base URL
 and a client factory, and Basalt sets `?schema=tenant_<id>` per tenant so Prisma

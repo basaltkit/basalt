@@ -898,6 +898,7 @@ plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
 | `EventValidationError` | `EVENT_INVALID` | O schema do evento rejeitou o payload antes de qualquer listener (incluindo a captura do outbox) correr |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | O `OUTBOX` (ou qualquer token de store) foi resolvido sem o plugin que o regista |
 | `ERR_UNKNOWN_BUILTIN_MODULE` no `import 'node:sqlite'` | — | Um pacote `*-sqlite` em Node 22.x sem `--experimental-sqlite`. Usa Node 24, ou acrescenta a flag; os pacotes declaram `engines.node >= 22.5.0` |
+| `TenantPoolExhaustedError` (503, o corpo diz só "Service unavailable.") | `PRISMA_POOL_EXHAUSTED` | Base de dados por tenant: todos os `max` clientes do pool ficaram em uso durante `acquireTimeoutMs`. As contagens `leased`/`recentlyUsed` ficam no log do servidor, nunca na resposta. Sobe `max` para os tenants distintos activos em poucos segundos — vê [Base de dados por tenant](/pt/guide/database-per-tenant) |
 
 - **"Funcionava em dev e esqueceu tudo depois do deploy"** — um store continua na
   sua predefinição em memória. As predefinições são silenciosas por design; procura
@@ -920,6 +921,15 @@ plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
   durável, não encaminhado por tenant. Para base de dados por tenant tens de o
   encaminhar através do cliente do tenant ativo; vê
   [Base de dados por tenant](/pt/guide/database-per-tenant).
+- **Base de dados por tenant: uma query falha, ou as ligações acumulam-se,
+  depois de a resposta ter sido enviada** — trabalho que sobrevive ao pedido
+  continua a usar `ctx().db`, cujo lease terminou com a resposta. Faz `await`
+  antes de responder, ou corre-o em `tenancy.run()` / `DB_POOL.use()`.
+- **Base de dados por tenant: todos os pedidos estão lentos e a base de dados
+  vê um fluxo de ligações novas** — mais tenants distintos do que `max`
+  revezam-se, por isso o pool fecha e abre um cliente por pedido (já não
+  responde 503). Sobe `max` e vê com que frequência a tua factory `forTenant`
+  corre.
 
 ## O que fazer antes de ir para produção
 

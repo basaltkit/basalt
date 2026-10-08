@@ -339,7 +339,15 @@ const enricher: RequestEnricher = async ({ context }) => {
 }
 ```
 
-O `prismaPlugin` faz exactamente isto em database-per-tenant
+A limpeza tomada **fora** do valor de retorno de um enricher — num listener de
+hook, ou no handler — vai para o mesmo sítio através de
+`ctx().onDispose?.(disposer)`. O `runRoute` define-o só no contexto do pedido
+(um contexto copiado pelo `tenancy.run()` não o herda), e só a partir do
+`@basaltkit/http` 2.8: a sua ausência diz a um plugin que nada vai correr o seu
+disposer, por isso não deve tomar o que não consegue devolver. O
+`prismaPlugin` apoia-se nos dois em database-per-tenant: faz lease no
+`tenancy:switched` e entrega a libertação ao `ctx().onDispose`, por isso a
+ordem em que os plugins são registados nunca importa
 ([dimensionar o pool](/pt/guide/database-per-tenant#o-pool-de-clientes-por-tenant)).
 
 Regras do jogo: os enrichers **constroem** contexto, os guards **decidem** —
