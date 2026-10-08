@@ -2770,6 +2770,18 @@ importers:
 
   packages/webhooks-prisma:
     devDependencies:
+      '@basaltkit/core':
+        specifier: workspace:^
+        version: link:../core
+      '@basaltkit/events':
+        specifier: workspace:^
+        version: link:../events
+      '@basaltkit/prisma':
+        specifier: workspace:^
+        version: link:../prisma
+      '@basaltkit/tenancy':
+        specifier: workspace:^
+        version: link:../tenancy
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
