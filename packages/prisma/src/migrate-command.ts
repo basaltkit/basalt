@@ -1,4 +1,5 @@
 import type { CommandDefinition } from './command.js'
+import { describeDbError } from './describe-db-error.js'
 import { migrateTenants, prismaMigrator, type MigrateFn, type MigrateTarget } from './migrate.js'
 
 export interface TenantMigrateCommandConfig {
@@ -35,6 +36,9 @@ export function tenantMigrateCommand(config: TenantMigrateCommandConfig): Comman
         onResult: (result) => {
           const label = result.schema ? `${result.tenantId} (${result.schema})` : result.tenantId
           io.log(`  ${result.ok ? 'ok  ' : 'FAIL'} ${label}${result.error ? ` — ${result.error}` : ''}`)
+          // The Prisma CLI's error says what failed, not what to do about it.
+          const diagnosis = result.error ? describeDbError(result.error, { url: result.url }) : undefined
+          if (diagnosis) io.log(`         fix: ${diagnosis.fix}`)
         },
       })
 

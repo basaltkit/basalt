@@ -97,7 +97,9 @@ antes de um teste o fazer.
 O histórico dos tenants migra-se schema a schema com
 [`migrateTenants`](/pt/guide/database-per-tenant#migrar-todos-os-tenants) e o
 `prisma.config.ts` dos tenants. O histórico central é `prisma migrate deploy`
-normal.
+normal. O `basalt db:status` reporta os dois planos só em leitura, e as
+[Operações de base de dados](/pt/guide/database-operations) cobrem os erros e os
+grants que as migrações não conseguem manter no sítio.
 
 ## Regra 3 — Resolver pelo host, registar com uma lista reservada
 

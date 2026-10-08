@@ -153,6 +153,7 @@ export default defineConfig({
                 { text: 'Storage', link: '/pt/guide/storage' },
                 { text: 'Caching', link: '/pt/guide/caching' },
                 { text: 'Base de dados por tenant', link: '/pt/guide/database-per-tenant' },
+                { text: 'Operações de base de dados', link: '/pt/guide/database-operations' },
               ],
             },
             {
@@ -286,6 +287,7 @@ export default defineConfig({
             { text: 'Storage', link: '/guide/storage' },
             { text: 'Caching', link: '/guide/caching' },
             { text: 'Database-per-tenant', link: '/guide/database-per-tenant' },
+            { text: 'Database operations', link: '/guide/database-operations' },
           ],
         },
         {

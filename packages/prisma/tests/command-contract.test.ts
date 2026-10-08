@@ -7,6 +7,7 @@ import { createApp } from '@basaltkit/core'
 import { commandsPlugin, memoryIo, runCli, type CommandDefinition as CliCommandDefinition } from '@basaltkit/cli'
 import { tenantMigrateCommand } from '../src/migrate-command.js'
 import { prismaSyncCommand } from '../src/sync-command.js'
+import { dbStatusCommand } from '../src/status-command.js'
 
 describe('command contract (structural parity with @basaltkit/cli)', () => {
   it("prisma's commands are assignable to the CLI's CommandDefinition (compile-time proof)", () => {
@@ -17,8 +18,9 @@ describe('command contract (structural parity with @basaltkit/cli)', () => {
     const commands: CliCommandDefinition[] = [
       tenantMigrateCommand({ tenants: () => [], target: { mode: 'database', urlFor: () => '' } }),
       prismaSyncCommand(),
+      dbStatusCommand(),
     ]
-    expect(commands.map((command) => command.name)).toEqual(['tenant:migrate', 'prisma:sync'])
+    expect(commands.map((command) => command.name)).toEqual(['tenant:migrate', 'prisma:sync', 'db:status'])
   })
 
   it('the real CLI discovers and runs tenant:migrate end-to-end', async () => {

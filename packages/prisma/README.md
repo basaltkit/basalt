@@ -503,7 +503,15 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 
 ### `assertMigrated(client, options?)`
 
-`assertMigrated(client, options?: { tables?: string[] }): Promise<void>` — what `prismaPlugin({ assertMigrated })` runs at boot; usable on its own (a readiness probe, a script). Throws `DatabaseNotMigratedError` when `_prisma_migrations` or a listed table is missing, or the check cannot run (driver errors are included with URL credentials masked by `redactCredentials`).
+`assertMigrated(client, options?: { tables?: string[] }): Promise<void>` — what `prismaPlugin({ assertMigrated })` runs at boot; usable on its own (a readiness probe, a script). Throws `DatabaseNotMigratedError` when `_prisma_migrations` or a listed table is missing, or the check cannot run (driver errors are included with URL credentials masked by `redactCredentials`). `error.details.diagnosis` carries the `describeDbError` diagnosis; a role without privileges on the schema (SQLSTATE `42501`, or a schema hidden from the `search_path` for lack of `USAGE`) is reported as `DB_PERMISSION_DENIED` with the `GRANT` to run, not as "not migrated".
+
+### `describeDbError(error, options?)`
+
+`describeDbError(error: unknown, options?: { url?: string; role?: string }): { code, cause, fix } | undefined` — maps a database failure to what it means and the one-line fix: `DB_PERMISSION_DENIED` (`42501`, also inside `P2010`; `P1010`), `DB_NOT_EMPTY_BASELINE` (`P3005`), `DB_UNREACHABLE` (`P1001`/`P1002`/`P1000`/`P1003`, `ECONNREFUSED`, …) and `DB_NOT_MIGRATED` (`P2021`, `42P01`). Reads Prisma errors, driver errors, Prisma CLI stderr and plain strings; returns `undefined` for anything else; credentials are redacted. `tenant:migrate` prints its fix under a failing tenant. See the [Database operations](https://basaltkit.dev/guide/database-operations) guide.
+
+### `dbStatusCommand(config?)`
+
+Builds the read-only `basalt db:status` command (register it via `commandsPlugin()`): runs `prisma migrate status` for the central plane (`central: { configPath?, schemaPath? } | false`) and for every tenant (`tenants: { list, target, configPath?, schemaPath?, concurrency? }`, the same `target` as `tenantMigrateCommand`), prints one line per plane with the fix for what is wrong, and exits 1 when anything is pending, failed, drifted, unmanaged or unreachable. `--json` prints `{ ok, planes }`. `run` overrides how the Prisma CLI is invoked. Helpers: `parseMigrateStatus(output, exitCode)`, `prismaStatusArgs(target)`.
 
 ### `applyTenantScope(operation, args, tenantId, field)` (Advanced)
 

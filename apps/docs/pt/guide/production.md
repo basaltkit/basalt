@@ -93,6 +93,12 @@ autorização. Cobre exatamente as chaves em `GUARDED_META_KEYS`; um valor
 `false`/`undefined` numa rota é uma desativação explícita e nunca é assinalado. Ver
 [Autorização](/pt/guide/authorization) e [Adaptadores](/pt/guide/adapters).
 
+Com `prismaPlugin({ assertMigrated: true })` o boot recusa também uma base
+inacessível, por migrar, ou que o role da app não pode usar — e diz qual, com a
+correcção (um `GRANT` em falta, um baseline, `migrate deploy`). Os significados,
+um `db:status` só de leitura para a CI e uma receita pós-deploy idempotente para
+grants e extensões estão em [Operações de base de dados](/pt/guide/database-operations).
+
 ## Persistência
 
 O desenvolvimento corre sobre stores em memória, por isso não há nada a instalar.

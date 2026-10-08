@@ -110,6 +110,22 @@ export {
   type CommandIo,
 } from './command.js'
 export {
+  describeDbError,
+  type DbErrorDiagnosis,
+  type DescribeDbErrorOptions,
+} from './describe-db-error.js'
+export {
+  dbStatusCommand,
+  parseMigrateStatus,
+  prismaStatusArgs,
+  npxPrismaRunner,
+  type DbStatusCommandConfig,
+  type MigrationState,
+  type MigrationStatus,
+  type PrismaCliRunner,
+  type PrismaStatusTarget,
+} from './status-command.js'
+export {
   tenantMigrateCommand,
   type TenantMigrateCommandConfig,
 } from './migrate-command.js'
