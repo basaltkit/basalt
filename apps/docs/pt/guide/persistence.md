@@ -274,6 +274,38 @@ tem o SQL). Depois, faz a base de dados impor também o append-only:
 REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
 ```
 
+#### Registar fora de um pedido (jobs, scripts)
+
+Uma entrada recebe o `actorId` e o `tenantId` do contexto ativo. Fora de um
+pedido não há contexto, por isso o `audit.record()` cai na **cadeia de sistema**
+sem ator — a não ser que lhe dês um:
+
+- **Jobs da fila** não precisam de nada: o `@basaltkit/queue` captura o tenant e
+  o utilizador de quem despachou o job e restaura-os à volta do handler, por isso
+  um `record()` dentro do job fica atribuído como no pedido que o despachou.
+- **Scripts e comandos CLI** envolvem o trabalho no contexto em nome do qual agem:
+
+  ```ts
+  import { runWithContext } from '@basaltkit/core'
+
+  await runWithContext({ tenant: { id: 'acme' }, user: { id: 'ops:backfill' } }, () =>
+    audit.record('invoice.backfilled', { count }),
+  )
+  ```
+
+- **Uma única entrada** pode passar um scope explícito como terceiro argumento:
+
+  ```ts
+  await audit.record('report.generated', { rows }, { tenantId: 'acme', actorId: 'job:nightly' })
+  ```
+
+  A entrada entra na cadeia desse tenant (`t:acme`), por isso o
+  `verify({ tenantId: 'acme' })` cobre-a. O scope só pode **restringir**: dentro
+  de um contexto com tenant (ou utilizador), um `scope.tenantId` (ou
+  `scope.actorId`) diferente lança um `TypeError` em vez de escrever na cadeia de
+  outro tenant. Ambos os valores têm de ser strings imprimíveis não vazias com no
+  máximo 256 caracteres. Nunca reencaminhes input do cliente para ele.
+
 ## Tenancy — `@basaltkit/tenancy-sqlite` / `@basaltkit/tenancy-prisma`
 
 O registo de tenants é a fundação de uma app multi-tenant, mas `@basaltkit/tenancy`
