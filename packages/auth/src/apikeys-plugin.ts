@@ -22,7 +22,9 @@ declare module '@basaltkit/core' {
      * (`mk_live_` plus six characters, what listings show; never the secret)
      * and `ip` the client address, so an app can throttle or alert per caller.
      * This event is excluded from `auditPlugin`'s default hook capture: any
-     * unauthenticated client can trigger it on every request.
+     * unauthenticated client can trigger it on every request. Refusals of a
+     * key that DID verify are also emitted as `auth:apikey_refused`, which is
+     * audited by default.
      */
     'auth:apikey_rejected': {
       id?: string
@@ -30,6 +32,19 @@ declare module '@basaltkit/core' {
       tenantId?: string
       prefix?: string
       ip?: string
+    }
+    /**
+     * A key that verified was refused: used outside its tenant
+     * (`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond
+     * its scopes (`scope`). Emitted right after the matching
+     * `auth:apikey_rejected`. Unlike an unknown key, it is attributable (`id`)
+     * and only a key holder can cause it, so `auditPlugin` records it by
+     * default (`auth:**`): a cross-tenant probe with a real key leaves a trail.
+     */
+    'auth:apikey_refused': {
+      id: string
+      reason: 'tenant_mismatch' | 'not_allowed' | 'scope'
+      tenantId?: string
     }
   }
 }
@@ -215,10 +230,17 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
       const guard: RouteGuard = async ({ route, context }) => {
         const key = context.apiKey
         const meta = route.meta as Record<string, unknown> | undefined
+        // A verified key refused: the catch-all event, then the attributable
+        // one the audit records by default.
+        const refuse = async (id: string, reason: 'tenant_mismatch' | 'not_allowed' | 'scope'): Promise<void> => {
+          const tenantId = tenantOf(context)
+          const payload = { id, reason, ...(tenantId !== undefined ? { tenantId } : {}) }
+          await hooks.emit('auth:apikey_rejected', payload)
+          await hooks.emit('auth:apikey_refused', payload)
+        }
         if (key) {
           const reject = async (reason: 'tenant_mismatch' | 'not_allowed' | 'scope', error: Error) => {
-            const tenantId = tenantOf(context)
-            await hooks.emit('auth:apikey_rejected', { id: key.id, reason, ...(tenantId !== undefined ? { tenantId } : {}) })
+            await refuse(key.id, reason)
             throw error
           }
           const tenantId = tenantOf(context)
@@ -249,7 +271,7 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
         const granted = key?.scopes ?? []
         for (const scope of required as string[]) {
           if (!scopesSatisfy(granted, [scope])) {
-            if (key) await hooks.emit('auth:apikey_rejected', { id: key.id, reason: 'scope' })
+            if (key) await refuse(key.id, 'scope')
             throw new ScopeRequiredError(scope)
           }
         }

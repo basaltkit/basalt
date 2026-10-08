@@ -272,6 +272,13 @@ fires for every request that presents a dead API key, before anyone is
 authenticated, so recording it let any anonymous client append to a tenant's
 (serialized, hash-chained) trail as fast as it could send requests.
 
+Refusals of a key that **did** verify — used in another tenant
+(`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond its
+scopes (`scope`) — are still audited by default: `apiKeysPlugin` emits them a
+second time as `auth:apikey_refused` (`{ id, reason, tenantId? }`), which `auth:**`
+records. Only a key holder can cause one, and the entry names the key, so a
+cross-tenant probe with a real key always leaves a trail.
+
 `hooks` takes a list (the include set) or `{ include, exclude }`. A hook is
 recorded when it matches an `include` pattern and no `exclude` pattern; without
 `exclude`, the default excludes (`DEFAULT_AUDIT_HOOK_EXCLUDES`) apply. A hook
@@ -279,13 +286,48 @@ named **exactly** in `include` is always recorded — that is how you opt one ba
 in:
 
 ```ts
-auditPlugin({ hooks: ['auth:**', 'auth:apikey_rejected'] })               // record rejections too
+auditPlugin({ hooks: ['auth:**', 'auth:apikey_rejected'] })               // record every rejection too
 auditPlugin({ hooks: { include: ['auth:**', 'billing:**'], exclude: ['auth:login'] } })
 auditPlugin({ hooks: { include: ['auth:**'], exclude: [] } })             // no default excludes
 ```
 
-If you record `auth:apikey_rejected`, throttle it yourself (its payload carries
-the key's display `prefix` and the client `ip` for that).
+Opting `auth:apikey_rejected` back in records a valid-key refusal twice (under
+both names) and every unknown key once. Rather than record that noise, watch
+it: the payload of an invalid key carries the display `prefix` and the client
+`ip`, enough for an aggregated signal like this one:
+
+```ts
+import { definePlugin } from '@basaltkit/core'
+import { AUDIT } from '@basaltkit/audit'
+
+const WINDOW_MS = 60_000
+const THRESHOLD = 20
+
+// One audit entry per caller per minute once it crosses the threshold —
+// never one per request. In-process: behind several instances, count in a
+// shared store (Redis) instead.
+export const apiKeyBurstAlert = definePlugin({
+  name: 'app:apikey-burst',
+  register({ hooks, container }) {
+    let windowStart = Date.now()
+    let counts = new Map<string, number>()
+    hooks.on('auth:apikey_rejected', async ({ reason, ip, prefix }) => {
+      if (reason !== 'invalid') return // valid-key refusals: auth:apikey_refused, already audited
+      const now = Date.now()
+      if (now - windowStart >= WINDOW_MS) {
+        windowStart = now
+        counts = new Map()
+      }
+      const caller = ip ?? prefix ?? 'unknown'
+      const count = (counts.get(caller) ?? 0) + 1
+      counts.set(caller, count)
+      if (count === THRESHOLD) {
+        await container.get(AUDIT).record('security:apikey_invalid_burst', { ip, prefix, count, windowMs: WINDOW_MS })
+      }
+    })
+  },
+})
+```
 
 ### Verifiable audit trail
 

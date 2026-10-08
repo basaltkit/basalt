@@ -2181,9 +2181,9 @@ export interface AuditHookSelection {
  * does not verify, before anyone is authenticated. Captured by `auth:**`, it
  * let any anonymous client append to the audit trail (and to its serialized
  * per-tenant hash chain) as fast as it could send requests. Refusals of a key
- * that DID verify (tenant mismatch, scope) are rare and attributable, but they
- * share the event; an app that wants them records the hook explicitly, ideally
- * behind its own throttle.
+ * that DID verify (tenant mismatch, session-only route, scope) are rare and
+ * attributable: `@basaltkit/auth` also emits them as `auth:apikey_refused`,
+ * which is not excluded, so `auth:**` keeps recording them.
  */
 export const DEFAULT_AUDIT_HOOK_EXCLUDES: readonly string[] = ['auth:apikey_rejected']
 

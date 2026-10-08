@@ -151,7 +151,7 @@ const users: UserSource = {
 |---|---|---|---|
 | `findByEmail(email)` | Yes | `AuthUser \| null` | Sign-in and registration lookups. Emails are case-insensitive identities. |
 | `findById(id)` | Yes | `AuthUser \| null` | Resolving the user behind a token, session or API key. |
-| `create({ email, passwordHash, emailVerified? })` | Yes | `AuthUser` | Registration; the hash arrives already computed. `emailVerified: true` comes only from trusted flows (`register(…, { emailVerified: true })`, a provider-verified social login) and must be persisted with the row. A source that drops it is patched through `update()`; without `update()` such a call throws `AUTH_UPDATE_UNSUPPORTED`. |
+| `create({ email, passwordHash, emailVerified? })` | Yes | `AuthUser` | Registration; the hash arrives already computed. `emailVerified: true` comes only from trusted flows (`register(…, { emailVerified: true })`, a provider-verified social login) and must be persisted with the row. A source that drops it is patched through `update()`; without `update()`, `register(…, { emailVerified: true })` throws `AUTH_UPDATE_UNSUPPORTED` and a social login keeps the account unverified (still linked and signed in). |
 | `update(id, patch)` | No | `AuthUser \| null` | Email verification and password reset need it (`AUTH_UPDATE_UNSUPPORTED` without it). |
 | `findByIds(ids)` | No | `PublicUser[]` | **Bulk contact lookup** — see below. |
 
@@ -546,7 +546,10 @@ verify with `401 AUTH_APIKEY_INVALID` and `WWW-Authenticate: Bearer
 error="invalid_token"` (default: the request continues as anonymous), and
 `touchEveryMs` (default 60 s; `0` = every request) throttles `lastUsedAt` writes.
 `auth:apikey_rejected` carries the display `prefix` and `ip` of an invalid key,
-never the secret; `@basaltkit/audit` does not record it by default.
+never the secret; `@basaltkit/audit` does not record it by default. A refusal of
+a key that verified (`tenant_mismatch`, `not_allowed`, `scope`) is also emitted
+as `auth:apikey_refused` (`{ id, reason, tenantId? }`), which the audit records
+by default.
 
 ### Brute-force lockout (LoginThrottle)
 
