@@ -999,6 +999,36 @@ A bearer prefixed with `mk_` is ignored by `authPlugin` and handled by
 `apiKeysPlugin`. If keys "don't work", you're likely missing `apiKeysPlugin()`.
 :::
 
+### Keys for machine clients {#apikeys-machine-clients}
+
+A presented key that does not verify (unknown, revoked, expired, malformed) is
+ignored by default: the request continues as anonymous and the route's own
+guards answer — `401 AUTH_REQUIRED` on a `meta.auth` route, `403
+AUTH_SCOPE_REQUIRED` on a `meta.scopes` one, or the public response. A machine
+client then cannot tell "my key is dead" from "I lack a scope". Opt in to a
+clear refusal:
+
+```ts
+apiKeysPlugin({ users, rejectInvalid: true })
+// dead key → 401 { error: { code: 'AUTH_APIKEY_INVALID', … } }
+//            WWW-Authenticate: Bearer error="invalid_token"
+```
+
+The refusal happens before any guard, identically on fastify, express and hono.
+A request with no key at all is unaffected.
+
+`verify()` records `lastUsedAt`, but at most once per `touchEveryMs` per key
+(default 60 s), so a client polling every second costs one store write a minute
+instead of one per request. `lastUsedAt` is accurate to within that window;
+`touchEveryMs: 0` writes on every request.
+
+Every refusal emits `auth:apikey_rejected`. For an invalid key the payload
+carries the presented key's display `prefix` (`mk_live_` plus six characters,
+what listings show — never the secret) and the client `ip`, so you can alert or
+throttle per caller. Because any anonymous client can trigger it, this hook is
+**not** recorded by `auditPlugin`'s defaults — see
+[which hooks are audited](/guide/persistence#which-hooks-are-audited).
+
 ## Brute-force lockout
 
 Active by default: 5 failed attempts per email within 15 minutes → `AccountLockedError`
@@ -1106,6 +1136,8 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | `users` | `UserSource` | — | When set, a key carrying a `userId` also populates `ctx().user`, so scope-guarded routes can read the acting user |
 | `allowTenantlessKeys` | `boolean` | `false` | Let keys issued without a tenant act on tenant-scoped requests (trusted platform keys only) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Let a key without `*` reach `meta.auth`/`can`/`teamRole`/`audience` routes that declare no `meta.scopes` |
+| `rejectInvalid` | `boolean` | `false` | A presented key that does not verify → `401 AUTH_APIKEY_INVALID` + `WWW-Authenticate: Bearer error="invalid_token"`, instead of continuing as anonymous |
+| `touchEveryMs` | `number` | `60_000` | Minimum interval between two `lastUsedAt` writes for one key; `0` writes on every request |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 
 `webauthnPlugin(options)` and its `config`:
@@ -1225,7 +1257,7 @@ users in.
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Email the token**; the second confirms the change |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Security notification |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Audit trail |
-| `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; never the key |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; `prefix` is the display prefix of an invalid key, never the key. Not audited by default |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
 | `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
 | `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials and account links were revoked |

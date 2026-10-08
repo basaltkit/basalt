@@ -525,6 +525,13 @@ declare `meta.scopes`; opt out with `allowNarrowKeysOnUnscopedRoutes: true`) and
 **session-only routes** (`meta.apiKey: false` refuses every key with
 `403 AUTH_APIKEY_NOT_ALLOWED` — `apiKeyRoutes()` and `mfaRoutes()` declare it).
 
+For machine clients: `rejectInvalid: true` answers a presented key that does not
+verify with `401 AUTH_APIKEY_INVALID` and `WWW-Authenticate: Bearer
+error="invalid_token"` (default: the request continues as anonymous), and
+`touchEveryMs` (default 60 s; `0` = every request) throttles `lastUsedAt` writes.
+`auth:apikey_rejected` carries the display `prefix` and `ip` of an invalid key,
+never the secret; `@basaltkit/audit` does not record it by default.
+
 ### Brute-force lockout (LoginThrottle)
 
 Active by default: 5 failed attempts per email within a 15-minute window → `AUTH_LOCKED` error (HTTP 429). A successful login clears the counter.

@@ -25,6 +25,19 @@ export class ApiKeyExpirationError extends BasaltError {
 
 /** The prefix on every key. `mk` = Basalt key, `live` = environment. */
 const KEY_PREFIX = 'mk_live_'
+/** Secret characters kept in the display prefix (`ApiKeyRecord.prefix`). */
+const DISPLAY_SECRET_CHARS = 6
+
+/**
+ * The display prefix of a presented key (`mk_live_` plus the first six secret
+ * characters), the same value `ApiKeyRecord.prefix` stores and listings show.
+ * Undefined for anything that is not shaped like a Basalt key, so an unrelated
+ * secret sent by mistake is never echoed into a hook payload or a log.
+ */
+export const apiKeyDisplayPrefix = (presented: string): string | undefined =>
+  presented.startsWith(KEY_PREFIX) && presented.length >= KEY_PREFIX.length + DISPLAY_SECRET_CHARS
+    ? presented.slice(0, KEY_PREFIX.length + DISPLAY_SECRET_CHARS)
+    : undefined
 
 /** SHA-256 is safe here: API keys are high-entropy, so no slow hash is needed. */
 const hashKey = (key: string): string => createHash('sha256').update(key).digest('hex')
@@ -51,7 +64,25 @@ export interface ApiKeysOptions {
   hooks?: HookBus
   /** Injectable clock — tests and deterministic runs override it. */
   now?: () => number
+  /**
+   * Minimum interval, in milliseconds, between two `lastUsedAt` writes for the
+   * same key. A machine client calling once a second would otherwise cost one
+   * store write per request. `lastUsedAt` is therefore accurate to within this
+   * window. `0` writes on every verification (the pre-4.2 behaviour).
+   * Default 60_000.
+   */
+  touchEveryMs?: number
 }
+
+export class ApiKeyOptionsError extends BasaltError {
+  readonly status = 500
+  constructor(message: string) {
+    super('AUTH_APIKEY_OPTIONS_INVALID', message)
+  }
+}
+
+/** Default `touchEveryMs`: one `lastUsedAt` write per key per minute. */
+export const DEFAULT_API_KEY_TOUCH_EVERY_MS = 60_000
 
 /**
  * Issues and verifies API keys. The plaintext key is returned exactly once by
@@ -62,11 +93,17 @@ export class ApiKeys {
   private readonly store: ApiKeyStore
   private readonly hooks: HookBus | undefined
   private readonly now: () => number
+  private readonly touchEveryMs: number
 
   constructor(options: ApiKeysOptions = {}) {
     this.store = options.store ?? new MemoryApiKeyStore()
     this.hooks = options.hooks
     this.now = options.now ?? Date.now
+    const touchEveryMs = options.touchEveryMs ?? DEFAULT_API_KEY_TOUCH_EVERY_MS
+    if (!Number.isFinite(touchEveryMs) || touchEveryMs < 0) {
+      throw new ApiKeyOptionsError(`apiKeys: touchEveryMs must be a finite number >= 0 (got ${String(touchEveryMs)}).`)
+    }
+    this.touchEveryMs = touchEveryMs
   }
 
   /** Mints a key. Returns the record plus the plaintext `key` (shown once). */
@@ -79,7 +116,7 @@ export class ApiKeys {
     const record: ApiKeyRecord = {
       id: randomUUID(),
       name: input.name,
-      prefix: `${KEY_PREFIX}${secret.slice(0, 6)}`,
+      prefix: `${KEY_PREFIX}${secret.slice(0, DISPLAY_SECRET_CHARS)}`,
       hash: hashKey(key),
       scopes: input.scopes ?? ['*'],
       createdAt: this.now(),
@@ -98,13 +135,17 @@ export class ApiKeys {
 
   /**
    * Resolves a presented key to its record, or null if it's malformed,
-   * unknown, or revoked. Updates `lastUsedAt` on a hit.
+   * unknown, or revoked. Updates `lastUsedAt` on a hit, at most once per
+   * `touchEveryMs` per key.
    */
   async verify(presented: string): Promise<ApiKeyRecord | null> {
     if (!presented.startsWith(KEY_PREFIX)) return null
     const record = await this.store.findByHash(hashKey(presented))
-    if (!record || record.revokedAt !== undefined || (record.expiresAt !== undefined && record.expiresAt <= this.now())) return null
-    await this.store.touch(record.id, this.now())
+    const now = this.now()
+    if (!record || record.revokedAt !== undefined || (record.expiresAt !== undefined && record.expiresAt <= now)) return null
+    if (record.lastUsedAt === undefined || now - record.lastUsedAt >= this.touchEveryMs) {
+      await this.store.touch(record.id, now)
+    }
     return record
   }
 
