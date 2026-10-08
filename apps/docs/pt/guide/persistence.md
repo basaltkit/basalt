@@ -408,7 +408,10 @@ const { changed, residual } = await audit.redact(entryId, {
   **atestação `audit:redacted`**. Esta liga o `id`, o `seq` e o `hash` da entrada,
   os campos apagados, um digest do novo estado e o `reasonRef`, e nunca os dados
   apagados. O `verify` verifica a entrada apagada através dela, e qualquer
-  discrepância falha como `redaction-mismatch`. O resultado conta as entradas
+  discrepância falha como `redaction-mismatch`. Também verifica cada atestação
+  no sentido inverso: a sua entrada tem de continuar apagada nesse estado ou num
+  posterior. Repor uma linha apagada a partir de um backup, ou voltar a uma
+  redação mais antiga, também falha. O resultado conta as entradas
   apagadas em `redacted`.
 - O **âmbito** segue o `trail()`. Dentro de um contexto de tenant só as entradas
   desse tenant são alcançáveis, e qualquer outro id dá `AuditEntryNotFoundError`

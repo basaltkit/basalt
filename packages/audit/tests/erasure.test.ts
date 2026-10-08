@@ -441,6 +441,42 @@ describe('verify — tamper matrix on a redacted entry', () => {
     expect(await audit.verify({ from: 2 })).toMatchObject({ ok: false, reason: 'sequence-gap', firstBrokenAt: 3 })
   })
 
+  it('restoring the whole original row (content + marker dropped, e.g. from a backup) → redaction-mismatch on the attestation', async () => {
+    const { store, audit, entry, result } = await setup()
+    // The original row still matches its original hash: only the attestation
+    // that vouches for an erasure of it can reveal the un-erasure.
+    tamper(store, entry.id, () => entry)
+    expect(await audit.verify()).toMatchObject({ ok: false, reason: 'redaction-mismatch', entryId: result.attestation!.id })
+  })
+
+  it('rolling a re-redacted row back to an older attested state → redaction-mismatch', async () => {
+    const { store, audit, entry, result: first } = await setup()
+    const older = rowsOf(store)[rowIndex(store, entry.id)]!
+    await audit.redact(entry.id, { payload: ['customer.name'] })
+    expect(await audit.verify()).toMatchObject({ ok: true, redacted: 1 })
+    // Restore the row as it was after the FIRST redaction (name back, marker on the first attestation).
+    tamper(store, entry.id, () => older)
+    expect(older.redaction?.attestationId).toBe(first.attestation!.id)
+    expect(await audit.verify()).toMatchObject({ ok: false, reason: 'redaction-mismatch' })
+  })
+
+  it('an attestation whose entry is gone, or whose newer marker is not a later attestation → redaction-mismatch', async () => {
+    const { store, audit, entry, result } = await setup()
+    const seq = result.attestation!.seq!
+    const saved = rowsOf(store)[rowIndex(store, entry.id)]!
+    rowsOf(store).splice(rowIndex(store, entry.id), 1)
+    expect(await audit.verify({ from: seq })).toMatchObject({
+      ok: false,
+      reason: 'redaction-mismatch',
+      entryId: result.attestation!.id,
+      detail: 'the entry this attestation vouches for is missing',
+    })
+    rowsOf(store).unshift(saved)
+    const next = rowsOf(store).find((e) => e.event === 'next')!
+    tamper(store, entry.id, (e) => ({ ...e, redaction: { ...e.redaction!, attestationId: next.id } }))
+    expect(await audit.verify({ from: seq })).toMatchObject({ ok: false, reason: 'redaction-mismatch', entryId: result.attestation!.id })
+  })
+
   it('an attestation of another tenant, or not after the entry, is refused', async () => {
     const { store, audit, entry, result } = await setup()
     tamper(store, result.attestation!.id, (a) => ({ ...a, tenantId: 'acme' }))

@@ -283,7 +283,16 @@ otherwise `'redaction-mismatch'`:
   attestation is hash-checked when it carries a hash).
 
 On success the entry counts in `checked` and `redacted`, and its stored hash
-continues the links. An attestation outside a `from`/`to` window is hash-checked
+continues the links.
+
+The walk also checks each `audit:redacted` attestation it reaches (source
+`manual`, hash ok) the other way, otherwise `'redaction-mismatch'` on the
+attestation: `store.get(att.payload.entryId)` must exist and carry a marker
+whose `attestationId` is `att.id`, or names a later (`seq` greater) attestation
+of the same entry and tenant. Without it, a row restored to its original
+content and stripped of its marker (from a backup) matches its original hash
+again and verifies, and a re-redacted row rolled back to an older attested
+state verifies through the older attestation. An attestation outside a `from`/`to` window is hash-checked
 on its own; inside the window the walk also link-checks it. Readers
 (`describeResult`, the CLI) append `, N redacted`.
 
