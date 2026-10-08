@@ -38,6 +38,8 @@ export interface ToolCallContext {
  * `/mcp` (the route's Origin/Content-Type checks keep it CSRF-safe). Everything
  * else is dropped — `x-request-id`/`x-correlation-id` (the tool mints its own),
  * conditional headers (`if-none-match` would turn a tool result into a 304),
+ * the idempotency key (never forwarded, even via `forwardHeaders`: a replay
+ * would bypass the tool result's error redaction),
  * `content-length`/`content-type` (describe the JSON-RPC envelope, not the
  * tool's input), hop-by-hop and forwarding headers (the client ip travels as
  * `ip`). Extend it with `mcpPlugin({ forwardHeaders })`.
@@ -64,15 +66,36 @@ export function toolSignal(request: HttpRequest): AbortSignal | undefined {
   return signals.get(request)
 }
 
+/**
+ * The idempotency key header(s) of `container`: `idempotency-key`, plus the
+ * one `idempotencyPlugin({ header })` configured, if it differs. Never
+ * forwarded into a tool call, even when listed in `forwardHeaders`: the key
+ * identifies the JSON-RPC envelope, not one tool call, and a replay hands back
+ * the recorded response verbatim — an error body with its unredacted
+ * `details`, bypassing the tool result's redaction.
+ */
+function idempotencyHeaders(container: Container): ReadonlySet<string> {
+  const names = new Set(['idempotency-key'])
+  try {
+    const stage = ensureMetadata(container).get<{ describe?: () => { header?: string } }>('http:idempotency')[0]
+    const header = stage?.describe?.().header
+    if (header) names.add(header.toLowerCase())
+  } catch {
+    /* no stage, or an unexpected shape: the default name is still dropped */
+  }
+  return names
+}
+
 function filterHeaders(
   headers: Record<string, string | string[] | undefined> | undefined,
   allow: ReadonlySet<string>,
+  deny: ReadonlySet<string>,
 ): Record<string, string | string[] | undefined> {
   const out: Record<string, string | string[] | undefined> = {}
   if (!headers) return out
   for (const [name, value] of Object.entries(headers)) {
     const key = name.toLowerCase()
-    if (value !== undefined && allow.has(key)) out[key] = value
+    if (value !== undefined && allow.has(key) && !deny.has(key)) out[key] = value
   }
   return out
 }
@@ -327,7 +350,7 @@ function makeInvoke(
         method: route.method,
         url,
         routePattern: route.url,
-        headers: filterHeaders(callCtx?.headers, allow),
+        headers: filterHeaders(callCtx?.headers, allow, idempotencyHeaders(container)),
         params,
         query,
         body,
