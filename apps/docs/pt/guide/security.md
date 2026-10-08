@@ -319,10 +319,11 @@ comporta-se da mesma forma em **Fastify, Express e Hono**:
 ```ts
 import { idempotencyPlugin } from '@basaltkit/http' // também reexportado por @basaltkit/fastify
 
-idempotencyPlugin({
-  fingerprint: 'body',     // um corpo diferente sob a mesma chave → 422
-  replayAfterGuards: true, // um caller revogado recebe 401/403, não o sucesso em cache
-}) // protege POST por omissão
+// Protege POST por omissão. Cada chave fica associada ao seu pedido (params,
+// query e corpo: um diferente → 422), e os replays só acontecem depois dos
+// guards da rota e da validação (um caller revogado recebe 401/403, não o
+// sucesso em cache).
+idempotencyPlugin()
 ```
 
 - Repetir com a mesma chave → a resposta em cache, com `Idempotent-Replayed: true`.
@@ -337,8 +338,11 @@ idempotencyPlugin({
   headers em `credentialHeaders` (por omissão `authorization`, `x-session-id`,
   `cookie`, `x-api-key`) e o tenant é `x-tenant-id` + `host`, por isso a resposta
   em cache de um utilizador nunca pode ser replicada a outro (sem fuga entre
-  utilizadores/tenants), e a mesma chave em dois endpoints não pode colidir. Se
-  autenticas com outro header, adiciona-o a `credentialHeaders`.
+  utilizadores/tenants). O escopo usa o método e o *padrão* da rota
+  (`/accounts/:id/charge`), por isso a mesma chave em duas rotas diferentes
+  nunca colide; dentro de um padrão, o `fingerprint` por omissão associa os
+  params, a query e o corpo concretos (abaixo). Se autenticas com outro header,
+  adiciona-o a `credentialHeaders`.
 - Pedidos **sem** nenhum header de credencial não são colocados em cache nem
   replicados por omissão (senão um estranho que adivinhasse a chave receberia a
   resposta). Ativa com `allowAnonymous: true` apenas em endpoints públicos sem
@@ -350,32 +354,57 @@ idempotencyPlugin({
 - Cobre as rotas que o Basalt serve (definições `route()`). Um handler que
   registes à mão na framework por baixo não fica coberto.
 
-**Associa a chave ao pedido — `fingerprint`.** Sem ele, um cliente que reutiliza
+**A chave fica associada ao pedido — `fingerprint`.** Um cliente que reutiliza
 uma chave para um pedido *diferente* (um bug, ou um retry depois de o utilizador
-editar o formulário) recebe em silêncio o resultado do primeiro pedido.
-`fingerprint: 'body'` guarda um SHA-256 do corpo com o registo — JSON canónico
-com chaves ordenadas para um corpo com parse, os bytes exatos para uma rota
-[`rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook) — e
-responde a uma diferença com `422 IDEMPOTENCY_KEY_REUSED`, também enquanto o
-primeiro pedido ainda está a correr. As rotas `upload()` não levam fingerprint
-com `'body'`; passa uma função (`({ route, request }) => string | undefined`)
-para as cobrir, ou para qualquer outro critério teu.
+editar o formulário) receberia em silêncio o resultado do primeiro pedido. O
+fingerprint é um SHA-256 guardado com o registo; uma repetição cujo fingerprint
+difere é recusada com `422 IDEMPOTENCY_KEY_REUSED`, também enquanto o primeiro
+pedido ainda está a correr. Os modos:
 
-**Onde corre a verificação — `replayAfterGuards`.** Por omissão a verificação
-corre depois dos enrichers e **antes** dos guards da rota: um caller cujo token
-foi revogado desde o primeiro pedido continua a receber o sucesso em cache,
-desde que apresente o mesmo header de credencial. Com `replayAfterGuards: true`
-corre depois dos guards e da validação do pedido, mesmo antes do handler — o
-caller revogado recebe o `401`/`403` do guard, e um pedido que falha a validação
-nunca reserva a chave. Uma rota `rawBody()` com fingerprint `'body'` é sempre
-verificada depois dos guards, porque os seus bytes nunca são lidos antes de
+- `'request'` (por omissão) — os params da rota, a query e o corpo: JSON
+  canónico com chaves ordenadas para um corpo com parse, os bytes exatos para
+  uma rota [`rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook).
+  A mesma chave em `/accounts/1/charge` e depois em `/accounts/2/charge` dá
+  `422`, mesmo com um corpo idêntico. As rotas `upload()` associam só params e
+  query: o stream pertence ao handler e não é lido.
+- `'body'` — só o corpo (JSON canónico, ou os bytes em bruto); params e query
+  não são associados, e as rotas `upload()` não levam fingerprint.
+- uma função `({ route, request }) => unknown` — o teu próprio fingerprint. Uma
+  string é hasheada tal como está; qualquer outro valor (um objeto, um array) é
+  canonicalizado primeiro, por isso a ordem das chaves nunca conta. Devolve
+  `undefined` para saltar um pedido.
+- `false` — as chaves não ficam associadas a um pedido.
+
+Uma função é a forma de retirar campos voláteis que um cliente muda em cada
+retry:
+
+```ts
+idempotencyPlugin({
+  fingerprint: ({ request }) => {
+    const { sentAt, ...rest } = (request.body ?? {}) as Record<string, unknown>
+    return { params: request.params, body: rest } // canonicalizado: a ordem das chaves é irrelevante
+  },
+})
+```
+
+**Onde corre a verificação — `replayAfterGuards`.** Por omissão (`true`) a
+verificação corre depois dos guards da rota e da validação do pedido, mesmo
+antes do handler: um caller cujo token foi revogado desde o primeiro pedido
+recebe o `401`/`403` do guard em vez do sucesso em cache, os guards correm em
+cada replay, e um pedido que falha a validação nunca reserva a chave. `false`
+corre-a depois dos enrichers e **antes** dos guards: um caller revogado que
+apresente o mesmo header de credencial continua então a receber o sucesso em
+cache. Mesmo assim, uma rota `rawBody()` com fingerprint `'request'` ou `'body'`
+é verificada depois dos guards, porque os seus bytes nunca são lidos antes de
 eles passarem.
 
-As duas opções estão desligadas por omissão para que as apps existentes mantenham
-o comportamento; uma futura major vai ligá-las. Um `IdempotencyStore` próprio
-continua a funcionar sem mudanças — para responder `422` em vez de `409` a uma
-repetição concorrente pode também guardar o `fingerprint` passado a
-`setPending(key, { fingerprint })` e devolver `{ pending: true, fingerprint }` no
+Para manter o comportamento do `@basaltkit/http` 2.x, passa
+`idempotencyPlugin({ fingerprint: false, replayAfterGuards: false })` — vê
+[Atualizar: idempotência estrita por omissão](/pt/guide/whats-new#idempotency-strict-by-default).
+Um `IdempotencyStore` próprio tem de persistir `record.fingerprint` para que um
+registo concluído seja recusado com `422`; para responder `422` em vez de `409`
+a uma repetição concorrente guarda também o `fingerprint` passado a
+`setPending(key, { fingerprint })` e devolve `{ pending: true, fingerprint }` no
 `get()`, como fazem os dois stores incluídos.
 
 ## Revogar access tokens

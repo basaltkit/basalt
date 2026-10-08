@@ -13,7 +13,7 @@ that carries the full option table; nothing here restates one.
       placeholders. See [Security](/guide/security#fail-closed-secrets-secret).
 - [ ] **Edge is protected** — `securityPlugin({ rateLimit, cors, headers })`.
 - [ ] **Logins are throttled** — on by default in `@basaltkit/auth`.
-- [ ] **Mutations are idempotent** — `idempotencyPlugin()` for `POST`.
+- [ ] **Mutations are idempotent** — `idempotencyPlugin()` for `POST` (binds keys to the request and replays after guards by default).
 - [ ] **The app boots on a cold start with production config** — the boot-time
       guards below only fire when you actually call `boot()`.
 - [ ] **Health probes wired** — `healthPlugin({ checks })` for `/livez` + `/readyz`.
