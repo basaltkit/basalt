@@ -439,7 +439,7 @@ patternMatches('auth:**', 'billing:paid')    // false
 ## Common errors and solutions (FAQ)
 
 **Entries come back with empty `actorId`/`tenantId`.**
-There was no active context at record time. Make sure the code runs inside `runWithContext({ user, tenant }, …)` — in HTTP, this is established by the middleware.
+There was no active context at record time. Make sure the code runs inside `runWithContext({ user, tenant }, …)` — in HTTP, this is established by the middleware. Outside a request (a script, a CLI command), you can instead pass `audit.record(event, payload, { tenantId, actorId })`; see "Manual records".
 
 **Domain events aren't being recorded.**
 Either `eventsPlugin()` isn't registered (`auditPlugin` only subscribes to the bus if `container.has(EVENTS)`), or you passed `events: []`, or the patterns don't match the event names.
