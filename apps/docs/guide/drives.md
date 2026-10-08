@@ -370,6 +370,44 @@ disconnect carries on.
 await drives.disconnect(connection.id, { force: true })
 ```
 
+## Connection health
+
+Every connection view carries three health fields, all epoch milliseconds like
+`lastSyncedAt`:
+
+| Field | Stamped by |
+| --- | --- |
+| `lastSucceededAt` | a sync that persisted a page, and a successful `drives.check()` |
+| `lastFailedAt` | a failed sync, a failed `drives.check()`, and the refresh that found the grant dead |
+| `lastErrorCode` | the error **code** of that failure (`DRIVE_CREDENTIALS_INVALID`, `DRIVE_RATE_LIMITED`, …) — never a message |
+
+They are deliberately **not** stamped on an ordinary successful
+`listItems()`/`download()`: health tracking adds no write, and no revision bump
+that could race a token refresh, to the hot path. When you need a fresh answer,
+probe:
+
+```ts
+const { ok, code } = await drives.check(connection.id)
+// lists one item at the root; never throws for a provider failure
+```
+
+A settings page can derive a status from the view without any extra call:
+
+```ts
+function health(c: DriveConnectionView, now = Date.now()): 'ok' | 'stale' | 'reconnect' {
+  if (c.status === 'invalid') return 'reconnect'
+  const success = c.lastSucceededAt ?? 0
+  if ((c.lastFailedAt ?? 0) > success) return c.lastErrorCode === 'DRIVE_CREDENTIALS_INVALID' ? 'reconnect' : 'stale'
+  return now - success > 24 * 60 * 60_000 ? 'stale' : 'ok'
+}
+```
+
+There is **no credential-expiry countdown**, on purpose. Access tokens are
+refreshed for you and their expiry says nothing about the connection; refresh
+tokens mostly have no published lifetime (Google revokes on password change or
+inactivity, Microsoft's slide on use, Dropbox's do not expire). A date we
+cannot know would only teach users to distrust the one they can.
+
 ## Connecting Dropbox
 
 `@basaltkit/drives-dropbox` is the first real adapter, and the reference for
@@ -1004,7 +1042,9 @@ export class PrismaDriveConnectionStore implements DriveConnectionStore {
 `updateMany` with the revision in the `where` clause is what makes the write a
 single atomic compare-and-set; a read-then-`update` pair is not. Store
 `scopes`, `account` and `watch` as JSON columns and the `secret` as text — it is
-already sealed.
+already sealed. The health fields (`lastSucceededAt`, `lastFailedAt`,
+`lastErrorCode`) are nullable columns that must round-trip; the contract suite
+checks them.
 
 Then check the implementation against the same conformance suite the in-memory
 stores pass. It ships on the test-only `@basaltkit/drives/testing` subpath and

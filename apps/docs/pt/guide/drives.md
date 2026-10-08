@@ -384,6 +384,46 @@ vai para o `onHookError` (uma opção do `drivesPlugin`/`Drives`;
 await drives.disconnect(connection.id, { force: true })
 ```
 
+## Saúde da ligação
+
+Cada vista de ligação traz três campos de saúde, todos em milissegundos epoch
+como o `lastSyncedAt`:
+
+| Campo | Marcado por |
+| --- | --- |
+| `lastSucceededAt` | uma sincronização que persistiu uma página, e um `drives.check()` com sucesso |
+| `lastFailedAt` | uma sincronização falhada, um `drives.check()` falhado, e o refresh que encontrou a autorização morta |
+| `lastErrorCode` | o **código** de erro dessa falha (`DRIVE_CREDENTIALS_INVALID`, `DRIVE_RATE_LIMITED`, …) — nunca uma mensagem |
+
+Deliberadamente **não** são marcados num `listItems()`/`download()` normal com
+sucesso: seguir a saúde não acrescenta nenhuma escrita ao caminho quente, nem
+um incremento de revisão que possa competir com um refresh de token. Quando
+precisas de uma resposta fresca, faz uma sondagem:
+
+```ts
+const { ok, code } = await drives.check(connection.id)
+// lista um item na raiz; nunca lança por uma falha do fornecedor
+```
+
+Uma página de definições pode derivar um estado a partir da vista sem nenhuma
+chamada extra:
+
+```ts
+function health(c: DriveConnectionView, now = Date.now()): 'ok' | 'stale' | 'reconnect' {
+  if (c.status === 'invalid') return 'reconnect'
+  const success = c.lastSucceededAt ?? 0
+  if ((c.lastFailedAt ?? 0) > success) return c.lastErrorCode === 'DRIVE_CREDENTIALS_INVALID' ? 'reconnect' : 'stale'
+  return now - success > 24 * 60 * 60_000 ? 'stale' : 'ok'
+}
+```
+
+**Não há contagem decrescente para a expiração das credenciais**, de propósito.
+Os access tokens são renovados por ti e a sua expiração não diz nada sobre a
+ligação; os refresh tokens, na maioria, não têm duração publicada (o Google
+revoga-os com uma mudança de password ou inactividade, os da Microsoft
+deslizam com o uso, os do Dropbox não expiram). Uma data que não podemos saber
+só ensinaria os utilizadores a desconfiar da que podem.
+
 ## Ligar o Dropbox
 
 O `@basaltkit/drives-dropbox` é o primeiro adaptador real, e a referência para
@@ -1038,6 +1078,8 @@ export class PrismaDriveConnectionStore implements DriveConnectionStore {
 É o `updateMany` com a revisão na cláusula `where` que torna a escrita num
 compare-and-set atómico; um par ler-e-depois-`update` não o é. Guarda `scopes`,
 `account` e `watch` como colunas JSON e o `secret` como texto — já vem cifrado.
+Os campos de saúde (`lastSucceededAt`, `lastFailedAt`, `lastErrorCode`) são
+colunas opcionais que têm de ser persistidas; a suite de contrato verifica-o.
 
 Depois valida a implementação com a mesma suite de conformidade que os stores
 em memória passam. Vem no subpath só para testes `@basaltkit/drives/testing` e
