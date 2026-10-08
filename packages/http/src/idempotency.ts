@@ -407,7 +407,15 @@ export class IdempotencyStage {
   /** Records the handler's outcome (or releases the key when it is not replayable). */
   async complete(ticket: IdempotencyTicket, reply: RecordingReply, result: unknown): Promise<void> {
     const status = reply.statusCode
-    const serialised = status >= 500 ? undefined : serialise(reply.sentHere ? reply.payload : result, reply.contentType)
+    let serialised: ReturnType<typeof serialise>
+    try {
+      serialised = status >= 500 ? undefined : serialise(reply.sentHere ? reply.payload : result, reply.contentType)
+    } catch {
+      // Not JSON-serialisable (a BigInt, a cycle): the adapter fails to send it
+      // too. Release rather than leave the key pending, or every retry would
+      // get 409 until the reservation expires.
+      serialised = undefined
+    }
     if (!serialised) {
       await this.store.release(ticket.scoped) // keep failures (and streams) retryable
       return

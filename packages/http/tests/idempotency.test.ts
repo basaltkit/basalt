@@ -112,6 +112,25 @@ describe('idempotency stage', () => {
     expect((await call(container, def, auth, { n: 2 })).statusCode).toBe(422)
   })
 
+  it('releases the key when the result cannot be serialised, so a retry is not stuck on 409', async () => {
+    let runs = 0
+    const store = new MemoryIdempotencyStore()
+    const container = await bootStage({ store })
+    const def = route({
+      method: 'POST',
+      url: '/big',
+      handler: () => {
+        runs += 1
+        return runs === 1 ? { n: BigInt(1) } : { n: 2 }
+      },
+    })
+    await call(container, def, auth, {}).catch(() => undefined)
+    expect(store.size).toBe(0)
+    const retry = await call(container, def, auth, {})
+    expect(retry.statusCode).not.toBe(409)
+    expect(runs).toBe(2)
+  })
+
   it('refuses an invalid fingerprint option', () => {
     expect(() => idempotencyPlugin({ fingerprint: 'headers' as never })).toThrow(TypeError)
   })
