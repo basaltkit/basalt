@@ -257,7 +257,7 @@ object.
 | `connect(input)` | Stores a connection from tokens you already hold (service account, device code) |
 | `list(filter?)` | The tenant's connections, credentials stripped |
 | `get(id, tenantId?)` | One connection, or `DRIVE_CONNECTION_NOT_FOUND` |
-| `disconnect(id, options?)` | Revokes at the provider (default), unsubscribes, deletes the row |
+| `disconnect(id, options?)` | Emits `drive:disconnecting` (a throw vetoes unless `force: true`), revokes at the provider (default), unsubscribes, deletes the row, emits `drive:disconnected` |
 | `forgetImports(id, tenantId?)` | Drops the dedup ledger so a later sync re-imports |
 | `listItems(id, options?)` | One page of a folder. The returned `cursor` is MAC-bound to the tenant and connection; a cursor this engine did not issue is refused with `DRIVE_ACCESS_DENIED` |
 | `getItem(id, externalId, options?)` | One item's metadata |
@@ -314,7 +314,7 @@ documents; the engine guarantees no byte is fetched.
 
 ### Hooks
 
-`drive:connected` · `drive:disconnected` · `drive:credentials_refreshed` ·
+`drive:connected` · `drive:disconnecting` · `drive:disconnected` · `drive:credentials_refreshed` ·
 `drive:credentials_invalid` · `drive:sync_started` · `drive:sync_completed` ·
 `drive:sync_failed` · `drive:item_imported` · `drive:item_skipped`
 
@@ -333,6 +333,14 @@ why it is false, because the reasons need different responses:
 
 Branching on the boolean alone cannot separate the last two, and they are the
 two that matter.
+
+`disconnect()` order is fixed: `drive:disconnecting` (row still present; a
+throwing handler vetoes — no revoke, row kept, error propagated) → revoke →
+unwatch → delete → `drive:disconnected` (row already gone). Cascade from
+`drive:disconnecting`. `disconnect(id, { force: true })` proceeds past a veto
+and reports the handler's error to the `onHookError` option
+(`process.emitWarning` by default), so a buggy hook cannot block a user from
+withdrawing a grant.
 
 ### Limits worth knowing before you design around them
 

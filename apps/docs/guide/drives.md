@@ -302,6 +302,40 @@ rather than leaving you to infer it from a boolean:
 but it cannot separate the last two, and those are the two that need different
 actions from an operator.
 
+### Disconnect order, and the veto
+
+`disconnect()` runs its steps in a fixed order:
+
+| Step | Row present? | Notes |
+| --- | --- | --- |
+| 1. `drive:disconnecting` | yes | a throwing handler **vetoes**: nothing is revoked, the row is kept, the error propagates |
+| 2. revoke at the provider | yes | best effort, unless `{ revoke: false }` |
+| 3. unwatch the push subscription | yes | best effort |
+| 4. delete the row and its credentials | — | |
+| 5. `drive:disconnected` | **no** | the row is already gone; the payload carries everything you need |
+
+Cascade your own data from `drive:disconnecting`, where the connection can
+still be looked up, and refuse when it is not safe yet:
+
+```ts
+hooks.on('drive:disconnecting', async ({ tenantId, connectionId }) => {
+  if (await db.importJob.count({ where: { tenantId, connectionId, status: 'running' } })) {
+    throw new Error('Imports are still running for this drive; try again shortly.')
+  }
+  await db.driveFolderMapping.deleteMany({ where: { tenantId, connectionId } })
+})
+```
+
+A veto is also how a buggy handler could stop a user from ever withdrawing a
+third-party grant. For an operator's "revoke this now" path, pass
+`{ force: true }`: the handler's error goes to `onHookError` (a
+`drivesPlugin`/`Drives` option; `process.emitWarning` when unset) and the
+disconnect carries on.
+
+```ts
+await drives.disconnect(connection.id, { force: true })
+```
+
 ## Connecting Dropbox
 
 `@basaltkit/drives-dropbox` is the first real adapter, and the reference for

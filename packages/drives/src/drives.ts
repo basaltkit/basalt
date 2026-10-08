@@ -84,6 +84,13 @@ export type DriveRevocationOutcome = 'revoked' | 'skipped' | 'unsupported' | 'fa
 declare module '@basaltkit/core' {
   interface BasaltHooks {
     'drive:connected': { tenantId: string; connectionId: string; provider: string; label: string }
+    /**
+     * Emitted by `disconnect()` **before** anything is revoked or deleted, while
+     * the row still exists. A handler that throws vetoes the disconnect: the
+     * grant is not revoked, the row is kept and the error propagates — unless
+     * the caller passed `force: true` (see {@link DisconnectOptions.force}).
+     */
+    'drive:disconnecting': { tenantId: string; connectionId: string; provider: string }
     'drive:disconnected': {
       tenantId: string
       connectionId: string
@@ -129,6 +136,13 @@ export interface DrivesOptions {
   retry?: DriveRetryPolicy
   /** Escape hatch for a self-hosted provider on a private network. Off by default. */
   allowPrivateHosts?: boolean
+  /**
+   * Receives a hook handler's error that the engine deliberately did not
+   * propagate — today, a `drive:disconnecting` veto overridden with
+   * `disconnect(…, { force: true })`. Defaults to `process.emitWarning`, so
+   * nothing is swallowed silently.
+   */
+  onHookError?: (error: unknown, info: { hook: string; tenantId: string; connectionId: string }) => void
   /** Injected DNS resolver (tests). */
   lookup?: (host: string) => Promise<{ address: string; family?: number }[]>
   /** Injected transport (tests). */
@@ -156,6 +170,17 @@ export interface DisconnectOptions {
    * that — it only makes the remaining access invisible to us.
    */
   revoke?: boolean
+  /**
+   * Proceed even when a `drive:disconnecting` handler throws. Default `false`.
+   *
+   * A throwing `drive:disconnecting` handler is a veto, which is what an app
+   * wants for "this connection still has imports in flight". It is also how a
+   * buggy handler could stop a user from ever withdrawing a third-party grant,
+   * so an operator path ("revoke this now") should pass `force: true`: the
+   * handler's error is reported to {@link DrivesOptions.onHookError} and the
+   * disconnect carries on.
+   */
+  force?: boolean
 }
 
 /**
@@ -421,10 +446,28 @@ export class Drives {
    * exist in the app's storage and still need their provenance; dropping the
    * ledger would make a re-connect re-import everything as if it were new.
    * {@link forgetImports} is the explicit way to ask for the other behaviour.
+   *
+   * Hook order: `drive:disconnecting` (row still present; a throw vetoes) →
+   * revoke → unwatch → delete → `drive:disconnected` (row already gone).
    */
   async disconnect(connectionId: string, options: DisconnectOptions = {}): Promise<void> {
     const connection = await this.require(connectionId, options.tenantId, 'disconnect')
     const provider = this.provider(connection.provider)
+
+    // The pre-delete hook: the row still exists, so a handler can look it up
+    // and cascade (or refuse). Order is fixed and documented:
+    // disconnecting → revoke → unwatch → delete → disconnected.
+    try {
+      await this.hooks?.emit('drive:disconnecting', {
+        tenantId: connection.tenantId,
+        connectionId: connection.id,
+        provider: connection.provider,
+      })
+    } catch (error) {
+      if (!options.force) throw error
+      this.reportHookError(error, { hook: 'drive:disconnecting', tenantId: connection.tenantId, connectionId: connection.id })
+    }
+
     const revoke = options.revoke !== false
     let revoked = false
     // Decided up front so the two "we did not revoke" cases stay distinguishable:
@@ -477,6 +520,22 @@ export class Drives {
       revoked,
       revocation,
     })
+  }
+
+  private reportHookError(error: unknown, info: { hook: string; tenantId: string; connectionId: string }): void {
+    if (this.options.onHookError) {
+      try {
+        this.options.onHookError(error, info)
+      } catch {
+        // A broken reporter must not undo the decision to proceed.
+      }
+      return
+    }
+    const message = error instanceof Error ? error.message : String(error)
+    process.emitWarning(
+      `drives: a "${info.hook}" handler failed for connection "${info.connectionId}" and was overridden with force: ${message}`,
+      { code: 'BASALT_DRIVES_HOOK_OVERRIDDEN' },
+    )
   }
 
   /** Drops the dedup ledger for a connection, so a later sync re-imports everything. */
