@@ -10,6 +10,7 @@ import {
   wireParitySuite,
   metaValidatorParitySuite,
   routeTableParitySuite,
+  enricherReplyParitySuite,
   rateLimitKeyParitySuite,
   rateLimitWarningParitySuite,
   rawBodyParitySuite,
@@ -76,6 +77,7 @@ corsPreflightParitySuite('hono', driver)
 wireParitySuite('hono', driver)
 metaValidatorParitySuite('hono', driver)
 routeTableParitySuite('hono', driver)
+enricherReplyParitySuite('hono', driver)
 fileRoutesParitySuite('hono', driver)
 commentRoutesParitySuite('hono', driver)
 realtimeSseParitySuite('hono', driver)

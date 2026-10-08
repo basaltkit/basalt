@@ -66,6 +66,8 @@ interface PSession {
   id: string
   userId: string
   expiresAt: Date
+  /** Present once the schema has the column (see `trackSessionActivity`). */
+  lastSeenAt?: Date | null
 }
 interface PRefresh {
   token: string
@@ -147,6 +149,8 @@ export interface PrismaAuthClient {
   authSession: {
     findUnique(a: any): Promise<PSession | null>
     create(a: any): Promise<PSession>
+    /** Used only with `trackSessionActivity: true`. */
+    updateMany?(a: any): Promise<{ count: number }>
     deleteMany(a: any): Promise<{ count: number }>
   }
   authRefreshToken: {
@@ -266,6 +270,13 @@ export interface PrismaAuthStoreOptions {
    * SQLite store any length).
    */
   columnLimits?: 'mysql' | AuthColumnLimits
+  /**
+   * Record session activity in `AuthSession.lastSeenAt`, so `authPlugin`'s
+   * `sessionIdleTtl` can be enforced. Needs the column (in the bundled
+   * schemas since 2.1 — migrate before enabling). Off by default, so an app
+   * that has not migrated keeps working unchanged.
+   */
+  trackSessionActivity?: boolean
 }
 
 const limitsOf = (options: PrismaAuthStoreOptions): AuthColumnLimits | undefined =>
@@ -468,23 +479,47 @@ export class PrismaAuthTokenStore implements AuthTokenStore {
 
 export class PrismaSessionStore implements SessionStore {
   private readonly limits: AuthColumnLimits | undefined
+  private readonly trackActivity: boolean
+  /**
+   * Records session activity for `AuthOptions.sessionIdleTtl`. Defined only
+   * with `trackSessionActivity: true`, which needs the `lastSeenAt` column:
+   * without it Auth refuses an idle timeout instead of writing a column the
+   * database may not have.
+   */
+  readonly touch?: (id: string, at: number) => Promise<void>
 
   constructor(
     private readonly client: PrismaAuthClient,
     options: PrismaAuthStoreOptions = {},
   ) {
     this.limits = limitsOf(options)
+    this.trackActivity = options.trackSessionActivity === true
+    if (this.trackActivity) {
+      this.touch = async (id: string, when: number): Promise<void> => {
+        const updateMany = this.client.authSession.updateMany
+        if (typeof updateMany !== 'function') {
+          throw new TypeError('@basaltkit/auth-prisma: trackSessionActivity needs authSession.updateMany on the Prisma client.')
+        }
+        await updateMany.call(this.client.authSession, { where: { id: hashSessionId(id) }, data: { lastSeenAt: at(when) } })
+      }
+    }
   }
 
   async create(userId: string, ttlMs: number): Promise<SessionRecord> {
     // Mint a raw id for the client (cookie), but store its hash so a dump of the
     // session table can't be replayed as a live session.
     const rawId = randomBytes(32).toString('base64url')
-    const expiresAt = Date.now() + ttlMs
-    const data = { id: hashSessionId(rawId), userId, expiresAt: at(expiresAt) }
+    const now = Date.now()
+    const expiresAt = now + ttlMs
+    const data = {
+      id: hashSessionId(rawId),
+      userId,
+      expiresAt: at(expiresAt),
+      ...(this.trackActivity ? { lastSeenAt: at(now) } : {}),
+    }
     assertColumnLengths(PKG, this.limits, 'AuthSession', data)
     await this.client.authSession.create({ data })
-    return { id: rawId, userId, expiresAt }
+    return { id: rawId, userId, expiresAt, ...(this.trackActivity ? { lastSeenAt: now } : {}) }
   }
 
   async find(id: string): Promise<SessionRecord | null> {
@@ -497,7 +532,12 @@ export class PrismaSessionStore implements SessionStore {
       return null
     }
     // Echo the id the caller queried with (never the stored hash).
-    return { id, userId: r.userId, expiresAt }
+    return {
+      id,
+      userId: r.userId,
+      expiresAt,
+      ...(r.lastSeenAt !== null && r.lastSeenAt !== undefined ? { lastSeenAt: ms(r.lastSeenAt) } : {}),
+    }
   }
 
   async delete(id: string): Promise<boolean> {

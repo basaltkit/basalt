@@ -499,6 +499,47 @@ authPlugin({ users, secret, csrf: { trustedOrigins: ['https://app.example.com'] 
 authPlugin({ users, secret, csrf: false }) // não recomendado
 ```
 
+### Duração da sessão: timeout de inatividade e cookies `__Host-` {#session-hardening}
+
+`sessionTtl` (por omissão `30d`) é uma duração **absoluta**: uma sessão ativa
+termina nesse momento na mesma. `sessionIdleTtl` acrescenta um timeout de
+**inatividade** — uma sessão sem uso durante mais tempo é recusada (o pedido fica
+anónimo, por isso uma rota `meta.auth` responde `401`) e apagada:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  sessions: s.sessions,
+  sessionTtl: '12h',      // absoluta
+  sessionIdleTtl: '30m',  // inatividade
+  sessionCookie: { name: '__Host-session' },
+})
+```
+
+A atividade é registada com o `touch()` do store, no máximo uma vez por
+`min(60s, sessionIdleTtl / 4)`, por isso o limite efetivo de inatividade pode
+exceder a configuração nessa medida. O store tem de implementar `touch`: o store
+em memória e o `@basaltkit/auth-sqlite` implementam; o `@basaltkit/auth-prisma`
+implementa com `prismaAuthStores(prisma, { trackSessionActivity: true })` depois
+de acrescentares a coluna `lastSeenAt`. Um store sem `touch` faz o `authPlugin`
+falhar no arranque em vez de não aplicar o timeout em silêncio.
+
+Quando ativas a opção, uma sessão sem `lastSeenAt` (gravada antes de o store o
+registar) começa a contar a inatividade no próximo uso. Uma sessão que já o tem
+é medida a partir dele — e, com a opção desligada, nada o atualizou, por isso
+ainda guarda a hora de criação. Conta que as sessões mais antigas do que
+`sessionIdleTtl` terminem uma vez, no pedido seguinte, quando ativares a opção.
+
+Um cookie chamado `__Host-…` ou `__Secure-…` tem de cumprir as regras de prefixo
+do browser, senão o browser descarta-o em silêncio e cada login «tem sucesso»
+sem sessão. O Basalt aplica-as: os dois prefixos implicam `Secure` quando
+`secure` não está definido, e `__Host-` implica `Path=/` (o Basalt nunca define
+`Domain`). Um `secure: false` contraditório, ou um cookie `__Host-` com outro
+`path`, falha no arranque com `AUTH_SESSION_COOKIE_INVALID`. `__Host-` é a
+escolha mais forte para um cookie de sessão: um subdomínio irmão não o consegue
+definir nem sombrear.
+
 ### Rotas de conta: `meta.account` e `meta.mfa` {#account-routes}
 
 Todas as rotas de `authRoutes()`, de `mfaRoutes()` e as duas de `oauthRoutes()`
@@ -1083,6 +1124,36 @@ tratado pelo `apiKeysPlugin`. Se as chaves "não funcionam", provavelmente falta
 `apiKeysPlugin()`.
 :::
 
+### Chaves para clientes máquina {#apikeys-machine-clients}
+
+Uma chave apresentada que não verifica (desconhecida, revogada, expirada, mal
+formada) é ignorada por padrão: o pedido continua como anónimo e respondem os
+guards da própria rota — `401 AUTH_REQUIRED` numa rota `meta.auth`, `403
+AUTH_SCOPE_REQUIRED` numa rota `meta.scopes`, ou a resposta pública. Um cliente
+máquina não consegue então distinguir «a minha chave morreu» de «falta-me um
+scope». Ativa uma recusa clara:
+
+```ts
+apiKeysPlugin({ users, rejectInvalid: true })
+// chave morta → 401 { error: { code: 'AUTH_APIKEY_INVALID', … } }
+//               WWW-Authenticate: Bearer error="invalid_token"
+```
+
+A recusa acontece antes de qualquer guard, de forma idêntica em fastify, express
+e hono. Um pedido sem chave nenhuma não é afetado.
+
+O `verify()` regista `lastUsedAt`, mas no máximo uma vez por `touchEveryMs` por
+chave (60 s por padrão), por isso um cliente que consulta a cada segundo custa
+uma escrita no store por minuto em vez de uma por pedido. O `lastUsedAt` é exato
+dentro dessa janela; `touchEveryMs: 0` escreve em cada pedido.
+
+Cada recusa emite `auth:apikey_rejected`. Para uma chave inválida, o payload traz
+o `prefix` de apresentação da chave (`mk_live_` mais seis caracteres, o que as
+listagens mostram — nunca o segredo) e o `ip` do cliente, para poderes alertar
+ou limitar por chamador. Como qualquer cliente anónimo o consegue disparar, este
+hook **não** é registado pelos padrões do `auditPlugin` — vê
+[que hooks são auditados](/pt/guide/persistence#which-hooks-are-audited).
+
 ## Bloqueio por força bruta
 
 Ativo por padrão: 5 tentativas falhadas por email em 15 minutos → `AccountLockedError`
@@ -1151,8 +1222,9 @@ plugin fornece:
 | `mfa` | `MfaStore` | em memória | Estado de inscrição TOTP e códigos de recuperação |
 | `accessTtl` | `DurationInput` | `'15m'` | Duração do access token. Curta por desenho — é o refresh token que sustenta a sessão |
 | `refreshTtl` | `DurationInput` | `'30d'` | Duração do refresh token — na prática, "quanto tempo até o utilizador ter de entrar outra vez" |
-| `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor |
-| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test` |
+| `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor (absoluta) |
+| `sessionIdleTtl` | `DurationInput` | — (sem timeout de inatividade) | Recusa e apaga uma sessão sem uso durante mais tempo; requer um store com `touch` ([detalhes](#session-hardening)) |
+| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test`. Um nome `__Host-`/`__Secure-` implica `Secure` (e `Path=/` para `__Host-`); um valor contraditório falha no arranque |
 | `verificationTtl` | `DurationInput` | `'24h'` | Duração do link de verificação de email |
 | `resetTtl` | `DurationInput` | `'1h'` | Duração do link de reposição de password; mantém-na curta |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 por 15m, por email) | Bloqueio por força bruta por email. `false` desativa-o — só em testes |
@@ -1194,6 +1266,8 @@ ambos.
 | `users` | `UserSource` | — | Quando definido, uma chave com `userId` também preenche `ctx().user`, para que as rotas protegidas por scopes leiam o utilizador que age |
 | `allowTenantlessKeys` | `boolean` | `false` | Deixa chaves emitidas sem tenant agir em pedidos com tenant (só chaves de plataforma de confiança) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Deixa uma chave sem `*` alcançar rotas `meta.auth`/`can`/`teamRole`/`audience` que não declaram `meta.scopes` |
+| `rejectInvalid` | `boolean` | `false` | Uma chave apresentada que não verifica → `401 AUTH_APIKEY_INVALID` + `WWW-Authenticate: Bearer error="invalid_token"`, em vez de continuar como anónimo |
+| `touchEveryMs` | `number` | `60_000` | Intervalo mínimo entre duas escritas de `lastUsedAt` para uma chave; `0` escreve em cada pedido |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 
 `webauthnPlugin(options)` e a sua `config`:
@@ -1317,7 +1391,7 @@ autenticar os utilizadores.
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Envia o token por email**; o segundo confirma a alteração |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Notificação de segurança |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Trilho de auditoria |
-| `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alertas — `reason` é `invalid`, `tenant_mismatch`, `not_allowed` ou `scope`; nunca a chave |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alertas — `reason` é `invalid`, `tenant_mismatch`, `not_allowed` ou `scope`; `prefix` é o prefixo de apresentação de uma chave inválida, nunca a chave. Não auditado por padrão |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | Alertas de força bruta de MFA e de bloqueio |
 | `auth:refresh_reused` | `{ userId, familyId }` | Alertas de roubo de token — um refresh token consumido voltou |
 | `auth:social_account_adopted` | `{ user }` | Um login social verificado assumiu uma conta não verificada; as credenciais antigas e as ligações de contas foram revogadas |
