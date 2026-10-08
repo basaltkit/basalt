@@ -3,16 +3,24 @@ import { createToken, definePlugin, ensureMetadata, tryCtx, type RequestContext 
 import { EVENTS } from '@basaltkit/events'
 import {
   AUDIT_CHAIN_GENESIS,
+  AUDIT_ERASED,
+  AUDIT_REDACTED_EVENT,
   AUDIT_SYSTEM_CHAIN,
   AuditChainConflictError,
+  AuditEntryNotFoundError,
+  AuditRedactionConflictError,
+  AuditRedactionRefusedError,
   assertAuditKeyId,
   assertIntegrityKey,
   auditChainKey,
   auditKeyId,
+  auditRedactionState,
+  auditStableJson,
   checkAuditHash,
   type AuditIntegrityKey,
   type AuditSigningKey,
   computeAuditHashV2,
+  computeAuditHashV3,
   parseAuditChainKey,
   parseAuditHash,
 } from './chain.js'
@@ -53,8 +61,98 @@ export interface AuditEntry {
    * Self-describing hash over `prevHash` + the canonical entry:
    * `v2:sha256:<hex>` or `v2:hmac-sha256:<keyId>:<hex>` (see `computeAuditHashV2`),
    * or a bare 64-hex legacy (v1) hash on entries written before key ids existed.
+   * A redacted entry keeps its original hash (it still carries the chain links);
+   * its content is then authenticated by its `audit:redacted` attestation.
    */
   readonly hash?: string | undefined
+  /**
+   * v3 entries only (`integrity.erasable`): 256 random bits (hex) mixed into
+   * the hash, cleared when the entry is redacted — after which nobody can
+   * recompute the hash to confirm a guess of an erased value. Stores must
+   * round-trip it (column `nonce`).
+   */
+  readonly nonce?: string | undefined
+  /**
+   * Present once personal data was erased from the entry with
+   * {@link Audit.redact}. Stores must round-trip it (columns `redaction` and
+   * `redactedBy`): a store that drops it turns every redacted entry into a
+   * `hash-mismatch`.
+   */
+  readonly redaction?: AuditRedactionMarker | undefined
+}
+
+/** What was erased from an entry, and which attestation vouches for it. */
+export interface AuditRedactionMarker {
+  /** Id of the latest `audit:redacted` entry attesting this state (column `redactedBy`). */
+  readonly attestationId: string
+  /** Payload paths erased so far (the `fieldPolicies` grammar), sorted, or `'all'`. */
+  readonly payload: readonly string[] | 'all'
+  /** Whether `ip` was erased. */
+  readonly ip: boolean
+  /** Whether `userAgent` was erased. */
+  readonly userAgent: boolean
+}
+
+/**
+ * Who could still confirm a guess of an erased value from the entry's hash:
+ * `'none'` (unchained entry), `'keyed'` (an HMAC chain: only the holder of the
+ * integrity key), `'public'` (a plain SHA-256 chain: anyone who reads the row).
+ */
+export type AuditRedactionResidual = 'none' | 'keyed' | 'public'
+
+/** What {@link Audit.redact} erases from one entry. */
+export interface AuditRedactRequest {
+  /**
+   * Payload paths to erase, in the `fieldPolicies` grammar (`customer.email`,
+   * `items[].name`; at most 64), or `'all'` for the whole payload. Every value a
+   * path reaches becomes {@link AUDIT_ERASED}; paths absent from the payload are
+   * skipped.
+   */
+  payload?: readonly string[] | 'all'
+  /** Erase the client IP. */
+  ip?: boolean
+  /** Erase the user-agent. */
+  userAgent?: boolean
+  /**
+   * Opaque, NON-personal reference recorded in the attestation — a DSR or
+   * ticket id (1–128 printable characters). Never a free-text reason: that
+   * would write personal data back into the trail.
+   */
+  reasonRef?: string
+  /**
+   * The highest {@link AuditRedactionResidual} accepted. Default `'keyed'`:
+   * erasing from an unkeyed (plain SHA-256) chain, whose hash anyone can use to
+   * confirm a guess, must be acknowledged with `'public'`.
+   */
+  residual?: AuditRedactionResidual
+  /** The tenant, when there is no tenant in context (like `trail({ tenantId })`). Ignored inside a tenant context. */
+  tenantId?: string
+  /** The eraser, when there is no user in context. Must equal the context user when there is one. */
+  actorId?: string
+}
+
+/** Outcome of {@link Audit.redact}. */
+export interface AuditRedactResult {
+  /** The entry as stored now. */
+  entry: AuditEntry
+  /** The `audit:redacted` entry appended — `undefined` when nothing changed. */
+  attestation: AuditEntry | undefined
+  /** `false` when every requested field was already erased or absent (nothing written). */
+  changed: boolean
+  residual: AuditRedactionResidual
+}
+
+/** One atomic redaction, as {@link AuditStore.redact} receives it. */
+export interface AuditRedactionWrite {
+  id: string
+  /** Optimistic check: the row must still have this `hash` and this `redactedBy` (`undefined` = NULL). */
+  expect: { hash: string | undefined; redactedBy: string | undefined }
+  payload: unknown
+  ip: string | undefined
+  userAgent: string | undefined
+  redaction: AuditRedactionMarker
+  /** Appended in the same transaction, with `append()`'s `(chain, seq)` conflict semantics. */
+  attestation: AuditEntry
 }
 
 export interface AuditQuery {
@@ -136,7 +234,8 @@ export interface AuditChainRange {
 }
 
 /**
- * Append-only by contract: no update, no delete.
+ * Append-only by contract: no update, no delete — except {@link AuditStore.redact},
+ * the one sanctioned, attested in-place change.
  *
  * The chain methods are optional — a store without them works exactly as before,
  * but cannot back `integrity: 'hash-chain'`. A store that implements them MUST
@@ -172,6 +271,21 @@ export interface AuditStore {
    * scanning `query()`.
    */
   readUnchained?(tenantId: string | undefined, range: AuditUnchainedRange): Promise<AuditEntry[]>
+  /**
+   * One entry by id, in any chain. Required by {@link Audit.redact}, and by
+   * `verify()` as soon as a redacted entry exists (it reads the attestation).
+   */
+  get?(id: string): Promise<AuditEntry | undefined>
+  /**
+   * The ONLY sanctioned in-place change. Atomically: sets `payload`, `ip`,
+   * `userAgent` and `redaction` (persist `redaction.attestationId` as
+   * `redactedBy`) and clears `nonce` — only if the row's `hash` and
+   * `redactedBy` still equal `write.expect`, else throws
+   * {@link AuditRedactionConflictError} — and appends `write.attestation` with
+   * `append()`'s semantics (a taken `(chain, seq)` throws
+   * {@link AuditChainConflictError}). On any error, nothing is written.
+   */
+  redact?(write: AuditRedactionWrite): Promise<void>
 }
 
 /**
@@ -215,6 +329,33 @@ export class MemoryAuditStore implements AuditStore {
       this.chainSlots.add(slot)
     }
     this.entries.push(Object.freeze({ ...entry, payload: frozenPayload(entry.payload) }))
+  }
+
+  async get(id: string): Promise<AuditEntry | undefined> {
+    return this.entries.find((e) => e.id === id)
+  }
+
+  async redact(write: AuditRedactionWrite): Promise<void> {
+    // Every check before the first change: the method is synchronous after
+    // this point, so in memory the update and the append are one atomic step.
+    const index = this.entries.findIndex((e) => e.id === write.id)
+    const current = index < 0 ? undefined : this.entries[index]!
+    if (current === undefined || current.hash !== write.expect.hash || current.redaction?.attestationId !== write.expect.redactedBy) {
+      throw new AuditRedactionConflictError(write.id)
+    }
+    const attestation = write.attestation
+    const slot = attestation.seq === undefined ? undefined : `${auditChainKey(attestation.tenantId)}#${attestation.seq}`
+    if (slot !== undefined && this.chainSlots.has(slot)) throw new AuditChainConflictError(attestation.tenantId, attestation.seq)
+    const { ip: _ip, userAgent: _userAgent, nonce: _nonce, redaction: _redaction, ...rest } = current
+    this.entries[index] = Object.freeze({
+      ...rest,
+      payload: frozenPayload(write.payload),
+      ...(write.ip !== undefined ? { ip: write.ip } : {}),
+      ...(write.userAgent !== undefined ? { userAgent: write.userAgent } : {}),
+      redaction: deepFreeze(structuredClone(write.redaction)),
+    })
+    if (slot !== undefined) this.chainSlots.add(slot)
+    this.entries.push(Object.freeze({ ...attestation, payload: frozenPayload(attestation.payload) }))
   }
 
   async chainHead(tenantId: string | undefined): Promise<AuditChainHead | undefined> {
@@ -600,7 +741,7 @@ function compileFieldPolicies(
       const list: unknown = policy[field]
       if (list === undefined) return []
       if (!Array.isArray(list)) throw new TypeError(`Audit fieldPolicies["${event}"].${field} must be an array of paths`)
-      return list.map((path: unknown) => fieldPath(event, field, path))
+      return list.map((path: unknown) => fieldPath(`Audit fieldPolicies["${event}"].${field}`, path))
     }
     const entry = { omit: paths('omit'), pseudonymize: paths('pseudonymize') }
     if (entry.pseudonymize.length > 0) pseudonymizes = true
@@ -617,8 +758,11 @@ function compileFieldPolicies(
   return { policies: compiled, key }
 }
 
-function fieldPath(event: string, field: string, path: unknown): string[] {
-  const where = `Audit fieldPolicies["${event}"].${field}`
+/**
+ * Validates one path of the field grammar (shared by `fieldPolicies` and
+ * `Audit.redact`) and splits it into segments; `where` prefixes the error.
+ */
+function fieldPath(where: string, path: unknown): string[] {
   if (typeof path !== 'string' || path.length === 0 || path.length > MAX_FIELD_POLICY_PATH) {
     throw new TypeError(`${where}: each path must be a non-empty string of at most ${MAX_FIELD_POLICY_PATH} characters`)
   }
@@ -720,6 +864,16 @@ export interface AuditHashChainIntegrity {
    * are accepted under any key held here or as `key`. Requires `key`.
    */
   verifyKeys?: Array<AuditIntegrityKey | AuditSigningKey>
+  /**
+   * Write v3 entries: each carries a random `nonce` inside its hash, which
+   * {@link Audit.redact} destroys — so after an erasure the stored hash no
+   * longer lets anyone (the key holder included) confirm a guess of the erased
+   * value. Needs a store with `get()` that persists `nonce` (checked on the
+   * first write). Off by default: entries stay v2, byte for byte. Upgrade every
+   * verifier before turning it on — an older `@basaltkit/audit` reports v3
+   * entries as `hash-mismatch`.
+   */
+  erasable?: boolean
 }
 
 /** `'hash-chain'` (SHA-256) or {@link AuditHashChainIntegrity} (HMAC-SHA256 under a >=128-bit secret). */
@@ -744,8 +898,11 @@ export interface AuditOptions {
    * Per-event personal-data policy ({@link AuditFieldPolicy}), keyed by the
    * exact event or hook name. Applied to `record()`, hooks and events BEFORE the
    * redactor and before hashing, so an omitted field never reaches the store or
-   * the chain. Use it for personal data: the trail is append-only and the hash
-   * chain covers the payload, so erasing a value later would break verification.
+   * the chain. Use it for personal data: it is the cheapest erasure, the value
+   * is never stored. Erasing a stored value later is possible with
+   * {@link Audit.redact}, which keeps the chain verifiable through an attested
+   * `audit:redacted` entry — but the hash of an older entry can still confirm a
+   * guess of the erased value to whoever can compute it (see `residual`).
    */
   fieldPolicies?: AuditFieldPolicies
   /**
@@ -802,6 +959,12 @@ export type AuditVerifyFailure =
    * retired key to `verifyKeys`), or under a key while this `Audit` has none.
    */
   | 'unknown-key'
+  /**
+   * A redacted entry whose `audit:redacted` attestation is missing, does not
+   * match its current state, or does not verify — or a store without `get()`
+   * holding a redacted entry (see `detail`).
+   */
+  | 'redaction-mismatch'
 
 export interface AuditVerifyResult {
   ok: boolean
@@ -809,6 +972,8 @@ export interface AuditVerifyResult {
   tenantId: string | undefined
   /** Chained entries that verified before the first failure (all of them when `ok`). */
   checked: number
+  /** Of `checked`, the redacted entries — verified through their `audit:redacted` attestation. */
+  redacted: number
   /**
    * Rows of this tenant written without a chain. Legacy ones (see
    * `legacyUntil`) are not verifiable but not broken; the others are listed in
@@ -827,6 +992,8 @@ export interface AuditVerifyResult {
   /** Id of the offending row, when there is one. */
   entryId?: string
   reason?: AuditVerifyFailure
+  /** Extra explanation of `reason`, when there is one worth giving (e.g. a store method that is missing). */
+  detail?: string
   /** Last verified entry — record it outside the database to detect later truncation of the tail. */
   head?: AuditChainHead
 }
@@ -915,6 +1082,154 @@ function resolveRecordScope(
   return { actorId: ctxActorId ?? actorId, tenantId: ctxTenantId ?? tenantId }
 }
 
+/** Most payload paths one redaction (and one stored marker) may name. */
+const MAX_REDACT_PATHS = 64
+/** Longest `reasonRef`. */
+const MAX_REASON_REF = 128
+/** Re-reads after a concurrent redaction of the same entry before giving up. */
+const MAX_REDACTION_ROUNDS = 3
+const RESIDUAL_RANK: Readonly<Record<AuditRedactionResidual, number>> = { none: 0, keyed: 1, public: 2 }
+const REDACT_REQUEST_KEYS = new Set(['payload', 'ip', 'userAgent', 'reasonRef', 'residual', 'tenantId', 'actorId'])
+
+/** An {@link AuditRedactRequest}, validated. */
+interface CompiledRedaction {
+  payload: { paths: string[]; segments: string[][] } | 'all' | undefined
+  ip: boolean
+  userAgent: boolean
+  reasonRef: string | undefined
+  residual: AuditRedactionResidual
+  tenantId: string | undefined
+  actorId: string | undefined
+}
+
+/** Who a redaction may reach: one tenant (`undefined` = rows without a tenant), or every row. */
+type RedactionScope = { tenantId: string | undefined } | 'any'
+
+/**
+ * Validates a redaction request up front — like `fieldPolicies`, a typo
+ * (`payloads`) or a prototype segment is a `TypeError`, never a silent no-op.
+ */
+function compileRedactRequest(method: string, entryId: unknown, request: unknown): CompiledRedaction {
+  if (!isScopeId(entryId)) {
+    throw new TypeError(`${method}: entryId must be a non-empty string of at most ${MAX_SCOPE_ID} printable characters`)
+  }
+  if (request === null || typeof request !== 'object' || Array.isArray(request)) {
+    throw new TypeError(`${method}: request must be an object { payload?, ip?, userAgent?, reasonRef?, residual?, tenantId?, actorId? }`)
+  }
+  const r = request as Record<string, unknown>
+  for (const key of Object.keys(r)) {
+    if (!REDACT_REQUEST_KEYS.has(key)) {
+      throw new TypeError(`${method}: unknown option "${key}" (expected ${[...REDACT_REQUEST_KEYS].join(', ')})`)
+    }
+  }
+  let payload: CompiledRedaction['payload']
+  if (r['payload'] === 'all') payload = 'all'
+  else if (r['payload'] !== undefined) {
+    const list = r['payload']
+    if (!Array.isArray(list) || list.length === 0 || list.length > MAX_REDACT_PATHS) {
+      throw new TypeError(`${method}: request.payload must be 'all' or an array of 1-${MAX_REDACT_PATHS} paths`)
+    }
+    for (const path of list) fieldPath(`${method}: request.payload`, path)
+    const paths = [...new Set(list as string[])].sort()
+    payload = { paths, segments: paths.map((path) => fieldPath(`${method}: request.payload`, path)) }
+  }
+  for (const flag of ['ip', 'userAgent'] as const) {
+    if (r[flag] !== undefined && typeof r[flag] !== 'boolean') throw new TypeError(`${method}: request.${flag} must be a boolean`)
+  }
+  if (payload === undefined && r['ip'] !== true && r['userAgent'] !== true) {
+    throw new TypeError(`${method}: nothing to erase — pass payload, ip and/or userAgent`)
+  }
+  const reasonRef = r['reasonRef']
+  if (reasonRef !== undefined && (!isScopeId(reasonRef) || reasonRef.length > MAX_REASON_REF)) {
+    throw new TypeError(`${method}: request.reasonRef must be a non-empty string of at most ${MAX_REASON_REF} printable characters`)
+  }
+  const residual = r['residual'] ?? 'keyed'
+  if (residual !== 'none' && residual !== 'keyed' && residual !== 'public') {
+    throw new TypeError(`${method}: request.residual must be 'none', 'keyed' or 'public'`)
+  }
+  for (const id of ['tenantId', 'actorId'] as const) {
+    if (r[id] !== undefined && !isScopeId(r[id])) {
+      throw new TypeError(`${method}: request.${id} must be a non-empty string of at most ${MAX_SCOPE_ID} printable characters`)
+    }
+  }
+  return {
+    payload,
+    ip: r['ip'] === true,
+    userAgent: r['userAgent'] === true,
+    reasonRef: reasonRef as string | undefined,
+    residual,
+    tenantId: r['tenantId'] as string | undefined,
+    actorId: r['actorId'] as string | undefined,
+  }
+}
+
+/** A payload in the form a durable store returns it (a JSON round-trip), as a fresh, mutable copy. */
+function jsonCopy(payload: unknown): unknown {
+  if (payload === undefined) return undefined
+  const json = JSON.stringify(payload)
+  return json === undefined ? null : (JSON.parse(json) as unknown)
+}
+
+/** The payload after a redaction: every value a requested path reaches becomes {@link AUDIT_ERASED}. */
+function erasePayload(payload: unknown, plan: CompiledRedaction): unknown {
+  const copy = jsonCopy(payload)
+  if (plan.payload === undefined) return copy
+  if (plan.payload === 'all') return AUDIT_ERASED
+  for (const segments of plan.payload.segments) {
+    walkFieldPath(copy, segments, 0, 0, (parent, name) => {
+      parent[name] = AUDIT_ERASED
+    })
+  }
+  return copy
+}
+
+/** The cumulative erased set: the previous marker's, plus this request's (`'all'` absorbs every path). */
+function mergeErased(previous: AuditRedactionMarker | undefined, plan: CompiledRedaction): Omit<AuditRedactionMarker, 'attestationId'> {
+  const payload: readonly string[] | 'all' =
+    previous?.payload === 'all' || plan.payload === 'all'
+      ? 'all'
+      : [...new Set([...(previous?.payload ?? []), ...(plan.payload?.paths ?? [])])].sort()
+  return { payload, ip: (previous?.ip ?? false) || plan.ip, userAgent: (previous?.userAgent ?? false) || plan.userAgent }
+}
+
+/** Whether a stored marker has the expected shape (it comes from a database column). */
+function isRedactionMarker(value: unknown): value is AuditRedactionMarker {
+  if (value === null || typeof value !== 'object') return false
+  const m = value as Record<string, unknown>
+  return (
+    typeof m['attestationId'] === 'string' &&
+    typeof m['ip'] === 'boolean' &&
+    typeof m['userAgent'] === 'boolean' &&
+    (m['payload'] === 'all' ||
+      (Array.isArray(m['payload']) && m['payload'].length <= MAX_REDACT_PATHS && m['payload'].every((p) => typeof p === 'string')))
+  )
+}
+
+/**
+ * Whether every field the marker declares erased actually holds the erased
+ * value (or is absent). This is what narrows a forged attestation to erasure:
+ * it can never vouch for a substituted value.
+ */
+function erasedFieldsHold(entry: AuditEntry, marker: AuditRedactionMarker): boolean {
+  if (marker.ip && entry.ip !== undefined) return false
+  if (marker.userAgent && entry.userAgent !== undefined) return false
+  if (marker.payload === 'all') return entry.payload === AUDIT_ERASED
+  const payload = jsonCopy(entry.payload)
+  let holds = true
+  for (const path of marker.payload) {
+    let segments: string[]
+    try {
+      segments = fieldPath('redaction marker', path)
+    } catch {
+      return false
+    }
+    walkFieldPath(payload, segments, 0, 0, (parent, name) => {
+      if (parent[name] !== AUDIT_ERASED) holds = false
+    })
+  }
+  return holds
+}
+
 const defaultRequestContext: AuditRequestContextResolver = (context) => context?.client
 
 const clip = (value: unknown, max: number): string | undefined =>
@@ -924,6 +1239,10 @@ type ChainStore = Required<Pick<AuditStore, 'chainHead' | 'readChain' | 'countUn
 
 export class Audit {
   private readonly chainEnabled: boolean
+  /** Write v3 (nonce) entries — `integrity.erasable`. */
+  private readonly erasable: boolean
+  /** `undefined` until the first v3 write is read back; then whether the store kept its nonce. */
+  private nonceRoundTrip: boolean | undefined
   /** Signs new entries; `undefined` = plain SHA-256. */
   private readonly signer: AuditSigningKey | undefined
   /** Every key verification may use, by id (the signer's included). Empty = unkeyed chain. */
@@ -937,7 +1256,7 @@ export class Audit {
   constructor(
     private readonly store: AuditStore,
     /** Scrubs each payload before it is stored. Default masks common secret keys. */
-    private readonly redact: AuditRedactor = defaultAuditRedactor,
+    private readonly redactor: AuditRedactor = defaultAuditRedactor,
     /**
      * Whether the host app is multi-tenant, i.e. whether `@basaltkit/tenancy`
      * is registered. `auditPlugin` wires this to the container's
@@ -954,6 +1273,15 @@ export class Audit {
     this.chainEnabled = integrity !== 'none'
     if (typeof integrity === 'object' && integrity.mode !== 'hash-chain') {
       throw new TypeError(`Unknown audit integrity mode: ${String(integrity.mode)}`)
+    }
+    const erasable = typeof integrity === 'object' ? integrity.erasable : undefined
+    if (erasable !== undefined && typeof erasable !== 'boolean') throw new TypeError('Audit integrity `erasable` must be a boolean')
+    this.erasable = erasable === true
+    if (this.erasable && typeof store.get !== 'function') {
+      throw new TypeError(
+        'Audit integrity `erasable` needs a store implementing get() that persists `nonce` ' +
+          '(MemoryAuditStore, @basaltkit/audit-sqlite >= 2.1, @basaltkit/audit-prisma >= 2.1 with the `nonce` column).',
+      )
     }
     const keys = typeof integrity === 'object' ? keyRing(integrity) : { signer: undefined, verifyKeys: new Map() }
     this.signer = keys.signer
@@ -981,8 +1309,14 @@ export class Audit {
    * the context already has a tenant (or a user), a different `scope.tenantId`
    * (or `scope.actorId`) throws a `TypeError` instead of writing into another
    * tenant's chain. Never forward client input into `scope`.
+   *
+   * The `audit:` event prefix is reserved for framework events; `'audit:redacted'`
+   * (only {@link redact} writes it) throws a `TypeError`.
    */
   async record(event: string, payload?: unknown, scope?: AuditRecordScope): Promise<AuditEntry> {
+    if (event === AUDIT_REDACTED_EVENT) {
+      throw new TypeError(`audit.record: "${AUDIT_REDACTED_EVENT}" is reserved — only Audit.redact() writes it`)
+    }
     return this.append(this.build('manual', event, payload, scope))
   }
 
@@ -1055,6 +1389,271 @@ export class Audit {
   async systemTrail(query: AuditQuery = {}): Promise<AuditEntry[]> {
     assertAuditQuery(query)
     return this.read(query)
+  }
+
+  /**
+   * Erases personal data from one stored entry while the trail stays
+   * verifiable (RFC 0003). The requested payload paths become
+   * {@link AUDIT_ERASED} and the flagged `ip` / `userAgent` are dropped, in
+   * place; the entry keeps its original `hash`, so the chain links hold. In the
+   * same transaction an `audit:redacted` entry is appended to the entry's own
+   * chain, binding its id, `seq`, `hash`, the erased fields and a digest of its
+   * new state — `verify()` checks the redacted entry through it.
+   *
+   * Scoping mirrors {@link trail}: inside a tenant context only that tenant's
+   * entries are reachable (another id is {@link AuditEntryNotFoundError});
+   * without one, `request.tenantId` pins the tenant; with neither, a
+   * multi-tenant app must use {@link systemRedact}. Who may erase is the app's
+   * decision — wrap this in an authorized job or command; never forward client
+   * input as `entryId` unchecked.
+   *
+   * Refuses ({@link AuditRedactionRefusedError}, nothing written) an entry that
+   * does not verify as it is now, an attestation, a residual above
+   * `request.residual`, and a store without `get` / `redact`. Idempotent: a
+   * request that changes nothing writes nothing (`changed: false`).
+   */
+  async redact(entryId: string, request: AuditRedactRequest): Promise<AuditRedactResult> {
+    const plan = compileRedactRequest('Audit.redact', entryId, request)
+    const ctxTenantId = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
+    let scope: RedactionScope
+    if (ctxTenantId !== undefined) scope = { tenantId: ctxTenantId }
+    else if (plan.tenantId !== undefined) scope = { tenantId: plan.tenantId }
+    else if (!this.tenancyActive()) scope = 'any'
+    else {
+      throw new Error(
+        'Audit.redact() requires a tenant in context or an explicit tenantId. ' +
+          'For a deliberate cross-tenant erasure use Audit.systemRedact().',
+      )
+    }
+    return this.redactEntry(entryId, plan, scope)
+  }
+
+  /**
+   * SYSTEM-ONLY: {@link redact} across every tenant — `request.tenantId`, when
+   * given, still pins one. For trusted data-subject-request tooling only; never
+   * call it with, or forward into it, client-controlled input.
+   */
+  async systemRedact(entryId: string, request: AuditRedactRequest): Promise<AuditRedactResult> {
+    const plan = compileRedactRequest('Audit.systemRedact', entryId, request)
+    return this.redactEntry(entryId, plan, plan.tenantId !== undefined ? { tenantId: plan.tenantId } : 'any')
+  }
+
+  private async redactEntry(entryId: string, plan: CompiledRedaction, scope: RedactionScope): Promise<AuditRedactResult> {
+    const store = this.erasureStore()
+    const context = tryCtx()
+    const ctxActorId = (context?.['user'] as { id?: string } | undefined)?.id
+    if (ctxActorId !== undefined && plan.actorId !== undefined && plan.actorId !== ctxActorId) {
+      throw new TypeError('Audit.redact: request.actorId cannot differ from the request user')
+    }
+    const actorId = ctxActorId ?? plan.actorId
+    const load = async (): Promise<AuditEntry> => {
+      const row = await store.get(entryId)
+      if (row === undefined || (scope !== 'any' && row.tenantId !== scope.tenantId)) throw new AuditEntryNotFoundError()
+      return row
+    }
+    // The chain of the attestation is the entry's own — read it once to pick the lock.
+    const { tenantId } = await load()
+    return this.withChainLock(auditChainKey(tenantId), async () => {
+      rounds: for (let round = 1; ; round++) {
+        const row = await load()
+        if (row.event === AUDIT_REDACTED_EVENT) {
+          throw new AuditRedactionRefusedError(
+            'unverified',
+            `Audit.redact: an ${AUDIT_REDACTED_EVENT} attestation cannot be redacted (it holds no personal data, and it vouches for another entry)`,
+          )
+        }
+        await this.assertRedactable(row)
+        const residual = this.residualOf(row)
+        if (RESIDUAL_RANK[residual] > RESIDUAL_RANK[plan.residual]) {
+          throw new AuditRedactionRefusedError(
+            'residual',
+            residual === 'public'
+              ? "Audit.redact: the entry's hash is a plain SHA-256 — after erasure anyone who reads the row can still confirm a guess of the erased value. Pass residual: 'public' to accept that, or key the chain (integrity.key) for new entries."
+              : "Audit.redact: the entry's hash is keyed — after erasure the integrity key holder can still confirm a guess of the erased value. Pass residual: 'keyed' to accept that.",
+          )
+        }
+        const payload = erasePayload(row.payload, plan)
+        const ip = plan.ip ? undefined : row.ip
+        const userAgent = plan.userAgent ? undefined : row.userAgent
+        const changed =
+          auditStableJson(jsonCopy(row.payload) ?? null) !== auditStableJson(payload ?? null) || ip !== row.ip || userAgent !== row.userAgent
+        if (!changed) return { entry: row, attestation: undefined, changed: false, residual }
+        const erased = mergeErased(row.redaction, plan)
+        for (let attempt = 1; ; attempt++) {
+          const attestationId = randomUUID()
+          const redaction: AuditRedactionMarker = deepFreeze({ attestationId, ...erased })
+          const { ip: _ip, userAgent: _userAgent, nonce: _nonce, redaction: _redaction, ...header } = row
+          const redacted: AuditEntry = Object.freeze({
+            ...header,
+            payload: frozenPayload(payload),
+            ...(ip !== undefined ? { ip } : {}),
+            ...(userAgent !== undefined ? { userAgent } : {}),
+            redaction,
+          })
+          const attestation = await this.chainLink({
+            id: attestationId,
+            source: 'manual',
+            event: AUDIT_REDACTED_EVENT,
+            // Built here, not by build(): neither fieldPolicies nor the redactor
+            // may touch it (a redactor that masks `hash` or `state` would make it
+            // unverifiable), and it holds no personal data.
+            payload: frozenPayload({
+              entryId: row.id,
+              seq: row.seq ?? null,
+              hash: row.hash ?? null,
+              erased: { payload: erased.payload === 'all' ? 'all' : [...erased.payload], ip: erased.ip, userAgent: erased.userAgent },
+              state: auditRedactionState(redacted),
+              ...(plan.reasonRef !== undefined ? { reasonRef: plan.reasonRef } : {}),
+            }),
+            actorId,
+            // Always the entry's own tenant (its chain) — never the caller's
+            // scope: an attestation in another chain would never verify.
+            tenantId: row.tenantId,
+            requestId: context?.requestId,
+            ...this.requestFields(context, AUDIT_REDACTED_EVENT),
+            at: Date.now(),
+          })
+          try {
+            await store.redact({
+              id: row.id,
+              expect: { hash: row.hash, redactedBy: row.redaction?.attestationId },
+              payload,
+              ip,
+              userAgent,
+              redaction,
+              attestation,
+            })
+            await this.assertNonceRoundTrip(attestation)
+            return { entry: redacted, attestation, changed: true, residual }
+          } catch (error) {
+            // A concurrent redaction of the same entry won: re-read it and merge
+            // into its newer state.
+            if (error instanceof AuditRedactionConflictError && round < MAX_REDACTION_ROUNDS) continue rounds
+            // Another writer took the attestation's seq: re-link and retry.
+            if (!(error instanceof AuditChainConflictError) || attempt >= MAX_CHAIN_ATTEMPTS) throw error
+            await new Promise((resolve) => setTimeout(resolve, Math.random() * 4 * attempt))
+          }
+        }
+      }
+    })
+  }
+
+  /** Refuses to attest an entry that does not verify as it is now (anti-laundering). */
+  private async assertRedactable(row: AuditEntry): Promise<void> {
+    const chained = row.seq !== undefined || row.hash !== undefined
+    if (chained && !this.chainEnabled) {
+      throw new AuditRedactionRefusedError(
+        'unverified',
+        "Audit.redact: the entry is hash-chained but this Audit has integrity 'none' — redact through an Audit configured like the writer, otherwise the attestation is unchained and the entry stops verifying",
+      )
+    }
+    if (row.redaction !== undefined && row.redaction !== null) {
+      const problem = await this.redactionProblem(row)
+      if (problem !== undefined) {
+        throw new AuditRedactionRefusedError('unverified', `Audit.redact: the entry is redacted but does not verify (${problem})`)
+      }
+      return
+    }
+    if (chained && checkAuditHash(row, this.verifyKeys) !== 'ok') {
+      throw new AuditRedactionRefusedError(
+        'unverified',
+        'Audit.redact: the entry does not verify as it is (changed outside Audit, or signed under a key this Audit does not hold) — refusing to attest its content',
+      )
+    }
+  }
+
+  /** Who could still confirm a guess of an erased value from the entry's hash. */
+  private residualOf(row: AuditEntry): AuditRedactionResidual {
+    const parsed = parseAuditHash(row.hash)
+    if (parsed === undefined) return 'none'
+    if (parsed.version === 1) return this.verifyKeys.size > 0 ? 'keyed' : 'public'
+    // v3: redaction destroys the nonce, so nobody can recompute the hash.
+    if (parsed.version === 3) return 'none'
+    return parsed.alg === 'hmac-sha256' ? 'keyed' : 'public'
+  }
+
+  /**
+   * Checks a redacted entry against its `audit:redacted` attestation.
+   * `undefined` when it holds; otherwise what is wrong.
+   */
+  private async redactionProblem(entry: AuditEntry): Promise<string | undefined> {
+    const marker: unknown = entry.redaction
+    if (!isRedactionMarker(marker)) return 'malformed redaction marker'
+    if (typeof this.store.get !== 'function') {
+      return 'the store has no get() method, so the attestation of a redacted entry cannot be read — implement AuditStore.get()'
+    }
+    const attestation = await this.store.get(marker.attestationId)
+    if (attestation === undefined || attestation.id !== marker.attestationId) return 'attestation not found'
+    if (attestation.event !== AUDIT_REDACTED_EVENT || attestation.source !== 'manual') return 'the marker does not point to an attestation'
+    if (attestation.tenantId !== entry.tenantId) return 'attestation of another tenant'
+    if (entry.seq !== undefined && (attestation.seq === undefined || attestation.seq <= entry.seq)) {
+      return 'the attestation is not chained after the entry'
+    }
+    const claim = attestation.payload as Record<string, unknown> | null
+    if (claim === null || typeof claim !== 'object') return 'attestation payload malformed'
+    if (claim['entryId'] !== entry.id || claim['seq'] !== (entry.seq ?? null) || claim['hash'] !== (entry.hash ?? null)) {
+      return 'the attestation vouches for another entry'
+    }
+    const declared = { payload: marker.payload, ip: marker.ip, userAgent: marker.userAgent }
+    if (auditStableJson(claim['erased'] ?? null) !== auditStableJson(declared)) return 'the erased fields differ from the attestation'
+    if (claim['state'] !== auditRedactionState(entry)) return 'the entry changed after it was redacted'
+    if (!erasedFieldsHold(entry, marker)) return 'an erased field holds a value'
+    if (entry.seq !== undefined || attestation.hash !== undefined) {
+      const check = checkAuditHash(attestation, this.verifyKeys)
+      if (check !== 'ok') return `the attestation does not verify (${check})`
+    }
+    return undefined
+  }
+
+  /**
+   * Checks that the erasure an `audit:redacted` entry attests is still in
+   * place: its entry must still be redacted, and its marker must name this
+   * attestation or a later one for the same entry. `undefined` when it holds;
+   * otherwise what is wrong (an un-erasure, or a rollback to an older state).
+   */
+  private async attestationProblem(attestation: AuditEntry): Promise<string | undefined> {
+    const claim = attestation.payload as Record<string, unknown> | null
+    const entryId = claim !== null && typeof claim === 'object' ? claim['entryId'] : undefined
+    if (typeof entryId !== 'string') return 'attestation payload malformed'
+    if (typeof this.store.get !== 'function') {
+      return 'the store has no get() method, so the entry an attestation vouches for cannot be read — implement AuditStore.get()'
+    }
+    const target = await this.store.get(entryId)
+    if (target === undefined) return 'the entry this attestation vouches for is missing'
+    const marker: unknown = target.redaction
+    if (marker === undefined || marker === null) return 'the entry this attestation vouches for is no longer redacted'
+    if (!isRedactionMarker(marker)) return 'the entry this attestation vouches for has a malformed redaction marker'
+    if (marker.attestationId === attestation.id) return undefined
+    // A newer redaction moved the marker on: it must be a later attestation of
+    // the same entry (that one is checked against the entry's current state).
+    const newer = await this.store.get(marker.attestationId)
+    const newerClaim = newer?.payload as Record<string, unknown> | null | undefined
+    if (
+      newer === undefined ||
+      newer.event !== AUDIT_REDACTED_EVENT ||
+      newer.source !== 'manual' ||
+      newer.tenantId !== attestation.tenantId ||
+      newerClaim === null ||
+      typeof newerClaim !== 'object' ||
+      newerClaim['entryId'] !== entryId ||
+      newer.seq === undefined ||
+      attestation.seq === undefined ||
+      newer.seq <= attestation.seq
+    ) {
+      return 'the entry this attestation vouches for was rolled back to an older state'
+    }
+    return undefined
+  }
+
+  private erasureStore(): AuditStore & Required<Pick<AuditStore, 'get' | 'redact'>> {
+    const store = this.store
+    if (typeof store.get !== 'function' || typeof store.redact !== 'function') {
+      throw new AuditRedactionRefusedError(
+        'unsupported-store',
+        'Audit.redact() needs a store implementing get() and redact() (MemoryAuditStore, @basaltkit/audit-sqlite >= 2.1, @basaltkit/audit-prisma >= 2.1).',
+      )
+    }
+    return store as AuditStore & Required<Pick<AuditStore, 'get' | 'redact'>>
   }
 
   /** `chainedOnly` is re-applied here: a custom store may not know the filter. */
@@ -1166,10 +1765,12 @@ export class Audit {
 
     const unchained = await store.countUnchained(tenantId)
     const unverified = await this.unverifiedRows(store, tenantId, legacyUntil)
+    let redacted = 0
     const result = (fields: Partial<AuditVerifyResult> & Pick<AuditVerifyResult, 'ok' | 'checked'>): AuditVerifyResult => ({
       tenantId,
       unchained,
       unverified,
+      redacted,
       ...fields,
     })
 
@@ -1199,8 +1800,16 @@ export class Audit {
       })
       let skipped = false
       for (const entry of page) {
-        const broken = (reason: AuditVerifyFailure) =>
-          result({ ok: false, checked, firstBrokenAt: expected, entryId: entry.id, reason, ...(head ? { head } : {}) })
+        const broken = (reason: AuditVerifyFailure, detail?: string) =>
+          result({
+            ok: false,
+            checked,
+            firstBrokenAt: expected,
+            entryId: entry.id,
+            reason,
+            ...(detail !== undefined ? { detail } : {}),
+            ...(head ? { head } : {}),
+          })
         if (overlap && !skipped && entry.id === lastId && entry.seq === expected - 1) {
           skipped = true
           continue
@@ -1208,8 +1817,23 @@ export class Audit {
         if (entry.seq !== expected) return broken(entry.seq! < expected ? 'sequence-duplicate' : 'sequence-gap')
         if (entry.prevHash !== prevHash) return broken('prev-hash-mismatch')
         if (entry.tenantId !== tenantId) return broken('hash-mismatch')
-        const hashCheck = checkAuditHash(entry, this.verifyKeys)
-        if (hashCheck !== 'ok') return broken(hashCheck)
+        if (entry.redaction !== undefined && entry.redaction !== null) {
+          // The stored hash no longer covers the content (it still carries the
+          // links): the entry's `audit:redacted` attestation vouches for it.
+          const problem = await this.redactionProblem(entry)
+          if (problem !== undefined) return broken('redaction-mismatch', problem)
+          redacted++
+        } else {
+          const hashCheck = checkAuditHash(entry, this.verifyKeys)
+          if (hashCheck !== 'ok') return broken(hashCheck)
+          if (entry.event === AUDIT_REDACTED_EVENT && entry.source === 'manual') {
+            // The other direction: an erasure it attests must still be in place.
+            // A row restored to its original content (from a backup) matches its
+            // original hash again, so only its attestation can reveal it.
+            const problem = await this.attestationProblem(entry)
+            if (problem !== undefined) return broken('redaction-mismatch', problem)
+          }
+        }
         if (expectedHead !== undefined && entry.seq === expectedHead.seq && entry.hash !== expectedHead.hash) {
           return broken('head-mismatch')
         }
@@ -1295,11 +1919,10 @@ export class Audit {
     const store = this.store as ChainStore
     return this.withChainLock(auditChainKey(draft.tenantId), async () => {
       for (let attempt = 1; ; attempt++) {
-        const head = await store.chainHead(draft.tenantId)
-        const linked = { ...draft, seq: (head?.seq ?? 0) + 1, prevHash: head?.hash ?? AUDIT_CHAIN_GENESIS }
-        const entry = Object.freeze({ ...linked, hash: computeAuditHashV2(linked, this.signer) })
+        const entry = await this.chainLink(draft)
         try {
           await store.append(entry)
+          await this.assertNonceRoundTrip(entry)
           return entry
         } catch (error) {
           // Another writer (a second replica) took this seq first: re-read the
@@ -1309,6 +1932,46 @@ export class Audit {
         }
       }
     })
+  }
+
+  /**
+   * Links `draft` after the current head of its chain and hashes it — or
+   * returns it as is when integrity is off. Callers hold the chain lock.
+   */
+  private async chainLink(draft: AuditEntry): Promise<AuditEntry> {
+    if (!this.chainEnabled) return Object.freeze(draft)
+    if (this.erasable && this.nonceRoundTrip === false) throw this.nonceLost()
+    const head = await (this.store as ChainStore).chainHead(draft.tenantId)
+    const linked = {
+      ...draft,
+      ...(this.erasable ? { nonce: randomBytes(32).toString('hex') } : {}),
+      seq: (head?.seq ?? 0) + 1,
+      prevHash: head?.hash ?? AUDIT_CHAIN_GENESIS,
+    }
+    const hash = this.erasable ? computeAuditHashV3(linked, this.signer) : computeAuditHashV2(linked, this.signer)
+    return Object.freeze({ ...linked, hash })
+  }
+
+  /**
+   * Fails closed when the store does not persist `nonce`: every v3 entry it
+   * stored would fail verification forever. Checked once, on the first v3
+   * write of this instance (read back with `get()`); a store found dropping
+   * the nonce makes every later write throw too.
+   */
+  private async assertNonceRoundTrip(entry: AuditEntry): Promise<void> {
+    if (entry.nonce === undefined || this.nonceRoundTrip === true) return
+    if (this.nonceRoundTrip === undefined) {
+      const stored = await this.store.get!(entry.id)
+      this.nonceRoundTrip = stored?.nonce === entry.nonce
+    }
+    if (!this.nonceRoundTrip) throw this.nonceLost()
+  }
+
+  private nonceLost(): TypeError {
+    return new TypeError(
+      `Audit integrity \`erasable\`: the store (${this.store.constructor.name}) does not persist the entry \`nonce\` — ` +
+        'add the `nonce` column (see the store README) before enabling `erasable`; v3 entries written without it cannot be verified.',
+    )
   }
 
   private async withChainLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -1335,7 +1998,7 @@ export class Audit {
       id: randomUUID(),
       source,
       event,
-      payload: frozenPayload(this.redact(this.minimize(payload, event), event)),
+      payload: frozenPayload(this.redactor(this.minimize(payload, event), event)),
       actorId,
       tenantId,
       requestId: context?.requestId,
@@ -1361,7 +2024,7 @@ export class Audit {
     const ip = clip(info?.ip, MAX_IP)
     const userAgent = clip(info?.userAgent, MAX_USER_AGENT)
     if (ip === undefined && userAgent === undefined) return {}
-    const scrubbed = this.redact({ ...(ip ? { ip } : {}), ...(userAgent ? { userAgent } : {}) }, event)
+    const scrubbed = this.redactor({ ...(ip ? { ip } : {}), ...(userAgent ? { userAgent } : {}) }, event)
     if (scrubbed === null || typeof scrubbed !== 'object') return {}
     const out = scrubbed as Record<string, unknown>
     const fields: AuditRequestInfo = {}
@@ -1624,13 +2287,14 @@ export interface AuditVerifyCommandContext {
 
 const describeResult = (r: AuditVerifyResult): string => {
   const chain = r.tenantId === undefined ? '(system)' : r.tenantId
-  const unchained = r.unchained > 0 ? `, ${r.unchained} unchained row(s)` : ''
+  const unchained =
+    (r.redacted > 0 ? `, ${r.redacted} redacted` : '') + (r.unchained > 0 ? `, ${r.unchained} unchained row(s)` : '')
   if (!r.ok && r.reason === 'unchained-entry') {
     return `${chain}: BROKEN — ${r.unverified.length} row(s) outside the chain written after it began (e.g. entry ${String(r.entryId)}); ${r.checked} chained entr${r.checked === 1 ? 'y' : 'ies'} verified`
   }
   return r.ok
     ? `${chain}: ok — ${r.checked} entr${r.checked === 1 ? 'y' : 'ies'} verified${r.head ? `, head #${r.head.seq} ${r.head.hash}` : ''}${unchained}`
-    : `${chain}: BROKEN at seq ${String(r.firstBrokenAt)} (${String(r.reason)})${r.entryId ? ` entry ${r.entryId}` : ''} — ${r.checked} verified before it${unchained}`
+    : `${chain}: BROKEN at seq ${String(r.firstBrokenAt)} (${String(r.reason)}${r.detail ? `: ${r.detail}` : ''})${r.entryId ? ` entry ${r.entryId}` : ''} — ${r.checked} verified before it${unchained}`
 }
 
 /**
