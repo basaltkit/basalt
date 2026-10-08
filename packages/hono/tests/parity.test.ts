@@ -17,6 +17,7 @@ import {
   type ParityRequest,
 } from '../../http/tests/adapter-parity.js'
 import { fileRoutesParitySuite } from '../../files/tests/route-parity.js'
+import { centralOnlyParitySuite } from '../../tenancy/tests/central-only-parity.js'
 import { HONO, honoPlugin } from '../src/index.js'
 
 let app: BasaltApp | undefined
@@ -93,3 +94,4 @@ describe('hono: multipart on routes that are not upload() routes', () => {
     await driver.close()
   })
 })
+centralOnlyParitySuite('hono', driver)
