@@ -157,10 +157,13 @@ export function makeFakeClient(options: FakeClientOptions = {}): PrismaAuthClien
       },
     },
     authApiKey: {
+      // Rows come back as copies, as from a real database.
       async findUnique({ where }) {
-        if (where.id !== undefined) return apiKeys.get(where.id) ?? null
-        if (where.hash !== undefined) {
-          for (const k of apiKeys.values()) if (k.hash === where.hash) return k
+        const copy = (k: PApiKeyRow | undefined) => (k ? { ...k } : null)
+        if (where.id !== undefined) return copy(apiKeys.get(where.id))
+        if (where.hash !== undefined) return copy([...apiKeys.values()].find((k) => k.hash === where.hash))
+        if (where.previousHash !== undefined) {
+          return copy([...apiKeys.values()].find((k) => k.previousHash != null && k.previousHash === where.previousHash))
         }
         return null
       },
@@ -168,18 +171,32 @@ export function makeFakeClient(options: FakeClientOptions = {}): PrismaAuthClien
         let rows = [...apiKeys.values()].filter((k) => k.revokedAt === null)
         if (where.tenantId !== undefined) rows = rows.filter((k) => k.tenantId === where.tenantId)
         if (where.userId !== undefined) rows = rows.filter((k) => k.userId === where.userId)
+        if (where.serviceId !== undefined) rows = rows.filter((k) => k.serviceId === where.serviceId)
         if (orderBy?.createdAt === 'asc') rows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-        return rows
+        return rows.map((k) => ({ ...k }))
       },
       async create({ data }) {
         if ([...apiKeys.values()].some((k) => k.hash === data.hash)) throw new Error('unique hash')
-        const row = { ...data }
+        // Column defaults, as the PostgreSQL schema declares them.
+        const row = { serviceId: null, previousHash: null, previousHashExpiresAt: null, rotatedAt: null, allowedIps: [], meta: null, ...data }
         apiKeys.set(row.id, row)
-        return row
+        return { ...row }
       },
+      // Honours every where-condition the store sends (id, revokedAt: null, hash CAS)
+      // and the unique indexes on hash and previousHash.
       async updateMany({ where, data }) {
         const row = apiKeys.get(where.id)
         if (!row) return { count: 0 }
+        if (Object.hasOwn(where, 'revokedAt') && where.revokedAt === null && row.revokedAt !== null) return { count: 0 }
+        if (where.hash !== undefined && row.hash !== where.hash) return { count: 0 }
+        for (const field of ['hash', 'previousHash'] as const) {
+          const value = data[field]
+          if (typeof value !== 'string') continue
+          const clash = [...apiKeys.values()].some(
+            (k) => k.id !== row.id && (k.hash === value || (k.previousHash != null && k.previousHash === value)),
+          )
+          if (clash) throw new Error(`unique ${field}`)
+        }
         Object.assign(row, data)
         return { count: 1 }
       },
@@ -297,6 +314,8 @@ interface PTokenRow { token: string; userId: string; purpose: string; expiresAt:
 interface PApiKeyRow {
   id: string; name: string; prefix: string; hash: string; tenantId: string | null
   userId: string | null; scopes: string[]; createdAt: Date; expiresAt: Date | null; lastUsedAt: Date | null; revokedAt: Date | null
+  serviceId?: string | null; previousHash?: string | null; previousHashExpiresAt?: Date | null; rotatedAt?: Date | null
+  allowedIps?: unknown; meta?: unknown
 }
 interface PLinkRow { id: string; provider: string; subject: string; userId: string; email: string; createdAt: Date }
 interface PPasskeyRow {
