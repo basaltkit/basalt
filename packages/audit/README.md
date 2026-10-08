@@ -105,6 +105,18 @@ await runWithContext({ user: { id: 'u1' }, tenant: { id: 'acme' } }, async () =>
 
 `record` returns the created entry (already frozen).
 
+Outside a request (a script, a CLI command) there is no context, so the entry
+goes to the system chain with no actor. Wrap the work in `runWithContext` as
+above, or pass an explicit scope as the third argument:
+
+```ts
+await audit.record('report.generated', { rows }, { tenantId: 'acme', actorId: 'job:nightly' })
+```
+
+The scope can only **narrow**: inside a context with a tenant (or a user), a
+different `scope.tenantId` (or `scope.actorId`) throws a `TypeError`. Queue jobs
+need neither: `@basaltkit/queue` restores the dispatcher's tenant and user.
+
 ### Querying the trail
 
 `trail(query)` returns entries **most recent first**:

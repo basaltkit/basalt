@@ -266,6 +266,37 @@ has the SQL). Then make the database enforce append-only too:
 REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
 ```
 
+#### Recording outside a request (jobs, scripts)
+
+An entry takes its `actorId` and `tenantId` from the active context. Outside a
+request there is none, so `audit.record()` lands in the **system chain** with no
+actor — unless you give it one:
+
+- **Queue jobs** need nothing: `@basaltkit/queue` captures the dispatcher's
+  tenant and user and restores them around the handler, so `record()` inside a
+  job is attributed like it was in the request that dispatched it.
+- **Scripts and CLI commands** wrap the work in the context they act for:
+
+  ```ts
+  import { runWithContext } from '@basaltkit/core'
+
+  await runWithContext({ tenant: { id: 'acme' }, user: { id: 'ops:backfill' } }, () =>
+    audit.record('invoice.backfilled', { count }),
+  )
+  ```
+
+- **A single entry** can pass an explicit scope as the third argument:
+
+  ```ts
+  await audit.record('report.generated', { rows }, { tenantId: 'acme', actorId: 'job:nightly' })
+  ```
+
+  The entry joins that tenant's chain (`t:acme`), so `verify({ tenantId: 'acme' })`
+  covers it. The scope can only **narrow**: inside a context with a tenant (or a
+  user), a different `scope.tenantId` (or `scope.actorId`) throws a `TypeError`
+  rather than writing into another tenant's chain. Both values must be non-empty
+  printable strings of at most 256 characters. Never forward client input into it.
+
 ## Tenancy — `@basaltkit/tenancy-sqlite` / `@basaltkit/tenancy-prisma`
 
 The tenant registry is the foundation of a multi-tenant app, yet `@basaltkit/tenancy`

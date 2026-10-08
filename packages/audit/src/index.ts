@@ -700,6 +700,57 @@ const MAX_UNVERIFIED = 100
 /** Largest timestamp a `Date` can hold (ECMAScript time value bound). */
 const MAX_TIMESTAMP = 8.64e15
 
+/** Longest `actorId` / `tenantId` accepted in a {@link AuditRecordScope}. */
+const MAX_SCOPE_ID = 256
+
+/**
+ * Explicit attribution of a manual entry — see {@link Audit.record}. Narrowing
+ * only: it may restate the context's tenant/user, never replace them.
+ */
+export interface AuditRecordScope {
+  /** Tenant whose chain the entry joins. Must equal the context tenant when there is one. */
+  tenantId?: string
+  /** Actor of the entry. Must equal the context user when there is one. */
+  actorId?: string
+}
+
+/** A non-empty, bounded string without control characters. */
+function isScopeId(value: unknown): value is string {
+  // eslint-disable-next-line no-control-regex
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_SCOPE_ID && !/[\u0000-\u001f\u007f]/.test(value)
+}
+
+/**
+ * The `actorId` / `tenantId` of a manual entry: the context's, restated or
+ * supplied (when the context has none) by `scope`. A scope that differs from
+ * the context throws — `record()` must not let code running for tenant A write
+ * into tenant B's chain, or attribute an action to someone else.
+ */
+function resolveRecordScope(
+  ctxActorId: string | undefined,
+  ctxTenantId: string | undefined,
+  scope: AuditRecordScope | undefined,
+): { actorId: string | undefined; tenantId: string | undefined } {
+  if (scope === undefined) return { actorId: ctxActorId, tenantId: ctxTenantId }
+  if (scope === null || typeof scope !== 'object' || Array.isArray(scope)) {
+    throw new TypeError('audit.record: scope must be an object { tenantId?, actorId? }')
+  }
+  const { tenantId, actorId } = scope
+  if (tenantId !== undefined && !isScopeId(tenantId)) {
+    throw new TypeError(`audit.record: scope.tenantId must be a non-empty string of at most ${MAX_SCOPE_ID} printable characters`)
+  }
+  if (actorId !== undefined && !isScopeId(actorId)) {
+    throw new TypeError(`audit.record: scope.actorId must be a non-empty string of at most ${MAX_SCOPE_ID} printable characters`)
+  }
+  if (ctxTenantId !== undefined && tenantId !== undefined && tenantId !== ctxTenantId) {
+    throw new TypeError('audit.record: scope.tenantId cannot differ from the request tenant')
+  }
+  if (ctxActorId !== undefined && actorId !== undefined && actorId !== ctxActorId) {
+    throw new TypeError('audit.record: scope.actorId cannot differ from the request user')
+  }
+  return { actorId: ctxActorId ?? actorId, tenantId: ctxTenantId ?? tenantId }
+}
+
 const defaultRequestContext: AuditRequestContextResolver = (context) => context?.client
 
 const clip = (value: unknown, max: number): string | undefined =>
@@ -751,9 +802,19 @@ export class Audit {
       options.requestContext === true ? defaultRequestContext : options.requestContext || undefined
   }
 
-  /** Manual entry — for actions no hook covers. */
-  async record(event: string, payload?: unknown): Promise<AuditEntry> {
-    return this.append(this.build('manual', event, payload))
+  /**
+   * Manual entry — for actions no hook covers.
+   *
+   * `actorId` and `tenantId` come from the active context (`ctx().user.id`,
+   * `ctx().tenant.id`). Outside a request — a script, a CLI command, a job that
+   * did not restore a context — pass `scope` to attribute the entry explicitly;
+   * the entry then joins that tenant's hash chain. `scope` can only NARROW: when
+   * the context already has a tenant (or a user), a different `scope.tenantId`
+   * (or `scope.actorId`) throws a `TypeError` instead of writing into another
+   * tenant's chain. Never forward client input into `scope`.
+   */
+  async record(event: string, payload?: unknown, scope?: AuditRecordScope): Promise<AuditEntry> {
+    return this.append(this.build('manual', event, payload, scope))
   }
 
   /** @internal used by the plugin's hook/event taps. */
@@ -1096,17 +1157,18 @@ export class Audit {
     }
   }
 
-  private build(source: AuditEntry['source'], event: string, payload: unknown): AuditEntry {
+  private build(source: AuditEntry['source'], event: string, payload: unknown, scope?: AuditRecordScope): AuditEntry {
     const context = tryCtx()
     const user = context?.['user'] as { id?: string } | undefined
     const tenant = context?.['tenant'] as { id?: string } | undefined
+    const { actorId, tenantId } = resolveRecordScope(user?.id, tenant?.id, scope)
     return Object.freeze({
       id: randomUUID(),
       source,
       event,
       payload: frozenPayload(this.redact(payload, event)),
-      actorId: user?.id,
-      tenantId: tenant?.id,
+      actorId,
+      tenantId,
       requestId: context?.requestId,
       ...this.requestFields(context, event),
       at: Date.now(),
