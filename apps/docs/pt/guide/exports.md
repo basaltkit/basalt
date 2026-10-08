@@ -4,6 +4,8 @@
 TSV, JSON e NDJSON de raiz (zero dependências), com uma junção de formatador
 plugável para XLSX/PDF. Foi feito para correr de forma assíncrona via
 [`@basaltkit/queue`](/pt/guide/queues) e armazenar o resultado com `@basaltkit/files`.
+Também lê CSV: o [`defineImport`/`readImport`](#importar-csv) lê um ficheiro com
+números e datas estritos por locale e um relatório de erros por linha.
 
 [[toc]]
 
@@ -230,3 +232,67 @@ exportsPlugin({
 O `xlsxFormatter` simples não muda (datas como texto ISO, sem estilos). Os
 formatos de número são formatos de apresentação: a célula guarda o número em
 bruto, por isso o Excel mostra-o com o separador decimal de quem o abre.
+
+## Importar CSV
+
+O caminho inverso — ler o que um ERP ou uma folha de cálculo exporta — vem no
+mesmo pacote. O `defineImport` declara as colunas uma vez; o `readImport` lê um
+ficheiro (uma `string`, um `Uint8Array` ou um `AsyncIterable` de pedaços, por
+exemplo o stream de um upload) e devolve as linhas lidas e um relatório de erros
+por linha para um ecrã de pré-visualização. **Nunca lança por causa de dados
+maus.**
+
+```ts
+import { defineImport, readImport } from '@basaltkit/exports'
+
+const purchaseOrders = defineImport<{ number: string; quantity: number; unitPrice: number; dueDate: Date | null }>({
+  name: 'purchase-orders',
+  delimiter: ';',
+  locale: { decimal: ',', thousands: ' ', date: 'dd/mm/yyyy' },
+  maxRows: 2000,
+  columns: [
+    { key: 'number', headers: ['Número', 'Nº'], required: true },
+    { key: 'quantity', headers: ['Quantidade', 'Qtd'], required: true, parse: 'integer' },
+    { key: 'unitPrice', headers: ['Preço unitário'], required: true, parse: 'decimal' },
+    { key: 'dueDate', headers: ['Data de entrega'], parse: 'date' },
+  ],
+})
+
+const { rows, errors, warnings } = await readImport(purchaseOrders, file)
+// rows:   [{ line: 2, value: { number: 'PO-1', quantity: 1000, unitPrice: 1250.5, dueDate: Date } }, …]
+// errors: [{ line: 7, column: 'unitPrice', code: 'AMBIGUOUS_DECIMAL', message: '"12.5" is ambiguous: …' }]
+```
+
+- **Cabeçalhos por nome**, em qualquer ordem, com sinónimos; a comparação
+  ignora maiúsculas, acentos e espaços repetidos (`PREÇO  UNITÁRIO` corresponde a
+  `Preço unitário`). Uma coluna `required` em falta, ou dois cabeçalhos para a
+  mesma coluna, falham o ficheiro; um cabeçalho desconhecido é um aviso
+  (`unknownColumns: 'error'` para o recusar).
+- **Números estritos.** O separador que não é o decimal só é aceite como
+  separador de milhares, em grupos de três. Com vírgula decimal, `1.250,50` é
+  1250,5 e `1 408 278,55` é 1408278,55, mas `12.5` é `AMBIGUOUS_DECIMAL` — nunca
+  lido em silêncio como 125 ou 12,5, que é como um preço acaba errado por um
+  factor de 1 000. O `'integer'` recusa casas decimais.
+- **Datas** em `'dd/mm/yyyy'` ou ISO (`yyyy-mm-dd`, ou um timestamp com
+  offset), validadas contra o calendário (`31/02/2026` é `INVALID_DATE`), e
+  devolvidas como meia-noite UTC. Para outra coisa qualquer passa uma função em
+  `parse`; um throw passa a `INVALID_VALUE` com a sua mensagem.
+- **Erros por linha.** As células são aparadas (trim); uma célula opcional vazia
+  é `null`, uma obrigatória vazia é `REQUIRED`. Uma linha com algum erro, ou com
+  o número errado de campos (`COLUMN_COUNT`), fica fora de `rows`, e cada célula
+  má tem o seu `{ line, column, code, message }` — `line` é a linha física do
+  ficheiro, contada também através das quebras de linha dentro de campos entre
+  aspas. O `maxErrors` (por omissão 1 000) limita o relatório.
+- **Falha fechado num ficheiro malformado.** Umas aspas que nunca fecham, texto
+  depois de umas aspas de fecho, umas aspas dentro de um campo sem aspas, UTF-8
+  inválido, um campo maior que `maxFieldLength`, ou mais de `maxRows` linhas de
+  dados (por omissão 10 000, verificado durante o stream, antes de ler o resto)
+  devolvem esse único erro e **nenhuma linha** — um ficheiro truncado nunca é
+  importado a meio.
+
+O leitor de baixo nível também é exportado: `parseDelimited(input, { delimiter,
+quote, bom, maxRows, maxFieldLength })` é um iterador assíncrono RFC 4180 de
+`{ line, cells }` que lança `DelimitedParseError` (`code`
+`CSV_UNTERMINATED_QUOTE`, …, com `reason` e `line`). Um BOM inicial é removido
+(`bom: 'forbid'` recusa-o), e o que o `createCsvFormatter` escreve volta a ser
+lido sem alterações.
