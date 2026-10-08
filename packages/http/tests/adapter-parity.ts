@@ -1,7 +1,8 @@
 /**
  * Shared adapter parity matrix for `upload()` bodies (BK-006), keyed per-route
  * rate limits (BK-008), structured error details (BK-021), streaming
- * responses (BK-019), `rawBody()` bodies (BK-029), the route table (BK-025), CORS preflights (FA-015) and
+ * responses (BK-019), `rawBody()` bodies (BK-029), the route table (BK-025), CORS preflights (FA-015),
+ * enricher reply headers (BK-083) and
  * wire-level behaviour (FA-077…FA-080). Not a test file on its own: each adapter package
  * (fastify, express, hono) runs it against its own driver, so the three are
  * held to the exact same assertions.
@@ -922,6 +923,40 @@ export function metaValidatorParitySuite(adapter: string, driver: ParityDriver):
       const send = await driver.boot([ok, route({ method: 'GET', url: '/plain', handler: () => 'p' })], [shapes])
       expect(seen).toEqual(['GET /ok', 'GET /plain'])
       expect((await send({ method: 'GET', url: '/ok' })).json).toEqual({ ok: true })
+    })
+  })
+}
+
+/**
+ * An enricher receives the reply, so one that refuses the request can set a
+ * response header first (BK-083: `WWW-Authenticate` on a dead API key). The
+ * header must survive the shared error envelope on every adapter.
+ */
+export function enricherReplyParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: enricher reply headers on a refusal (BK-083)`, () => {
+    afterEach(() => driver.close())
+    const refusing = definePlugin({
+      name: 'test:refusing-enricher',
+      register({ container }) {
+        const enricher: RequestEnricher = ({ request, reply }) => {
+          if (request.headers['x-credential'] !== 'dead') return
+          reply?.header('WWW-Authenticate', 'Bearer error="invalid_token"')
+          throw new HttpError(401, 'TEST_CREDENTIAL_INVALID', 'Dead credential.')
+        }
+        ensureMetadata(container).add('http:enrichers', enricher)
+      },
+    })
+    const ok = route({ method: 'GET', url: '/thing', handler: () => ({ ok: true }) })
+
+    it('keeps the header set before the throw, with the standard error body', async () => {
+      const send = await driver.boot([ok], [refusing])
+      const res = await send({ method: 'GET', url: '/thing', headers: { 'x-credential': 'dead' } })
+      expect(res.status).toBe(401)
+      expect(res.json).toEqual({ error: { code: 'TEST_CREDENTIAL_INVALID', message: 'Dead credential.' } })
+      expect(res.headers['www-authenticate']).toBe('Bearer error="invalid_token"')
+      const fine = await send({ method: 'GET', url: '/thing' })
+      expect(fine.status).toBe(200)
+      expect(fine.headers['www-authenticate']).toBeUndefined()
     })
   })
 }

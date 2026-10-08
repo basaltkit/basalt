@@ -516,6 +516,19 @@ class QuotaExceededError extends BasaltError {
 - `toOtlpJson(spans, serviceName)` (Advanced) — serializes to OTLP/JSON format.
 - Types: `SpanContext`, `FinishedSpan`, `SpanKind`, `SpanStatus`, `AttributeValue`.
 
+### Secrets at rest — `@basaltkit/core/secret-box`
+
+`createSecretBox({ keys, info, version, aadFields })` returns
+`{ version, activeKeyId, seal, open, isCurrent, keyIdOf, reseal }`: AES-256-GCM
+with HKDF-SHA256 keys from a key ring (the first key seals, all open), every
+ciphertext bound to `aadFields` ordered context strings (no NUL), envelope
+`<version>.<keyId>.<iv>.<tag>.<ciphertext>`, and no plaintext path. `reseal`
+returns `null` for an envelope already on the active key, after authenticating
+it. Failures throw `SecretBoxError` (`code: 'SECRET_BOX_ERROR'`, `failure`:
+`config` | `malformed` | `unknown-key` | `context` | `auth-failed`). It backs
+`@basaltkit/auth`'s `SecretBox` and `@basaltkit/drives`' `DriveSecretBox`, and
+is exported only from this subpath, not from the main entry.
+
 ### Metadata (Advanced)
 
 `MetadataRegistry` (`add(bucket, entry)`, `get(bucket)`, `bucketNames()`), the `METADATA` token, and `ensureMetadata(container)` — a central registry of what each plugin declared (routes, commands, schedules), read by tooling (CLI, docs) without importing the producing package.

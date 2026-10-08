@@ -69,15 +69,20 @@ await audit.record('data.export', { format: 'csv' })
 
 ### Automatic hook capture
 
-By default, hooks matching `auth:**`, `billing:**`, `tenancy:created`, or `permission:**` are recorded (not `tenancy:switched`, which fires on every request). You can replace the list:
+By default, hooks matching `auth:**`, `billing:**`, `tenancy:created`, or `permission:**` are recorded (not `tenancy:switched`, which fires on every request), except those in `DEFAULT_AUDIT_HOOK_EXCLUDES`: `auth:apikey_rejected`, which any anonymous client can trigger on every request by presenting a dead API key. You can replace the list:
 
 ```ts
 import { auditPlugin } from '@basaltkit/audit'
 
 auditPlugin({
-  hooks: ['auth:**', 'billing:**', 'api-keys:**'], // replaces the defaults
+  hooks: ['auth:**', 'billing:**', 'api-keys:**'], // replaces the defaults (the default excludes still apply)
 })
+
+// Object form: a hook is recorded when it matches `include` and not `exclude`.
+auditPlugin({ hooks: { include: ['auth:**'], exclude: ['auth:login'] } })
 ```
+
+A hook named exactly (no wildcard) in `include` is always recorded, which is how you opt `auth:apikey_rejected` back in: `hooks: ['auth:**', 'auth:apikey_rejected']`. `exclude: []` turns the default excludes off.
 
 Enrichment comes from the active context: `ctx().user.id` → `actorId`, `ctx().tenant.id` → `tenantId`, `ctx().requestId` → `requestId`.
 
@@ -295,7 +300,7 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `store` | `AuditStore` | No | `new MemoryAuditStore()` | Where entries are stored. |
-| `hooks` | `string[]` | No | `['auth:**', 'billing:**', 'tenancy:created', 'permission:**']` | Hook patterns recorded automatically (replaces the defaults). |
+| `hooks` | `string[] \| { include: string[]; exclude?: string[] }` | No | `['auth:**', 'billing:**', 'tenancy:created', 'permission:**']`, minus `DEFAULT_AUDIT_HOOK_EXCLUDES` | Hook patterns recorded automatically (replaces the defaults). `exclude` defaults to `DEFAULT_AUDIT_HOOK_EXCLUDES`; a hook named exactly in `include` is always recorded. |
 | `events` | `string[]` | No | `['**']` (everything) | EventBus event patterns recorded. `[]` disables it. |
 | `redact` | `AuditRedactor` | No | `defaultAuditRedactor` | Scrubs each payload (and the request fields) before it is stored. See "Redaction". |
 | `onCaptureError` | `(error, { source, event }) => void` | No | logs | Called when a bridged hook/event capture fails; the emitting operation continues. |
@@ -445,7 +450,7 @@ There was no active context at record time. Make sure the code runs inside `runW
 Either `eventsPlugin()` isn't registered (`auditPlugin` only subscribes to the bus if `container.has(EVENTS)`), or you passed `events: []`, or the patterns don't match the event names.
 
 **One of my hooks doesn't show up in the trail.**
-The defaults only cover `auth/billing/tenancy/permission`. Pass `hooks: [...]` with your own patterns — note that the list **replaces** the defaults, so include the ones you want to keep too.
+The defaults only cover `auth/billing/tenancy/permission`, and leave out `auth:apikey_rejected`. Pass `hooks: [...]` with your own patterns — note that the list **replaces** the defaults, so include the ones you want to keep too; name a default-excluded hook exactly to record it.
 
 **I lost the history after restarting.**
 `MemoryAuditStore` is volatile. In production, implement `AuditStore` over a database.

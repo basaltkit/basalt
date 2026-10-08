@@ -62,6 +62,8 @@ export {
   InvalidCredentialsError,
   EmailTakenError,
   WeakJwtSecretError,
+  SessionCookieConfigError,
+  SessionIdleConfigError,
   RefreshInvalidError,
   RefreshReusedError,
   AuthRequiredError,
@@ -108,6 +110,8 @@ export { authPlugin, AUTH, CsrfRejectedError, type AuthPluginOptions, type CsrfO
 export {
   ApiKeys,
   ApiKeyExpirationError,
+  ApiKeyOptionsError,
+  DEFAULT_API_KEY_TOUCH_EVERY_MS,
   ScopeRequiredError,
   scopesSatisfy,
   type ApiKeysOptions,
@@ -120,6 +124,7 @@ export {
   ApiKeyTenantMismatchError,
   ApiKeyNotAllowedError,
   ApiKeyAmbiguousError,
+  ApiKeyInvalidError,
   type ApiKeysPluginOptions,
 } from './apikeys-plugin.js'
 export {

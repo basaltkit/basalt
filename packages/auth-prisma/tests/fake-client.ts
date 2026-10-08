@@ -90,6 +90,12 @@ export function makeFakeClient(options: FakeClientOptions = {}): PrismaAuthClien
         sessions.set(row.id, row)
         return row
       },
+      async updateMany({ where, data }) {
+        const row = sessions.get(where.id)
+        if (!row) return { count: 0 }
+        Object.assign(row, data)
+        return { count: 1 }
+      },
       async deleteMany({ where }) {
         return { count: sessions.delete(where.id) ? 1 : 0 }
       },
@@ -285,7 +291,7 @@ export function makeFakeClient(options: FakeClientOptions = {}): PrismaAuthClien
 
 // row shapes the fake stores (Prisma-return shape: Date / boolean / null)
 interface PUserRow { id: string; email: string; passwordHash: string; emailVerified: boolean }
-interface PSessionRow { id: string; userId: string; expiresAt: Date }
+interface PSessionRow { id: string; userId: string; expiresAt: Date; lastSeenAt?: Date | null }
 interface PRefreshRow { token: string; familyId: string; userId: string; expiresAt: Date; usedAt: Date | null }
 interface PTokenRow { token: string; userId: string; purpose: string; expiresAt: Date; usedAt: Date | null }
 interface PApiKeyRow {

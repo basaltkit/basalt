@@ -495,6 +495,46 @@ authPlugin({ users, secret, csrf: { trustedOrigins: ['https://app.example.com'] 
 authPlugin({ users, secret, csrf: false }) // not recommended
 ```
 
+### Session lifetime: idle timeout and `__Host-` cookies {#session-hardening}
+
+`sessionTtl` (default `30d`) is an **absolute** lifetime: an active session
+still ends then. `sessionIdleTtl` adds an **idle** timeout — a session unused
+for longer is refused (the request is anonymous, so a `meta.auth` route answers
+`401`) and deleted:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  sessions: s.sessions,
+  sessionTtl: '12h',      // absolute
+  sessionIdleTtl: '30m',  // idle
+  sessionCookie: { name: '__Host-session' },
+})
+```
+
+Activity is recorded with the store's `touch()`, at most once per
+`min(60s, sessionIdleTtl / 4)`, so the effective idle limit can exceed the
+setting by that much. The store must implement `touch`: the memory store and
+`@basaltkit/auth-sqlite` do; `@basaltkit/auth-prisma` does with
+`prismaAuthStores(prisma, { trackSessionActivity: true })` after you add the
+`lastSeenAt` column. A store without it makes `authPlugin` fail at boot rather
+than silently not enforcing the timeout.
+
+When you turn the option on, a session row with no `lastSeenAt` (written before
+the store recorded it) starts its idle clock on its next use. A row that does
+carry one is measured from it — and while the option was off nothing touched
+it, so it still holds the creation time. Expect sessions older than
+`sessionIdleTtl` to be signed out once, on their next request, at rollout.
+
+A cookie named `__Host-…` or `__Secure-…` must follow the browser's prefix
+rules, or the browser silently drops it and every login "succeeds" without a
+session. Basalt applies them: both prefixes imply `Secure` when `secure` is
+unset, and `__Host-` implies `Path=/` (Basalt never sets `Domain`). A
+contradicting `secure: false`, or a `__Host-` cookie with another `path`, fails
+at boot with `AUTH_SESSION_COOKIE_INVALID`. `__Host-` is the strongest choice
+for a session cookie: a sibling subdomain cannot set or shadow it.
+
 ### Account routes: `meta.account` and `meta.mfa` {#account-routes}
 
 Every `authRoutes()` route, every `mfaRoutes()` route and both `oauthRoutes()`
@@ -1078,6 +1118,36 @@ A bearer prefixed with `mk_` is ignored by `authPlugin` and handled by
 `apiKeysPlugin`. If keys "don't work", you're likely missing `apiKeysPlugin()`.
 :::
 
+### Keys for machine clients {#apikeys-machine-clients}
+
+A presented key that does not verify (unknown, revoked, expired, malformed) is
+ignored by default: the request continues as anonymous and the route's own
+guards answer — `401 AUTH_REQUIRED` on a `meta.auth` route, `403
+AUTH_SCOPE_REQUIRED` on a `meta.scopes` one, or the public response. A machine
+client then cannot tell "my key is dead" from "I lack a scope". Opt in to a
+clear refusal:
+
+```ts
+apiKeysPlugin({ users, rejectInvalid: true })
+// dead key → 401 { error: { code: 'AUTH_APIKEY_INVALID', … } }
+//            WWW-Authenticate: Bearer error="invalid_token"
+```
+
+The refusal happens before any guard, identically on fastify, express and hono.
+A request with no key at all is unaffected.
+
+`verify()` records `lastUsedAt`, but at most once per `touchEveryMs` per key
+(default 60 s), so a client polling every second costs one store write a minute
+instead of one per request. `lastUsedAt` is accurate to within that window;
+`touchEveryMs: 0` writes on every request.
+
+Every refusal emits `auth:apikey_rejected`. For an invalid key the payload
+carries the presented key's display `prefix` (`mk_live_` plus six characters,
+what listings show — never the secret) and the client `ip`, so you can alert or
+throttle per caller. Because any anonymous client can trigger it, this hook is
+**not** recorded by `auditPlugin`'s defaults — see
+[which hooks are audited](/guide/persistence#which-hooks-are-audited).
+
 ## Brute-force lockout
 
 Active by default: 5 failed attempts per email within 15 minutes → `AccountLockedError`
@@ -1145,8 +1215,9 @@ the plugin supplies:
 | `mfa` | `MfaStore` | in-memory | TOTP enrollment state and recovery codes |
 | `accessTtl` | `DurationInput` | `'15m'` | Access-token lifetime. Short by design — the refresh token is what carries the session |
 | `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
-| `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime |
-| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test` |
+| `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime (absolute) |
+| `sessionIdleTtl` | `DurationInput` | — (no idle timeout) | Refuse and delete a session unused for longer; needs a store with `touch` ([details](#session-hardening)) |
+| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value fails at boot |
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
@@ -1187,6 +1258,8 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | `users` | `UserSource` | — | When set, a key carrying a `userId` also populates `ctx().user`, so scope-guarded routes can read the acting user |
 | `allowTenantlessKeys` | `boolean` | `false` | Let keys issued without a tenant act on tenant-scoped requests (trusted platform keys only) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Let a key without `*` reach `meta.auth`/`can`/`teamRole`/`audience` routes that declare no `meta.scopes` |
+| `rejectInvalid` | `boolean` | `false` | A presented key that does not verify → `401 AUTH_APIKEY_INVALID` + `WWW-Authenticate: Bearer error="invalid_token"`, instead of continuing as anonymous |
+| `touchEveryMs` | `number` | `60_000` | Minimum interval between two `lastUsedAt` writes for one key; `0` writes on every request |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 
 `webauthnPlugin(options)` and its `config`:
@@ -1308,7 +1381,7 @@ users in.
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Email the token**; the second confirms the change |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Security notification |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Audit trail |
-| `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; never the key |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; `prefix` is the display prefix of an invalid key, never the key. Not audited by default |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
 | `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
 | `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials and account links were revoked |

@@ -1,6 +1,6 @@
 import { BasaltError, createToken, definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
 import type { RequestEnricher, RouteGuard, RouteVisibilityCheck } from '@basaltkit/http'
-import { ApiKeys, ScopeRequiredError, scopesSatisfy, type ApiKeyContext, type ApiKeysOptions } from './apikeys.js'
+import { ApiKeys, ScopeRequiredError, apiKeyDisplayPrefix, resolveTouchEveryMs, scopesSatisfy, type ApiKeyContext, type ApiKeysOptions } from './apikeys.js'
 import { publicUser } from './auth.js'
 import type { UserSource } from './stores.js'
 
@@ -17,8 +17,20 @@ declare module '@basaltkit/core' {
      * outside the tenant it is bound to (`tenant_mismatch`), used on a
      * session-only route (`not_allowed`) or beyond its scopes (`scope`). Never
      * carries the key itself.
+     *
+     * For an `invalid` key, `prefix` is the presented key's display prefix
+     * (`mk_live_` plus six characters, what listings show; never the secret)
+     * and `ip` the client address, so an app can throttle or alert per caller.
+     * This event is excluded from `auditPlugin`'s default hook capture: any
+     * unauthenticated client can trigger it on every request.
      */
-    'auth:apikey_rejected': { id?: string; reason: 'invalid' | 'tenant_mismatch' | 'not_allowed' | 'scope'; tenantId?: string }
+    'auth:apikey_rejected': {
+      id?: string
+      reason: 'invalid' | 'tenant_mismatch' | 'not_allowed' | 'scope'
+      tenantId?: string
+      prefix?: string
+      ip?: string
+    }
   }
 }
 
@@ -52,6 +64,21 @@ export class ApiKeyAmbiguousError extends BasaltError {
     super('AUTH_APIKEY_AMBIGUOUS', 'Two different API keys were presented; send exactly one.')
   }
 }
+
+/**
+ * A presented API key is unknown, revoked, expired or malformed. Thrown only
+ * with `apiKeysPlugin({ rejectInvalid: true })`; by default such a request
+ * continues as anonymous.
+ */
+export class ApiKeyInvalidError extends BasaltError {
+  readonly status = 401
+  constructor() {
+    super('AUTH_APIKEY_INVALID', 'The API key is invalid, revoked or expired.')
+  }
+}
+
+/** RFC 6750 challenge sent with {@link ApiKeyInvalidError}. */
+const INVALID_TOKEN_CHALLENGE = 'Bearer error="invalid_token"'
 
 /** The route only accepts an interactive session, not an API key. */
 export class ApiKeyNotAllowedError extends BasaltError {
@@ -97,6 +124,16 @@ export interface ApiKeysPluginOptions extends ApiKeysOptions {
    * old behaviour where any key with a `userId` acts as its owner. Default false.
    */
   allowNarrowKeysOnUnscopedRoutes?: boolean
+  /**
+   * `true` refuses a request that presents an API key which does not verify
+   * (unknown, revoked, expired, malformed) with 401 `AUTH_APIKEY_INVALID` and
+   * `WWW-Authenticate: Bearer error="invalid_token"`, before any guard runs. A
+   * machine client can then tell "my key is dead" from "this route needs a
+   * scope". Default false: the request continues as anonymous and the route's
+   * own guards answer (401 `AUTH_REQUIRED`, 403 `AUTH_SCOPE_REQUIRED`, or the
+   * public response).
+   */
+  rejectInvalid?: boolean
 }
 
 const tenantOf = (context: RequestContext): string | undefined =>
@@ -112,6 +149,9 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:apikeys',
     register({ container, hooks }) {
+      // The ApiKeys singleton is built lazily; fail at boot, not on the first
+      // request, on an invalid option.
+      resolveTouchEveryMs(options.touchEveryMs)
       container.singleton(API_KEYS, () => new ApiKeys({ ...options, hooks }))
       // A verified social login that adopts a never-verified account distrusts
       // whoever registered it: the keys they may have minted die with the rest
@@ -121,7 +161,8 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
       })
       const metadata = ensureMetadata(container)
 
-      const enricher: RequestEnricher = async ({ request, context, container: c }) => {
+      const enricher: RequestEnricher = async ({ request, reply, context, container: c }) => {
+        const ip = typeof request.ip === 'string' && request.ip.length > 0 ? request.ip : undefined
         const authHeader = request.headers.authorization
         const bearer =
           typeof authHeader === 'string' && authHeader.startsWith('Bearer mk_')
@@ -134,7 +175,7 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
         // replaces the key the client meant (and vice versa). Identical values
         // are harmless and accepted.
         if (bearer !== undefined && custom !== undefined && bearer !== custom) {
-          await hooks.emit('auth:apikey_rejected', { reason: 'invalid' })
+          await hooks.emit('auth:apikey_rejected', { reason: 'invalid', ...(ip !== undefined ? { ip } : {}) })
           throw new ApiKeyAmbiguousError()
         }
         const presented = bearer ?? custom
@@ -142,7 +183,16 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
 
         const record = await c.get(API_KEYS).verify(presented)
         if (!record) {
-          await hooks.emit('auth:apikey_rejected', { reason: 'invalid' })
+          const prefix = apiKeyDisplayPrefix(presented)
+          await hooks.emit('auth:apikey_rejected', {
+            reason: 'invalid',
+            ...(prefix !== undefined ? { prefix } : {}),
+            ...(ip !== undefined ? { ip } : {}),
+          })
+          if (options.rejectInvalid === true) {
+            reply?.header('WWW-Authenticate', INVALID_TOKEN_CHALLENGE)
+            throw new ApiKeyInvalidError()
+          }
           return
         }
 

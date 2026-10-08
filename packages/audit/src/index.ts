@@ -1428,9 +1428,17 @@ export interface AuditPluginOptions {
   store?: AuditStore
   /**
    * Lifecycle hook patterns to record automatically.
-   * Default: auth, billing, tenancy and permission activity.
+   * Default: auth, billing, tenancy and permission activity, minus
+   * {@link DEFAULT_AUDIT_HOOK_EXCLUDES}.
+   *
+   * A plain list is the `include` set. The object form adds `exclude`: a hook
+   * is recorded when it matches an `include` pattern and no `exclude` pattern.
+   * When `exclude` is omitted the default excludes apply; a hook named exactly
+   * (no wildcard) in `include` is always recorded, which is how an app opts a
+   * default-excluded hook back in (`['auth:**', 'auth:apikey_rejected']`).
+   * `exclude: []` turns the default excludes off.
    */
-  hooks?: string[]
+  hooks?: string[] | AuditHookSelection
   /**
    * Domain event patterns recorded from the EventBus (when present).
    * Default: everything. Pass [] to disable.
@@ -1496,10 +1504,44 @@ export interface AuditPluginOptions {
  */
 const DEFAULT_HOOK_PATTERNS = ['auth:**', 'billing:**', 'tenancy:created', 'permission:**']
 
+/** The include/exclude form of {@link AuditPluginOptions.hooks}. */
+export interface AuditHookSelection {
+  include: string[]
+  /** Default: {@link DEFAULT_AUDIT_HOOK_EXCLUDES}. */
+  exclude?: string[]
+}
+
+/**
+ * Hooks left out of the automatic capture unless named explicitly.
+ *
+ * `auth:apikey_rejected` fires for every request that presents a key which
+ * does not verify, before anyone is authenticated. Captured by `auth:**`, it
+ * let any anonymous client append to the audit trail (and to its serialized
+ * per-tenant hash chain) as fast as it could send requests. Refusals of a key
+ * that DID verify (tenant mismatch, scope) are rare and attributable, but they
+ * share the event; an app that wants them records the hook explicitly, ideally
+ * behind its own throttle.
+ */
+export const DEFAULT_AUDIT_HOOK_EXCLUDES: readonly string[] = ['auth:apikey_rejected']
+
+const hasWildcard = (pattern: string): boolean => pattern.includes('*')
+
+/** Compiles `AuditPluginOptions.hooks` into a predicate. */
+function hookSelector(option: string[] | AuditHookSelection | undefined): (hook: string) => boolean {
+  const include = Array.isArray(option) ? option : (option?.include ?? DEFAULT_HOOK_PATTERNS)
+  const exclude = Array.isArray(option) || option?.exclude === undefined ? DEFAULT_AUDIT_HOOK_EXCLUDES : option.exclude
+  const explicit = new Set(include.filter((pattern) => !hasWildcard(pattern)))
+  return (hook) => {
+    if (explicit.has(hook)) return true
+    if (!include.some((pattern) => patternMatches(pattern, hook))) return false
+    return !exclude.some((pattern) => patternMatches(pattern, hook))
+  }
+}
+
 export function auditPlugin(options: AuditPluginOptions = {}) {
   // Fail at configuration time, not on the first resolution of AUDIT.
   compileFieldPolicies(options.fieldPolicies, options.fieldPolicyKey)
-  const hookPatterns = options.hooks ?? DEFAULT_HOOK_PATTERNS
+  const selectHook = hookSelector(options.hooks)
   const eventPatterns = options.events ?? ['**']
   const onCaptureError =
     options.onCaptureError ??
@@ -1545,7 +1587,7 @@ export function auditPlugin(options: AuditPluginOptions = {}) {
       }
 
       hooks.onAny(async (hook, payload) => {
-        if (!hookPatterns.some((pattern) => patternMatches(pattern, hook))) return
+        if (!selectHook(hook)) return
         try {
           await container.get(AUDIT).capture('hook', hook, payload)
         } catch (error) {

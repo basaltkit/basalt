@@ -10,6 +10,7 @@ import {
   wireParitySuite,
   metaValidatorParitySuite,
   routeTableParitySuite,
+  enricherReplyParitySuite,
   rateLimitKeyParitySuite,
   rateLimitWarningParitySuite,
   rawBodyParitySuite,
@@ -56,6 +57,7 @@ corsPreflightParitySuite('express', driver)
 wireParitySuite('express', driver)
 metaValidatorParitySuite('express', driver)
 routeTableParitySuite('express', driver)
+enricherReplyParitySuite('express', driver)
 fileRoutesParitySuite('express', driver)
 commentRoutesParitySuite('express', driver)
 realtimeSseParitySuite('express', driver)

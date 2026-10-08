@@ -37,6 +37,12 @@ export type RequestEnricher = (info: {
    * because enrichers written before this existed do not read it.
    */
   route?: BasaltRoute
+  /**
+   * The reply, so an enricher that rejects the request can set a response
+   * header first (e.g. `WWW-Authenticate` on a refused credential). Optional:
+   * a pipeline may run enrichers without one.
+   */
+  reply?: HttpReply
 }) => void | RequestDisposer | Promise<void | RequestDisposer>
 
 /**
@@ -230,7 +236,7 @@ export async function runRoute(
       }
       if (scoped) {
         for (const enrich of pipeline.enrichers ?? []) {
-          const disposer = await enrich({ route: definition, request, context, container: scoped })
+          const disposer = await enrich({ route: definition, request, context, container: scoped, reply })
           if (typeof disposer === 'function') onDispose(disposer)
         }
         for (const guard of pipeline.guards ?? [])
