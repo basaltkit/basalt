@@ -135,10 +135,10 @@ describe('doctor', () => {
     const dir = await installedApp('db', { prisma: true })
     let result = await doctor(dir, [], { env: { NO_COLOR: '1', DB_DATABASE_URL: 'postgres://x' } })
     expect(result.code).toBe(1)
-    expect(result.out).toContain('Prisma client not generated (src/generated/prisma)')
+    expect(result.out).toContain('Prisma client not generated (generated/prisma)')
     expect(result.out).toContain('No migrations yet')
     expect(result.out).toContain('DB_DATABASE_URL is set ($DB_DATABASE_URL)')
-    await write(dir, 'src/generated/prisma/client.ts', '')
+    await write(dir, 'generated/prisma/client.ts', '')
     await write(dir, 'prisma/migrations/20260101000000_init/migration.sql', '')
     // The scaffold's .env provides the URL…
     result = await doctor(dir, [], { env: { NO_COLOR: '1' } })

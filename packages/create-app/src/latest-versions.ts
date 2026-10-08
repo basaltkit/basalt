@@ -34,6 +34,7 @@
 export const THIRD_PARTY_VERSIONS: Readonly<Record<string, string>> = {
   '@prisma/adapter-pg': '^7.10.0',
   '@prisma/client': '^7.10.0',
+  '@prisma/client-runtime-utils': '^7.10.0',
   '@tailwindcss/vite': '^4.3.3',
   '@types/node': '^26.6.2',
   '@types/pg': '^8.15.6',

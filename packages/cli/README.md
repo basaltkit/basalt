@@ -95,7 +95,7 @@ Without registering anything, `runCli` always provides:
 | `basalt schedule:list` | Lists scheduled tasks and their cron expressions (read from the `schedule:entries` bucket, populated by `@basaltkit/scheduler`) |
 | `basalt dev [--entry] [--worker] [--queue] [--no-routes]` | Runs the app with watch + restart, **prints the route table on boot**, and with `--worker` also starts a watched `queue:work` alongside it (server + worker in one command). Delegates watching to `tsx watch` / `node --watch`. |
 | `basalt upgrade [--dry] [--only=<id>] [--dir=<path>]` | Applies framework upgrade codemods (ships the `@machize/*` → `@basaltkit/*` scope rename; `--dry` previews). `create-basalt update` runs them for you after an install. `nodeUpgradeFs(baseDir)` resolves relative paths against the directory being upgraded, so `--dir=` reads the tree it lists |
-| `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile` (plus a `.dockerignore` keeping `.env` and keys out of the image), `ci`, `editorconfig` (run with no id to list) |
+| `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile` (a multi-stage build that runs `pnpm build` and ships `dist/src/server.js` on plain node as `USER node`, plus a `.dockerignore` keeping `.env` and keys out of the image — the same files create-basalt scaffolds), `ci` (install, typecheck, build, test), `editorconfig` (run with no id to list). The stub contents are exported too: `DOCKERFILE`, `DOCKERIGNORE`, `CI_WORKFLOW`, `EDITORCONFIG`, `PRODUCTION_ENTRY` |
 
 Not served by `runCli`: the **project commands** `update`, `add`, `doctor` and
 `info` belong to `create-basalt` — the scaffolded `bin/basalt.ts` forwards them

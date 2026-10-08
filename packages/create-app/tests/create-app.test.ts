@@ -27,6 +27,7 @@ describe('createProject', () => {
       '.env',
       '.env.example',
       '.gitignore',
+      'Dockerfile',
       'README.md',
       'package.json',
       'pnpm-workspace.yaml',
@@ -36,6 +37,7 @@ describe('createProject', () => {
       'src/routes.ts',
       'src/server.ts',
       'tests/app.test.ts',
+      'tsconfig.build.json',
       'tsconfig.json',
     ])
 

@@ -42,3 +42,4 @@ export {
   type PublishFs,
   type PublishResult,
 } from './publish.js'
+export { DOCKERFILE, DOCKERIGNORE, CI_WORKFLOW, EDITORCONFIG, PRODUCTION_ENTRY } from './stubs.js'
