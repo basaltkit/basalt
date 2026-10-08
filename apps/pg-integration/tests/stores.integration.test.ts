@@ -35,7 +35,7 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
       prisma.authToken.deleteMany(), prisma.authApiKey.deleteMany(), prisma.authMfa.deleteMany(),
       prisma.teamMembership.deleteMany(), prisma.teamInvitation.deleteMany(),
       prisma.subscription.deleteMany(), prisma.usageCounter.deleteMany(), prisma.webhookEvent.deleteMany(),
-      prisma.comment.deleteMany(), prisma.auditEntry.deleteMany(), prisma.activityRecord.deleteMany(),
+      prisma.comment.deleteMany(), prisma.commentRevision.deleteMany(), prisma.auditEntry.deleteMany(), prisma.activityRecord.deleteMany(),
       prisma.inAppNotification.deleteMany(), prisma.notificationPreference.deleteMany(), prisma.permUserRole.deleteMany(),
       prisma.permUserPermission.deleteMany(), prisma.permRolePermission.deleteMany(),
       prisma.permTemporaryGrant.deleteMany(), prisma.permDelegation.deleteMany(),
@@ -133,6 +133,17 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     expect((await c.update('acme', 'c1', { resolvedAt: 100, resolvedBy: 'u9' }))?.resolvedAt).toBe(100)
     expect((await c.update('acme', 'c1', { resolvedAt: undefined, resolvedBy: undefined }))?.resolvedAt).toBeUndefined()
     expect((await c.list('acme', 'issue', '1')).length).toBe(1)
+  })
+
+  it('comments: anchor, soft-delete columns and revisions (BK-080)', async () => {
+    const c = prismaCommentsStore(prisma).store
+    await c.create({ id: 'c9', tenantId: 'acme', resourceType: 'doc', resourceId: '9', authorId: 'u1', body: 'v1', mentions: [], createdAt: 1, anchor: { page: 2 } })
+    expect((await c.find('acme', 'c9'))?.anchor).toEqual({ page: 2 })
+    await c.addRevision({ id: 'r1', tenantId: 'acme', commentId: 'c9', body: 'v0', at: 5, by: 'u1' })
+    expect((await c.revisions('acme', 'c9')).map((r) => r.body)).toEqual(['v0'])
+    expect(await c.update('acme', 'c9', { deletedAt: 10, deletedBy: 'mod', deleteReason: 'spam' })).toMatchObject({ deletedAt: 10, deletedBy: 'mod', deleteReason: 'spam' })
+    await c.delete('acme', 'c9')
+    expect(await c.revisions('acme', 'c9')).toEqual([])
   })
 
   it('audit: append-only trail with the event wildcard', async () => {

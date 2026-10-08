@@ -99,8 +99,11 @@ const identity = (log: string[]) =>
         log.push('enricher')
         const user = request.headers['x-user']
         const tenant = request.headers['x-tenant']
-        if (typeof user === 'string' && user) context['user'] = { id: user }
-        if (typeof tenant === 'string' && tenant) context['tenant'] = { id: tenant }
+        // Untyped on purpose: a package whose tests load @basaltkit/auth types
+        // `ctx().user` as its full user, which this stand-in does not build.
+        const scope = context as unknown as Record<string, unknown>
+        if (typeof user === 'string' && user) scope['user'] = { id: user }
+        if (typeof tenant === 'string' && tenant) scope['tenant'] = { id: tenant }
       }
       const guard: RouteGuard = ({ route: r, context }) => {
         log.push('guard')
