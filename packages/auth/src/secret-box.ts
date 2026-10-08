@@ -1,5 +1,6 @@
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
+import { createDecipheriv, createHash } from 'node:crypto'
 import { BasaltError } from '@basaltkit/core'
+import { createSecretBox, SecretBoxError, type SecretBoxPrimitive } from '@basaltkit/core/secret-box'
 
 /**
  * Authenticated encryption (AES-256-GCM) for secrets stored at rest — used to
@@ -28,14 +29,16 @@ import { BasaltError } from '@basaltkit/core'
  * Without the last point, anyone able to write the column could replace an
  * encrypted TOTP secret with a plaintext one they know (a downgrade), and the
  * box would hand it back as if it were genuine.
+ *
+ * The AEAD itself is the shared primitive in `@basaltkit/core/secret-box`
+ * (version `bka2`, two context fields); this class adds the auth contract on
+ * top — its errors, non-empty context fields, and the legacy read paths.
  */
 
 const VERSION = 'bka2'
 const LEGACY_PREFIX = 'v1:'
 /** Mixed into HKDF so key material reused elsewhere derives a different box key. */
 const HKDF_INFO = 'basalt:auth:secret-box:v2'
-const KEY_ID = /^[A-Za-z0-9_-]{1,64}$/
-const MIN_KEY_BYTES = 32
 /** GCM's full tag; anything shorter is refused (a short tag is cheaper to forge). */
 const TAG_BYTES = 16
 
@@ -100,14 +103,27 @@ export interface SecretBoxOptions {
 
 const toBytes = (key: string | Uint8Array): Buffer => (typeof key === 'string' ? Buffer.from(key, 'utf8') : Buffer.from(key))
 
-/** NUL-separated, so no field boundary can be shifted (`a|b`+`c` ≠ `a`+`b|c`). */
-function aad(keyId: string, context: SecretContext): Buffer {
-  for (const field of [context.purpose, context.subject]) {
+/**
+ * The context as the primitive's ordered fields. Auth also refuses empty
+ * fields: an empty subject would bind a secret to no record at all.
+ */
+function fields(context: SecretContext): [string, string] {
+  for (const field of [context?.purpose, context?.subject]) {
     if (typeof field !== 'string' || field.length === 0 || field.includes('\0')) {
       throw new SecretUnreadableError('the secret context must be non-empty strings without NUL characters.')
     }
   }
-  return Buffer.from([VERSION, keyId, context.purpose, context.subject].join('\0'), 'utf8')
+  return [context.purpose, context.subject]
+}
+
+/** Maps a primitive failure onto the auth errors (one class per side of the contract). */
+function translate(error: unknown): never {
+  if (error instanceof SecretBoxError) {
+    if (error.failure === 'config') throw new SecretBoxKeyError(error.detail)
+    if (error.failure === 'malformed') throw new SecretUnreadableError('malformed envelope.')
+    throw new SecretUnreadableError(error.detail)
+  }
+  throw error
 }
 
 /**
@@ -115,26 +131,16 @@ function aad(keyId: string, context: SecretContext): Buffer {
  * envelope and the threat model.
  */
 export class SecretBox {
-  private readonly keys = new Map<string, Buffer>()
-  private readonly activeId: string
+  private readonly box: SecretBoxPrimitive
   private readonly v1Keys: Buffer[]
   private readonly acceptPlaintext: boolean
 
   constructor(options: SecretBoxOptions) {
-    const ring = options.keys
-    if (!Array.isArray(ring) || ring.length === 0) throw new SecretBoxKeyError('at least one key is required.')
-    for (const entry of ring) {
-      if (typeof entry?.id !== 'string' || !KEY_ID.test(entry.id)) {
-        throw new SecretBoxKeyError(`key id ${JSON.stringify(entry?.id)} must match ${String(KEY_ID)}.`)
-      }
-      if (this.keys.has(entry.id)) throw new SecretBoxKeyError(`duplicate key id "${entry.id}".`)
-      const material = toBytes(entry.key)
-      if (material.length < MIN_KEY_BYTES) {
-        throw new SecretBoxKeyError(`key "${entry.id}" is ${material.length} bytes; at least ${MIN_KEY_BYTES} are required.`)
-      }
-      this.keys.set(entry.id, Buffer.from(hkdfSync('sha256', material, Buffer.alloc(0), HKDF_INFO, 32)))
+    try {
+      this.box = createSecretBox({ keys: options.keys, info: HKDF_INFO, version: VERSION, aadFields: 2 })
+    } catch (error) {
+      translate(error)
     }
-    this.activeId = ring[0]!.id
     // The v1 format derived its key with a bare SHA-256; reproduced only to read old rows.
     this.v1Keys = (options.legacy?.v1Keys ?? []).map((k) => createHash('sha256').update(toBytes(k)).digest())
     this.acceptPlaintext = options.legacy?.plaintext === true
@@ -142,17 +148,17 @@ export class SecretBox {
 
   /** The key id new ciphertexts are sealed with. */
   get activeKeyId(): string {
-    return this.activeId
+    return this.box.activeKeyId
   }
 
   /** Encrypts `plaintext` under the active key, bound to `context`. */
   seal(plaintext: string, context: SecretContext): string {
-    const key = this.keys.get(this.activeId)!
-    const iv = randomBytes(12)
-    const cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: TAG_BYTES })
-    cipher.setAAD(aad(this.activeId, context))
-    const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
-    return [VERSION, this.activeId, iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), ciphertext.toString('base64url')].join('.')
+    const bound = fields(context)
+    try {
+      return this.box.seal(plaintext, bound)
+    } catch (error) {
+      translate(error)
+    }
   }
 
   /**
@@ -162,7 +168,14 @@ export class SecretBox {
    */
   open(value: string, context: SecretContext): string {
     if (typeof value !== 'string') throw new SecretUnreadableError('not a string.')
-    if (value.startsWith(`${VERSION}.`)) return this.openV2(value, context)
+    if (value.startsWith(`${VERSION}.`)) {
+      const bound = fields(context)
+      try {
+        return this.box.open(value, bound)
+      } catch (error) {
+        translate(error)
+      }
+    }
     if (value.startsWith(LEGACY_PREFIX)) return this.openV1(value)
     if (this.acceptPlaintext) return value
     throw new SecretUnreadableError('the value is not an encrypted envelope (plaintext is refused).')
@@ -170,8 +183,7 @@ export class SecretBox {
 
   /** Whether `value` is already sealed with the active key (nothing to migrate). */
   isCurrent(value: string): boolean {
-    const parts = value.split('.')
-    return parts.length === 5 && parts[0] === VERSION && parts[1] === this.activeId
+    return this.box.isCurrent(value)
   }
 
   /**
@@ -186,25 +198,6 @@ export class SecretBox {
       return null
     }
     return this.seal(this.open(value, context), context)
-  }
-
-  private openV2(value: string, context: SecretContext): string {
-    const parts = value.split('.')
-    if (parts.length !== 5) throw new SecretUnreadableError('malformed envelope.')
-    const [, keyId, ivB64, tagB64, ctB64] = parts as [string, string, string, string, string]
-    const key = this.keys.get(keyId)
-    if (!key) throw new SecretUnreadableError(`unknown key id "${keyId}" (was it removed from the ring?).`)
-    const additional = aad(keyId, context)
-    try {
-      const tag = Buffer.from(tagB64, 'base64url')
-      if (tag.length !== TAG_BYTES) throw new Error('truncated tag')
-      const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'), { authTagLength: TAG_BYTES })
-      decipher.setAAD(additional)
-      decipher.setAuthTag(tag)
-      return Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64url')), decipher.final()]).toString('utf8')
-    } catch {
-      throw new SecretUnreadableError('authentication failed (wrong key, tampering, or a value from another record).')
-    }
   }
 
   private openV1(value: string): string {

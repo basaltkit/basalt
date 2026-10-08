@@ -347,6 +347,44 @@ conhece. A rotação de chaves e a migração de linhas em texto simples ou `v1:
 adesão `legacy` explícita mais `auth.reencryptMfaSecret(userId)`) estão em
 [Cifrar os segredos TOTP em repouso](/pt/guide/auth#mfa-encryption).
 
+## Segredos em repouso {#secrets-at-rest}
+
+Todos os segredos que o Basalt guarda cifrados — segredos TOTP (o `SecretBox`
+do `@basaltkit/auth`, envelope `bka2`) e tokens OAuth de drives na nuvem (o
+`DriveSecretBox` do `@basaltkit/drives`, envelope `bkd1`) — passam por uma única
+primitiva auditada, `createSecretBox` de `@basaltkit/core/secret-box`:
+
+- **AES-256-GCM**, IV aleatório de 96 bits, tag completa de 128 bits (uma tag
+  mais curta é recusada);
+- derivação de chave **HKDF-SHA256** com uma etiqueta por caixa, por isso o mesmo
+  material de chave usado por duas caixas dá chaves sem relação;
+- um **anel de chaves com ids**: a primeira chave sela, todas abrem, e o
+  `reseal()` passa uma linha para a chave ativa — a rotação é gradual;
+- **ligação AAD** ao registo dono (utilizador, ou tenant + ligação + fornecedor):
+  um blob copiado para outra linha falha a verificação da tag;
+- **sem caminho em texto simples**: tudo o que não seja um envelope dessa caixa
+  é recusado.
+
+Usa-a para um segredo teu (segredos de assinatura de webhooks, tokens de APIs de
+terceiros) em vez de escreveres AES à mão:
+
+```ts
+import { createSecretBox } from '@basaltkit/core/secret-box'
+
+const box = createSecretBox({
+  keys: [{ id: '2026-10', key: env.INTEGRATIONS_KEY }], // ≥ 32 bytes; chaves novas primeiro
+  info: 'my-app:integration-tokens:v1',                 // única por caixa
+  version: 'mya1',                                      // etiqueta do envelope, [a-z0-9]{1,16}
+  aadFields: 2,                                         // a que cada segredo fica ligado
+})
+const sealed = box.seal(token, [tenantId, integrationId])
+const token2 = box.open(sealed, [tenantId, integrationId]) // caso contrário lança SecretBoxError
+```
+
+As falhas lançam `SecretBoxError` com um `failure` de `config`, `malformed`,
+`unknown-key`, `context` ou `auth-failed` (nunca o segredo nem a chave). O
+subpath não é reexportado pela entrada principal de `@basaltkit/core`.
+
 ## Responsabilidade partilhada — reforçar a tua integração
 
 O Basalt fecha as vulnerabilidades que *consegue* fechar sozinho. Três coisas,
