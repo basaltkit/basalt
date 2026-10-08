@@ -218,10 +218,10 @@ export function centralDb(): CentralDb {
 
 The second helper is the one people leave out. `meta: { tenant: false }` lifts the
 *requirement* for a tenant; it does not stop resolution. A platform route
-reached on `acme.example.com/platform/...` still has `ctx().tenant` set to Acme,
-and a `centralDb()` that simply returns `central` is now the only thing between
-Acme's owner and the operator's tables. Rule 5 closes the route; this closes the
-data path. Keep both.
+declared `tenant: false` and reached on `acme.example.com/platform/...` still has
+`ctx().tenant` set to Acme, and a `centralDb()` that simply returns `central` is
+then the only thing between Acme's owner and the operator's tables. Rule 5 closes
+the route (`tenant: 'never'`); this closes the data path. Keep both.
 
 ::: danger Never fall back to the central plane
 `try { return db() } catch { return central }` is the most dangerous line we
@@ -239,7 +239,7 @@ an instance bound to `central`.
 | --- | --- | --- | --- |
 | Tenant route (default) | nothing | tenant host only | invoices, documents, team |
 | Account route | `tenant: false` | apex **and** tenant hosts | `authRoutes()`, `mfaRoutes()`, invite acceptance |
-| Platform route | `tenant: false, platform: true, auth: true, can: 'platform:…'` | apex only | tenant approval, plans, operator roles |
+| Platform route | `tenant: 'never', auth: true, can: 'platform:…'` | apex only | tenant approval, plans, operator roles |
 
 Account routes are the interesting case. `POST /auth/login` on the apex
 authenticates against `public.auth_users`; the same route on `acme.example.com`
@@ -253,30 +253,33 @@ const central = (r: RouteDef) => ({ ...r, meta: { ...r.meta, tenant: false } })
 routes: [...authRoutes().map(central), ...mfaRoutes().map(central), ...appRoutes]
 ```
 
-Platform routes need a guard the framework does not ship, because `platform` is
-your key, not its:
+Platform routes declare `tenant: 'never'`. `tenancyPlugin` resolves the tenant
+first, and when one resolves on a route that refuses it, the request is answered
+with the same body an unmatched route gets — `404 { error: { code: 'NOT_FOUND',
+message: 'Route not found.' } }` — before any guard runs, without entering the
+tenant's context and without emitting `tenancy:switched`. Identical on Fastify,
+Express and Hono:
 
 ```ts
-// src/platform/guard.ts — registered like any other guard
-const platformOnly: RouteGuard = async ({ route, context }) => {
-  if (route.meta?.['platform'] !== true) return
-  if (context.tenant) throw new HttpError(404, 'Not found')
-}
-metadata.add('http:guards', platformOnly)
+const platform = (r: RouteDef) => ({ ...r, meta: { ...r.meta, tenant: 'never' as const } })
+routes: [...platformRoutes.map(platform), ...authRoutes().map(central), ...appRoutes]
 ```
 
 Why 404 and not 403: on a tenant host the platform console does not exist. A 403
-tells Acme's owner there is something there to be forbidden from.
+— or a 401 from the auth guard — tells Acme's owner there is something there to
+be forbidden from. A value other than `true`, `false` or `'never'` (a typo such as
+`tenant: 'none'`) refuses the boot, and `basalt ai doctor` warns about a route
+that pairs `tenant: false` with `can: 'platform:…'`.
 
 ::: warning Wildcards reach further than you think
 A tenant `owner` role granted `'*'` satisfies `can: 'platform:tenants:approve'`.
 Inside the tenant plane that is harmless — the central tables are not there —
-until a platform route is served on a tenant host without the guard above. We
+until a platform route is served on a tenant host without `tenant: 'never'`. We
 found this chain complete in one app: owner on own subdomain → `platform:*`
 matched by `*` → `centralDb()` returned the tenant client → an operator-role
 write landed in the tenant schema and its audit entry in the **central** chain.
-The guard is what breaks the chain; prefixing platform permissions is hygiene,
-not protection.
+`tenant: 'never'` is what breaks the chain; prefixing platform permissions is
+hygiene, not protection.
 :::
 
 Registration on tenant hosts is invite-only: people join a tenant by invitation,
@@ -453,14 +456,15 @@ one that adds the platform console.
 - [ ] `prismaPlugin({ client: central, schemaPerTenant | forTenant })` — two planes
 - [ ] two `schema.prisma`, two generators, two client types
 - [ ] resolvers: subdomain, domain; header only under `NODE_ENV === 'test'`
-- [ ] `required: true`; `meta.tenant: false` only on account and platform routes
+- [ ] `required: true`; `meta.tenant: false` only on account routes
 - [ ] one reserved-slug module used by `validateTenantId` and by sign-up
 - [ ] `canonicalDomain` set on the plugin
 - [ ] every both-plane store built over `tenantClient()`; every central store bound to `central`
 - [ ] `tenantDb()` requires a tenant; `centralDb()` refuses one
 - [ ] no `catch { return central }` anywhere
-- [ ] platform routes declare `platform: true` and a guard 404s them on a tenant host
-- [ ] `/auth/register` is invite-only on tenant hosts (`registerPolicy: teamsInviteGate(…)`) or `register: 'closed'`
+- [ ] platform routes declare `meta.tenant: 'never'` (404 on a tenant host)
+- [ ] `tenancyPlugin` listed before `authPlugin` / `apiKeysPlugin` (their enrichers would answer first)
+- [ ] `/auth/register` is invite-only on tenant hosts (`registerPolicy: teamsInviteGate(…)`) or `register: 'closed'` (404)
 - [ ] one `authPlugin`; no operator model, no second session table
 - [ ] users created through `AUTH`, never inserted with a hand-made hash (`register(…, { emailVerified: true })` when the flow already proved the address)
 - [ ] MFA policy answers for platform roles

@@ -435,12 +435,19 @@ tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'localhos
 Um tenant é um **registo aberto** (`{ id, ...anything }`), guardado como JSON para que
 qualquer campo por tenant faça a ida e volta sem alterações; os domínios personalizados
 são normalizados numa tabela indexada para que `findByDomain` (o domain resolver) seja
-uma lookup por chave. Ambos adicionam métodos de escrita — `save` (upsert + substitui o
+uma lookup por chave. Ambos adicionam métodos de escrita — `save` (upsert + sincroniza o
 conjunto de domínios), `remove` — e impõem **domínios globalmente únicos**: reivindicar
 um já detido por outro tenant é rejeitado, pelo que o encaminhamento permanece
 inequívoco. `prismaTenantSource` traz um `schema.prisma` de referência apanhado pelo
 `basalt prisma:sync`; o mesmo trade-off "qual deles?" que o auth — SQLite para um nó
 único, Prisma quando já corres uma base de dados.
+
+
+Cada pacote traz também o `DomainStore` durável para domínios personalizados
+verificados (`CustomDomains`), na mesma tabela: `prismaDomainStore(prisma)` /
+`sqliteDomainStore(tenants.db)`. Os domínios reivindicados através dele sobrevivem
+a todos os `save()`, e o `findByDomain` só os resolve depois de verificados — vê
+[um domain store durável](/pt/guide/tenancy#um-domain-store-duravel).
 
 ## Outbox de eventos — `@basaltkit/events-sqlite` / `@basaltkit/events-prisma`
 
@@ -767,6 +774,7 @@ configuração continua segura em testes.
 | Notifications | `sqliteInAppStore()` | `prismaInAppStore(client)` | `notificationsPlugin({ inApp: store })` |
 | Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store, temporaryGrants, delegations })` |
 | Tenancy | `sqliteTenantSource()` | `prismaTenantSource(client)` | `tenancyPlugin({ source })` — devolve a própria source, não `{ store }` |
+| Domínios personalizados | `sqliteDomainStore(db)` | `prismaDomainStore(client)` | `new CustomDomains({ store })` — devolve o próprio store |
 | Outbox de eventos | `sqliteOutboxStore()` | `prismaOutboxStore(client, { claim? })` | `outboxPlugin({ store })` |
 | Webhooks | `sqliteWebhookStore()` | `prismaWebhookStore(client)` | `webhooksPlugin({ store })` |
 

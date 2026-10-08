@@ -261,6 +261,16 @@ A route can override `required` for itself with `meta.tenant` — `false` marks 
 route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
 ```
 
+`false` only lifts the requirement: on a tenant host the tenant still resolves and the route runs inside it. A route of the central plane only (the SaaS owner's console) declares `'never'` instead — when a tenant resolves, the request gets the plain "route not found" 404 (`CentralOnlyRouteError`, code `NOT_FOUND`) before any guard runs, without entering the tenant's context:
+
+```ts
+route({ method: 'GET', url: '/platform/plans', meta: { tenant: 'never', auth: true, can: 'platform:plans.read' }, handler })
+```
+
+Any other `meta.tenant` value refuses the boot (`HTTP_INVALID_ROUTE_META`).
+
+The check runs in the tenancy enricher, and enrichers run in plugin order: list `tenancyPlugin` before `authPlugin` / `apiKeysPlugin`, whose enrichers can refuse a request themselves (an invalid bearer) — that answer would otherwise reach the caller instead of the 404.
+
 Without `canonicalDomain` a tenant is created with no `domains` entry, and
 nothing says so: `subdomainResolver` answers from the `Host` without consulting
 the table. The tenant works; what is missing is the record that the address is

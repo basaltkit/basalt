@@ -422,7 +422,7 @@ const centralAccess = prismaAccessStore(prisma).store
 await centralAccess.grantToRole(PLATFORM_ADMIN, ['tenant:approve', 'platform:read'], GLOBAL_SCOPE)
 
 route({ method: 'POST', url: '/central/admin/tenants/:id/approve',
-        meta: { tenant: false, auth: true, can: 'tenant:approve' }, handler })
+        meta: { tenant: 'never', auth: true, can: 'tenant:approve' }, handler })
 ```
 
 The scope is `GLOBAL_SCOPE`, not a string of your own. A request with no
@@ -432,8 +432,10 @@ consulted, so the route above would deny the very administrator you just
 created, and nothing tells you why. See
 [the global scope can't be a tenant](/guide/authorization#the-global-scope-can-t-be-a-tenant).
 
-`meta: { tenant: false, auth: true, can: '…' }` — the same three keys every
-tenant route uses. Name the first administrator from the CLI, not from a route:
+`meta: { tenant: 'never', auth: true, can: '…' }` — the same three keys every
+tenant route uses. `'never'`, not `false`: a platform route reached on a tenant
+host answers 404 before any guard runs, instead of running inside that tenant
+(see [central-only routes](/guide/tenancy#central-only-routes-tenant-never)). Name the first administrator from the CLI, not from a route:
 the first one has nobody to appoint them, and an unprotected "create the first
 admin" endpoint is the door that stays open because nobody remembers to close
 it. Whoever can run a command on the server can already reach the database.

@@ -42,6 +42,7 @@ export {
   nodeReader,
   memoryReader,
   type AppFileInfo,
+  type CentralPlatformRouteHint,
   type DetectedStack,
   type EnvFileInfo,
   type PrismaInfo,
