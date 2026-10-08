@@ -176,7 +176,7 @@ oficiais:
 | `http:enrichers` | `RequestEnricher` | tenancy, auth, qualquer construtor de contexto | os adapters HTTP (cada pedido, antes dos guards) |
 | `http:guards` | `RouteGuard` | auth, permissions, teams, os teus plugins | os adapters HTTP (cada pedido, depois dos enrichers) |
 | `http:guarded-meta` | `string` (uma chave de meta) | cada plugin cujo guard **aplica** uma chave de meta de segurança | o check de boot dos adapters (abaixo) |
-| `http:routes` | descritores de rota | os adapters no boot | OpenAPI, a CLI (`basalt routes`), o SDK |
+| `http:routes` | descritores de rota | os adapters no boot | OpenAPI, a CLI (`basalt routes`), `describeRoutes()`, o SDK |
 | `commands` | `CommandDefinition` (estrutural) | qualquer package com comandos CLI | `@basaltkit/cli` |
 | `schedule:entries` | descritores de agendamento | o scheduler | tooling CLI `schedule:list` |
 | `tenancy:active` | `true` | `tenancyPlugin` | packages que adotam defaults tenant-safe (primeiro consumidor: cache) |

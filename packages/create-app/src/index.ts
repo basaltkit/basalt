@@ -7,6 +7,7 @@ import {
   dbTs,
   devEnvFile,
   devTs,
+  dockerfile,
   dockerignore,
   envExample,
   envTs,
@@ -21,6 +22,7 @@ import {
   readme,
   routesTs,
   serverTs,
+  tsconfigBuildJson,
   tsconfigJson,
   type ProjectOptions,
 } from './templates.js'
@@ -117,8 +119,10 @@ export function scaffoldFiles(options: ProjectOptions): Record<string, string> {
   return {
     'package.json': packageJson(options),
     'tsconfig.json': tsconfigJson(options),
+    'tsconfig.build.json': tsconfigBuildJson(),
     '.env.example': envExample(options),
     '.gitignore': gitignore(options),
+    Dockerfile: dockerfile(),
     '.dockerignore': dockerignore(),
     'README.md': readme(options),
     'pnpm-workspace.yaml': pnpmWorkspaceYaml(options),

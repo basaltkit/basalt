@@ -128,6 +128,53 @@ instances to share one database. Both implement the identical store contracts,
 so switching is a one-line change.
 :::
 
+### Prisma with pnpm: the generated client
+
+Prisma 7 needs an explicit generator `output`, and where it points decides
+whether the app runs on plain `node` after a build. What create-basalt scaffolds
+(and what to copy into an older app):
+
+```prisma
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"   // outside src/: tsc never copies these .js files
+}
+```
+
+```json
+{
+  "imports": { "#db/*": "./generated/prisma/*" },
+  "dependencies": {
+    "@prisma/client": "^7.10.0",
+    "@prisma/client-runtime-utils": "^7.10.0"
+  }
+}
+```
+
+```ts
+// src/db.ts — the same specifier resolves from src/ (tsx, vitest) and dist/src/ (node)
+import { PrismaClient } from '#db/client.js'
+```
+
+- **Outside `src/`.** A client generated under `src/generated` type-checks and
+  runs under tsx, but `tsc` emits only what it compiles — the generated `.js`
+  files never reach `dist/`, and `node dist/src/server.js` fails with
+  `ERR_MODULE_NOT_FOUND`. The `imports` alias avoids both a copy script and a
+  relative path that differs between `src/` and `dist/src/`.
+- **`@prisma/client-runtime-utils` as a direct dependency.** The generated
+  `runtime/client.js` requires it by name. Under pnpm it is only a transitive
+  dependency of `@prisma/client`, kept in the virtual store where a file in your
+  project cannot reach it — so declare it, with the same range as
+  `@prisma/client`. No `publicHoistPattern` or `node-linker=hoisted` needed.
+- **Approve the CLI's build scripts.** pnpm 11 fails an install while a
+  dependency's build is unapproved; the scaffold's `pnpm-workspace.yaml` lists
+  `prisma` and `@prisma/engines` under `allowBuilds`.
+
+`create-basalt doctor` flags a client generated under `src/` and a missing
+`@prisma/client-runtime-utils`; `create-basalt update` adds the dependency and
+prints the move. The image itself is covered in
+[Going to production](/guide/production#build-ship).
+
 ## Teams — `@basaltkit/teams-sqlite` / `@basaltkit/teams-prisma`
 
 `@basaltkit/teams` keeps memberships and invitations behind the same kind of store

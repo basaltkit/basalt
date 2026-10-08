@@ -138,9 +138,12 @@ Always:
 
 ```
 my-app/
-├── package.json          # scripts: dev, start, test, typecheck, basalt (+ dev:web with --ui); create-basalt as a devDependency
+├── package.json          # scripts: dev, build, start (node dist/src/server.js), start:dev (tsx), test, typecheck, basalt (+ dev:web with --ui); create-basalt as a devDependency
 ├── .basalt/project.json  # scaffold manifest: create-basalt version, options, a hash per generated file — commit it
 ├── tsconfig.json         # strict TypeScript, ESM
+├── tsconfig.build.json   # what `pnpm build` compiles: src/ → dist/ (rootDir ".", so dist/src/server.js)
+├── Dockerfile            # multi-stage: build with the dev toolchain, run dist/src/server.js on plain node as USER node
+├── .dockerignore         # keeps .env, keys, node_modules and dist out of the build context
 ├── .env.example          # MY_APP_PORT, MY_APP_HOST, MY_APP_LOG_LEVEL, NODE_ENV (+ MY_APP_APP_SECRET with auth) + the precedence warning — committed
 ├── .env                  # the same values for local development (+ a generated MY_APP_APP_SECRET with auth) — git-ignored, loaded by dev/basalt
 ├── .gitignore
@@ -150,12 +153,12 @@ my-app/
 │   ├── env.ts            # environment variables validated with Zod (@basaltkit/env), app-prefixed
 │   ├── app.ts            # buildApp() with the chosen plugins
 │   ├── routes.ts         # GET / (friendly index) and GET /health
-│   ├── server.ts         # startup + clean shutdown on SIGINT/SIGTERM (`pnpm start` — loads no .env)
+│   ├── server.ts         # startup + clean shutdown on SIGINT/SIGTERM (`pnpm start` runs it compiled — loads no .env)
 │   └── dev.ts            # `pnpm dev`: loads .env, defaults NODE_ENV=development, starts server.ts
 └── tests/app.test.ts     # smoke test adapted to the options
 ```
 
-With `--prisma`, adds `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` (with tenancy) and the `db:generate` / `db:migrate` / `db:deploy` / `db:seed` scripts. The `basalt` script is `create-basalt --project` with `--no-cli` (so `pnpm basalt update|add|doctor|info` works in every app); with `--cli` it is `tsx bin/basalt.ts`, and `bin/basalt.ts` forwards those four commands to create-basalt before booting the app. With `--ui`, adds the `web/` folder (Vite 8 + React 19 + Tailwind CSS 4 via `@tailwindcss/vite` + shadcn — Tailwind is configured in `web/src/index.css`, no `tailwind.config.js`/PostCSS — with `web/src/api.ts` built on top of `@basaltkit/sdk`; with auth on it includes a login/register screen).
+With `--prisma`, adds `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` (with tenancy) and the `db:generate` / `db:migrate` / `db:deploy` / `db:seed` scripts. The client is generated into `generated/prisma` (outside `src/`, so the build never copies it) and imported as `#db/client.js` through a package.json `imports` alias; `@prisma/client-runtime-utils` is a direct dependency (the generated runtime requires it by name), and `pnpm-workspace.yaml` approves the `prisma` / `@prisma/engines` build scripts. The `basalt` script is `create-basalt --project` with `--no-cli` (so `pnpm basalt update|add|doctor|info` works in every app); with `--cli` it is `tsx bin/basalt.ts`, and `bin/basalt.ts` forwards those four commands to create-basalt before booting the app. With `--ui`, adds the `web/` folder (Vite 8 + React 19 + Tailwind CSS 4 via `@tailwindcss/vite` + shadcn — Tailwind is configured in `web/src/index.css`, no `tailwind.config.js`/PostCSS — with `web/src/api.ts` built on top of `@basaltkit/sdk`; with auth on it includes a login/register screen).
 
 ### With `--ui`: running the API and frontend
 
@@ -288,6 +291,13 @@ file". Files are patched **only** when they are byte-for-byte a known template
 (or the manifest records them untouched); a customised one is left alone and the
 exact snippet to paste is printed.
 
+An app from before the production path is **offered** what it lacks:
+`tsconfig.build.json`, a `build` script, the `Dockerfile` (pnpm apps) and
+`.dockerignore`, and with Prisma `@prisma/client-runtime-utils`. Existing files
+are never touched and an existing `start` script is never rewritten — the two
+script lines to paste are printed instead. A Prisma client still generated under
+`src/generated` gets the move instructions and no Dockerfile until it is moved.
+
 ### Adding features later
 
 ```bash
@@ -331,8 +341,11 @@ nor in `.env` — an error, with the fix (`cp .env.example .env`, set it, start
 PostgreSQL); a missing `.env` next to a `.env.example` (warning); whether the Prisma client is generated and
 migrations exist (whether they are *applied* needs a database —
 `prisma migrate status`); `.mcp.json` when `@basaltkit/ai-mcp` is installed; dev
-tooling declared as a runtime dependency; and an outdated `bin/basalt.ts` or
-`src/dev.ts`.
+tooling declared as a runtime dependency; an outdated `bin/basalt.ts` or
+`src/dev.ts`; and, statically, the production path (a `start` running tsx while
+tsx is a devDependency, no `build` script, `dist/src/server.js` older than
+`src/`, a Prisma client generated under `src/`, a missing
+`@prisma/client-runtime-utils`). It never builds or starts the app.
 
 `info` prints create-basalt, Node, OS, package manager, the app's features and
 the declared/installed versions of the framework and key tools — paste it into

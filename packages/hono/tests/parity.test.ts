@@ -8,6 +8,7 @@ import {
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
+  routeTableParitySuite,
   rateLimitKeyParitySuite,
   rawBodyParitySuite,
   sendWith,
@@ -69,6 +70,7 @@ streamParitySuite('hono', driver)
 corsPreflightParitySuite('hono', driver)
 wireParitySuite('hono', driver)
 metaValidatorParitySuite('hono', driver)
+routeTableParitySuite('hono', driver)
 fileRoutesParitySuite('hono', driver)
 
 describe('hono: multipart on routes that are not upload() routes', () => {

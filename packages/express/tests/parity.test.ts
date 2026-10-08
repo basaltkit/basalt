@@ -8,6 +8,7 @@ import {
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
+  routeTableParitySuite,
   rateLimitKeyParitySuite,
   rawBodyParitySuite,
   streamParitySuite,
@@ -49,4 +50,5 @@ streamParitySuite('express', driver)
 corsPreflightParitySuite('express', driver)
 wireParitySuite('express', driver)
 metaValidatorParitySuite('express', driver)
+routeTableParitySuite('express', driver)
 fileRoutesParitySuite('express', driver)

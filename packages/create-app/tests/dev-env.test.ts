@@ -231,9 +231,11 @@ describe('src/dev.ts', () => {
     const dev = run(dir, 'src/dev.ts', [], { DEVTS_PORT: '4000' })
     expect(dev.stderr).toBe('')
     expect(JSON.parse(dev.stdout)).toEqual({ url: 'postgres://from-dotenv/devts', port: '4000', nodeEnv: 'development' })
-    // `pnpm start` runs server.ts directly: production configuration comes from the environment only.
+    // `pnpm start` runs the compiled server.ts: production configuration comes from the environment only.
     expect(await read(dir, 'src/server.ts')).not.toMatch(/loadEnvFile|\.env/)
-    expect(JSON.parse(await read(dir, 'package.json')).scripts.start).toBe('tsx src/server.ts')
+    const scripts = JSON.parse(await read(dir, 'package.json')).scripts
+    expect(scripts.start).toBe('node --enable-source-maps dist/src/server.js')
+    expect(scripts['start:dev']).toBe('tsx src/server.ts')
   })
 
   it('still starts without a .env', async () => {
