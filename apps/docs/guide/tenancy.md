@@ -1002,7 +1002,8 @@ the lookup fails — the claim stands and `add()` throws `DOMAIN_TAKEN`.
 
 | Hook | Payload |
 | --- | --- |
-| `tenancy:switched` | `{ tenant }` — emitted on every entry into a tenant context, by the HTTP enricher and by `tenancy.run()` |
+| `tenancy:switched` | `{ tenant, via }` — emitted on every entry into a tenant context, by the HTTP enricher (`via: 'http'`) and by `tenancy.run()` (`via: 'run'`) |
+| `tenancy:exited` | `{ tenant }` — emitted when a `tenancy.run()` callback settles (resolved or thrown), still inside that tenant's context, so a listener can release what it took on `tenancy:switched` (prismaPlugin returns its leased client). Not emitted for HTTP requests — an enricher returns a disposer for those |
 | `tenancy:created` | `{ tenant }` — emitted once a new tenant is created **and provisioned**, so a listener may assume its storage exists. Does not fire if `onProvision` threw |
 | `tenancy:destroyed` | `{ tenant }` — emitted by `tenancy.destroy()` after `onDeprovision` ran and the record was deleted from the source |
 

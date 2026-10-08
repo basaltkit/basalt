@@ -1024,7 +1024,8 @@ consulta falhar — o claim mantém-se e o `add()` lança `DOMAIN_TAKEN`.
 
 | Hook | Payload |
 | --- | --- |
-| `tenancy:switched` | `{ tenant }` — emitido em cada entrada num contexto de tenant, pelo enricher HTTP e pelo `tenancy.run()` |
+| `tenancy:switched` | `{ tenant, via }` — emitido em cada entrada num contexto de tenant, pelo enricher HTTP (`via: 'http'`) e pelo `tenancy.run()` (`via: 'run'`) |
+| `tenancy:exited` | `{ tenant }` — emitido quando o callback de um `tenancy.run()` assenta (resolvido ou com erro), ainda dentro do contexto desse tenant, para que um listener liberte o que tomou em `tenancy:switched` (o prismaPlugin devolve o cliente em lease). Não é emitido para pedidos HTTP — para esses, um enricher devolve um disposer |
 | `tenancy:destroyed` | `{ tenant }` — emitido pelo `tenancy.destroy()` depois de o `onDeprovision` correr e o registo ser apagado da source |
 
 Os registos duráveis de tenants e as opções de base de dados por tenant estão em

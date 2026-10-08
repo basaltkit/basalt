@@ -194,7 +194,8 @@ in order:
    **scoped container** (`createScope()`).
 2. **Enrichers** run (`http:enrichers`) — build the context: tenancy sets
    `ctx().tenant`, auth sets `ctx().user`. An enricher receives
-   `{ request, context, container }`.
+   `{ request, context, container }` and may return a disposer, run once when
+   the response has ended ([below](#writing-your-own-guard-or-enricher)).
 3. **Guards** run (`http:guards`) — authorize: a guard receives
    `{ route, request, context, container }`, reads the route's `meta`, and
    rejects by **throwing**. Auth reads `meta.auth`, permissions reads
@@ -314,6 +315,25 @@ export const approvalPlugin = definePlugin({
   },
 })
 ```
+
+An enricher that **takes** something for the request — a leased database
+client, a lock, a span — returns a disposer instead of hoping someone cleans
+up. The adapter runs it exactly once when the response has really ended:
+after the body was sent (a `stream()` download or an `sse()` stream included),
+after an error response, when a later enricher or guard rejected the request,
+or when the client went away. Disposers run last-registered first; a failing
+one is reported (`REQUEST_DISPOSER_FAILED`) and never changes the response.
+
+```ts
+const enricher: RequestEnricher = async ({ context }) => {
+  const lease = await pool.acquire(context.tenant!.id)
+  ;(context as { db?: unknown }).db = lease.client
+  return () => lease.release() // RequestDisposer — runs once, on every adapter
+}
+```
+
+`prismaPlugin` does exactly this for database-per-tenant
+([sizing the pool](/guide/database-per-tenant#the-per-tenant-client-pool)).
 
 Rules of the road: enrichers **build** context, guards **decide** — keep the
 two separate; guards must be cheap (they run on every matching request) and
