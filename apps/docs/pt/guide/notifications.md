@@ -182,17 +182,22 @@ mailerPlugin({
 
 ### Receber mail (inbound)
 
-O mailer só **envia**. O Basalt não tem um pacote de mail de entrada: os
-fornecedores (Postmark, SendGrid Inbound Parse, rotas do Mailgun, SES → SNS)
-entregam as mensagens recebidas a um endpoint HTTP, muitas vezes como os bytes
-`message/rfc822` em bruto. Recebe-as numa
-[rota `rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook),
-que entrega ao handler os bytes intactos em todos os adapters, e — quando o
-fornecedor assina com um HMAC sobre o corpo — verifica esses bytes diretamente
-com [`verifySignature(header, body.bytes, secret)`](/pt/guide/webhooks#verificar-bytes-raw)
-antes de fazer o parse do MIME com a biblioteca que preferires. Nunca
-descodifiques os bytes para string primeiro: uma mensagem que não seja UTF-8
-válido deixaria de bater com a assinatura.
+O mailer só **envia**. Receber é um pacote à parte,
+[`@basaltkit/inbound-mail`](/pt/guide/inbound-mail): um relay (Cloudflare Email
+Routing, um poller IMAP, o teu próprio MTA) envia cada mensagem como bytes em
+bruto assinados, o `inboundMailRoutes()` verifica-os e encaminha pelo
+destinatário assinado, e o `parseInbound()` faz o parse dentro de limites e só
+confia em `Authentication-Results` de servidores que indicares. Nunca
+descodifiques a mensagem para string antes de a verificar: uma mensagem que não
+seja UTF-8 válido deixaria de bater com a assinatura.
+
+Para um fornecedor que envia o seu próprio formato (Postmark, SendGrid Inbound
+Parse, rotas do Mailgun, SES → SNS), põe-no atrás de um relay que assine o
+[formato de transmissão](/pt/guide/inbound-mail#formato-de-transmissao-v1), ou
+recebe-o tu numa
+[rota `rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook)
+e verifica os bytes com
+[`verifySignature(header, body.bytes, secret)`](/pt/guide/webhooks#verificar-bytes-raw).
 
 ## SMS e WhatsApp
 

@@ -559,6 +559,9 @@ route({
 })
 ```
 
+Receiving email is the same idea applied to MIME, with the envelope inside the
+signature: see [Inbound mail](/guide/inbound-mail).
+
 ## Delivery semantics
 
 - `timeoutMs` is one deadline per attempt that covers **resolving the host and

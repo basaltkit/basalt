@@ -576,6 +576,9 @@ route({
 })
 ```
 
+Receber email é a mesma ideia aplicada ao MIME, com o envelope dentro da
+assinatura: vê [Mail de entrada](/pt/guide/inbound-mail).
+
 ## Semântica de entrega
 
 - O `timeoutMs` é um prazo por tentativa que cobre **a resolução do host e o

@@ -85,6 +85,13 @@ Entrou no `main` depois da publicação da 1.12, tudo opt-in e sem quebras:
   de entrega, `headerPrefix` muda o nome dos headers `x-basalt-*`, e
   `signPayload()` / `verifySignature()` aceitam bytes em bruto — vê
   [Webhooks](/pt/guide/webhooks#selar-secrets-em-repouso).
+- **Mail de entrada.** Um pacote novo, `@basaltkit/inbound-mail` 0.1, recebe
+  email de um relay como bytes em bruto assinados (um destinatário por pedido,
+  envelope dentro da assinatura), encaminha-o pelo destinatário assinado para
+  handlers conscientes do tenant e faz o parse dentro de limites, confiando em
+  `Authentication-Results` e ARC só de servidores que indicares. Traz um Worker
+  de referência para o Cloudflare Email Routing — vê
+  [Mail de entrada](/pt/guide/inbound-mail).
 
 ## Destaques
 
