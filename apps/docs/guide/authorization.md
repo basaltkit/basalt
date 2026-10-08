@@ -163,14 +163,17 @@ counts that resource:
 
 ```ts
 // documents/access.ts: the single source of the "who sees which document" rule
-export function documentAccessWhere(user: { id: string; roles: string[] }) {
-  if (user.roles.includes('admin')) return {}
+const isAdmin = (user: { roles?: unknown }) => Array.isArray(user.roles) && user.roles.includes('admin')
+
+export function documentAccessWhere(user: { id: string; roles?: unknown }) {
+  if (isAdmin(user)) return {}
   return { OR: [{ ownerId: user.id }, { shares: { some: { userId: user.id } } }] }
 }
 
 export const DocumentPolicy = definePolicy<Document>('document', {
   // The same rule, for one object (meta.can resource requirements, gate.can).
-  read: (user, doc) => doc.ownerId === user.id || doc.shares.some((s) => s.userId === user.id),
+  read: (user, doc) =>
+    isAdmin(user) || doc.ownerId === user.id || doc.shares.some((s) => s.userId === user.id),
 })
 
 // documents/repository.ts

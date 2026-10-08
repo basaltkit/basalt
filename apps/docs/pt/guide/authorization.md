@@ -167,14 +167,17 @@ listam ou contam esse recurso:
 
 ```ts
 // documents/access.ts: a fonte única da regra "quem vê que documento"
-export function documentAccessWhere(user: { id: string; roles: string[] }) {
-  if (user.roles.includes('admin')) return {}
+const isAdmin = (user: { roles?: unknown }) => Array.isArray(user.roles) && user.roles.includes('admin')
+
+export function documentAccessWhere(user: { id: string; roles?: unknown }) {
+  if (isAdmin(user)) return {}
   return { OR: [{ ownerId: user.id }, { shares: { some: { userId: user.id } } }] }
 }
 
 export const DocumentPolicy = definePolicy<Document>('document', {
   // A mesma regra, para um objeto (requisitos de recurso do meta.can, gate.can).
-  read: (user, doc) => doc.ownerId === user.id || doc.shares.some((s) => s.userId === user.id),
+  read: (user, doc) =>
+    isAdmin(user) || doc.ownerId === user.id || doc.shares.some((s) => s.userId === user.id),
 })
 
 // documents/repository.ts
