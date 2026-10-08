@@ -9,6 +9,7 @@ import {
   AuditRedactionRefusedError,
   type AuditRedactionWrite,
   auditStableJson,
+  parseAuditHash,
   type AuditChainHead,
   type AuditChainRange,
   type AuditEntry,
@@ -60,6 +61,8 @@ interface PAuditEntry {
   // Added in @basaltkit/audit-prisma 2.1 — the marker of an attested erasure.
   redaction?: string | null
   redactedBy?: string | null
+  /** v3 hashes only (`integrity.erasable`). */
+  nonce?: string | null
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -114,6 +117,7 @@ const toEntry = (r: PAuditEntry): AuditEntry => {
     ...(r.seq != null ? { seq: r.seq } : {}),
     ...(r.prevHash != null ? { prevHash: r.prevHash } : {}),
     ...(r.hash != null ? { hash: r.hash } : {}),
+    ...(r.nonce != null ? { nonce: r.nonce } : {}),
     ...(redaction !== undefined ? { redaction } : {}),
   }
 }
@@ -149,6 +153,7 @@ export type AuditColumn =
   | 'hash'
   | 'redaction'
   | 'redactedBy'
+  | 'nonce'
 
 export type AuditColumnLimits = ColumnLimits<{ AuditEntry: AuditColumn }>
 
@@ -172,6 +177,7 @@ export const auditMysqlColumnLimits: AuditColumnLimits = {
     hash: V,
     redaction: MYSQL_TEXT,
     redactedBy: V,
+    nonce: V,
   },
 }
 
@@ -231,6 +237,9 @@ export class PrismaAuditStore implements AuditStore {
     }
     if (entry.ip !== undefined) data.ip = entry.ip
     if (entry.userAgent !== undefined) data.userAgent = entry.userAgent
+    // Only v3 entries (integrity.erasable) carry one: apps that do not opt in
+    // need no `nonce` column.
+    if (entry.nonce !== undefined) data.nonce = entry.nonce
     // Before the insert: a truncated row would be written and then fail
     // verification forever; a refused one leaves the chain as it was.
     assertColumnLengths(PKG, this.limits, 'AuditEntry', data)
@@ -274,6 +283,9 @@ export class PrismaAuditStore implements AuditStore {
       redaction: auditStableJson(erased),
       redactedBy: attestationId,
     }
+    // A v3 row has a nonce to destroy (and therefore the column); clearing it on
+    // other rows would make the 2.1 schema without `nonce` fail for nothing.
+    if (parseAuditHash(write.expect.hash)?.version === 3) update.nonce = null
     assertColumnLengths(PKG, this.limits, 'AuditEntry', update)
     const attestation = this.toData(write.attestation)
     await client.$transaction(async (tx: PrismaAuditClient) => {

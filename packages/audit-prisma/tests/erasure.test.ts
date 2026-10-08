@@ -15,17 +15,20 @@ import { matches, type Where } from './prisma-where.js'
 
 type Row = Record<string, unknown>
 
-const LEGACY_COLUMNS = ['redaction', 'redactedBy']
+const LEGACY_COLUMNS = ['redaction', 'redactedBy', 'nonce']
 
 /**
  * An in-memory stand-in for a generated client with the 2.1 `AuditEntry` model:
  * `@@unique([chain, seq])`, `findUnique`, `updateMany` and an interactive
  * `$transaction` that rolls every write back when the callback throws.
  */
-function fakeClient(opts: { legacySchema?: boolean; withoutTransaction?: boolean; withoutFindUnique?: boolean } = {}) {
+function fakeClient(
+  opts: { legacySchema?: boolean; withoutNonce?: boolean; withoutTransaction?: boolean; withoutFindUnique?: boolean } = {},
+) {
   let rows: Row[] = []
   const unknownColumn = (data: Row) => {
-    const bad = opts.legacySchema ? Object.keys(data).find((k) => LEGACY_COLUMNS.includes(k)) : undefined
+    const missing = opts.legacySchema ? LEGACY_COLUMNS : opts.withoutNonce ? ['nonce'] : []
+    const bad = Object.keys(data).find((k) => missing.includes(k))
     if (bad) throw new Error(`Unknown argument \`${bad}\``)
   }
   const delegate: PrismaAuditClient['auditEntry'] = {
@@ -175,6 +178,32 @@ describe('PrismaAuditStore — erasure', () => {
     await audit.record('b', { n: 2 })
     expect(Object.keys(client.rows()[0]!)).not.toContain('redaction')
     expect(await audit.verify()).toMatchObject({ ok: true, checked: 2, redacted: 0 })
+  })
+
+  it('v3 (erasable): persists the nonce and clears it on redaction', async () => {
+    const client = fakeClient()
+    const store = new PrismaAuditStore(client)
+    const audit = new Audit(store, undefined, undefined, { integrity: { mode: 'hash-chain', key: 'k'.repeat(32), keyId: 'k1', erasable: true } })
+    const entry = await audit.record('x', { email: 'a@b.co' })
+    expect((await store.get(entry.id))!.nonce).toBe(entry.nonce)
+    const result = await audit.redact(entry.id, { payload: ['email'], residual: 'none' })
+    expect(result.residual).toBe('none')
+    expect(client.rows().find((r) => r['id'] === entry.id)!['nonce']).toBeNull()
+    expect(await audit.verify()).toMatchObject({ ok: true, checked: 2, redacted: 1 })
+  })
+
+  it('v2 rows redact on a schema without the nonce column', async () => {
+    const client = fakeClient({ withoutNonce: true })
+    const audit = new Audit(new PrismaAuditStore(client), undefined, undefined, keyed)
+    const entry = await audit.record('x', { email: 'a@b.co' })
+    expect((await audit.redact(entry.id, { payload: ['email'] })).changed).toBe(true)
+    expect(await audit.verify()).toMatchObject({ ok: true, redacted: 1 })
+  })
+
+  it('erasable on a schema without the nonce column fails loudly', async () => {
+    const client = fakeClient({ withoutNonce: true })
+    const audit = new Audit(new PrismaAuditStore(client), undefined, undefined, { integrity: { mode: 'hash-chain', erasable: true } })
+    await expect(audit.record('x')).rejects.toThrow(/Unknown argument `nonce`/)
   })
 
   it('a malformed marker fails closed', async () => {
