@@ -13,6 +13,7 @@ import { ctx, definePlugin, ensureMetadata, MetricsRegistry, type BasaltPlugin }
 import {
   describeRoutes,
   findUnguardedRoutes,
+  generateOpenApi,
   GUARDED_META_BUCKET,
   HTTP_SERVER,
   HttpError,
@@ -20,6 +21,7 @@ import {
   InvalidRouteMetaError,
   META_VALIDATORS_BUCKET,
   metricsPlugin,
+  openapiPlugin,
   sse,
   MAX_ERROR_DETAILS_BYTES,
   rawBody,
@@ -550,6 +552,49 @@ export function rateLimitBucketsParitySuite(adapter: string, driver: ParityDrive
       expect(statuses).toEqual([200, 200, 200, 200, 200, 429])
       expect((await call('/V1/Orders?x=1')).limit).toBe('5')
       expect((await call('/app')).limit).toBe('2')
+    })
+  })
+}
+
+/** The served OpenAPI document is the same on every adapter. */
+export function openApiParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: OpenAPI document parity (BK-083 h)`, () => {
+    afterEach(() => driver.close())
+    it('serves the same /openapi.json', async () => {
+      const routes = [
+          route({ method: 'GET', url: '/orders', meta: { scopes: ['orders:read'], tags: ['orders'] }, handler: () => [] }),
+          route({ method: 'POST', url: '/orders', meta: { scopes: ['orders:write'] }, body: z.object({ sku: z.string() }), handler: () => ({}) }),
+          route({ method: 'GET', url: '/me', meta: { auth: true }, handler: () => ({}) }),
+          route({ method: 'GET', url: '/session-only', meta: { auth: true, apiKey: false }, handler: () => ({}) }),
+          route({ method: 'GET', url: '/public', handler: () => ({}) }),
+      ]
+      const info = { title: 'Parity', version: '1.0.0' }
+      const apiKey = { header: 'x-api-key', onAuthRoutes: true }
+      // Stands in for authPlugin + apiKeysPlugin, which claim these keys.
+      const claims = definePlugin({
+        name: 'test:openapi-claims',
+        register({ container }) {
+          ensureMetadata(container).add(GUARDED_META_BUCKET, 'auth')
+          ensureMetadata(container).add(GUARDED_META_BUCKET, 'scopes')
+        },
+      })
+      const send = await driver.boot(routes, [claims, idempotencyPlugin(), openapiPlugin({ info, apiKey })])
+      const doc = (await send({ method: 'GET', url: '/openapi.json' })).json as Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(doc['paths']['/orders']['get']['security']).toEqual([{ apiKeyAuth: [] }])
+      expect(doc['paths']['/orders']['post']['x-required-scopes']).toEqual(['orders:write'])
+      expect(doc['paths']['/orders']['post']['parameters'][0]['name']).toBe('Idempotency-Key')
+      expect(doc['paths']['/me']['get']['security']).toEqual([{ bearerAuth: [] }, { apiKeyAuth: [] }])
+      expect(doc['paths']['/session-only']['get']['security']).toEqual([{ bearerAuth: [] }])
+      expect(doc['paths']['/public']['get']['security']).toBeUndefined()
+      // The whole document equals the adapter-free generation: any
+      // adapter-specific drift fails here, on every adapter alike.
+      const expected = generateOpenApi(
+        routes.map((r) => ({ method: r.method, url: r.url, meta: r.meta ?? {}, ...(r.body ? { body: r.body } : {}) })),
+        info,
+        [],
+        { apiKey, idempotency: { header: 'Idempotency-Key', methods: ['POST'] } },
+      )
+      expect(doc).toEqual(JSON.parse(JSON.stringify(expected)))
     })
   })
 }

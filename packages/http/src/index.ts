@@ -99,6 +99,8 @@ export {
   type OpenApiPluginOptions,
   type OpenApiInfo,
   type OpenApiTag,
+  type GenerateOpenApiOptions,
+  type OpenApiApiKeyOptions,
   type RouteLike,
 } from './openapi.js'
 
