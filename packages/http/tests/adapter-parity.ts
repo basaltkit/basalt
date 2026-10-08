@@ -1536,7 +1536,7 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
           const path = request.url.split('?')[0]
           const label = `${request.method} ${path}`
           // The /late routes register their only disposer themselves.
-          if (path.startsWith('/late')) return undefined
+          if (path?.startsWith('/late')) return undefined
           return () => {
             // A stream's disposer must not run before its body was sent.
             if (path === '/stream') disposed.push(streamDone ? label : `${label} (early)`)
