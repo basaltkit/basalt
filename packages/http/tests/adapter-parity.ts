@@ -1193,3 +1193,141 @@ export function wireParitySuite(adapter: string, driver: ParityDriver): void {
     })
   })
 }
+
+/**
+ * Request disposers (BK-077): an enricher may return cleanup for the end of
+ * its request (prismaPlugin returns a leased tenant client). Every adapter
+ * must run it exactly once — after a buffered reply, an error, a fully read
+ * stream, an event stream the client closed, a download the client abandoned,
+ * and when a later enricher rejects the request — and never while the body is
+ * still being sent.
+ */
+export function disposerParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: request disposer parity (BK-077)`, () => {
+    const disposed: string[] = []
+    const sources: { big?: CountingSource } = {}
+    let streamDone = false
+
+    const disposing = definePlugin({
+      name: 'test:disposing',
+      register({ container }) {
+        const take: RequestEnricher = ({ request }) => {
+          const path = request.url.split('?')[0]
+          const label = `${request.method} ${path}`
+          return () => {
+            // A stream's disposer must not run before its body was sent.
+            if (path === '/stream') disposed.push(streamDone ? label : `${label} (early)`)
+            else disposed.push(label)
+          }
+        }
+        const reject: RequestEnricher = ({ request }) => {
+          if (request.headers['x-reject'] === '1') throw new HttpError(403, 'REJECTED', 'No.')
+        }
+        ensureMetadata(container).add('http:enrichers', take)
+        ensureMetadata(container).add('http:enrichers', reject)
+      },
+    })
+
+    const routes = [
+      route({ method: 'GET', url: '/plain', handler: () => ({ ok: true }) }),
+      route({
+        method: 'GET',
+        url: '/fail',
+        handler: () => {
+          throw new Error('handler failed')
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/stream',
+        handler: () => {
+          const source = Readable.from(
+            (async function* () {
+              yield Buffer.from('a')
+              yield Buffer.from('b')
+              streamDone = true
+            })(),
+          )
+          return stream(source, { contentType: 'text/plain' })
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/big',
+        handler() {
+          const source = new CountingSource(BIG_BYTES)
+          sources.big = source
+          return stream(source, { contentType: 'application/octet-stream' })
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/events',
+        handler: () => sse((events) => new Promise<void>((resolve) => events.onClose(resolve))),
+      }),
+    ]
+
+    let send: Send
+    const boot = async () => {
+      disposed.length = 0
+      streamDone = false
+      delete sources.big
+      send = await driver.boot(routes, [disposing])
+    }
+    afterEach(() => driver.close())
+
+    const settled = async (): Promise<string[]> => {
+      await until(() => disposed.length > 0, 'the disposer to run')
+      await settle(30)
+      return disposed
+    }
+
+    it('runs once after a buffered reply', async () => {
+      await boot()
+      expect((await send({ method: 'GET', url: '/plain' })).status).toBe(200)
+      expect(await settled()).toEqual(['GET /plain'])
+    })
+
+    it('runs once after a handler error', async () => {
+      await boot()
+      expect((await send({ method: 'GET', url: '/fail' })).status).toBe(500)
+      expect(await settled()).toEqual(['GET /fail'])
+    })
+
+    it('runs once when a later enricher rejects the request', async () => {
+      await boot()
+      expect((await send({ method: 'GET', url: '/plain', headers: { 'x-reject': '1' } })).status).toBe(403)
+      expect(await settled()).toEqual(['GET /plain'])
+    })
+
+    it('runs once, after the last byte, for a streamed body', async () => {
+      await boot()
+      const res = await send({ method: 'GET', url: '/stream' })
+      expect(res.bytes.toString()).toBe('ab')
+      expect(await settled()).toEqual(['GET /stream'])
+    })
+
+    it('runs once when the client abandons a download — not before', async () => {
+      await boot()
+      const controller = new AbortController()
+      const res = await send.raw({ method: 'GET', url: '/big', signal: controller.signal })
+      const reader = res.body!.getReader()
+      expect((await reader.read()).done).toBe(false)
+      expect(disposed).toEqual([])
+      controller.abort()
+      expect(await settled()).toEqual(['GET /big'])
+    })
+
+    it('runs once, only when the client closes an event stream', async () => {
+      await boot()
+      const controller = new AbortController()
+      const res = await send.raw({ method: 'GET', url: '/events', signal: controller.signal })
+      expect(res.status).toBe(200)
+      await settle(50)
+      expect(disposed).toEqual([])
+      controller.abort()
+      await res.body?.cancel().catch(() => {})
+      expect(await settled()).toEqual(['GET /events'])
+    })
+  })
+}

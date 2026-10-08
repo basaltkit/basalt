@@ -107,3 +107,22 @@ describe('TenantClientPool never evicts a client in use (FA-067)', () => {
     expect(disconnected).toEqual(['a'])
   })
 })
+
+describe('TenantPoolExhaustedError says what held the slots (BK-077)', () => {
+  it('counts leased vs recently-used clients and advises accordingly', async () => {
+    const { pool } = makePool({ max: 2, idleMs: 60_000, acquireTimeoutMs: 10 })
+    await pool.get('a')
+    await pool.get('b')
+    const recent = (await pool.get('c').catch((e: unknown) => e)) as TenantPoolExhaustedError
+    expect(recent).toBeInstanceOf(TenantPoolExhaustedError)
+    expect(recent.details).toMatchObject({ tenantId: 'c', max: 2, leased: 0, recentlyUsed: 2 })
+    expect(recent.message).toContain('Lower `idleMs`')
+
+    const { pool: busy } = makePool({ max: 1, idleMs: 0, acquireTimeoutMs: 10 })
+    const lease = await busy.acquire('a')
+    const leased = (await busy.get('b').catch((e: unknown) => e)) as TenantPoolExhaustedError
+    expect(leased.details).toMatchObject({ leased: 1, recentlyUsed: 0 })
+    expect(leased.message).toContain('Raise `max`')
+    lease.release()
+  })
+})

@@ -845,9 +845,11 @@ readonly field — it is a boot failure, never an HTTP response.
 |---|---|
 | `runRoute(definition, request, reply, pipeline?)` | Executes a request's full pipeline; returns the handler's value. |
 | `toErrorResponse(error)` → `ErrorResponse` | Converts any error into a standardized `{ status, body }`. |
-| `RequestEnricher` | `(info: { request, context, container }) => void \| Promise<void>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. |
+| `RequestEnricher` | `(info: { request, context, container, route? }) => void \| RequestDisposer \| Promise<void \| RequestDisposer>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. A returned disposer runs exactly once when the response has ended (sent, streamed out, failed or abandoned), on every adapter. |
+| `RequestDisposer` | `() => void \| Promise<void>` — cleanup an enricher returns (e.g. releasing a leased database client). |
+| `RequestDisposers` | Per-request disposer list for adapter authors: `add(disposer)`, once-guarded `run()` (last-registered first; a disposer added after `run()` runs at once). |
 | `RouteGuard` | `(info: { route, request, context, container }) => void \| Promise<void>` — rejects by throwing. Bucket `'http:guards'`. |
-| `RoutePipeline` | `{ container?, enrichers?, guards? }`. |
+| `RoutePipeline` | `{ container?, enrichers?, guards?, onDispose? }`. `onDispose` receives the disposers enrichers return; an adapter passes it and runs them when the response ends. Without it, `runRoute` runs them itself when it returns or throws. |
 | `assertRoutesGuarded(routes, claimed, allow?)` | The boot check every adapter runs. `claimed` is a `Set` of claimed keys or a booted `Container` (the keys are read from its `'http:guarded-meta'` bucket). |
 | `isJsonMediaType(contentType)` | `true` for `application/json` or a `+json` type, parameters and case ignored — never a substring match (`text/plain; application/json` is CORS-safelisted, not JSON). The rule every adapter parses bodies by. |
 | `mediaTypeOf(contentType)` | The bare, lower-cased media type of a `Content-Type` header (`''` when absent). |
