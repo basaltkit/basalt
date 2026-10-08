@@ -92,6 +92,12 @@ covers exactly the keys in `GUARDED_META_KEYS`; a `false`/`undefined` value on a
 route is an explicit opt-off and is never flagged. See
 [Authorization](/guide/authorization) and [Adapters](/guide/adapters).
 
+With `prismaPlugin({ assertMigrated: true })` the boot also refuses a database
+that is unreachable, not migrated, or that the app's role cannot use — and says
+which, with the fix (a missing `GRANT`, a baseline, `migrate deploy`). The
+meanings, a read-only `db:status` for CI and an idempotent post-deploy recipe
+for grants and extensions are in [Database operations](/guide/database-operations).
+
 ## Persistence
 
 Development runs on in-memory stores so there is nothing to install. In

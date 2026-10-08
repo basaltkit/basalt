@@ -94,6 +94,9 @@ the compiler refuses `centralDb().invoice` before a test would.
 The tenant history is migrated per schema with
 [`migrateTenants`](/guide/database-per-tenant#migrating-every-tenant) and the
 tenant `prisma.config.ts`. The central history is ordinary `prisma migrate deploy`.
+`basalt db:status` reports both planes read-only, and
+[Database operations](/guide/database-operations) covers the errors and the
+grants that migrations cannot keep in place.
 
 ## Rule 3 — Resolve by host, register with one reserved list
 
