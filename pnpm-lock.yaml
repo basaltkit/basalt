@@ -2143,6 +2143,12 @@ importers:
         specifier: workspace:^
         version: link:../core
     devDependencies:
+      '@basaltkit/fastify':
+        specifier: workspace:^
+        version: link:../fastify
+      '@basaltkit/http':
+        specifier: workspace:^
+        version: link:../http
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
