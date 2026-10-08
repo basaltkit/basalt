@@ -175,7 +175,7 @@ the official buckets:
 | `http:enrichers` | `RequestEnricher` | tenancy, auth, anything context-building | the HTTP adapters (every request, before guards) |
 | `http:guards` | `RouteGuard` | auth, permissions, teams, your plugins | the HTTP adapters (every request, after enrichers) |
 | `http:guarded-meta` | `string` (a meta key) | every plugin whose guard **enforces** a security meta key | the adapters' boot check (below) |
-| `http:routes` | route descriptors | the adapters at boot | OpenAPI, the CLI (`basalt routes`), the SDK |
+| `http:routes` | route descriptors | the adapters at boot | OpenAPI, the CLI (`basalt routes`), `describeRoutes()`, the SDK |
 | `commands` | `CommandDefinition` (structural) | any package shipping CLI commands | `@basaltkit/cli` |
 | `schedule:entries` | schedule descriptors | the scheduler | CLI `schedule:list` tooling |
 | `tenancy:active` | `true` | `tenancyPlugin` | packages adopting tenant-safe defaults (first consumer: cache) |

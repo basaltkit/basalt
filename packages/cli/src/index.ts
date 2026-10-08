@@ -6,6 +6,8 @@ export { parseArgv, type ParsedArgv } from './parse.js'
 export {
   builtinCommands,
   routesCommand,
+  routeAllowPattern,
+  UNGUARDED_SCOPE_NOTE,
   scheduleListCommand,
   type RouteMetadata,
   type ScheduleMetadata,

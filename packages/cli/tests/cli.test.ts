@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createApp, definePlugin, ensureMetadata } from '@basaltkit/core'
-import { commandsPlugin, defineCommand, memoryIo, parseArgv, renderTable, runCli } from '../src/index.js'
+import { commandsPlugin, defineCommand, memoryIo, parseArgv, renderTable, routeAllowPattern, runCli } from '../src/index.js'
 
 describe('parseArgv', () => {
   it('splits command, positional args and flags', () => {
@@ -119,6 +119,91 @@ describe('runCli', () => {
     expect(code).toBe(0)
     expect(io.lines[0]).toContain('GET')
     expect(io.lines[0]).toContain('/projects')
+  })
+
+  describe('routes guards, --json and --unguarded (BK-025)', () => {
+    const producer = definePlugin({
+      name: 'fake-adapter',
+      register({ container }) {
+        const metadata = ensureMetadata(container)
+        metadata.add('http:routes', { method: 'GET', url: '/health', meta: { auth: false } })
+        metadata.add('http:routes', {
+          method: 'POST',
+          url: '/projects',
+          meta: { auth: true, can: 'projects:create', rateLimit: { limit: 10, windowMs: 60_000 }, tenant: true },
+        })
+        metadata.add('http:routes', { method: 'GET', url: '/projects', meta: { auth: true } })
+        metadata.add('http:routes', { method: 'POST', url: '/webhooks/stripe', meta: {} })
+      },
+    })
+    const run = async (...argv: string[]) => {
+      const io = memoryIo()
+      const code = await runCli({ app: createApp({ plugins: [producer] }), argv: ['routes', ...argv], io })
+      return { code, io }
+    }
+
+    it('prints a guard column per declared key', async () => {
+      const { code, io } = await run()
+      expect(code).toBe(0)
+      const [table] = io.lines
+      expect(table?.split('\n')[0]).toMatch(/^method\s+url\s+auth\s+can\s+rateLimit\s+tenant\s+guards/)
+      expect(table).toMatch(/POST\s+\/projects\s+true\s+projects:create\s+10\/1m\s+required/)
+      expect(table).toMatch(/GET\s+\/health\s+false/)
+    })
+
+    it('--json prints one parseable array of route rows', async () => {
+      const { code, io } = await run('--json')
+      expect(code).toBe(0)
+      expect(io.lines).toHaveLength(1)
+      const rows = JSON.parse(io.lines[0] as string) as { url: string; method: string; can: string[] | null }[]
+      expect(rows.map((r) => `${r.method} ${r.url}`)).toEqual([
+        'GET /health',
+        'GET /projects',
+        'POST /projects',
+        'POST /webhooks/stripe',
+      ])
+      expect(rows[2]?.can).toEqual(['projects:create'])
+    })
+
+    it('--unguarded exits 1 and names the offenders and what they miss', async () => {
+      const { code, io } = await run('--unguarded', '--require=auth,can')
+      expect(code).toBe(1)
+      expect(io.errors[0]).toContain('2 route(s) do not declare auth + can')
+      const output = io.lines.join('\n')
+      expect(output).toMatch(/GET\s+\/projects\s+can/)
+      expect(output).toMatch(/POST\s+\/webhooks\/stripe\s+auth, can/)
+      expect(output).toContain('Checks route meta only')
+    })
+
+    it('--allow exempts matching routes; a clean run exits 0', async () => {
+      const { code, io } = await run('--unguarded', '--require=auth', '--allow=POST /webhooks/*')
+      expect(code).toBe(0)
+      expect(io.lines[0]).toContain('declare auth')
+    })
+
+    it('--unguarded --json prints the offenders with their missing guards', async () => {
+      const { code, io } = await run('--unguarded', '--require=can', '--json', '--allow=/webhooks/**')
+      expect(code).toBe(1)
+      expect(JSON.parse(io.lines[0] as string)).toEqual([
+        expect.objectContaining({ method: 'GET', url: '/projects', missing: ['can'] }),
+      ])
+    })
+
+    it('--unguarded refuses to run without an explicit, known --require', async () => {
+      expect((await run('--unguarded')).code).toBe(2)
+      const unknown = await run('--unguarded', '--require=auth,mfa')
+      expect(unknown.code).toBe(2)
+      expect(unknown.io.errors[0]).toContain('mfa')
+    })
+  })
+
+  it('routeAllowPattern matches * within a segment and ** across segments', () => {
+    expect(routeAllowPattern('/webhooks/*')({ method: 'POST', url: '/webhooks/stripe' })).toBe(true)
+    expect(routeAllowPattern('/webhooks/*')({ method: 'POST', url: '/webhooks/a/b' })).toBe(false)
+    expect(routeAllowPattern('/webhooks/**')({ method: 'POST', url: '/webhooks/a/b' })).toBe(true)
+    expect(routeAllowPattern('get /health')({ method: 'GET', url: '/health' })).toBe(true)
+    expect(routeAllowPattern('GET /health')({ method: 'POST', url: '/health' })).toBe(false)
+    expect(routeAllowPattern('/a.b')({ method: 'GET', url: '/axb' })).toBe(false)
   })
 
   it('schedule:list reports when there is nothing scheduled', async () => {

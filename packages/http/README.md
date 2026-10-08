@@ -321,6 +321,27 @@ permissions guard throws `InvalidCanMetaError` (`PERMISSION_META_INVALID`, HTTP 
 **every request** to that route rather than skipping the check. Authorization fails
 closed, loudly.
 
+### The route table — `describeRoutes()` / `findUnguardedRoutes()`
+
+`describeRoutes(entries)` normalises the `http:routes` bucket every adapter fills at
+boot into sorted `RouteRow`s — `{ method, url, auth, can, rateLimit, tenant, public, guards }`
+(`auth`/`can`/`rateLimit`/`tenant` are `null` when undeclared; `can: false` becomes
+`[]`; `rateLimit` reads `'10/1m per user'`; `tenant` is `'required' | 'exempt' | 'central'`).
+`findUnguardedRoutes(rows, { require: ['auth', 'can'], allow? })` returns the rows that
+do not declare the required guards, treating `auth: false` / `public: true` (and
+`can: false`, for `can`) as intentional. Both are pure and also importable from the
+zod-free subpath `@basaltkit/http/route-table`; `basalt routes` uses them.
+
+```ts
+const app = await buildApp().boot() // no listen needed
+const rows = describeRoutes(ensureMetadata(app.container).get('http:routes'))
+expect(findUnguardedRoutes(rows, { require: ['auth', 'can'], allow: (r) => r.url === '/health' })).toEqual([])
+```
+
+They read route **meta only**: an app-wide rate limit, URL-based tenancy, app hooks
+and the edge routes added through `HTTP_SERVER.addRoute()` (health, metrics, openapi)
+are not in the table.
+
 ### Conditional GETs — `meta: { etag: true }`
 
 Opt a read route in and the shared pipeline hashes the serialized body into a strong
@@ -849,6 +870,7 @@ readonly field — it is a boot failure, never an HTTP response.
 | `RouteGuard` | `(info: { route, request, context, container }) => void \| Promise<void>` — rejects by throwing. Bucket `'http:guards'`. |
 | `RoutePipeline` | `{ container?, enrichers?, guards? }`. |
 | `assertRoutesGuarded(routes, claimed, allow?)` | The boot check every adapter runs. `claimed` is a `Set` of claimed keys or a booted `Container` (the keys are read from its `'http:guarded-meta'` bucket). |
+| `describeRoutes(entries)` → `RouteRow[]` · `findUnguardedRoutes(rows, { require, allow? })` | The route table with declared guards, and the routes missing required guards — see [The route table](#the-route-table--describeroutes--findunguardedroutes). Also at `@basaltkit/http/route-table`. |
 | `isJsonMediaType(contentType)` | `true` for `application/json` or a `+json` type, parameters and case ignored — never a substring match (`text/plain; application/json` is CORS-safelisted, not JSON). The rule every adapter parses bodies by. |
 | `mediaTypeOf(contentType)` | The bare, lower-cased media type of a `Content-Type` header (`''` when absent). |
 | `DEFAULT_BODY_LIMIT` | `1048576` (1 MiB) — the default body limit of every adapter. |

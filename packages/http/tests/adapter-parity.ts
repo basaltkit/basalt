@@ -1,7 +1,7 @@
 /**
  * Shared adapter parity matrix for `upload()` bodies (BK-006), keyed per-route
  * rate limits (BK-008), structured error details (BK-021), streaming
- * responses (BK-019), `rawBody()` bodies (BK-029), CORS preflights (FA-015) and
+ * responses (BK-019), `rawBody()` bodies (BK-029), the route table (BK-025), CORS preflights (FA-015) and
  * wire-level behaviour (FA-077…FA-080). Not a test file on its own: each adapter package
  * (fastify, express, hono) runs it against its own driver, so the three are
  * held to the exact same assertions.
@@ -10,6 +10,9 @@ import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { ctx, definePlugin, ensureMetadata, MetricsRegistry, type BasaltPlugin } from '@basaltkit/core'
 import {
+  describeRoutes,
+  findUnguardedRoutes,
+  GUARDED_META_BUCKET,
   HTTP_SERVER,
   HttpError,
   InvalidRouteMetaError,
@@ -28,6 +31,7 @@ import {
   type RequestEnricher,
   type RouteGuard,
   type RouteMetaValidator,
+  type RouteTableEntry,
 } from '@basaltkit/http'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
@@ -1190,6 +1194,70 @@ export function wireParitySuite(adapter: string, driver: ParityDriver): void {
       abort.abort()
       await res.body?.cancel().catch(() => {})
       expect(await eventually(() => inFlightOf(registry), 0)).toBe(0)
+    })
+  })
+}
+
+/**
+ * Route-table parity (BK-025): every adapter publishes the same `http:routes`
+ * entries at boot, so `describeRoutes()` — what `basalt routes` prints and
+ * route-security tests assert on — is identical on all three. Edge routes
+ * added through `HTTP_SERVER.addRoute()` (health, metrics, openapi) are NOT
+ * in the bucket on any adapter; this pins that too, since the docs say so.
+ */
+export function routeTableParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: route table parity (BK-025)`, () => {
+    afterEach(() => driver.close())
+
+    it('describeRoutes() over the booted bucket is the same on every adapter', async () => {
+      let bucket: RouteTableEntry[] = []
+      const guards = definePlugin({
+        name: 'test:route-table-guards',
+        register({ container }) {
+          const metadata = ensureMetadata(container)
+          metadata.add(GUARDED_META_BUCKET, 'auth')
+          metadata.add(GUARDED_META_BUCKET, 'can')
+        },
+        boot({ container, hooks }) {
+          container.get(HTTP_SERVER).addRoute('GET', '/livez', () => ({ ok: true }))
+          hooks.on('app:booted', () => {
+            bucket = ensureMetadata(container).get<RouteTableEntry>('http:routes')
+          })
+        },
+      })
+      const handler = () => ({ ok: true })
+      const send = await driver.boot(
+        [
+          route({ method: 'GET', url: '/projects', meta: { auth: true, can: 'projects:read' }, handler }),
+          route({
+            method: 'POST',
+            url: '/projects',
+            meta: { auth: true, can: ['projects:create'], rateLimit: { limit: 5, windowMs: 60_000, key: 'user' }, tenant: true },
+            handler,
+          }),
+          route({ method: 'GET', url: '/pricing', meta: { auth: false, tenant: false }, handler }),
+          route({ method: 'GET', url: '/open', handler }),
+        ],
+        [guards],
+      )
+      expect((await send({ method: 'GET', url: '/livez' })).status).toBe(200)
+      const rows = describeRoutes(bucket)
+      expect(rows).toEqual([
+        { method: 'GET', url: '/open', auth: null, can: null, rateLimit: null, tenant: null, public: false, guards: [] },
+        { method: 'GET', url: '/pricing', auth: false, can: null, rateLimit: null, tenant: 'exempt', public: true, guards: [] },
+        { method: 'GET', url: '/projects', auth: true, can: ['projects:read'], rateLimit: null, tenant: null, public: false, guards: [] },
+        {
+          method: 'POST',
+          url: '/projects',
+          auth: true,
+          can: ['projects:create'],
+          rateLimit: '5/1m per user',
+          tenant: 'required',
+          public: false,
+          guards: [],
+        },
+      ])
+      expect(findUnguardedRoutes(rows, { require: ['auth', 'can'] }).map(({ row }) => row.url)).toEqual(['/open'])
     })
   })
 }
