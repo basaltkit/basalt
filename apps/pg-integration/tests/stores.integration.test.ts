@@ -8,7 +8,9 @@ import { prismaInAppStore } from '@basaltkit/notifications-prisma'
 import { prismaAccessStore } from '@basaltkit/permissions-prisma'
 import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'
 import { prismaTeamsStores } from '@basaltkit/teams-prisma'
-import { prismaTenantSource } from '@basaltkit/tenancy-prisma'
+import { CustomDomains } from '@basaltkit/tenancy'
+import { domainStoreContract } from '@basaltkit/tenancy/testing'
+import { prismaDomainStore, prismaTenantSource } from '@basaltkit/tenancy-prisma'
 import { prismaOutboxStore } from '@basaltkit/events-prisma'
 import { prismaWebhookStore } from '@basaltkit/webhooks-prisma'
 
@@ -179,6 +181,51 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     // remove cascades domains
     expect(await tenants.remove('acme')).toBe(true)
     expect(await tenants.findByDomain('new.acme.com')).toBeNull()
+  })
+
+  it('tenancy: PrismaDomainStore honours the DomainStore contract (BK-042)', async () => {
+    // Each case needs an empty store with the tenants acme + globex in place.
+    const fresh = async () => {
+      await prisma.tenantDomain.deleteMany()
+      await prisma.tenant.deleteMany()
+      const tenants = prismaTenantSource(prisma)
+      await tenants.create({ id: 'acme' })
+      await tenants.create({ id: 'globex' })
+      return prismaDomainStore(prisma)
+    }
+    for (const c of domainStoreContract(fresh)) {
+      try {
+        await c.run()
+      } catch (error) {
+        throw new Error(`contract case failed: ${c.name}`, { cause: error })
+      }
+    }
+  })
+
+  it('tenancy: save() keeps a verified custom domain; an unverified claim never resolves (BK-042)', async () => {
+    await prisma.tenantDomain.deleteMany()
+    await prisma.tenant.deleteMany()
+    const tenants = prismaTenantSource(prisma)
+    await tenants.create({ id: 'acme', domains: ['acme.example.com'] })
+    await tenants.create({ id: 'globex' })
+    const records: Record<string, string> = {}
+    const domains = new CustomDomains({
+      store: prismaDomainStore(prisma),
+      resolveTxt: async (host) => (records[host] ? [[records[host]!]] : []),
+    })
+    await domains.add('acme', 'docs.acme.com')
+    const dns = await domains.instructions('acme', 'docs.acme.com')
+    records[dns.host] = dns.value
+    expect(await domains.verify('acme', 'docs.acme.com')).toBe(true)
+    await domains.add('globex', 'victim.com')
+
+    await tenants.save({ id: 'acme', status: 'ready', domains: [] })
+
+    expect((await domains.list('acme')).map((d) => [d.domain, d.verified])).toEqual([['docs.acme.com', true]])
+    expect((await tenants.findByDomain('docs.acme.com'))?.id).toBe('acme')
+    expect(await tenants.findByDomain('acme.example.com')).toBeNull()
+    expect(await tenants.findByDomain('victim.com')).toBeNull()
+    await expect(domains.add('globex', 'docs.acme.com')).rejects.toMatchObject({ code: 'DOMAIN_TAKEN', status: 409 })
   })
 
   it('events outbox: enqueue, pending order, publish/fail lifecycle', async () => {

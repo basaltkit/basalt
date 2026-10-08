@@ -35,15 +35,33 @@ model Tenant {
 }
 
 model TenantDomain {
-  domain   String @id
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  domain            String    @id
+  tenantId          String
+  verificationToken String?   // set on CustomDomains claims (PrismaDomainStore), NULL on tenant.domains mirrors
+  verified          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  verifiedAt        DateTime?
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@index([tenantId])
   @@map("tenant_domains")
 }
 ```
 
-Then `prisma generate` and go.
+Then `prisma generate` and go. The four verification columns are needed by `PrismaDomainStore` only; upgrading from a version without them is an additive migration (`prisma migrate dev`). `PrismaTenantSource` keeps working on a database not yet migrated.
+
+## Verified custom domains — `PrismaDomainStore`
+
+The durable `DomainStore` for `CustomDomains` from `@basaltkit/tenancy`, on the same table:
+
+```ts
+import { CustomDomains } from '@basaltkit/tenancy'
+import { prismaDomainStore, prismaTenantSource } from '@basaltkit/tenancy-prisma'
+
+const tenants = prismaTenantSource(prisma)
+const domains = new CustomDomains({ store: prismaDomainStore(prisma), reservedDomains: ['example.com'] })
+```
+
+Rows with a `verificationToken` are claims and belong to the store; rows without one mirror `tenant.domains` and belong to the source. `save()`/`create()` never delete a claim, so `tenancy.provision()` or a status change keeps a verified domain and its proof; and `findByDomain` resolves a claim only once it is verified, so a domain another tenant merely claimed never routes a request. `add()` translates the unique violation (`P2002`) into `DomainTakenError` (409). `replace()` is one conditional `updateMany`, so of two concurrent take-overs exactly one wins.
 
 ## Usage
 
@@ -71,7 +89,7 @@ Wire the source before its models exist and it **fails fast** with a message nam
 
 A tenant is an **open record** (`{ id, ...anything }`), stored in a `Json` column so any per-tenant fields round-trip unchanged. Custom domains (`tenant.domains: string[]`) are normalized into the indexed `TenantDomain` table, so `findByDomain` (used by the domain resolver) is a keyed lookup.
 
-`PrismaTenantSource` implements the full `TenantSource` contract plus writes: `create` (insert-only + the domain set), `save` (upsert + replace the domain set), `find`, `findByDomain`, `list`, `remove` (cascades domains). **Domains are globally unique** — `create` and `save` reject a domain already owned by a different tenant, so routing stays unambiguous. Each write runs in **one interactive transaction** (`$transaction`): the tenant row, the domain check and the domain set commit together or not at all, so a failure part-way — a domain another tenant claimed a moment earlier, a lost connection — never leaves a tenant rewritten with its domains deleted. A domain listed twice is stored once.
+`PrismaTenantSource` implements the full `TenantSource` contract plus writes: `create` (insert-only + the domain set), `save` (upsert + sync the domain set — claim rows are left alone), `find`, `findByDomain`, `list`, `remove` (cascades domains). **Domains are globally unique** — `create` and `save` reject a domain already owned by a different tenant, so routing stays unambiguous. Each write runs in **one interactive transaction** (`$transaction`): the tenant row, the domain check and the domain set commit together or not at all, so a failure part-way — a domain another tenant claimed a moment earlier, a lost connection — never leaves a tenant rewritten with its domains deleted. A domain listed twice is stored once.
 
 ## Options reference
 
@@ -89,9 +107,9 @@ checked. Resolvers, `required`, `onMigrate` and `onSeed` belong to `tenancyPlugi
 | Method | Description |
 | --- | --- |
 | `create(tenant)` | Insert a **new** tenant and its domain set. An existing id throws `TenantAlreadyExistsError` (409) and leaves that tenant untouched — the insert's unique violation (`P2002`) is what refuses it, so of two concurrent creates exactly one wins. What `tenancy.create()` calls. |
-| `save(tenant)` | Upsert the tenant (replacing the whole record) and replace its domain set. For intentional updates and status transitions. Atomic: a conflicting domain rolls the whole save back. |
+| `save(tenant)` | Upsert the tenant (replacing the whole record) and bring its mirror rows in line with `tenant.domains` (drops unlisted ones, inserts missing ones; `PrismaDomainStore` claims are never deleted). For intentional updates and status transitions. Atomic: a conflicting domain rolls the whole save back. |
 | `find(id)` | The tenant record, or `null`. |
-| `findByDomain(domain)` | The tenant owning that domain, or `null`. |
+| `findByDomain(domain)` | The tenant owning that domain, or `null`. A `PrismaDomainStore` claim resolves only once verified (fail-closed). |
 | `list()` | Every tenant, ordered by `id`. |
 | `remove(id)` | Delete a tenant; its domains cascade. Returns whether one existed. |
 

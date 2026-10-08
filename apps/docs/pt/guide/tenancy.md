@@ -245,10 +245,58 @@ rejeita userinfo (`acme.basalt.app@evil.com`), caminhos, escapes `%`, não-ASCII
 literais IP com `400 DOMAIN_INVALID` em vez de os reescrever. Regista um domínio
 internacionalizado na forma `xn--` (`domainToASCII()` de `node:url`).
 
-O `verify()` faz um lookup `TXT` real via `node:dns` (injetável nos testes). Fornece um
-`DomainStore` durável (com a forma de `MemoryDomainStore`) para persistir os domínios.
-O provisionamento do certificado TLS é infraestrutura — emite o certificado na tua
+O `verify()` faz um lookup `TXT` real via `node:dns` (injetável nos testes). O
+provisionamento do certificado TLS é infraestrutura — emite o certificado na tua
 plataforma (Cloudflare, Caddy, ACME) assim que o `verify()` devolver `true`.
+
+### Um domain store durável
+
+O `MemoryDomainStore` esquece todas as reivindicações e provas no restart. As duas
+tenant sources duráveis trazem cada uma um store correspondente, na mesma tabela
+`tenant_domains`:
+
+```ts
+import { prismaDomainStore, prismaTenantSource } from '@basaltkit/tenancy-prisma'
+// ou: import { sqliteDomainStore, sqliteTenantSource } from '@basaltkit/tenancy-sqlite'
+
+const tenants = prismaTenantSource(prisma)
+const domains = new CustomDomains({
+  store: prismaDomainStore(prisma),   // sqliteDomainStore(tenants.db) com SQLite
+  reservedDomains: ['basalt.app'],
+})
+tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'basalt.app' }), domainResolver()] })
+```
+
+Com estes não precisas do `findByVerifiedDomain`: o `findByDomain` da própria
+source falha fechado, por isso uma reivindicação só resolve depois de verificada,
+e um domínio que outro tenant apenas reivindicou (`victim.com`) nunca encaminha um
+pedido. A tabela guarda dois tipos de linha, distinguidos pelo `verificationToken`:
+
+| Linha | Escrita por | `save()` / `provision()` | Resolve |
+| --- | --- | --- | --- |
+| espelho (`verificationToken` NULL) | a source, a partir de `tenant.domains` | acompanha `tenant.domains` | sempre |
+| reivindicação (`verificationToken` preenchido) | o domain store | nunca apagada | depois de `verified` |
+
+Por isso, re-aprovisionar um tenant ou mudar o seu estado nunca apaga um domínio
+personalizado verificado nem a sua prova. Um domínio é uma linha, seja de que
+tipo for: reivindicar um domínio que já está em algum `tenant.domains` lança
+`DOMAIN_TAKEN` (409), traduzido da violação de unicidade do driver dentro do store.
+
+O store Prisma precisa das colunas de verificação do modelo `TenantDomain` de
+referência (`verificationToken`, `verified`, `createdAt`, `verifiedAt`) — uma
+migração aditiva: volta a correr `basalt prisma:sync` e depois `prisma migrate dev`.
+A source SQLite acrescenta-as ao abrir.
+
+Vais escrever o teu próprio store? Corre contra ele o contrato partilhado — vive
+num subpath só de testes e funciona com qualquer runner:
+
+```ts
+import { domainStoreContract } from '@basaltkit/tenancy/testing'
+
+describe('MyDomainStore', () => {
+  for (const c of domainStoreContract(() => new MyDomainStore(db))) it(c.name, c.run)
+})
+```
 
 ## Criar tenants
 
@@ -304,8 +352,10 @@ tenancyPlugin({
 })
 ```
 
-`save` e `create` substituem o conjunto de domínios personalizados do tenant; um domínio já possuído
-por outro tenant é rejeitado (o routing tem de ser inequívoco). Ver [Persistência](/pt/guide/persistence).
+`save` e `create` alinham as linhas de domínio do tenant com `tenant.domains`
+(os domínios reivindicados pelo `CustomDomains` ficam intactos — vê
+[um domain store durável](#um-domain-store-duravel)); um domínio já possuído por
+outro tenant é rejeitado (o routing tem de ser inequívoco). Ver [Persistência](/pt/guide/persistence).
 
 ::: tip Dica
 Registo com backend Prisma. `prismaTenantSource(prisma)` guarda o registo na base de
@@ -972,7 +1022,7 @@ não-ASCII, literal IP) não corresponde a nada.
 
 | Opção | Tipo | Predefinição | Propósito |
 | --- | --- | --- | --- |
-| `store` | `DomainStore` | `new MemoryDomainStore()` | Onde vivem os domínios registados. Uma implementação durável **tem** de suportar o `add()` com uma restrição UNIQUE — esse insert é a barreira anti-roubo |
+| `store` | `DomainStore` | `new MemoryDomainStore()` | Onde vivem os domínios registados — `prismaDomainStore(prisma)` ou `sqliteDomainStore(db)` em produção. Uma implementação durável **tem** de suportar o `add()` com uma restrição UNIQUE e lançar `DomainTakenError` — esse insert é a barreira anti-roubo (verifica o teu com `domainStoreContract` de `@basaltkit/tenancy/testing`) |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 | `token` | `() => string` | 24 bytes aleatórios, base64url | Gerador do token de verificação (testes) |
 | `resolveTxt` | `(host) => Promise<string[][]>` | `resolveTxt` de `node:dns/promises` | Consulta DNS usada pelo `verify()`; substitui-a nos testes |

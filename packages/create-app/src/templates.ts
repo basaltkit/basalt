@@ -651,9 +651,17 @@ const PRISMA_MODELS: Readonly<Record<'tenancy' | 'auth' | 'teams' | 'subscriptio
 }
 
 model TenantDomain {
-  domain   String @id
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  domain            String    @id
+  tenantId          String
+  // Custom-domain verification (PrismaDomainStore). A row with a NULL token
+  // mirrors \`tenant.domains\` and is written by PrismaTenantSource; a row with a
+  // token is a CustomDomains claim, which the source never deletes, and which
+  // only resolves a request once \`verified\` is true.
+  verificationToken String?
+  verified          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  verifiedAt        DateTime?
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@map("tenant_domains")
