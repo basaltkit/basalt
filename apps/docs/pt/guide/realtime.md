@@ -538,6 +538,15 @@ note created ─▶ note:created hook ─▶ bridge rule ─▶ realtime.emit
 | `heartbeatMs` | `number` | desligado | Intervalo do ping de comentário — impede proxies de fechar um stream inativo e expõe sockets mortos |
 | `maxDurationMs` | `number` | desligado | Teto rígido para a vida de um stream; rede de segurança para ligações que nunca se desligam |
 
+`realtimeSse(hub, options)` — o producer que passa ao `sse()`:
+
+| Opção | Tipo | Predefinição | Para que serve |
+| --- | --- | --- | --- |
+| `meta` | `ConnectionMeta` | — | `{ tenantId, userId?, id? }` da ligação — tire-o do contexto do pedido, nunca do cliente |
+| `channels` | `readonly string[]` | — | Canais a juntar; cada um passa pelo `authorize` do hub, e uma recusa fecha o stream |
+| `onOpen` | `(connection) => void \| Promise<void>` | — | Corre quando todos os canais estão juntos (p. ex. enviar um snapshot) |
+| `maxBackpressure` | `number` | `50` | Envios consecutivos com o buffer cheio antes de fechar o stream; um envio que passa repõe a contagem |
+
 `createRealtimeClient(options)`:
 
 | Opção | Tipo | Predefinição | Para que serve |

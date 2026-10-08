@@ -532,6 +532,15 @@ note created ─▶ note:created hook ─▶ bridge rule ─▶ realtime.emit
 | `heartbeatMs` | `number` | off | Comment ping interval — keeps proxies from closing an idle stream and surfaces dead sockets |
 | `maxDurationMs` | `number` | off | Hard cap on one stream's lifetime; a backstop against connections that never disconnect |
 
+`realtimeSse(hub, options)` — the producer you pass to `sse()`:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `meta` | `ConnectionMeta` | — | `{ tenantId, userId?, id? }` of the connection — take it from the request context, never from the client |
+| `channels` | `readonly string[]` | — | Channels to join; each goes through the hub's `authorize`, and one refusal closes the stream |
+| `onOpen` | `(connection) => void \| Promise<void>` | — | Runs once every channel is joined (e.g. send a snapshot) |
+| `maxBackpressure` | `number` | `50` | Consecutive sends that hit a full buffer before the stream is closed; a send that goes through resets the count |
+
 `createRealtimeClient(options)`:
 
 | Option | Type | Default | Purpose |
