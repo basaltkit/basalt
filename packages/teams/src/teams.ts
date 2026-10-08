@@ -304,14 +304,7 @@ export class Teams {
    */
   async accept(token: string, userId: string, acceptingEmail?: string): Promise<Membership> {
     const invitation = await this.invitations.findByToken(hashInviteToken(token))
-    if (
-      !invitation ||
-      invitation.acceptedAt !== undefined ||
-      invitation.revokedAt !== undefined ||
-      this.now() >= invitation.expiresAt
-    ) {
-      throw new TeamInviteInvalidError()
-    }
+    if (!invitation || !this.isLive(invitation)) throw new TeamInviteInvalidError()
     // Bind acceptance to the invited address: a leaked or forwarded invite link
     // must not enroll a different account. Same error as an invalid token so a
     // wrong recipient can't tell a real token from a fake one. Pass the caller's
@@ -319,12 +312,88 @@ export class Teams {
     if (acceptingEmail !== undefined && canonicalInviteEmail(acceptingEmail) !== canonicalInviteEmail(invitation.email)) {
       throw new TeamInviteInvalidError()
     }
+    const membership = await this.consume(invitation, userId)
+    if (membership === null) throw new TeamInviteInvalidError()
+    return membership
+  }
+
+  /**
+   * Accepts the pending invitation of ONE tenant for an account whose address
+   * is already proven — the link-free twin of {@link accept}. The link carries
+   * a token that proves the invitation was received; a **verified** email equal
+   * to the invited address proves the same thing, so a person who signs up and
+   * confirms their address (or an already-verified user invited later, who
+   * then signs in) becomes a member without hunting for the invitation email.
+   *
+   * Same guarantees as {@link accept}: only a pending, unrevoked, unexpired
+   * invitation; exact canonical address match; compare-and-set on the
+   * invitation (concurrent calls enroll once); never demotes an existing
+   * membership of equal or higher rank.
+   *
+   * Returns `[]` unless `emailVerified === true`. Tenant-scoped on purpose: it
+   * never sweeps other tenants, so an address is not enrolled into
+   * organisations it is not currently signing in to.
+   */
+  async acceptByEmail(input: {
+    tenantId: string
+    userId: string
+    email: string
+    emailVerified?: boolean
+  }): Promise<Membership[]> {
+    if (input.emailVerified !== true || !input.tenantId || !input.userId) return []
+    const email = canonicalInviteEmail(input.email)
+    if (email === '') return []
+    const invitation = await this.invitations.findPending(input.tenantId, email)
+    // Re-check what the store promised: a lax store must not widen the match.
+    if (
+      !invitation ||
+      invitation.tenantId !== input.tenantId ||
+      canonicalInviteEmail(invitation.email) !== email ||
+      !this.isLive(invitation)
+    ) {
+      return []
+    }
+    const membership = await this.consume(invitation, input.userId)
+    return membership === null ? [] : [membership]
+  }
+
+  /**
+   * The live invitation of this tenant for this address (pending, unrevoked,
+   * unexpired), or `null`. A read — nothing is consumed. Behind
+   * {@link teamsInviteGate}.
+   */
+  async pendingInviteFor(tenantId: string, email: string): Promise<PublicInvitation | null> {
+    const wanted = canonicalInviteEmail(email)
+    if (!tenantId || wanted === '') return null
+    const invitation = await this.invitations.findPending(tenantId, wanted)
+    if (
+      !invitation ||
+      invitation.tenantId !== tenantId ||
+      canonicalInviteEmail(invitation.email) !== wanted ||
+      !this.isLive(invitation)
+    ) {
+      return null
+    }
+    return publicInvite(invitation)
+  }
+
+  /** Pending: not accepted, not revoked, not expired. */
+  private isLive(invitation: Invitation): boolean {
+    return (
+      invitation.acceptedAt === undefined && invitation.revokedAt === undefined && this.now() < invitation.expiresAt
+    )
+  }
+
+  /**
+   * Enrolls `userId` through `invitation` — the one place both acceptance paths
+   * share. `null` when the compare-and-set lost (the invitation was accepted
+   * or revoked concurrently).
+   */
+  private async consume(invitation: Invitation, userId: string): Promise<Membership | null> {
     // Compare-and-set: only the caller that flips the invitation from pending to
     // accepted may enroll. A store returning `false` lost a concurrent race.
     // (Legacy stores returning void are treated as success.)
-    if ((await this.invitations.markAccepted(invitation.id, this.now())) === false) {
-      throw new TeamInviteInvalidError()
-    }
+    if ((await this.invitations.markAccepted(invitation.id, this.now())) === false) return null
     // An invitation only ever ADDS access: it must never overwrite an existing
     // membership of equal or higher rank (e.g. an owner clicking a "member"
     // invite would otherwise be demoted — past the last-owner rule).
@@ -537,5 +606,31 @@ export class Teams {
    */
   private async hasOwner(tenantId: string): Promise<boolean> {
     return (await this.memberships.list(tenantId)).some((m) => m.role === OWNER)
+  }
+}
+
+/**
+ * The registration predicate of `@basaltkit/auth` (`RegisterPolicy`), shaped
+ * structurally so teams never imports auth: `({ email, tenantId? }) => …`.
+ */
+export type TeamsRegisterPolicy = (input: { email: string; tenantId?: string }) => Promise<boolean>
+
+/**
+ * "Registration on a tenant host is invite-only" as a ready-made
+ * `RegisterPolicy` for `authPlugin({ registerPolicy })` / `authRoutes({ register })`.
+ * Admits every address on the apex (`tenantId` undefined) and, on a tenant,
+ * only an address with a live invitation to THAT tenant
+ * ({@link Teams.pendingInviteFor}). It only reads — nothing is accepted here;
+ * the invitation is consumed later by the invite link or by
+ * `acceptOnVerifiedEmail`.
+ *
+ * Pass a `Teams` instance, or a function returning one when the service is
+ * resolved from the container after boot: `teamsInviteGate(() => app.container.get(TEAMS))`.
+ */
+export function teamsInviteGate(teams: Teams | (() => Teams)): TeamsRegisterPolicy {
+  const resolve = typeof teams === 'function' ? teams : () => teams
+  return async ({ email, tenantId }) => {
+    if (tenantId === undefined) return true
+    return (await resolve().pendingInviteFor(tenantId, email)) !== null
   }
 }
