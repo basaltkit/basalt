@@ -305,7 +305,9 @@ export class DriveCredentials {
       const updated = await this.options.store.update(
         connection.tenantId,
         connection.id,
-        { status: 'invalid' },
+        // Health stamped in the same compare-and-set write: no extra write and
+        // no extra revision bump on the refresh path.
+        { status: 'invalid', lastFailedAt: this.now(), lastErrorCode: 'DRIVE_CREDENTIALS_INVALID' },
         latest.revision,
       )
       if (updated) {

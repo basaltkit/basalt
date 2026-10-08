@@ -1,5 +1,5 @@
 import type { Drives } from './drives.js'
-import { DriveCursorResetError } from './errors.js'
+import { DriveCursorResetError, errorCodeOf } from './errors.js'
 import type { DriveChange, DriveDelta, DriveItem } from './provider.js'
 import type { DriveConnection, DriveImportStrategy } from './store.js'
 
@@ -247,7 +247,7 @@ export async function syncConnection(
       const updated = await store.update(
         connection.tenantId,
         connection.id,
-        { cursor: next, ...(synced ? { lastSyncedAt: now() } : {}) },
+        { cursor: next, ...(synced ? { lastSyncedAt: now(), lastSucceededAt: now() } : {}) },
         revision,
       )
       if (updated) {
@@ -367,6 +367,16 @@ export async function syncConnection(
     await hooks?.emit('drive:sync_completed', { ...result, tenantId: connection.tenantId, provider: connection.provider })
     return result
   } catch (error) {
+    // Best effort, no compare-and-set: a health stamp must never mask the
+    // sync error, and losing it to a concurrent write costs nothing.
+    try {
+      await store.update(connection.tenantId, connection.id, {
+        lastFailedAt: now(),
+        lastErrorCode: errorCodeOf(error),
+      })
+    } catch {
+      // ignored on purpose — see above
+    }
     await hooks?.emit('drive:sync_failed', {
       tenantId: connection.tenantId,
       connectionId: connection.id,

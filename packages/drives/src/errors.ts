@@ -268,6 +268,16 @@ export class DriveSecretKeyUnknownError extends BasaltError {
   }
 }
 
+/**
+ * The stable code of an error, for health stamping: a {@link BasaltError}'s
+ * `code`, or `'UNKNOWN'`. Never the message — that can quote provider text.
+ *
+ * @internal
+ */
+export function errorCodeOf(error: unknown): string {
+  return error instanceof BasaltError ? error.code : 'UNKNOWN'
+}
+
 /** The key ring passed to the secret box is unusable. Thrown at configuration time. */
 export class DriveSecretKeyInvalidError extends BasaltError {
   constructor(detail: string) {

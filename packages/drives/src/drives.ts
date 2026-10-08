@@ -16,6 +16,7 @@ import {
   DriveTenantRequiredError,
   DriveTenantReservedError,
   DriveUnsupportedError,
+  errorCodeOf,
 } from './errors.js'
 import { createDriveFetch, type GuardedFetch } from './fetch.js'
 import type {
@@ -715,6 +716,44 @@ export class Drives {
         ...(page.cursor !== undefined ? { cursor: this.sealListCursor(page.cursor, connection) } : {}),
       }
     })
+  }
+
+  /**
+   * A cheap health probe: lists one item at the connection's root and stamps
+   * `lastSucceededAt`, or `lastFailedAt` + `lastErrorCode`.
+   *
+   * It never throws for a provider-side failure — that is the answer, returned
+   * as `{ ok: false, code }`. It does throw for a caller mistake (an unknown
+   * connection, a tenant mismatch). The stamp is best effort: a store error
+   * while writing it does not change the result.
+   */
+  async check(
+    connectionId: string,
+    options: { tenantId?: string; signal?: AbortSignal } = {},
+  ): Promise<{ ok: boolean; code?: string }> {
+    const connection = await this.require(connectionId, options.tenantId, 'check')
+    let result: { ok: boolean; code?: string }
+    try {
+      await this.run(
+        connection,
+        (session, adapter) => adapter.list(session, { limit: 1 }),
+        options.signal ? { signal: options.signal } : {},
+      )
+      result = { ok: true }
+    } catch (error) {
+      result = { ok: false, code: errorCodeOf(error) }
+    }
+    const at = this.now()
+    try {
+      await this.store.update(
+        connection.tenantId,
+        connection.id,
+        result.ok ? { lastSucceededAt: at } : { lastFailedAt: at, lastErrorCode: result.code as string },
+      )
+    } catch {
+      // Best effort — the probe's answer stands either way.
+    }
+    return result
   }
 
   /** The MAC over everything a list cursor is only valid for. */

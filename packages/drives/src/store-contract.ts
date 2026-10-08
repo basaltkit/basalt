@@ -158,6 +158,17 @@ export function runDriveStoreContract(
         assert.equal(reread?.rootId, 'root')
       })
 
+      it('persists health fields (lastSucceededAt, lastFailedAt, lastErrorCode)', async () => {
+        const { store } = await factory()
+        await store.create(row())
+        await store.update('tenant-a', 'conn-1', { lastFailedAt: 5_000, lastErrorCode: 'DRIVE_CREDENTIALS_INVALID' })
+        await store.update('tenant-a', 'conn-1', { lastSucceededAt: 6_000 })
+        const found = await store.find('tenant-a', 'conn-1')
+        assert.equal(found?.lastFailedAt, 5_000)
+        assert.equal(found?.lastErrorCode, 'DRIVE_CREDENTIALS_INVALID')
+        assert.equal(found?.lastSucceededAt, 6_000)
+      })
+
       it('does not update a row through another tenant', async () => {
         const { store } = await factory()
         await store.create(row())
