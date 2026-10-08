@@ -197,8 +197,9 @@ export interface IdempotencyPluginOptions {
    * - `'body'`: the body only (canonical JSON, or the raw bytes); params and
    *   query are not bound. `upload()` routes are not fingerprinted.
    * - a function: your own fingerprint (e.g. over a header and the body). A
-   *   string result is hashed as-is; any other value is canonicalized first
-   *   (keys sorted at every level, so key order never matters). Return
+   *   returned object or array is canonicalized first (keys sorted at every
+   *   level, so key order never matters); a string or other primitive is
+   *   hashed by its string form. Return
    *   `undefined` to skip fingerprinting a request.
    * - `false`: keys are not bound to a request (the 2.x default).
    */
@@ -356,9 +357,11 @@ export class IdempotencyStage {
     if (!mode) return undefined
     if (typeof mode === 'function') {
       const value = mode({ route, request })
-      // A string is hashed as-is; anything else is canonicalized so key order
-      // never matters (an object used to collapse to "[object Object]").
-      return value === undefined ? undefined : sha256(typeof value === 'string' ? value : canonicalJson(value))
+      // An object or array is canonicalized so key order never matters (it used
+      // to collapse to "[object Object]"); any other value (string, number,
+      // boolean, bigint, null) is hashed as its string form, exactly as in 2.x.
+      if (value === undefined) return undefined
+      return sha256(value !== null && typeof value === 'object' ? canonicalJson(value) : String(value))
     }
     if (mode === 'body') {
       if (uploadOptionsOf(route.body)) return undefined

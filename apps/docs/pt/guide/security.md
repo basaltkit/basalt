@@ -369,9 +369,9 @@ pedido ainda está a correr. Os modos:
   query: o stream pertence ao handler e não é lido.
 - `'body'` — só o corpo (JSON canónico, ou os bytes em bruto); params e query
   não são associados, e as rotas `upload()` não levam fingerprint.
-- uma função `({ route, request }) => unknown` — o teu próprio fingerprint. Uma
-  string é hasheada tal como está; qualquer outro valor (um objeto, um array) é
-  canonicalizado primeiro, por isso a ordem das chaves nunca conta. Devolve
+- uma função `({ route, request }) => unknown` — o teu próprio fingerprint. Um
+  objeto ou array é canonicalizado primeiro, por isso a ordem das chaves nunca
+  conta; uma string ou outro primitivo é hasheado tal como está. Devolve
   `undefined` para saltar um pedido.
 - `false` — as chaves não ficam associadas a um pedido.
 

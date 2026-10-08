@@ -203,6 +203,26 @@ describe('idempotency stage', () => {
     expect(runs).toBe(1)
   })
 
+  it('a fingerprint function returning a primitive is hashed by its string form, as in 2.x (bigint included)', async () => {
+    let runs = 0
+    const container = await bootStage({
+      fingerprint: ({ request }) => BigInt((request.body as { n: number }).n),
+    })
+    const def = route({ method: 'POST', url: '/big', handler: () => ({ run: ++runs }) })
+    expect((await call(container, def, auth, { n: 1 })).statusCode).toBe(200)
+    expect((await call(container, def, auth, { n: 1 })).headers['idempotent-replayed']).toBe('true')
+    expect((await call(container, def, auth, { n: 2 })).statusCode).toBe(422)
+    expect(runs).toBe(1)
+
+    // A record fingerprinted by a 2.x string-returning function still matches.
+    const store = new MemoryIdempotencyStore()
+    const numeric = route({ method: 'POST', url: '/num', handler: () => ({ run: ++runs }) })
+    const byNumber = await bootStage({ store, fingerprint: () => 42 })
+    await call(byNumber, numeric, auth, {})
+    const byString = await bootStage({ store, fingerprint: () => '42' })
+    expect((await call(byString, numeric, auth, {})).headers['idempotent-replayed']).toBe('true')
+  })
+
   it('records stored without a fingerprint keep replaying after the upgrade (no flush needed)', async () => {
     let runs = 0
     const store = new MemoryIdempotencyStore()

@@ -360,9 +360,9 @@ running. The modes:
   query: their stream belongs to the handler and is not read.
 - `'body'` — the body only (canonical JSON, or the raw bytes); params and query
   are not bound, and `upload()` routes are not fingerprinted.
-- a function `({ route, request }) => unknown` — your own fingerprint. A string
-  is hashed as-is; any other value (an object, an array) is canonicalized
-  first, so key order never matters. Return `undefined` to skip a request.
+- a function `({ route, request }) => unknown` — your own fingerprint. An
+  object or array is canonicalized first, so key order never matters; a string
+  or other primitive is hashed as-is. Return `undefined` to skip a request.
 - `false` — keys are not bound to a request.
 
 A function is how you drop volatile fields a client changes on every retry:

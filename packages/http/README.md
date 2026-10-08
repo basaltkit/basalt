@@ -843,8 +843,8 @@ Rules:
   of a `rawBody()` route. A mismatch → `422 IDEMPOTENCY_KEY_REUSED`, also against a
   request still in flight. `'body'` binds the body only; `false` binds nothing. `upload()`
   routes bind only params and query; give them a function
-  (`fingerprint: ({ route, request }) => unknown` — a string is hashed as-is, any other
-  value is canonicalized first) to bind more.
+  (`fingerprint: ({ route, request }) => unknown` — an object or array is canonicalized
+  first, a string or other primitive is hashed as-is) to bind more.
 - By default (`replayAfterGuards: true`) the check runs after the guards and validation,
   just before the handler. `replayAfterGuards: false` runs it after the enrichers and
   **before** the guards; even then a `rawBody()` route fingerprinted by `'request'` or
@@ -961,7 +961,7 @@ readonly field — it is a boot failure, never an HTTP response.
 | `ttlMs` | `number` | `86_400_000` (24 h) | Retention of the default in-memory store. |
 | `credentialHeaders` | `string[]` | `authorization`, `x-session-id`, `cookie`, `x-api-key` | Headers folded into the replay scope. |
 | `allowAnonymous` | `boolean` | `false` | Also cache requests carrying none of the credential headers. |
-| `fingerprint` | `'request' \| 'body' \| false \| (input) => unknown` | `'request'` (2.x: `false`) | Bind a key to its request (`'request'`: params + query + body; `'body'`: body only; a function: your own value, canonicalized unless a string); a mismatch → `422 IDEMPOTENCY_KEY_REUSED`. |
+| `fingerprint` | `'request' \| 'body' \| false \| (input) => unknown` | `'request'` (2.x: `false`) | Bind a key to its request (`'request'`: params + query + body; `'body'`: body only; a function: your own value, canonicalized when an object or array); a mismatch → `422 IDEMPOTENCY_KEY_REUSED`. |
 | `replayAfterGuards` | `boolean` | `true` (2.x: `false`) | Run the check after guards and validation; `false` runs it before the guards. |
 
 `IdempotencyStore`: `get(key)` → `IdempotencyRecord | IdempotencyPending | 'pending' | undefined`;
