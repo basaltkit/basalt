@@ -68,6 +68,39 @@ describe('connection health', () => {
     expect(stored.lastErrorCode).toBe('DRIVE_RATE_LIMITED')
   })
 
+  it('a failed sync does not overwrite a row another writer changed meanwhile', async () => {
+    const h = harness({ provider: { files: [{ externalId: 'f1', name: 'a.txt', content: 'x' }] } })
+    const view = await connect(h, { tenantId: 'acme' })
+    h.fake.rateLimitNextCalls = 10
+    // A concurrent writer (a refresh, another worker) bumps the revision while
+    // this sync is failing; the best-effort stamp must lose, not clobber it.
+    const original = h.fake.startDelta.bind(h.fake)
+    h.fake.startDelta = async (session) => {
+      const row = (await h.store.find('acme', view.id))!
+      await h.store.update('acme', view.id, { label: 'renamed elsewhere' }, row.revision)
+      h.fake.startDelta = original
+      return original(session)
+    }
+    const before = (await h.store.find('acme', view.id))!.revision
+    await expect(syncConnection(h.drives, view.id, { tenantId: 'acme', enqueue: async () => {} })).rejects.toThrow()
+    const stored = (await h.store.find('acme', view.id))!
+    expect(stored.revision).toBe(before + 1)
+    expect(stored.lastFailedAt).toBeUndefined()
+    expect(stored.label).toBe('renamed elsewhere')
+  })
+
+  it('an aborted sync is not stamped as a failure', async () => {
+    const h = harness({ provider: { files: [{ externalId: 'f1', name: 'a.txt', content: 'x' }] } })
+    const view = await connect(h, { tenantId: 'acme' })
+    const controller = new AbortController()
+    h.fake.rateLimitNextCalls = 10
+    controller.abort()
+    await syncConnection(h.drives, view.id, { tenantId: 'acme', enqueue: async () => {}, signal: controller.signal }).catch(
+      () => undefined,
+    )
+    expect((await h.store.find('acme', view.id))!.lastFailedAt).toBeUndefined()
+  })
+
   it('the view carries the health fields and never the secret', async () => {
     const h = harness()
     const view = await connect(h, { tenantId: 'acme' })

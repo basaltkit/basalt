@@ -415,7 +415,7 @@ Every connection view carries three health fields, all epoch milliseconds like
 | Field | Stamped by |
 | --- | --- |
 | `lastSucceededAt` | a sync that persisted a page, and a successful `drives.check()` |
-| `lastFailedAt` | a failed sync, a failed `drives.check()`, and the refresh that found the grant dead |
+| `lastFailedAt` | a failed sync (best effort: skipped for an abort, or when another write changed the row meanwhile), a failed `drives.check()`, and the refresh that found the grant dead |
 | `lastErrorCode` | the error **code** of that failure (`DRIVE_CREDENTIALS_INVALID`, `DRIVE_RATE_LIMITED`, …) — never a message |
 
 They are deliberately **not** stamped on an ordinary successful
