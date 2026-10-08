@@ -2066,6 +2066,9 @@ importers:
       '@basaltkit/fastify':
         specifier: workspace:^
         version: link:../fastify
+      '@basaltkit/http':
+        specifier: workspace:^
+        version: link:../http
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy
