@@ -673,6 +673,15 @@ revela que a rota existe. O tenant não é ligado ao contexto e o
 `tenancy:switched` não é emitido. No apex, onde nenhum tenant resolve, a rota
 corre normalmente. O comportamento é igual em Fastify, Express e Hono.
 
+::: warning Põe o `tenancyPlugin` antes dos plugins de autenticação
+A verificação corre no *enricher* do tenancy, e os enrichers correm pela ordem
+dos plugins. Os enrichers do `authPlugin` e do `apiKeysPlugin` podem recusar eles
+próprios um pedido (401 para um bearer inválido ou expirado, 400 para duas API
+keys em conflito); se vierem primeiro, essa resposta chega ao cliente em vez do
+404 e revela que a rota existe. Coloca o
+`tenancyPlugin` antes deles em `plugins: [...]`.
+:::
+
 | `meta.tenant` | Nenhum tenant resolvido | Um tenant resolvido |
 | --- | --- | --- |
 | *(ausente)* | decide o `required` da app | corre no tenant |

@@ -658,6 +658,15 @@ never reveals that the route exists. The tenant is not attached to the context
 and `tenancy:switched` is not emitted. On the apex, where no tenant resolves, the
 route runs normally. The behaviour is the same on Fastify, Express and Hono.
 
+::: warning List `tenancyPlugin` before the auth plugins
+The check runs in the tenancy *enricher*, and enrichers run in plugin order.
+The `authPlugin` and `apiKeysPlugin` enrichers can refuse a request themselves
+(a 401 for an invalid or expired bearer, a 400 for two disagreeing API keys); if
+they come first, that answer reaches the caller instead of the 404 and tells it
+the route exists. Put `tenancyPlugin` ahead of them in
+`plugins: [...]`.
+:::
+
 | `meta.tenant` | No tenant resolved | A tenant resolved |
 | --- | --- | --- |
 | *(absent)* | app-wide `required` decides | runs in the tenant |

@@ -426,6 +426,7 @@ consola de plataforma.
 - [ ] `tenantDb()` exige tenant; `centralDb()` recusa-o
 - [ ] nenhum `catch { return central }` em lado nenhum
 - [ ] rotas de plataforma declaram `meta.tenant: 'never'` (404 num host de tenant)
+- [ ] `tenancyPlugin` antes do `authPlugin` / `apiKeysPlugin` (os enrichers deles responderiam primeiro)
 - [ ] `/auth/register` é 404 em hosts de tenant
 - [ ] um `authPlugin`; sem modelo de operador, sem segunda tabela de sessões
 - [ ] utilizadores criados pelo `AUTH`, nunca inseridos com hash feito à mão

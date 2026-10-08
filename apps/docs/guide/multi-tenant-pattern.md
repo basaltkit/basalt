@@ -414,6 +414,7 @@ one that adds the platform console.
 - [ ] `tenantDb()` requires a tenant; `centralDb()` refuses one
 - [ ] no `catch { return central }` anywhere
 - [ ] platform routes declare `meta.tenant: 'never'` (404 on a tenant host)
+- [ ] `tenancyPlugin` listed before `authPlugin` / `apiKeysPlugin` (their enrichers would answer first)
 - [ ] `/auth/register` is 404 on tenant hosts
 - [ ] one `authPlugin`; no operator model, no second session table
 - [ ] users created through `AUTH`, never inserted with a hand-made hash

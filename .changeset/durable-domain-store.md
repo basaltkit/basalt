@@ -13,6 +13,6 @@ Durable custom-domain stores, and tenant saves that no longer erase them (BK-042
 - `@basaltkit/tenancy`: new test-only subpath `@basaltkit/tenancy/testing` with `domainStoreContract(makeStore)`, framework-neutral cases (`node:assert`) every `DomainStore` should pass.
 - `create-basalt`: the scaffolded `TenantDomain` model carries the new columns.
 
-**Migration (additive).** The bundled `TenantDomain` model gains `verificationToken String?`, `verified Boolean @default(true)`, `createdAt DateTime @default(now())` and `verifiedAt DateTime?`. Re-run `basalt prisma:sync` and `prisma migrate dev`; existing rows become mirror rows and keep resolving. `PrismaTenantSource` keeps working before the migration — only `PrismaDomainStore` needs the columns. The SQLite source adds them on open.
+**Migration (additive).** The bundled `TenantDomain` model gains `verificationToken String?`, `verified Boolean @default(true)`, `createdAt DateTime @default(now())` and `verifiedAt DateTime?`. Re-run `basalt prisma:sync` and `prisma migrate dev`; existing rows become mirror rows and keep resolving. Until then, an app whose Prisma client is still generated from the old model keeps working — `PrismaTenantSource` never names the new columns in a query; once the client is regenerated from the new model, migrate before deploying it. The SQLite source adds them on open.
 
 `PrismaTenancyDelegates.tenantDomain` now also requires `findMany` (a generated `PrismaClient` has it; a hand-written client must add it).
