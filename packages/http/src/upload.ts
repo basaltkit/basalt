@@ -84,7 +84,12 @@ export interface ResolvedUploadOptions {
   allowedTypes: readonly string[] | undefined
 }
 
-const UPLOADS = new WeakMap<object, ResolvedUploadOptions>()
+/**
+ * The marker an {@link upload} schema carries — a global symbol, not a
+ * module-local `WeakMap`, so a schema built by one installed copy of
+ * `@basaltkit/http` is recognised by another (see `rawBody()`, BK-038).
+ */
+const UPLOAD_MARK = Symbol.for('basalt.http.upload')
 
 const positive = (name: string, value: number | undefined, fallback?: number): number => {
   const resolved = value ?? fallback
@@ -130,13 +135,17 @@ export function upload(options: UploadOptions): ZodType<UploadBody> {
   const schema = z.custom<UploadBody>(
     (value) => typeof value === 'object' && value !== null && 'files' in value && 'fields' in value,
   )
-  UPLOADS.set(schema, resolved)
+  Object.defineProperty(schema, UPLOAD_MARK, { value: Object.freeze(resolved), enumerable: false })
   return schema
 }
 
 /** The resolved limits when `schema` came from {@link upload}; otherwise `undefined`. */
 export function uploadOptionsOf(schema: unknown): ResolvedUploadOptions | undefined {
-  return typeof schema === 'object' && schema !== null ? UPLOADS.get(schema) : undefined
+  if (typeof schema !== 'object' || schema === null) return undefined
+  const mark = (schema as { [UPLOAD_MARK]?: unknown })[UPLOAD_MARK]
+  return typeof mark === 'object' && mark !== null && Number.isSafeInteger((mark as ResolvedUploadOptions).maxBytes)
+    ? (mark as ResolvedUploadOptions)
+    : undefined
 }
 
 /** True when a route's `body` is an {@link upload} declaration — adapters skip their own body parsing for it. */

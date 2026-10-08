@@ -13,6 +13,7 @@ import {
   metaValidatorParitySuite,
   rateLimitKeyParitySuite,
   rawBodyParitySuite,
+  crossCopyParitySuite,
   streamParitySuite,
   uploadParitySuite,
   type ParityDriver,
@@ -43,6 +44,7 @@ const driver: ParityDriver = {
 
 uploadParitySuite('fastify', driver)
 rawBodyParitySuite('fastify', driver)
+crossCopyParitySuite('fastify', driver)
 rateLimitKeyParitySuite('fastify', driver)
 errorDetailsParitySuite('fastify', driver)
 streamParitySuite('fastify', driver)

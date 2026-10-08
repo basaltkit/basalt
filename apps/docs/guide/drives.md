@@ -269,6 +269,17 @@ terminates the request somewhere the neutral layer cannot see, supply them
 yourself with `notifications.rawBody: (request) => Buffer` — never by
 re-serialising a parsed object.
 
+::: warning Two copies of `@basaltkit/http`
+`@basaltkit/drives` depends on `@basaltkit/http`, and a package manager can
+install a second, nested copy next to the one your adapter uses. Before
+`@basaltkit/http` 2.7.1 the `rawBody()` marker was private to the copy that
+created it, so the adapter parsed the delivery as JSON and the notification
+route failed closed. Keep the adapter's `@basaltkit/http` at **2.7.1 or later**
+(`pnpm why @basaltkit/http` shows the copies). A deployment that does not use
+push notifications can mount `driveRoutes()` without `notifications`: that is a
+connect-only setup with no `rawBody()` route at all.
+:::
+
 ## Connecting an account
 
 `driveRoutes()` above does this for you. The facade underneath is public too,

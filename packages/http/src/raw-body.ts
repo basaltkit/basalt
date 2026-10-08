@@ -55,7 +55,18 @@ export interface ResolvedRawBodyOptions {
   maxBytes: number
 }
 
-const RAW_BODIES = new WeakMap<object, ResolvedRawBodyOptions>()
+/**
+ * The marker a {@link rawBody} schema carries, as a **global** symbol.
+ *
+ * It used to live in a module-local `WeakMap`, which only the copy of this
+ * module that created the schema could read. With two copies of
+ * `@basaltkit/http` installed — a feature package's own nested copy next to
+ * the adapter's — a route built by one was invisible to the other: the adapter
+ * parsed the body as JSON and the route then failed closed for want of bytes
+ * (BK-038). `Symbol.for` is shared across copies (and realms), the same
+ * technique `sse()` and `stream()` use for their markers.
+ */
+const RAW_BODY_MARK = Symbol.for('basalt.http.rawBody')
 
 /**
  * Declares that a route wants the **untouched request bytes** — adapter-neutral:
@@ -97,13 +108,20 @@ export function rawBody(options: RawBodyOptions = {}): ZodType<RawBody> {
   const schema = z.custom<RawBody>(
     (value) => typeof value === 'object' && value !== null && Buffer.isBuffer((value as RawBody).bytes),
   )
-  RAW_BODIES.set(schema, { maxBytes })
+  // Non-enumerable and read-only: invisible to a spread or a JSON dump of the
+  // schema, and not something a later step can rewrite.
+  Object.defineProperty(schema, RAW_BODY_MARK, { value: Object.freeze({ maxBytes }), enumerable: false })
   return schema
 }
 
 /** The resolved limits when `schema` came from {@link rawBody}; otherwise `undefined`. */
 export function rawBodyOptionsOf(schema: unknown): ResolvedRawBodyOptions | undefined {
-  return typeof schema === 'object' && schema !== null ? RAW_BODIES.get(schema) : undefined
+  if (typeof schema !== 'object' || schema === null) return undefined
+  const mark = (schema as { [RAW_BODY_MARK]?: unknown })[RAW_BODY_MARK]
+  // Shape-checked, since any copy (of any version) could have written it.
+  return typeof mark === 'object' && mark !== null && Number.isSafeInteger((mark as ResolvedRawBodyOptions).maxBytes)
+    ? (mark as ResolvedRawBodyOptions)
+    : undefined
 }
 
 /** True when a route's `body` is a {@link rawBody} declaration — adapters skip their own body parsing for it. */

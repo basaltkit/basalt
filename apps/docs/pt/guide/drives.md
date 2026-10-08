@@ -282,6 +282,17 @@ pedido num sítio que a camada neutra não vê, fornece-os tu com
 `notifications.rawBody: (request) => Buffer` — nunca re-serializando um objecto
 já analisado.
 
+::: warning Duas cópias do `@basaltkit/http`
+O `@basaltkit/drives` depende do `@basaltkit/http`, e um gestor de pacotes pode
+instalar uma segunda cópia, aninhada, ao lado da que o teu adaptador usa. Antes
+do `@basaltkit/http` 2.7.1 o marcador do `rawBody()` era privado da cópia que o
+criou, por isso o adaptador fazia parse da entrega como JSON e a rota de
+notificações falhava fechada. Mantém o `@basaltkit/http` do adaptador na
+**2.7.1 ou posterior** (o `pnpm why @basaltkit/http` mostra as cópias). Uma
+instalação que não use notificações push pode montar o `driveRoutes()` sem
+`notifications`: fica só com o fluxo de ligação, sem nenhuma rota `rawBody()`.
+:::
+
 ## Ligar uma conta
 
 O `driveRoutes()` acima faz isto por ti. A fachada por baixo também é pública,
