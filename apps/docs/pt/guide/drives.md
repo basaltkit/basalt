@@ -174,6 +174,41 @@ export const env = defineEnv({
 })
 ```
 
+### Chaves e rotação
+
+::: warning O id do tenant faz parte de cada segredo cifrado
+Cada credencial é cifrada com o seu `(tenantId, connectionId, provider)` como
+dados associados do AES-GCM. **Mudar o id de um tenant torna impossível decifrar
+todos os segredos cifrados com o id antigo** — essas ligações precisam de novo
+consentimento. Usa um id de tenant imutável (um UUID) para as ligações, nunca um
+slug ou um subdomínio que um cliente possa mudar.
+:::
+
+Uma ligação activa volta a ser cifrada com a primeira chave no próximo refresh.
+Uma ligação adormecida nunca faz refresh, por isso uma rotação que tem de
+terminar corre o `rotateSecrets()` sobre todos os tenants:
+
+1. Acrescenta a chave nova à frente: `keys: [{ id: '2026-12', key: NEW }, { id: '2026-09', key: OLD }]`, e faz deploy.
+2. Volta a cifrar tudo o que ainda está numa chave antiga. Os ids de tenant vêm
+   da tua própria tabela de tenants — o contrato do store não tem listagem
+   entre tenants, de propósito:
+
+   ```ts
+   const tenantIds = (await db.tenant.findMany({ select: { id: true } })).map((t) => t.id)
+   const { resealed, skippedConflicts, remainingOnOldKeys } = await drives.rotateSecrets({ tenantIds })
+   ```
+
+   Cada escrita é um compare-and-set; uma linha que um refresh concorrente
+   reescreveu conta em `skippedConflicts` e não é sobrescrita (o refresh já a
+   cifrou com a chave nova). Corre-o num job ou na CLI, não num pedido: com um
+   tenant no contexto, todos os ids têm de ser iguais a ele. Numa app
+   single-tenant, chama-o sem argumentos.
+3. Quando `remainingOnOldKeys === 0`, remove a chave antiga e faz deploy. Se não
+   for zero, repete o passo 2.
+
+O `DriveSecretBox#keyIdOf(secret)` diz-te que chave cifrou um valor guardado sem
+o decifrar, para os teus próprios relatórios.
+
 ## Rotas
 
 O `driveRoutes()` serve o fluxo de ligação e **um** endpoint de notificações que

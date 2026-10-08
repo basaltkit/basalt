@@ -104,7 +104,9 @@ const app = createApp({
     filesPlugin({ disk: 'documents', validate: { sniff: true } }),
     drivesPlugin({
       providers: [dropboxDrive({ clientId: env.DROPBOX_APP_KEY, clientSecret: env.DROPBOX_APP_SECRET })],
-      // First key seals; the rest stay readable, so rotation is a rolling change.
+      // First key seals; the rest stay readable, so rotation is a rolling change
+      // (finish one with drives.rotateSecrets({ tenantIds })). The tenant id is
+      // bound into every sealed secret: never rename a tenant id.
       keys: [{ id: '2026-09', key: env.DRIVES_ENCRYPTION_KEY }],
       secret: env.APP_SECRET,
       // Your durable implementations. Omitted, both are in-memory (tests only).
@@ -259,6 +261,7 @@ object.
 | `get(id, tenantId?)` | One connection, or `DRIVE_CONNECTION_NOT_FOUND` |
 | `disconnect(id, options?)` | Emits `drive:disconnecting` (a throw vetoes unless `force: true`), revokes at the provider (default), unsubscribes, deletes the row, emits `drive:disconnected` |
 | `forgetImports(id, tenantId?)` | Drops the dedup ledger so a later sync re-imports |
+| `rotateSecrets({ tenantIds? })` | Re-seals stored credentials under the active key (compare-and-set per row); returns `{ resealed, skippedConflicts, remainingOnOldKeys }`. Drop the old key only when `remainingOnOldKeys === 0` |
 | `listItems(id, options?)` | One page of a folder. The returned `cursor` is MAC-bound to the tenant and connection; a cursor this engine did not issue is refused with `DRIVE_ACCESS_DENIED` |
 | `getItem(id, externalId, options?)` | One item's metadata |
 | `download(id, item, options?)` | The bytes, as a stream. Consume or destroy it |
@@ -282,6 +285,12 @@ Every call resolves its tenant like `@basaltkit/files`: the context tenant wins,
 > ```
 >
 > Skip it if `default` was ever a real tenant in that database. An authorization started before the upgrade fails its callback once (its `state` names the old key); the user just connects again.
+
+> **Tenant ids are immutable for drives.** Every sealed secret binds its
+> `tenantId` as AES-GCM associated data, so renaming a tenant id makes its
+> connections undecryptable. Use an immutable id, not a slug.
+> `DriveSecretBox#keyIdOf(secret)` reports which key sealed a stored value
+> without decrypting it.
 
 ### Functions
 

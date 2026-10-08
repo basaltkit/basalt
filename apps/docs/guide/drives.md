@@ -163,6 +163,40 @@ export const env = defineEnv({
 })
 ```
 
+### Keys and rotation
+
+::: warning The tenant id is part of every sealed secret
+Each credential is sealed with its `(tenantId, connectionId, provider)` as AES-GCM
+associated data. **Renaming a tenant id makes every secret sealed under the old
+one undecryptable** — those connections need re-consent. Key drive connections
+by an immutable tenant id (a UUID), never by a slug or a subdomain that a
+customer can change.
+:::
+
+An active connection re-seals under the first key the next time it refreshes.
+A dormant one never refreshes, so a rotation that must finish runs
+`rotateSecrets()` over every tenant:
+
+1. Prepend the new key: `keys: [{ id: '2026-12', key: NEW }, { id: '2026-09', key: OLD }]`, and deploy.
+2. Re-seal everything still on an old key. The tenant ids come from your own
+   tenant table — the store contract has no cross-tenant listing, on purpose:
+
+   ```ts
+   const tenantIds = (await db.tenant.findMany({ select: { id: true } })).map((t) => t.id)
+   const { resealed, skippedConflicts, remainingOnOldKeys } = await drives.rotateSecrets({ tenantIds })
+   ```
+
+   Each write is a compare-and-set; a row a concurrent refresh rewrote is
+   counted in `skippedConflicts`, not overwritten (the refresh already sealed it
+   with the new key). Run it from a job or the CLI, not a request: with a tenant
+   in context, every id must equal it. In a single-tenant app, call it with no
+   arguments.
+3. When `remainingOnOldKeys === 0`, drop the old key and deploy. If it is not
+   zero, run step 2 again.
+
+`DriveSecretBox#keyIdOf(secret)` tells you which key sealed a stored value
+without decrypting it, for your own reporting.
+
 ## Routes
 
 `driveRoutes()` serves the connect flow and **one** notification endpoint that
