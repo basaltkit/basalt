@@ -126,3 +126,15 @@ describe('TenantPoolExhaustedError says what held the slots (BK-077)', () => {
     lease.release()
   })
 })
+
+describe('TenantPoolExhaustedError on the wire', () => {
+  it('answers 503 with the code only: the shared pool counts stay in the server log', async () => {
+    const { toErrorResponse } = await import('@basaltkit/http')
+    const error = new TenantPoolExhaustedError('acme', 10, 10_000, { leased: 7, recentlyUsed: 3 })
+    expect(error.details).toMatchObject({ tenantId: 'acme', max: 10, leased: 7, recentlyUsed: 3 })
+    expect(toErrorResponse(error)).toEqual({
+      status: 503,
+      body: { error: { code: 'PRISMA_POOL_EXHAUSTED', message: 'Service unavailable.' } },
+    })
+  })
+})

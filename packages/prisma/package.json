@@ -26,9 +26,13 @@
     "@basaltkit/core": "workspace:^"
   },
   "peerDependencies": {
+    "@basaltkit/http": "workspace:^",
     "@prisma/client": ">=5.0.0 <8"
   },
   "peerDependenciesMeta": {
+    "@basaltkit/http": {
+      "optional": true
+    },
     "@prisma/client": {
       "optional": true
     }
@@ -36,6 +40,7 @@
   "devDependencies": {
     "@basaltkit/cli": "workspace:^",
     "@basaltkit/fastify": "workspace:^",
+    "@basaltkit/http": "workspace:^",
     "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@electric-sql/pglite": "^0.5.8",
