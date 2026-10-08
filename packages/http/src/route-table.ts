@@ -53,10 +53,13 @@ export interface RouteRow {
   rateLimit: string | null
   /**
    * The route's tenancy declaration: `'required'` (`meta.tenant: true`),
-   * `'exempt'` (`meta.tenant: false`), `'central'` (`meta.central: true`), or
-   * `null` when the route leaves it to the app-wide default.
+   * `'exempt'` (`meta.tenant: false`), `'central-only'` (`meta.tenant: 'never'`
+   * — the central plane only: a request that resolves a tenant is rejected),
+   * `'central'` (`meta.central: true`), or `null` when the route leaves it to
+   * the app-wide default. `meta.tenant: 'never'` wins over `meta.central`, as
+   * it is the stricter declaration.
    */
-  tenant: 'required' | 'exempt' | 'central' | null
+  tenant: 'required' | 'exempt' | 'central-only' | 'central' | null
   /** The route explicitly opts out of authentication (`meta.auth: false` or `meta.public: true`). */
   public: boolean
   /**
@@ -160,6 +163,7 @@ function formatWindow(ms: number): string {
 }
 
 function tenantOf(meta: Record<string, unknown>): RouteRow['tenant'] {
+  if (meta['tenant'] === 'never') return 'central-only'
   if (meta['central'] === true) return 'central'
   if (meta['tenant'] === true) return 'required'
   if (meta['tenant'] === false) return 'exempt'
