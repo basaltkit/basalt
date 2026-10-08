@@ -64,17 +64,19 @@ auditoria](#fechar-a-colheita-da-auditoria).
 
 ## Desde a 1.12 (por publicar)
 
-Entrou no `main` depois da publicação da 1.12, tudo sem quebras:
+Entrou no `main` depois da publicação da 1.12, tudo opt-in e sem quebras, exceto
+a migração do `@basaltkit/auth-prisma` 3.0 e as predefinições de idempotência abaixo:
 
 - **Idempotência em todos os adapters.** O `idempotencyPlugin` passou de
   `@basaltkit/fastify` para o pipeline de rotas partilhado em `@basaltkit/http`,
   por isso o Express e o Hono também o têm (o import do Fastify continua a
-  funcionar). Duas opções novas: `fingerprint: 'body'` recusa uma chave
-  reutilizada com um corpo diferente com `422 IDEMPOTENCY_KEY_REUSED`, e
-  `replayAfterGuards: true` passa a verificação para depois dos guards da rota,
-  para que um caller revogado receba `401`/`403` em vez do sucesso em cache. As
-  duas vão passar a default numa futura major — vê
-  [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).
+  funcionar). Duas opções novas: `fingerprint` recusa uma chave reutilizada com
+  um pedido diferente com `422 IDEMPOTENCY_KEY_REUSED`, e `replayAfterGuards`
+  passa a verificação para depois dos guards da rota, para que um caller
+  revogado receba `401`/`403` em vez do sucesso em cache. O `@basaltkit/http` 3
+  liga as duas por omissão — vê
+  [Atualizar: idempotência estrita por omissão](#idempotency-strict-by-default)
+  e [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).
 - **Cabeçalhos por rota.** `meta.headers` aplica cabeçalhos de resposta
   estáticos (por exemplo `X-Robots-Tag: noindex` num link de partilha público) em
   todas as respostas que a rota produz, incluindo os erros dos guards, da
@@ -122,6 +124,90 @@ Entrou no `main` depois da publicação da 1.12, tudo sem quebras:
   precisa de uma migração da base de dados** (`add_api_key_lifecycle`) — vê
   [Atualizar para o auth-prisma 3.0](/pt/guide/auth#prisma-—-basaltkit-auth-prisma)
   e [API keys](/pt/guide/auth#apikeys-rotation).
+
+### Atualizar: idempotência estrita por omissão (`@basaltkit/http` 3) {#idempotency-strict-by-default}
+
+O `@basaltkit/http` 3.0 inverte as duas predefinições do `idempotencyPlugin` que
+a 2.x deixava desligadas. O `@basaltkit/fastify`, o `@basaltkit/express` e o
+`@basaltkit/hono` passam à 3.0 com ele (e o `@basaltkit/testing`, cujos
+intervalos de peer dos adapters acompanham); nenhum muda a sua própria API.
+
+**O que muda.**
+
+- Uma `Idempotency-Key` reutilizada com um pedido diferente — outros params da
+  rota (`/accounts/2/charge` depois de `/accounts/1/charge`), outra query string
+  ou outro corpo — é recusada com `422 IDEMPOTENCY_KEY_REUSED` em vez de
+  receber em silêncio o resultado do primeiro pedido. A nova predefinição
+  `fingerprint: 'request'` associa params, query e corpo; `'body'` mantém o
+  significado da 2.x (só o corpo).
+- A verificação corre depois dos guards da rota e da validação do pedido
+  (`replayAfterGuards: true`). Um caller cujo token foi revogado, ou cuja
+  permissão foi retirada, recebe o `401`/`403` do guard em vez do sucesso em
+  cache; os guards correm em cada replay.
+- Um pedido que falha a validação deixa de reservar a chave: o seu `400` não é
+  gravado nem repetido, e a nova tentativa corrigida corre.
+
+**Quem é afetado.**
+
+- Clientes que põem campos voláteis no corpo ou na query de uma nova tentativa
+  (timestamps, nonces, cache-busters) passam a receber `422`. Retira esses campos
+  com uma função de fingerprint (abaixo), ou envia-os como headers.
+- Formulários que repetem uma submissão editada com a mesma chave passam a
+  receber `422`. Uma submissão nova precisa de uma chave nova.
+- Guards caros ou com efeitos secundários passam a correr em cada nova tentativa.
+- Um schema apertado entre a primeira tentativa e a seguinte (um deploy que
+  acrescenta um campo obrigatório) passa a responder `400` à nova tentativa, e
+  não o replay do primeiro sucesso. Os clientes não devem ler esse `400` como
+  "não foi cobrado" e voltar a submeter com uma chave nova.
+- Um rate limit feito por guard ([`meta.rateLimit`](/pt/guide/security#rate-limiting))
+  passa a contar as novas tentativas, por isso uma tempestade de retries pode
+  receber `429` onde a 2.x repetia o `201`.
+- As rotas `upload()` associam só params e query (o stream pertence ao handler e
+  não é lido); um ficheiro diferente sob a mesma chave continua a ser repetido.
+  Usa uma função de fingerprint para associar mais.
+- Uma função `fingerprint` que devolve um objeto ou array passa a ser
+  canonicalizada (chaves ordenadas em todos os níveis) em vez de ser hasheada
+  como `"[object Object]"` — igual para todos os objetos, uma colisão latente.
+
+**Manter o comportamento da 2.x.** As duas opções continuam suportadas:
+
+```ts
+idempotencyPlugin({ fingerprint: false, replayAfterGuards: false }) // predefinições da 2.x
+```
+
+Ou um eixo de cada vez: `fingerprint: 'body'` ignora params e query,
+`fingerprint: false` não associa nada, uma função associa o que escolheres (por
+exemplo o corpo sem um campo `sentAt`), e `replayAfterGuards: false` repõe a
+verificação antes dos guards.
+
+**Deploy gradual com um `RedisIdempotencyStore` partilhado.** Uma reserva com
+fingerprint é guardada como `pending:<fingerprint>`, e com a nova predefinição
+todas as reservas têm fingerprint. O `RedisIdempotencyStore` do
+`@basaltkit/fastify` 2.5 ou anterior não entende esse valor e responde `500` a
+uma repetição concorrente da mesma chave. Passa primeiro toda a frota para a
+última linha 2.x (`@basaltkit/http` 2.8 / `@basaltkit/fastify` 2.6) e só depois
+faz o deploy da 3.0.
+
+**Sobe o `@basaltkit/http` com o adapter.** Os três adapters estão na 3.0 e
+dependem do `@basaltkit/http` 3. Sobe o teu próprio intervalo de
+`@basaltkit/http` para `^3` na mesma alteração, ou a app pode ficar com duas
+cópias e com as predefinições daquela de onde importa o `idempotencyPlugin`. O
+`create-basalt update` resolve as versões mais recentes por ti.
+
+**Sem passo de dados.** Os hashes de scope não mudam, e os registos guardados
+pela 2.x não têm fingerprint, por isso nunca divergem: continuam a ser repetidos
+até expirarem. A exceção é um registo que a 2.x *já* tinha com fingerprint,
+num modo cujo hash muda com a atualização: uma app que retira um
+`fingerprint: 'body'` explícito para ficar com a predefinição `'request'`, ou
+uma função que devolve um objeto ou array. Uma nova tentativa que atravesse o
+deploy recebe então `422`; se isso importar, mantém a opção da 2.x até os
+registos expirarem (24 h por omissão).
+
+**Stores personalizados.** O contrato não muda, mas um `IdempotencyStore`
+personalizado tem de persistir `record.fingerprint` para que os registos
+concluídos sejam recusados com `422`. Um store que descarta o fingerprint na
+reserva responde `409` em vez de `422` a uma repetição concorrente com um pedido
+diferente.
 
 ## Destaques
 

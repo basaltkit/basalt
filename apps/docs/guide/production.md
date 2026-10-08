@@ -15,7 +15,7 @@ that carries the full option table; nothing here restates one.
       limit is keyed by address only; a public API for machine clients gets
       `rateLimit.prefixes` and per-key budgets. See [Rate limiting](/guide/security#rate-limiting).
 - [ ] **Logins are throttled** — on by default in `@basaltkit/auth`.
-- [ ] **Mutations are idempotent** — `idempotencyPlugin()` for `POST`.
+- [ ] **Mutations are idempotent** — `idempotencyPlugin()` for `POST` (binds keys to the request and replays after guards by default).
 - [ ] **The app boots on a cold start with production config** — the boot-time
       guards below only fire when you actually call `boot()`.
 - [ ] **Health probes wired** — `healthPlugin({ checks })` for `/livez` + `/readyz`.

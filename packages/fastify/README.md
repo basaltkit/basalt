@@ -232,12 +232,13 @@ code as on Express and Hono.
 ### Idempotency — `idempotencyPlugin()`
 
 Re-exported from `@basaltkit/http`, where it is documented: it replays the first response
-for a repeated `Idempotency-Key`, and behaves the same on Fastify, Express and Hono.
+for a repeated `Idempotency-Key`, binds each key to its request and replays only after the
+guards by default, and behaves the same on Fastify, Express and Hono.
 
 ```ts
 import { fastifyPlugin, idempotencyPlugin, RedisIdempotencyStore } from '@basaltkit/fastify'
 
-createApp({ plugins: [fastifyPlugin({ routes }), idempotencyPlugin({ fingerprint: 'body' })] })
+createApp({ plugins: [fastifyPlugin({ routes }), idempotencyPlugin()] })
 ```
 
 It covers Basalt `route()` definitions. Unlike the earlier Fastify-only hook, it does not
@@ -346,7 +347,7 @@ deprecated alias of `RedisIdempotencyClient`.
 | `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A plugin's route-meta validator (`http:meta-validators`) refused a value — e.g. `teamsPlugin` and an unknown `meta.teamRole`. Not waivable. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
 | — | `IDEMPOTENCY_CONFLICT` | 409 | A request with the same `Idempotency-Key` is still in flight. |
-| — | `IDEMPOTENCY_KEY_REUSED` | 422 | `fingerprint` is on and the key was used with a different request. |
+| — | `IDEMPOTENCY_KEY_REUSED` | 422 | The key was used with a different request (params, query or body; `fingerprint`, on by default). |
 | — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
 | — | `INTERNAL_ERROR` | 500 | Any other thrown error. Logged with its stack via `request.log.error`; the message never reaches the client. |
 
