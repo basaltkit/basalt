@@ -152,6 +152,35 @@ them all. A route that is safe to cache sets its own `Cache-Control` header,
 which replaces the default — do so on `meta.etag` routes (e.g.
 `private, no-cache`), since `no-store` keeps browsers from revalidating.
 
+### Per-route headers — `meta.headers`
+
+Some routes need headers the rest of the API does not: a public share link that
+search engines must not index, a download that must never be cached. Declare
+them on the route:
+
+```ts
+route({
+  method: 'POST',
+  url: '/s/:token',
+  meta: { headers: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  handler: /* … */,
+})
+```
+
+The pipeline sets them as soon as the route matches, before enrichers and
+guards, so they are on **every** response the route produces — the `200`, a
+guard's `401`/`403`, a validation `400`, a thrown `500` — on all three adapters.
+A header set by `reply.header()` would only reach the success path. They
+replace a global header of the same name (here `securityPlugin`'s
+`Cache-Control`), and a handler can still override one with `reply.header()`.
+
+The values are checked at boot (`InvalidRouteMetaError`): strings without CR,
+LF or other control characters, and never `Set-Cookie`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, hop-by-hop headers or `X-Request-Id`,
+which belong to the response or the adapter. A request that never reaches the
+route — a `404`, a rate-limit `429` or a malformed body rejected by the
+framework's parser — carries only the global headers.
+
 ## Resource limits & DoS resistance
 
 Beyond headers and rate limits, long-lived and slow connections can exhaust a
@@ -279,32 +308,65 @@ none of the auth endpoints leak which emails are registered.
 
 Safe retries for `POST`: a client that sends an `Idempotency-Key` gets the
 **same** response replayed on a retry, so a dropped connection never charges a
-card twice.
+card twice. It runs inside the shared route pipeline, so it behaves the same on
+**Fastify, Express and Hono**:
 
 ```ts
-import { idempotencyPlugin } from '@basaltkit/fastify'
+import { idempotencyPlugin } from '@basaltkit/http' // also re-exported by @basaltkit/fastify
 
-idempotencyPlugin() // guards POST by default
+idempotencyPlugin({
+  fingerprint: 'body',     // a different body under the same key → 422
+  replayAfterGuards: true, // a revoked caller gets 401/403, not the cached success
+}) // guards POST by default
 ```
 
 - Repeat with the same key → the cached response, with `Idempotent-Replayed: true`.
   This holds for every handler shape — one that returns its payload is replayed
   exactly like one that calls `reply.send()`.
 - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
-- `5xx` responses are **not** cached, so genuine failures stay retryable.
+- `5xx` responses, `stream()` downloads and `sse()` streams are **not** cached,
+  so genuine failures stay retryable. A client error the route throws (`4xx`)
+  is recorded and replayed like any other response.
 - Keys are scoped by **caller credentials + tenant + method + route**, hashed
   with SHA-256 before they reach the store. The credentials are every header in
   `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`,
   `x-api-key`) and the tenant is `x-tenant-id` + `host`, so one user's cached
   response can never be replayed to another (no cross-user/tenant leak), and the
-  same key on two endpoints can't collide. The replay runs before route guards:
-  if you authenticate with another header, add it to `credentialHeaders`.
+  same key on two endpoints can't collide. If you authenticate with another
+  header, add it to `credentialHeaders`.
 - Requests with **no** credential header are not cached or replayed by default
   (a stranger who guessed the key would otherwise get the response). Opt in with
   `allowAnonymous: true` only for public endpoints with nothing private in them.
 - Keys longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`;
   `MemoryIdempotencyStore` sweeps expired entries and is capped by `maxEntries`
-  (default 10 000).
+  (default 10 000). `RedisIdempotencyStore` shares replays across instances.
+- It covers the routes Basalt serves (`route()` definitions). A handler you
+  register on the underlying framework by hand is not covered.
+
+**Bind the key to the request — `fingerprint`.** Without it, a client that
+reuses a key for a *different* request (a bug, or a retry after the user edited
+the form) silently receives the first request's result. `fingerprint: 'body'`
+stores a SHA-256 of the body with the record — canonical JSON with sorted keys
+for a parsed body, the exact bytes for a [`rawBody()`](/guide/adapters#raw-request-bodies-webhook-signatures)
+route — and answers a mismatch with `422 IDEMPOTENCY_KEY_REUSED`, also while
+the first request is still running. `upload()` routes are not fingerprinted by
+`'body'`; pass a function (`({ route, request }) => string | undefined`) to
+fingerprint them, or anything else, your way.
+
+**Where the check runs — `replayAfterGuards`.** By default the check runs after
+the enrichers and **before** the route guards: a caller whose token was revoked
+since the first request still receives the cached success, as long as it
+presents the same credential header. With `replayAfterGuards: true` it runs
+after the guards and request validation, just before the handler — the revoked
+caller gets the guard's `401`/`403`, and a request that fails validation never
+reserves the key. A `rawBody()` route fingerprinted by `'body'` is always
+checked after the guards, since its bytes are never read before they pass.
+
+Both options are off by default so existing apps keep their behaviour; a
+future major will turn them on. A custom `IdempotencyStore` keeps working
+unchanged — to answer a concurrent repeat with `422` instead of `409` it can
+also keep the `fingerprint` passed to `setPending(key, { fingerprint })` and
+return `{ pending: true, fingerprint }` from `get()`, as both bundled stores do.
 
 ## Revoking access tokens
 

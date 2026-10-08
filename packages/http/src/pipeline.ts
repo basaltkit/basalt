@@ -9,6 +9,8 @@ import {
 } from './error-details.js'
 import { HttpError, RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
+import { idempotencyStageOf, RecordingReply, type IdempotencyTicket } from './idempotency.js'
+import { applyRouteHeaders } from './route-headers.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
 import { isSseResponse } from './sse.js'
 import { isStreamResponse } from './stream.js'
@@ -223,9 +225,17 @@ export async function runRoute(
   // No sink from the caller: the disposers are run here, when the route is done.
   const local = pipeline.onDispose ? undefined : new RequestDisposers()
   const onDispose = pipeline.onDispose ?? ((disposer: RequestDisposer) => local!.add(disposer))
+  // `idempotencyPlugin` (any adapter): where its check runs for this request,
+  // if the request is subject to it at all.
+  const idempotency = idempotencyStageOf(pipeline.container)
+  const placement = idempotency?.placement(definition, request)
 
   return runWithContext(context, async () => {
+    let ticket: IdempotencyTicket | undefined
     try {
+      // The route's static headers go on first, so every response it produces
+      // carries them — a guard's 401, a validation 400 and a thrown 500 too.
+      applyRouteHeaders(definition, reply)
       const scoped = context.container
       // Fail closed: guards that cannot run must never be silently skipped.
       if (!scoped && (pipeline.guards?.length ?? 0) > 0) {
@@ -239,20 +249,45 @@ export async function runRoute(
           const disposer = await enrich({ route: definition, request, context, container: scoped, reply })
           if (typeof disposer === 'function') onDispose(disposer)
         }
+        if (placement === 'beforeGuards') {
+          const begun = await idempotency!.begin(definition, request, reply)
+          if (begun === 'replayed') return undefined
+          ticket = begun
+        }
         for (const guard of pipeline.guards ?? [])
           await guard({ route: definition, request, context, container: scoped, reply })
       }
       const parsedBody = session || rawSession ? undefined : parsePart('body', definition.body, request.body)
       const query = parsePart('query', definition.query, request.query)
       const params = parsePart('params', definition.params, request.params)
+      const body = session ? session.open() : rawSession ? await rawSession.read() : parsedBody
+      if (placement === 'beforeHandler') {
+        const rawBytes = rawSession ? (body as { bytes: Uint8Array }).bytes : undefined
+        const begun = await idempotency!.begin(definition, request, reply, rawBytes)
+        if (begun === 'replayed') return undefined
+        ticket = begun
+      }
+      // The reservation owner records what the handler sends, to replay it.
+      const recorder = ticket ? new RecordingReply(reply) : undefined
       const result = await definition.handler({
-        body: session ? session.open() : rawSession ? await rawSession.read() : parsedBody,
+        body,
         query,
         params,
         request,
-        reply,
+        reply: recorder ?? reply,
       } as Parameters<BasaltRoute['handler']>[0])
-      return applyEtag(definition, request, reply, result)
+      const final = applyEtag(definition, request, reply, result)
+      if (ticket) {
+        const owned = ticket
+        ticket = undefined // settled here; a failure below must not settle it twice
+        await idempotency!.complete(owned, recorder!, final)
+      }
+      return final
+    } catch (error) {
+      // A thrown route: record the client error the adapter is about to send,
+      // or release the key so a server failure stays retryable.
+      if (ticket) await idempotency!.fail(ticket, toErrorResponse(error))
+      throw error
     } finally {
       session?.release(reply)
       rawSession?.release(reply)

@@ -174,6 +174,60 @@ expiry, or once the expiry has passed. `webhooks-sqlite` adds the columns
 itself. `webhooks-prisma` needs the two fields in your schema (`basalt
 prisma:sync`) before the first rotation.
 
+### Sealing secrets at rest
+
+By default an endpoint's signing secret is stored as given, so a database dump
+holds every customer's key. Pass a `secretBox` and the manager seals each secret
+before the store write and opens it right before a delivery — the stores stay
+unaware and persist whatever string they get:
+
+```ts
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { webhooksPlugin, WebhookSecretNotSealedError, type WebhookSecretBox } from '@basaltkit/webhooks'
+
+const key = Buffer.from(process.env.WEBHOOK_SEAL_KEY!, 'base64') // 32 bytes
+const aad = (c: { endpointId: string; tenantId?: string | null }) => Buffer.from(`${c.endpointId}\0${c.tenantId ?? ''}`)
+
+const secretBox: WebhookSecretBox = {
+  seal(plain, context) {
+    const iv = randomBytes(12)
+    const cipher = createCipheriv('aes-256-gcm', key, iv).setAAD(aad(context))
+    const data = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()])
+    return `v1:${Buffer.concat([iv, cipher.getAuthTag(), data]).toString('base64url')}`
+  },
+  open(sealed, context) {
+    if (!sealed.startsWith('v1:')) throw new WebhookSecretNotSealedError() // a legacy plaintext row
+    const raw = Buffer.from(sealed.slice(3), 'base64url')
+    const decipher = createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12)).setAAD(aad(context))
+    decipher.setAuthTag(raw.subarray(12, 28))
+    return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8')
+  },
+}
+
+webhooksPlugin({ store, secretBox })
+```
+
+- **Bring your own crypto.** `@basaltkit/webhooks` ships no cipher: the box can
+  be a KMS call, a vault, or the AES-GCM sketch above — any object with
+  `seal(plain, context)` and `open(sealed, context)` (sync or async). An
+  envelope you already use elsewhere (for example the one your file storage
+  seals keys with) is just as valid.
+- **Bind the context.** `context` is `{ endpointId, tenantId }`. Feeding it into
+  the ciphertext (AES-GCM additional data, a KMS encryption context) means a
+  sealed secret copied onto another endpoint's row no longer opens.
+- **What is sealed.** `register()` seals the secret it generates or receives,
+  `rotateSecret()` seals both the new secret and the previous one. Both still
+  **return the plaintext** — the one moment you hand it to the customer.
+  `list()` never returns secrets either way.
+- **Legacy rows.** Rows written before you enabled the box hold plaintext. They
+  keep delivering: a value for which the optional `isSealed(value)` returns
+  `false`, or whose `open()` throws `WebhookSecretNotSealedError`, is used as is.
+  The endpoint's next `rotateSecret()` (or re-`register()`) writes it sealed.
+- **Failures.** Any other error from `open()` fails that endpoint's delivery
+  (`error: 'could not open the endpoint signing secret'`, `retryable: true`, so
+  the outbox retries after a KMS blip); the cause is logged with the endpoint
+  id only. An expired previous secret is never opened.
+
 ## Dispatching events
 
 `dispatch(event, data, tenantId?)` finds every subscribed endpoint (the tenant's
@@ -252,6 +306,19 @@ guarantee. Every attempt is signed with its **own** timestamp `t`, so a retry
 after a long backoff still falls inside the receiver's tolerance; the body (with
 its `id` and `sentAt`) is identical on every attempt. `endpointId` names the subscription it was signed for. Both are inside
 the signed body, so neither can be altered without breaking the signature.
+
+The `x-basalt` prefix is the default. White-label products can choose their
+own with `headerPrefix` (lower-case, `[a-z][a-z0-9-]{0,31}`, checked when the
+deliverer is built): `headerPrefix: 'x-acme'` sends `x-acme-event`,
+`x-acme-delivery` and `x-acme-signature`. A receiver reads the same names with
+`webhookHeaderNames(prefix)`:
+
+```ts
+import { verifySignature, webhookHeaderNames } from '@basaltkit/webhooks'
+
+const names = webhookHeaderNames('x-acme') // { event, delivery, signature }
+const ok = verifySignature(request.headers[names.signature] as string, body.bytes, secret)
+```
 
 ## Auto-dispatch from domain events
 
@@ -458,6 +525,40 @@ grace window. `verifySignature` returns `true` when **any** of them matches your
 so a receiver keeps working whether it has already switched secrets or not.
 Unknown schemes (e.g. `v0=`) are ignored; a duplicate `t` is rejected.
 
+### Verifying raw bytes
+
+`verifySignature` and `signPayload` accept the body as a `string` **or** as bytes
+(`Buffer` / `Uint8Array`). The HMAC runs over `${t}.` followed by the body bytes —
+a string is UTF-8 encoded first — so a string and the `Buffer` of its UTF-8 bytes
+produce the same signature, and existing string signatures are unchanged.
+
+Pass the bytes when the body may not be valid UTF-8 (a forwarded
+`message/rfc822` e-mail, a binary payload): decoding them to a string first
+replaces invalid sequences and the HMAC no longer matches. A Basalt receiver
+gets those exact bytes, on every adapter, from a
+[`rawBody()` route](/guide/adapters#raw-request-bodies-webhook-signatures):
+
+```ts
+import { rawBody, route } from '@basaltkit/http'
+import { verifySignature } from '@basaltkit/webhooks'
+
+route({
+  method: 'POST',
+  url: '/hooks/basalt',
+  body: rawBody({ maxBytes: 256 * 1024 }),
+  async handler({ body, request, reply }) {
+    const ok = verifySignature(
+      request.headers['x-basalt-signature'] as string,
+      body.bytes, // the Buffer exactly as received
+      process.env.WEBHOOK_SECRET!,
+    )
+    if (!ok) return reply.code(400).send({ error: 'bad signature' })
+    const event = JSON.parse(body.text())
+    // …
+  },
+})
+```
+
 ## Delivery semantics
 
 - `timeoutMs` is one deadline per attempt that covers **resolving the host and
@@ -492,6 +593,31 @@ webhooksPlugin({
 For durable, distributed retries that survive a restart mid-delivery, drive
 `dispatch()` from `@basaltkit/queue` instead of relying on the in-process retry
 loop — see [Queues & jobs](/guide/queues).
+
+### Delivery telemetry
+
+Every result carries `durationMs`: the wall-clock time of the whole delivery,
+all attempts, DNS resolution and backoff included. `status` is the HTTP status
+of the last response received.
+
+For a per-attempt log — what an integrations page shows a customer — pass
+`onAttempt`. It is called after each attempt with
+`{ deliveryId, endpointId, tenantId?, event, attempt, ok, status?, durationMs, error?, at }`:
+
+```ts
+webhooksPlugin({
+  store,
+  onAttempt: (a) =>
+    deliveryLog.insert({ ...a, at: a.at.toISOString() }), // your table, your retention
+})
+```
+
+The hook is not awaited, and a throw or a rejection is logged and swallowed — a
+broken log never changes a delivery. A delivery refused before any attempt
+(no signing secret, an SSRF-blocked URL, the fan-out cap) produces no attempt;
+it appears only in the `DeliveryResult`. Basalt stores no delivery log of its
+own and never reads the response body (it is discarded unread, see above), so
+there is no response excerpt to record.
 
 ### The SSRF guard
 
@@ -697,6 +823,38 @@ The model's `previousSecret` / `previousSecretExpiresAt` columns hold a
 an endpoint is rotating, so a schema that predates them keeps working until you
 call `rotateSecret()` — sync and migrate before that.
 
+### Schema-per-tenant
+
+Under [schema-per-tenant](/guide/database-per-tenant) each tenant's endpoints
+live in its own schema. Give the Prisma store a client that resolves per call
+instead of a fixed one — no special store mode is needed:
+
+```ts
+import { tenantClient } from '@basaltkit/prisma'
+import type { PrismaClient } from '@prisma/client'
+
+const webhooks = prismaWebhookStore(tenantClient<PrismaClient>())
+webhooksPlugin({ store: webhooks.store, secretBox })
+```
+
+Inside a request, `register()` / `list()` / `dispatch()` reach the active
+tenant's schema (the endpoint is still bound to that tenant, which the schema
+makes redundant but harmless). Off the request path, every call must run inside
+the tenant's context — `db()` throws `DB_UNAVAILABLE` otherwise:
+
+```ts
+// a queue job carrying { tenantId, event, data } from the request that emitted it
+await tenancy.run(job.tenantId, () =>
+  hooks.dispatch(job.event, job.data, { tenantId: job.tenantId, idempotencyKey: job.id }),
+)
+```
+
+`webhookOutboxPlugin` does **not** fit this layout: its relay deliberately
+dispatches every entry in a fresh, tenant-less context, where a
+`tenantClient()` store cannot resolve. Drive deliveries from a queue job as
+above (the `idempotencyKey` keeps the delivery `id` stable across retries), or
+keep the webhook tables in the central schema with a plain client.
+
 ### Which backend?
 
 | Store | Package | Use when |
@@ -746,7 +904,7 @@ immediate cut-overs.
 
 ### `webhooksPlugin(options)`
 
-Everything except `store`, `deliverer`, `events` and the three fan-out options is forwarded to the
+Everything except `store`, `deliverer`, `events`, `secretBox` and the three fan-out options is forwarded to theEverything except `store`, `deliverer`, `events` and the three fan-out options is forwarded to the
 `WebhookDeliverer` it constructs (and ignored if you pass your own `deliverer`).
 
 | Option | Type | Default | Purpose |
@@ -757,6 +915,7 @@ Everything except `store`, `deliverer`, `events` and the three fan-out options i
 | `maxEndpointsPerDispatch` | `number \| false` | `100` | Most active endpoints of one scope (tenant, or tenant-agnostic) per event; over it, that scope is refused whole ([fan-out cap](#fan-out-cap)) |
 | `dispatchConcurrency` | `number` | `16` | Deliveries one `dispatch` runs at once |
 | `onFanOutExceeded` | `(info) => void` | `console.warn` | Called once per refused scope with `{ event, tenantId, endpoints, limit }`. Must not throw |
+| `secretBox` | `WebhookSecretBox` | — (stored as given) | Seals endpoint secrets before the store write and opens them per delivery ([sealing secrets at rest](#sealing-secrets-at-rest)) |
 | `secret` | `string` | — | Default HMAC signing secret (min 16 chars) for tenant-agnostic endpoints. Tenant endpoints always use their own |
 | `allowSharedSecret` | `boolean` | `false` | Opt-out: sign a tenant endpoint that has no own secret with the default `secret` (otherwise refused) |
 | `allowUnsigned` | `boolean` | `false` | Opt-out: send unsigned when there is no secret at all (otherwise refused) |
@@ -768,6 +927,8 @@ Everything except `store`, `deliverer`, `events` and the three fan-out options i
 | `fetchImplPinsAddress` | `boolean` | `false` | Declares that your `fetchImpl` honours `PINNED_ADDRESS` (e.g. wraps `pinnedFetch`): silences the unpinned warning and skips the per-retry re-validation |
 | `sleep` | `(ms) => Promise<void>` | `setTimeout` | Injectable backoff sleep (tests) |
 | `now` | `() => number` | `Date.now()/1000` | Injectable clock in **seconds**, used for the signature timestamp |
+| `headerPrefix` | `string` | `'x-basalt'` | Prefix of the `-event` / `-delivery` / `-signature` headers; lower-case `[a-z][a-z0-9-]{0,31}`, validated at construction |
+| `onAttempt` | `(attempt: WebhookAttempt) => void \| Promise<void>` | — | Called after every attempt ([delivery telemetry](#delivery-telemetry)); not awaited, errors are logged and swallowed |
 
 ### `SsrfGuardOptions` (the `ssrf` option)
 
@@ -801,8 +962,8 @@ and `basalt:events`, and drains the outbox once on shutdown (best-effort).
 
 | Export | Signature | Purpose |
 | --- | --- | --- |
-| `signPayload` | `(body, secret \| secrets[], timestampSeconds) => string` | Builds `t=…,v1=…` — sign a payload by hand; one `v1` per secret when given several (current first) |
-| `verifySignature` | `(header, body, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Constant-time verify in a receiver; `true` if any `v1` matches; `false` for a secret under 16 chars; throws `RangeError` only for an invalid tolerance/clock |
+| `signPayload` | `(body: string \| Uint8Array, secret \| secrets[], timestampSeconds) => string` | Builds `t=…,v1=…` — sign a payload by hand; one `v1` per secret when given several (current first) |
+| `verifySignature` | `(header, body: string \| Uint8Array, secret, toleranceSeconds = 300, nowSeconds?) => boolean` | Constant-time verify in a receiver; `true` if any `v1` matches; `false` for a secret under 16 chars; throws `RangeError` only for an invalid tolerance/clock |
 | `generateWebhookSecret` | `() => string` | A fresh `whsec_…` secret (32 random bytes) |
 | `MIN_WEBHOOK_SECRET_LENGTH` | `16` | Minimum secret length enforced on both ends |
 | `assertDeliverableUrl` | `(url, options?) => Promise<void>` | Reject an SSRF-unsafe URL at registration time; throws `WebhookUrlBlockedError` |
@@ -813,6 +974,7 @@ and `basalt:events`, and drains the outbox once on shutdown (best-effort).
 | `matchesEvent` | `(patterns, event) => boolean` | The pattern matcher, for a custom store's `forEvent` |
 | `webhookOutboxDispatch` | `(webhooks, options?) => OutboxDispatch` | Adapts a `WebhookManager` into an outbox dispatch; throws only on transient failures, with stable delivery ids |
 | `pinnedFetch` | `(url, init) => Promise<Response>` | `fetch`-compatible client over the pinned transport — the delegate for a custom `fetchImpl` |
+| `webhookHeaderNames` | `(prefix = 'x-basalt') => { event, delivery, signature }` | The header names a deliverer with that `headerPrefix` sends — read them in the receiver; throws `TypeError` for an invalid prefix |
 | `deriveDeliveryId` | `(idempotencyKey, endpointId) => string` | The deterministic delivery `id` used by the outbox / `idempotencyKey` |
 | `createGuardedFetch` | `(options) => (url, init?) => Promise<GuardedResponse>` | Streaming SSRF-guarded client: per-hop revalidation + IP pinning, byte cap mid-stream, no auto-redirect, no decompression; throws `GuardedFetchError` (`SSRF_BLOCKED` · `BODY_TOO_LARGE` · `TIMEOUT` · `TOO_MANY_REDIRECTS`) |
 | `hostAllowed` | `(host, allowed) => boolean` | The allowlist predicate: exact host, or `.suffix` for subdomains only |

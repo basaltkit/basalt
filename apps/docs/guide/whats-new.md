@@ -56,6 +56,27 @@ error details that are public by construction, audit hashes that name their
 key, webhooks that respect a port policy and a fan-out cap, and more. See
 [Closing the harvest](#closing-the-harvest).
 
+## Since 1.12 (unreleased)
+
+Shipped to `main` after the 1.12 release, all opt-in and non-breaking:
+
+- **Idempotency on every adapter.** `idempotencyPlugin` moved from
+  `@basaltkit/fastify` into the shared route pipeline in `@basaltkit/http`, so
+  Express and Hono get it too (the Fastify import keeps working). Two new
+  options: `fingerprint: 'body'` refuses a reused key carrying a different body
+  with `422 IDEMPOTENCY_KEY_REUSED`, and `replayAfterGuards: true` moves the
+  check after the route guards, so a revoked caller gets `401`/`403` instead of
+  the cached success. Both will become the default in a future major — see
+  [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyplugin).
+- **Per-route headers.** `meta.headers` sets static response headers (say
+  `X-Robots-Tag: noindex` on a public share link) on every response the route
+  produces, its guard, validation and handler errors included — see
+  [Per-route headers](/guide/security#per-route-headers-—-meta-headers).
+- **Operable webhooks.** `secretBox` seals endpoint signing secrets at rest,
+  `onAttempt` and `DeliveryResult.durationMs` report every delivery attempt,
+  `headerPrefix` renames the `x-basalt-*` headers, and `signPayload()` /
+  `verifySignature()` accept raw bytes — see [Webhooks](/guide/webhooks#sealing-secrets-at-rest).
+
 ## Highlights
 
 ### Promises the code now keeps

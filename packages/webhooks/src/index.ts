@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { createToken, definePlugin, ensureMetadata, tryCtx } from '@basaltkit/core'
 import { EVENTS } from '@basaltkit/events'
 import { deriveDeliveryId, generateWebhookSecret, MIN_WEBHOOK_SECRET_LENGTH, WebhookDeliverer, type DeliveryResult, type WebhookDelivererOptions } from './deliver.js'
@@ -20,9 +21,13 @@ export {
   PINNED_ADDRESS,
   pinnedFetch,
   deriveDeliveryId,
+  webhookHeaderNames,
+  DEFAULT_WEBHOOK_HEADER_PREFIX,
   type DeliveryResult,
   type DeliverOptions,
+  type WebhookAttempt,
   type WebhookDelivererOptions,
+  type WebhookHeaderNames,
 } from './deliver.js'
 export {
   assertDeliverableUrl,
@@ -105,6 +110,42 @@ export class WebhookEndpointNotFoundError extends Error {
   constructor(id: string) {
     super(`@basaltkit/webhooks: endpoint "${id}" was not found.`)
     this.name = 'WebhookEndpointNotFoundError'
+  }
+}
+
+/** Context handed to a {@link WebhookSecretBox} — bind it into the ciphertext (AAD) so a sealed secret can't be moved to another endpoint. */
+export interface WebhookSecretContext {
+  endpointId: string
+  /** The endpoint's tenant; `null`/absent for a tenant-agnostic endpoint. */
+  tenantId?: string | null
+}
+
+/**
+ * Seals endpoint signing secrets before they reach the store, and opens them
+ * when a delivery needs them, so a database dump never holds usable secrets.
+ * Supplied by the app (KMS, an AES-GCM key from the environment, a vault…) —
+ * `@basaltkit/webhooks` brings no crypto of its own. The stores stay unaware:
+ * they persist whatever string they are given.
+ *
+ * Rows written before sealing was enabled hold plaintext. They keep working:
+ * a value `isSealed()` rejects — or one whose `open()` throws
+ * {@link WebhookSecretNotSealedError} — is used as plaintext, and is sealed on
+ * the endpoint's next `rotateSecret()` (or re-`register()`). Any other error
+ * from `open()` fails that delivery (retryable).
+ */
+export interface WebhookSecretBox {
+  seal(plain: string, context: WebhookSecretContext): string | Promise<string>
+  open(sealed: string, context: WebhookSecretContext): string | Promise<string>
+  /** Optional: false for a stored value that is legacy plaintext (e.g. it lacks your ciphertext prefix). */
+  isSealed?(value: string): boolean
+}
+
+/** Thrown by a {@link WebhookSecretBox.open} for a value that was never sealed: the value is then used as plaintext. */
+export class WebhookSecretNotSealedError extends Error {
+  readonly code = 'WEBHOOK_SECRET_NOT_SEALED'
+  constructor(message = 'the stored webhook secret is not sealed') {
+    super(message)
+    this.name = 'WebhookSecretNotSealedError'
   }
 }
 
@@ -230,6 +271,12 @@ export interface WebhookManagerOptions extends WebhookFanOutOptions {
   tenancyActive?: () => boolean
   /** Clock in epoch ms, for the rotation grace window (tests). Default `Date.now`. */
   now?: () => number
+  /**
+   * Seals signing secrets at rest: applied by `register()` / `rotateSecret()`
+   * before the store write and reversed before each delivery. Default: none
+   * (secrets are stored as given). See {@link WebhookSecretBox}.
+   */
+  secretBox?: WebhookSecretBox
 }
 
 /** Options for {@link WebhookManager.rotateSecret}. */
@@ -277,6 +324,7 @@ export class WebhookManager {
   private readonly maxEndpointsPerDispatch: number
   private readonly dispatchConcurrency: number
   private readonly onFanOutExceeded: (info: WebhookFanOutExceeded) => void
+  private readonly secretBox: WebhookSecretBox | undefined
 
   constructor(
     private readonly store: WebhookStore,
@@ -285,6 +333,11 @@ export class WebhookManager {
   ) {
     this.tenancyActive = options.tenancyActive ?? (() => false)
     this.now = options.now ?? Date.now
+    const box = options.secretBox
+    if (box !== undefined && (typeof box?.seal !== 'function' || typeof box?.open !== 'function')) {
+      throw new TypeError('webhooks: secretBox must implement seal() and open()')
+    }
+    this.secretBox = box
     const cap = options.maxEndpointsPerDispatch ?? DEFAULT_MAX_ENDPOINTS_PER_DISPATCH
     if (cap !== false) assertPositiveInteger('maxEndpointsPerDispatch', cap)
     this.maxEndpointsPerDispatch = cap === false ? Number.POSITIVE_INFINITY : cap
@@ -297,6 +350,44 @@ export class WebhookManager {
           `[basalt:webhooks] fan-out cap exceeded: ${info.endpoints} endpoints of ${info.tenantId === undefined ? 'the tenant-agnostic scope' : `tenant "${info.tenantId}"`} ` +
             `match "${info.event}" (limit ${info.limit}); none of them was sent to.`,
         ))
+  }
+
+  /** Seals `plain` with the secret box (identity without one). */
+  private async seal(plain: string, context: WebhookSecretContext): Promise<string> {
+    if (!this.secretBox) return plain
+    const sealed = await this.secretBox.seal(plain, context)
+    if (typeof sealed !== 'string' || sealed.length === 0) throw new TypeError('webhooks: secretBox.seal() must return a non-empty string')
+    return sealed
+  }
+
+  /** Opens a stored secret; legacy plaintext (see {@link WebhookSecretBox}) is returned as is. */
+  private async open(stored: string, context: WebhookSecretContext): Promise<string> {
+    const box = this.secretBox
+    if (!box) return stored
+    if (box.isSealed && !box.isSealed(stored)) return stored
+    try {
+      return await box.open(stored, context)
+    } catch (error) {
+      if (error instanceof WebhookSecretNotSealedError) return stored
+      throw error
+    }
+  }
+
+  /** The endpoint with its stored secrets opened, ready for the deliverer. */
+  private async openSecrets(endpoint: WebhookEndpoint): Promise<WebhookEndpoint> {
+    if (!this.secretBox) return endpoint
+    const context: WebhookSecretContext = { endpointId: endpoint.id, tenantId: endpoint.tenantId ?? null }
+    const opened: WebhookEndpoint = { ...endpoint }
+    if (typeof endpoint.secret === 'string') opened.secret = await this.open(endpoint.secret, context)
+    // The previous secret is only opened while its grace window is open — an
+    // expired one is never used, so it must not be able to fail a delivery.
+    if (typeof endpoint.previousSecret === 'string') {
+      const expires = endpoint.previousSecretExpiresAt
+      const until = expires instanceof Date ? expires.getTime() : new Date(expires as unknown as string).getTime()
+      if (until > this.now()) opened.previousSecret = await this.open(endpoint.previousSecret, context)
+      else delete opened.previousSecret
+    }
+    return opened
   }
 
   private allowsPort(port: number): boolean {
@@ -359,12 +450,32 @@ export class WebhookManager {
     // is how a leaked secret is revoked, so its predecessor must stop signing too.
     // (Keys set only then, so a store whose schema predates rotation is unaffected.)
     const endRotation = existing?.previousSecret != null && !('previousSecret' in endpoint)
-    return this.store.add({
+    if (!this.secretBox) {
+      return this.store.add({
+        ...rest,
+        ...(tenantId !== undefined ? { tenantId } : {}),
+        ...(secret !== undefined ? { secret } : {}),
+        ...(endRotation ? { previousSecret: undefined, previousSecretExpiresAt: undefined } : {}),
+      })
+    }
+    // Sealing binds the endpoint id, so it must be known before the write.
+    const id = rest.id ?? randomUUID()
+    const context: WebhookSecretContext = { endpointId: id, tenantId: tenantId ?? null }
+    const previous = rest.previousSecret
+    const saved = await this.store.add({
       ...rest,
+      id,
       ...(tenantId !== undefined ? { tenantId } : {}),
-      ...(secret !== undefined ? { secret } : {}),
+      ...(secret !== undefined ? { secret: await this.seal(secret, context) } : {}),
+      ...(typeof previous === 'string' ? { previousSecret: await this.seal(previous, context) } : {}),
       ...(endRotation ? { previousSecret: undefined, previousSecretExpiresAt: undefined } : {}),
     })
+    // Hand back the plaintext the caller needs to give its customer.
+    return {
+      ...saved,
+      ...(secret !== undefined ? { secret } : {}),
+      ...(typeof previous === 'string' ? { previousSecret: previous } : {}),
+    }
   }
 
   /**
@@ -403,13 +514,18 @@ export class WebhookManager {
         ? (await this.store.list(tenantId)).find((e) => e.id === id && e.tenantId === tenantId)
         : (await this.store.list()).find((e) => e.id === id)
     if (!existing) throw new WebhookEndpointNotFoundError(id)
-    const current = existing.secret
-    if (current == null) {
+    const stored = existing.secret
+    if (stored == null) {
       throw new WebhookEndpointInvalidError(
         'the endpoint signs with the plugin-wide default secret and has no own secret to rotate',
         'rotateSecret',
       )
     }
+    const context: WebhookSecretContext = { endpointId: existing.id, tenantId: asTenantId(existing.tenantId) ?? null }
+    // Opened (legacy plaintext passes through) so the comparison below and the
+    // previous secret written back are both on plaintext — and a legacy row is
+    // sealed by this write.
+    const current = await this.open(stored, context)
     const next = options.secret ?? generateWebhookSecret()
     if (typeof next !== 'string' || next.length < MIN_WEBHOOK_SECRET_LENGTH) {
       throw new WebhookEndpointInvalidError(`secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters`, 'rotateSecret')
@@ -420,14 +536,14 @@ export class WebhookManager {
     const saved = await this.store.add({
       ...rest,
       ...(owner !== undefined ? { tenantId: owner } : {}),
-      secret: next,
+      secret: await this.seal(next, context),
       // Always written (undefined clears), so a rotation also ends an earlier one.
       ...(grace > 0
-        ? { previousSecret: current, previousSecretExpiresAt: new Date(this.now() + grace * 1000) }
+        ? { previousSecret: await this.seal(current, context), previousSecretExpiresAt: new Date(this.now() + grace * 1000) }
         : { previousSecret: undefined, previousSecretExpiresAt: undefined }),
     })
     const { previousSecret: _omit, ...result } = saved
-    return result
+    return { ...result, secret: next }
   }
 
   /**
@@ -521,7 +637,14 @@ export class WebhookManager {
           return { endpointId: endpoint.id, ok: false, attempts: 0, error, retryable: false }
         }
         try {
-          return await this.deliverer.deliver(endpoint, event, data, key !== undefined ? { deliveryId: deriveDeliveryId(key, endpoint.id) } : {})
+          let target: WebhookEndpoint
+          try {
+            target = await this.openSecrets(endpoint)
+          } catch (error) {
+            console.error(`[basalt:webhooks] could not open the signing secret of endpoint "${endpoint.id}":`, error)
+            return { endpointId: endpoint.id, ok: false, attempts: 0, error: 'could not open the endpoint signing secret', retryable: true }
+          }
+          return await this.deliverer.deliver(target, event, data, key !== undefined ? { deliveryId: deriveDeliveryId(key, endpoint.id) } : {})
         } catch (error) {
           console.error(`[basalt:webhooks] delivery to endpoint "${endpoint.id}" threw:`, error)
           return { endpointId: endpoint.id, ok: false, attempts: 0, error: 'internal delivery error', retryable: true }
@@ -535,6 +658,8 @@ export const WEBHOOKS = createToken<WebhookManager>('webhooks')
 
 export interface WebhooksPluginOptions extends WebhookDelivererOptions, WebhookFanOutOptions {
   store?: WebhookStore
+  /** Seal signing secrets at rest. See {@link WebhookSecretBox}. */
+  secretBox?: WebhookSecretBox
   deliverer?: WebhookDeliverer
   /** Domain event patterns to auto-dispatch (requires @basaltkit/events). */
   events?: string[]
@@ -564,6 +689,7 @@ export function webhooksPlugin(options: WebhooksPluginOptions = {}) {
         ...(options.maxEndpointsPerDispatch !== undefined ? { maxEndpointsPerDispatch: options.maxEndpointsPerDispatch } : {}),
         ...(options.dispatchConcurrency !== undefined ? { dispatchConcurrency: options.dispatchConcurrency } : {}),
         ...(options.onFanOutExceeded !== undefined ? { onFanOutExceeded: options.onFanOutExceeded } : {}),
+        ...(options.secretBox !== undefined ? { secretBox: options.secretBox } : {}),
       })
       container.singleton(WEBHOOKS, () => manager)
     },

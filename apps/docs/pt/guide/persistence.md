@@ -720,7 +720,7 @@ partilhado entre instâncias:
 | Usage metering | `MemoryUsageStore` | `RedisUsageStore` — `consume()` atómico via Lua |
 | Idempotência de webhook | `MemoryWebhookStore` | `RedisWebhookStore` — `SET NX EX` entre restarts |
 | Rate limiting | `MemoryRateLimitStore` | `RedisRateLimitStore` (`@basaltkit/http`) — um contador atómico partilhado entre instâncias |
-| Idempotência de request | `MemoryIdempotencyStore` | `RedisIdempotencyStore` (`@basaltkit/fastify`) — reproduz uma resposta em cache entre instâncias |
+| Idempotência de request | `MemoryIdempotencyStore` | `RedisIdempotencyStore` (`@basaltkit/http`, qualquer adapter) — reproduz uma resposta em cache entre instâncias |
 | Queues | driver em memória | pacotes de driver RabbitMQ / Kafka / SQS |
 | Search | `MemorySearchDriver` | `MeilisearchDriver` (incluído), `@basaltkit/search-postgres`, `@basaltkit/search-elasticsearch` |
 | Storage | disco local | pacotes de driver S3 / GCS / Azure |

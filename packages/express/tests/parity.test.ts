@@ -6,6 +6,8 @@ import {
   sendWith,
   errorDetailsParitySuite,
   disposerParitySuite,
+  routeHeadersParitySuite,
+  idempotencyParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
@@ -55,6 +57,8 @@ crossCopyParitySuite('express', driver)
 rateLimitKeyParitySuite('express', driver)
 rateLimitWarningParitySuite('express', driver)
 errorDetailsParitySuite('express', driver)
+routeHeadersParitySuite('express', driver)
+idempotencyParitySuite('express', driver)
 streamParitySuite('express', driver)
 corsPreflightParitySuite('express', driver)
 wireParitySuite('express', driver)

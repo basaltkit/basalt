@@ -620,5 +620,7 @@ createApp({
 })
 ```
 
-The one exception is **`idempotencyPlugin`**, which intercepts the response
-body — that remains Fastify-specific for now.
+`idempotencyPlugin` is neutral too: it runs inside the shared route pipeline,
+so replays, conflicts and the `fingerprint` / `replayAfterGuards` options behave
+identically on all three adapters — see
+[Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyplugin).

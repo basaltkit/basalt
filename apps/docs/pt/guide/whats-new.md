@@ -62,6 +62,30 @@ auditoria que nomeiam a sua chave, webhooks que respeitam uma política de porta
 e um tecto de fan-out, e mais. Ver [Fechar a colheita da
 auditoria](#fechar-a-colheita-da-auditoria).
 
+## Desde a 1.12 (por publicar)
+
+Entrou no `main` depois da publicação da 1.12, tudo opt-in e sem quebras:
+
+- **Idempotência em todos os adapters.** O `idempotencyPlugin` passou de
+  `@basaltkit/fastify` para o pipeline de rotas partilhado em `@basaltkit/http`,
+  por isso o Express e o Hono também o têm (o import do Fastify continua a
+  funcionar). Duas opções novas: `fingerprint: 'body'` recusa uma chave
+  reutilizada com um corpo diferente com `422 IDEMPOTENCY_KEY_REUSED`, e
+  `replayAfterGuards: true` passa a verificação para depois dos guards da rota,
+  para que um caller revogado receba `401`/`403` em vez do sucesso em cache. As
+  duas vão passar a default numa futura major — vê
+  [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).
+- **Cabeçalhos por rota.** `meta.headers` aplica cabeçalhos de resposta
+  estáticos (por exemplo `X-Robots-Tag: noindex` num link de partilha público) em
+  todas as respostas que a rota produz, incluindo os erros dos guards, da
+  validação e do handler — vê
+  [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-headers).
+- **Webhooks operáveis.** `secretBox` sela os secrets de assinatura dos endpoints
+  em repouso, `onAttempt` e `DeliveryResult.durationMs` reportam cada tentativa
+  de entrega, `headerPrefix` muda o nome dos headers `x-basalt-*`, e
+  `signPayload()` / `verifySignature()` aceitam bytes em bruto — vê
+  [Webhooks](/pt/guide/webhooks#selar-secrets-em-repouso).
+
 ## Destaques
 
 ### Promessas que o código passa a cumprir

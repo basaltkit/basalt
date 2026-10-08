@@ -9,6 +9,8 @@ import {
   sendWith,
   errorDetailsParitySuite,
   disposerParitySuite,
+  routeHeadersParitySuite,
+  idempotencyParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
@@ -52,6 +54,8 @@ crossCopyParitySuite('fastify', driver)
 rateLimitKeyParitySuite('fastify', driver)
 rateLimitWarningParitySuite('fastify', driver)
 errorDetailsParitySuite('fastify', driver)
+routeHeadersParitySuite('fastify', driver)
+idempotencyParitySuite('fastify', driver)
 streamParitySuite('fastify', driver)
 corsPreflightParitySuite('fastify', driver)
 wireParitySuite('fastify', driver)
