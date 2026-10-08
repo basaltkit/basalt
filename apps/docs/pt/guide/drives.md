@@ -152,8 +152,10 @@ const app = createApp({
       providers: [/* um adaptador — ver "Escrever um adaptador" */],
       keys: [{ id: '2026-09', key: env.DRIVES_ENCRYPTION_KEY }],
       secret: env.APP_SECRET,
-      store: prismaDriveConnectionStore(db),
-      ledger: prismaDriveImportLedger(db),
+      // As tuas implementações duráveis — ver "Escrever um store durável".
+      // Omitidos, ambos usam stores em memória (só para testes e demos).
+      store: yourDriveConnectionStore,
+      ledger: yourDriveImportLedger,
     }),
   ],
 })
@@ -896,6 +898,97 @@ const documentSink: DriveSink = async ({ item, content, connection, version }) =
   return { targetId: document.id }
 }
 ```
+
+## Escrever um store durável
+
+O `@basaltkit/drives` só traz o `MemoryDriveConnectionStore` e o
+`MemoryDriveImportLedger`. Em produção precisas do teu próprio
+`DriveConnectionStore` e `DriveImportLedger`: as apps modelam estas linhas de
+formas demasiado diferentes (uma tabela ou duas, uma coluna `tenantId` ou um
+schema por tenant) para uma única implementação servir. O que todos os stores
+têm de partilhar é o comportamento de que o motor depende:
+
+- **Compare-and-set.** `update(tenantId, id, patch, expectedRevision)` só se
+  aplica quando a `revision` guardada ainda é igual a `expectedRevision`, e
+  devolve `null` (sem mudar nada) caso contrário. Cada escrita incrementa a
+  `revision`. A proteção contra a corrida no refresh depende disto: um store
+  que ignora o argumento não é seguro com mais do que um worker, porque dois
+  workers a fazer refresh de uma ligação Microsoft ao mesmo tempo guardam um
+  refresh token que o fornecedor já retirou.
+- **`undefined` limpa, ausente mantém.** Uma chave do patch presente com
+  `undefined` limpa a coluna (`{ cursor: undefined }` descarta o cursor de
+  sincronização); uma chave ausente deixa-a como está.
+- **Âmbito de tenant em todas as queries.** O `tenantId` faz parte de cada
+  leitura, atualização e remoção — nunca procures uma linha só pelo `id`.
+- **Um ledger idempotente.** `record()` faz upsert em
+  `(tenantId, connectionId, externalId)`.
+
+Uma implementação de referência do store de ligações em Prisma:
+
+```ts
+import type { DriveConnection, DriveConnectionPatch, DriveConnectionStore } from '@basaltkit/drives'
+
+export class PrismaDriveConnectionStore implements DriveConnectionStore {
+  constructor(private readonly db: PrismaClient) {}
+
+  async create(record: DriveConnection) {
+    await this.db.driveConnection.create({ data: toRow(record) })
+  }
+
+  async find(tenantId: string, id: string) {
+    const row = await this.db.driveConnection.findFirst({ where: { id, tenantId } })
+    return row ? fromRow(row) : null
+  }
+
+  async list(tenantId: string, filter: { provider?: string; status?: string } = {}) {
+    const rows = await this.db.driveConnection.findMany({
+      where: { tenantId, ...(filter.provider ? { provider: filter.provider } : {}), ...(filter.status ? { status: filter.status } : {}) },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    })
+    return rows.map(fromRow)
+  }
+
+  async update(tenantId: string, id: string, patch: DriveConnectionPatch, expectedRevision?: number) {
+    // `toPatch` converte uma chave presente com `undefined` em `null` (limpa a
+    // coluna) e ignora as chaves ausentes.
+    const data = { ...toPatch(patch), revision: { increment: 1 }, updatedAt: Date.now() }
+    const r = await this.db.driveConnection.updateMany({
+      where: { id, tenantId, ...(expectedRevision !== undefined ? { revision: expectedRevision } : {}) },
+      data,
+    })
+    if (r.count === 0) return null // inexistente, de outro tenant, ou compare-and-set perdido
+    return this.find(tenantId, id)
+  }
+
+  async delete(tenantId: string, id: string) {
+    await this.db.driveConnection.deleteMany({ where: { id, tenantId } })
+  }
+}
+```
+
+É o `updateMany` com a revisão na cláusula `where` que torna a escrita num
+compare-and-set atómico; um par ler-e-depois-`update` não o é. Guarda `scopes`,
+`account` e `watch` como colunas JSON e o `secret` como texto — já vem cifrado.
+
+Depois valida a implementação com a mesma suite de conformidade que os stores
+em memória passam. Vem no subpath só para testes `@basaltkit/drives/testing` e
+funciona com qualquer runner que tenha `describe` e `it`:
+
+```ts
+import { describe, it } from 'vitest'
+import { runDriveStoreContract } from '@basaltkit/drives/testing'
+
+runDriveStoreContract(async () => {
+  await db.driveImport.deleteMany()
+  await db.driveConnection.deleteMany()
+  return { store: new PrismaDriveConnectionStore(db), ledger: new PrismaDriveImportLedger(db) }
+}, { describe, it })
+```
+
+Cobre o compare-and-set com uma revisão desatualizada, o incremento da revisão,
+a regra de `undefined` limpar, o isolamento de tenant em
+`find`/`list`/`update`/`delete`, e a idempotência do ledger. A factory corre
+antes de cada caso e tem de devolver stores vazios.
 
 ## Escrever um adaptador
 

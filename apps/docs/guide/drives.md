@@ -142,8 +142,10 @@ const app = createApp({
       providers: [/* an adapter — see "Writing an adapter" */],
       keys: [{ id: '2026-09', key: env.DRIVES_ENCRYPTION_KEY }],
       secret: env.APP_SECRET,
-      store: prismaDriveConnectionStore(db),
-      ledger: prismaDriveImportLedger(db),
+      // Your durable implementations — see "Writing a durable store".
+      // Omitted, both default to in-memory stores (tests and demos only).
+      store: yourDriveConnectionStore,
+      ledger: yourDriveImportLedger,
     }),
   ],
 })
@@ -864,6 +866,97 @@ const documentSink: DriveSink = async ({ item, content, connection, version }) =
   return { targetId: document.id }
 }
 ```
+
+## Writing a durable store
+
+`@basaltkit/drives` ships only `MemoryDriveConnectionStore` and
+`MemoryDriveImportLedger`. Production needs your own `DriveConnectionStore` and
+`DriveImportLedger`: apps model these rows too differently (one table or two, a
+`tenantId` column or a schema per tenant) for one bundled implementation to fit.
+What every store must share is the behaviour the engine relies on:
+
+- **Compare-and-set.** `update(tenantId, id, patch, expectedRevision)` applies
+  only when the stored `revision` still equals `expectedRevision`, and returns
+  `null` (changing nothing) otherwise. Every write bumps `revision`. The
+  refresh-race protection depends on it: a store that ignores the argument is
+  not safe to run more than one worker against, because two workers refreshing
+  a Microsoft connection at once will store a refresh token the provider has
+  already retired.
+- **`undefined` clears, absent keeps.** A patch key present with `undefined`
+  clears the column (`{ cursor: undefined }` drops the sync cursor); a key that
+  is absent leaves it alone.
+- **Tenant scoping on every query.** `tenantId` is part of every lookup, update
+  and delete — never look a row up by `id` alone.
+- **An idempotent ledger.** `record()` upserts on
+  `(tenantId, connectionId, externalId)`.
+
+A Prisma reference implementation of the connection store:
+
+```ts
+import type { DriveConnection, DriveConnectionPatch, DriveConnectionStore } from '@basaltkit/drives'
+
+export class PrismaDriveConnectionStore implements DriveConnectionStore {
+  constructor(private readonly db: PrismaClient) {}
+
+  async create(record: DriveConnection) {
+    await this.db.driveConnection.create({ data: toRow(record) })
+  }
+
+  async find(tenantId: string, id: string) {
+    const row = await this.db.driveConnection.findFirst({ where: { id, tenantId } })
+    return row ? fromRow(row) : null
+  }
+
+  async list(tenantId: string, filter: { provider?: string; status?: string } = {}) {
+    const rows = await this.db.driveConnection.findMany({
+      where: { tenantId, ...(filter.provider ? { provider: filter.provider } : {}), ...(filter.status ? { status: filter.status } : {}) },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    })
+    return rows.map(fromRow)
+  }
+
+  async update(tenantId: string, id: string, patch: DriveConnectionPatch, expectedRevision?: number) {
+    // `toPatch` maps a key present with `undefined` to `null` (clear the
+    // column) and skips absent keys.
+    const data = { ...toPatch(patch), revision: { increment: 1 }, updatedAt: Date.now() }
+    const r = await this.db.driveConnection.updateMany({
+      where: { id, tenantId, ...(expectedRevision !== undefined ? { revision: expectedRevision } : {}) },
+      data,
+    })
+    if (r.count === 0) return null // missing, another tenant's, or a lost compare-and-set
+    return this.find(tenantId, id)
+  }
+
+  async delete(tenantId: string, id: string) {
+    await this.db.driveConnection.deleteMany({ where: { id, tenantId } })
+  }
+}
+```
+
+`updateMany` with the revision in the `where` clause is what makes the write a
+single atomic compare-and-set; a read-then-`update` pair is not. Store
+`scopes`, `account` and `watch` as JSON columns and the `secret` as text — it is
+already sealed.
+
+Then check the implementation against the same conformance suite the in-memory
+stores pass. It ships on the test-only `@basaltkit/drives/testing` subpath and
+works with any runner that has `describe` and `it`:
+
+```ts
+import { describe, it } from 'vitest'
+import { runDriveStoreContract } from '@basaltkit/drives/testing'
+
+runDriveStoreContract(async () => {
+  await db.driveImport.deleteMany()
+  await db.driveConnection.deleteMany()
+  return { store: new PrismaDriveConnectionStore(db), ledger: new PrismaDriveImportLedger(db) }
+}, { describe, it })
+```
+
+It covers compare-and-set on a stale revision, the revision bump, the
+`undefined`-clears rule, tenant isolation for `find`/`list`/`update`/`delete`,
+and ledger idempotency. The factory runs before every case and must hand back
+empty stores.
 
 ## Writing an adapter
 
