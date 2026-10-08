@@ -369,6 +369,33 @@ describe('rateLimit.prefixes (path-prefix edge budgets)', () => {
     expect(await status({ url: '/v1/orders' })).toBe(429)
   })
 
+  it('counts CORS preflights under the prefix', async () => {
+    const store = new SpyStore()
+    const c = new HttpServerCollector()
+    await bootWith(c, [
+      securityPlugin({
+        rateLimit: { limit: 2, windowMs: 60_000, store, prefixes: [{ prefix: '/v1', limit: 3, windowMs: 60_000 }] },
+        cors: { origin: ['https://app.example'] },
+        headers: false,
+      }),
+    ])
+    const preflight = async (): Promise<number> => {
+      const request = makeRequest({
+        method: 'OPTIONS',
+        url: '/v1/orders',
+        ip: '203.0.113.10',
+        headers: { origin: 'https://app.example', 'access-control-request-method': 'POST' },
+        raw: {},
+      })
+      const reply = new FakeReply()
+      await c.runPre(request, reply)
+      return reply.statusCode
+    }
+    for (let i = 0; i < 3; i++) expect(await preflight()).not.toBe(429)
+    expect(await preflight()).toBe(429)
+    expect(store.hits).toEqual(Array(4).fill('prefix:/v1::203.0.113.10'))
+  })
+
   it('uses its own key, else the global key', async () => {
     const own = await setup(routes, {
       rateLimit: { limit: 2, windowMs: 60_000, prefixes: [{ prefix: '/v1', limit: 4, windowMs: 60_000, key: () => 'edge' }] },
