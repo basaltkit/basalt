@@ -1,14 +1,16 @@
 import { existsSync } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { arch, platform } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { binStatus } from '../bin-template.js'
 import { devEntryStatus } from '../dev-entry.js'
 import { alwaysLatest, lookupLatestVersions, type ResolveLatestOptions } from '../latest-versions.js'
+import { PRODUCTION_ENTRY } from '../stubs.js'
 import { envPrefix } from '../templates.js'
 import { allDependencies, type ProjectContext } from './context.js'
 import { ownVersion } from './manifest.js'
 import type { PackageJson } from './package-json.js'
+import { LEGACY_PRISMA_OUTPUT, RUNS_TSX } from './production.js'
 import { compareVersions, parseSimpleRange, parseVersion, satisfies } from './semver.js'
 import type { Colors } from './term.js'
 
@@ -22,7 +24,7 @@ export type Level = 'ok' | 'info' | 'warn' | 'error'
 
 export interface DoctorFinding {
   level: Level
-  /** Short area label: node, pm, deps, env, prisma, mcp, tooling. */
+  /** Short area label: node, pm, deps, env, prisma, mcp, tooling, build. */
   area: string
   message: string
 }
@@ -401,7 +403,53 @@ export async function runDoctor(ctx: ProjectContext, options: DoctorOptions = {}
   if (devStatus === 'modified') push('info', 'tooling', 'src/dev.ts is customised and does not load .env — see `create-basalt update` for the snippet.')
   if (!ctx.manifest) push('info', 'tooling', 'No .basalt/project.json (scaffolded before create-basalt 1.10) — features are inferred from package.json.')
 
+  // --- Production path (BK-026) — static: nothing is built or started ----------
+  const scripts = ctx.packageJson.scripts ?? {}
+  const run = (script: string): string => `${ctx.pm === 'npm' ? 'npm run' : ctx.pm} ${script}`
+  const start = scripts['start']
+  const tsxIsDevOnly = ctx.packageJson.dependencies?.['tsx'] === undefined && ctx.packageJson.devDependencies?.['tsx'] !== undefined
+  if (start !== undefined && RUNS_TSX.test(start) && tsxIsDevOnly) {
+    push('warn', 'build', `\`start\` runs tsx ("${start}"), but tsx is only a devDependency — a production install (--prod) has no tsx. Build and run the compiled server: \`npx create-basalt@latest update\` prints the scripts.`)
+  }
+  if (scripts['build'] === undefined) {
+    push('warn', 'build', `No \`build\` script — there is no tested way to run the app on plain node. \`npx create-basalt@latest update\` adds tsconfig.build.json and \`build\`.`)
+  } else {
+    const built = await mtimeOf(join(dir, PRODUCTION_ENTRY))
+    const source = await newestMtime(join(dir, 'src'))
+    if (built !== undefined && source !== undefined && source > built) {
+      push('info', 'build', `${PRODUCTION_ENTRY} is older than src/ — run \`${run('build')}\` before \`${run('start')}\`.`)
+    }
+  }
+  if (schema !== undefined) {
+    if (LEGACY_PRISMA_OUTPUT.test(schema)) {
+      push('warn', 'build', 'The Prisma client is generated under src/ — `tsc` does not copy its .js files, so the built app cannot load it. `npx create-basalt@latest update` prints how to move it to ./generated.')
+    }
+    if (deps['@prisma/client'] !== undefined && deps['@prisma/client-runtime-utils'] === undefined) {
+      push('warn', 'build', 'The generated Prisma client requires @prisma/client-runtime-utils by name — declare it as a dependency (same range as @prisma/client), or plain `node` cannot load the client under pnpm.')
+    }
+  }
+
   return findings
+}
+
+async function mtimeOf(path: string): Promise<number | undefined> {
+  try {
+    return (await stat(path)).mtimeMs
+  } catch {
+    return undefined
+  }
+}
+
+/** Newest modification time of the .ts files under `dir` (recursive), or undefined. */
+async function newestMtime(dir: string): Promise<number | undefined> {
+  let newest: number | undefined
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) {
+    const path = join(dir, entry.name)
+    const time = entry.isDirectory() ? await newestMtime(path) : entry.name.endsWith('.ts') ? await mtimeOf(path) : undefined
+    if (time !== undefined && (newest === undefined || time > newest)) newest = time
+  }
+  return newest
 }
 
 export function renderFindings(findings: readonly DoctorFinding[], colors: Colors): string[] {

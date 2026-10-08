@@ -36,6 +36,8 @@ linha liga ao guia que traz a tabela de opções completa; nada aqui repete uma.
       comments, audit, activity, notifications) pelos seus backends duráveis
       [`*-sqlite` / `*-prisma`](/pt/guide/persistence).
 - [ ] **Migrações correm por tenant** — `migrateTenants()` / comando `basalt`.
+- [ ] **Compilada, não transpilada em runtime** — `pnpm build` + `node dist/src/server.js`
+      (ou o `Dockerfile` do scaffold); nada de tsx em produção. Ver [Build e envio](#build-e-envio).
 - [ ] **CI verde** — build, typecheck, gate de cobertura, `pnpm audit`, CodeQL.
 
 ## Um `buildApp` com forma de produção
@@ -204,6 +206,49 @@ O sharding é para **scale-out**, não isolamento — para uma-base-por-tenant u
 antes `prismaPlugin({ forTenant })`. Mudar `shards.length` re-mapeia as chaves,
 por isso planeia uma migração antes de redimensionar; passa um `hash` próprio se
 precisares de consistent hashing para minimizar o reshuffle.
+
+## Build e envio
+
+Uma app create-basalt corre em **node puro** em produção — o tsx é uma
+devDependency e nunca é enviado. Três scripts tratam disso:
+
+```bash
+pnpm build       # tsc -p tsconfig.build.json → dist/ (só o src/; rootDir ".")
+pnpm start       # node --enable-source-maps dist/src/server.js
+pnpm start:dev   # tsx src/server.ts — o servidor a partir do código-fonte, sem build
+```
+
+O `tsconfig.build.json` estende o `tsconfig.json` (por isso o `pnpm typecheck` e
+o build nunca discordam), compila só o `src/` — os testes e o `bin/` (os
+geradores, a ponte de IA só de dev) ficam de fora — e mantém `rootDir: "."`, para
+que o `src/server.ts` fique em `dist/src/server.js`.
+
+O scaffold traz também um `Dockerfile` — o mesmo ficheiro que o
+`basalt publish dockerfile` escreve, a partir de uma única fonte no `@basaltkit/cli`:
+
+| Stage | O que faz |
+| --- | --- |
+| `build` | `pnpm install --frozen-lockfile` (com as devDependencies), `prisma generate` quando existe `prisma/schema.prisma`, `pnpm run build`, e depois `pnpm prune --prod --ignore-scripts` — o tsx, o TypeScript, a CLI do Prisma, os geradores e o `@basaltkit/ai-mcp` nunca chegam à imagem |
+| `run` | `node:22-slim`, `NODE_ENV=production`, copia `node_modules`, `dist/` e `generated/`, corre como `USER node`, `HEALTHCHECK` em `$HEALTHCHECK_PATH` (por omissão `/health`, a rota do scaffold — define `/readyz` com o `healthPlugin`), `CMD ["node", "--enable-source-maps", "dist/src/server.js"]` |
+
+```bash
+docker build -t my-saas .
+docker run -p 3000:3000 -e MY_SAAS_APP_SECRET=… -e MY_SAAS_DATABASE_URL=… my-saas
+```
+
+A configuração vem do ambiente: a imagem não carrega nenhum `.env`, e o
+`.dockerignore` mantém-no (e as chaves, o `node_modules`, um `dist/` local) fora
+do contexto de build. **A imagem não corre as migrações** — aplica-as antes de
+fazer o rollout (`pnpm db:deploy` no CI ou num job de release); a app recusa
+arrancar numa base de dados por migrar (`assertMigrated`). Uma app Prisma precisa
+do cliente fora do `src/` e do `@prisma/client-runtime-utils` como dependência
+direta — vê [Prisma com pnpm](/pt/guide/persistence#prisma-com-pnpm-o-cliente-gerado).
+
+Uma app gerada antes disto existir: o `pnpm basalt update` oferece o
+`tsconfig.build.json`, o script `build` e o Dockerfile, e imprime a mudança do
+`start` em vez de a fazer; o `pnpm basalt doctor` diz o que falta. A suite do
+create-basalt faz o build de scaffolds novos e arranca o
+`node dist/src/server.js` até o `/health` responder.
 
 ## Encerramento gracioso
 
