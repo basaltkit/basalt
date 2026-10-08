@@ -1,6 +1,6 @@
 # RFC 0003 — Erasing personal data from a verifiable audit trail (`audit.redact`)
 
-- **Status:** Draft (phase 0 written; implementation follows in phases 1–5, see §9)
+- **Status:** Draft (phases 0–5 implemented, see §9)
 - **Author:** basalt-principal-architect
 - **Date:** 2026-10-08
 - **Backlog:** BK-087, phase 2 (phase 1 — `fieldPolicies` — shipped in `@basaltkit/audit` 3.0)

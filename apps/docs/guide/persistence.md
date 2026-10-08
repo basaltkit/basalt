@@ -336,11 +336,15 @@ has the SQL). Then make the database enforce append-only too:
 REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
 ```
 
+Keep this even if you erase personal data: erasure runs through a dedicated
+eraser role, never the app role (see [below](#erasing-personal-data-audit-redact)).
+
 #### Personal data per event (`fieldPolicies`)
 
 The trail is append-only and the hash chain covers each payload, so a value
-that reaches it cannot be erased later without breaking `verify`. Keep personal
-data out at write time. The redactors work on key names and value shapes
+that reaches it can only be erased later through an attested
+[`audit.redact()`](#erasing-personal-data-audit-redact), and an old hash may
+still confirm a guess of it. Keep personal data out at write time. The redactors work on key names and value shapes
 (`password`, an email-looking string); they cannot know that the `notes` of one
 event is health data. Declare that per event:
 
@@ -369,9 +373,83 @@ auditPlugin({
   prototype (`__proto__`, `constructor`) segment, or a path deeper than 8
   segments throws a `TypeError`.
 
-Erasing a value that is already in the chain (a "right to erasure" request) is
-not supported yet; it needs a chain format that hashes a payload digest, which
-is planned as a separate RFC.
+#### Erasing personal data (`audit.redact`) {#erasing-personal-data-audit-redact}
+
+For a value that is already stored (a data-subject "right to erasure" request,
+or a field that should never have been recorded), `audit.redact()` erases
+chosen fields of one entry **in place** and keeps `verify` green:
+
+```ts
+const { changed, residual } = await audit.redact(entryId, {
+  payload: ['customer.email', 'items[].note'], // fieldPolicies paths, or 'all'
+  ip: true,                                     // and/or userAgent: true
+  reasonRef: 'DSR-2026-114',                    // opaque, non-personal reference
+})
+```
+
+- Each value a path reaches becomes `'[erased]'`; `ip`/`userAgent` are dropped.
+  Absent paths are skipped, and a request that changes nothing writes nothing
+  (`changed: false`). Erasing again merges into the entry's `redaction` marker.
+- The entry keeps its original `hash`, so the chain links hold. In the same
+  transaction an **`audit:redacted` attestation** is appended to the entry's own
+  chain. It binds the entry's `id`, `seq` and `hash`, the erased fields, a digest
+  of the new state and `reasonRef`, and never the erased data. `verify` checks the
+  redacted entry through it, and any mismatch fails as `redaction-mismatch`.
+  The result counts redacted entries in `redacted`.
+- **Scope** mirrors `trail()`. Inside a tenant context only that tenant's
+  entries are reachable, and any other id is `AuditEntryNotFoundError` (404).
+  Outside one, pass `tenantId`. A multi-tenant app that wants to reach any tenant
+  calls `audit.systemRedact()`, which is for trusted tooling only. Never forward
+  client input to it.
+- **Refused** (`AuditRedactionRefusedError`, nothing written): `'unverified'`
+  when the entry does not verify as it is now (so tampered content is never
+  blessed), `'residual'` (see below), and `'unsupported-store'` when the store
+  has no `get()`/`redact()`. Both bundled stores have them.
+- `record('audit:redacted', …)` throws. The `audit:` event prefix is reserved
+  for framework events, so do not use it for your own.
+
+**Residual.** After erasure, the entry's old hash may still confirm a guess of
+the erased value:
+
+| Entry hash | `residual` | Who can confirm a guess |
+|---|---|---|
+| none (unchained), v3 | `'none'` | nobody |
+| v2 HMAC (keyed chain) | `'keyed'` | the integrity-key holder |
+| v2 SHA-256 (unkeyed chain) | `'public'` | anyone who reads the row |
+
+`request.residual` is the most you accept, and the default is `'keyed'`. Erasing
+from an unkeyed chain must be acknowledged with `residual: 'public'`. For
+entries written from now on, set `integrity: { mode: 'hash-chain', key,
+erasable: true }`. It writes v3 hashes with a random per-entry nonce that a
+redaction destroys, so their residual is `'none'`. It needs the `nonce` column
+(SQLite migrates it; for Prisma, add it to the model), and it is off by default.
+
+**The eraser role.** The app role keeps `REVOKE UPDATE` (above). Erasure goes
+through a second database role that may update only the erasable columns, with a
+second store and a second `Audit` with the same options, given only to the
+erasure job. The [`@basaltkit/audit-prisma` README](https://github.com/basaltkit/basalt/tree/main/packages/audit-prisma#the-eraser-role)
+has the `GRANT` and an optional guard trigger. A data-subject request then
+becomes app logic, authorized by you:
+
+```ts
+import { AUDIT_REDACTED_EVENT } from '@basaltkit/audit'
+
+// eraserAudit = new Audit(eraserStore, …same options as the app's Audit)
+for (const entry of await eraserAudit.systemTrail({ actorId: subjectId, limit: 1000 })) {
+  if (entry.event === AUDIT_REDACTED_EVENT) continue
+  await eraserAudit.systemRedact(entry.id, { payload: 'all', ip: true, userAgent: true, reasonRef: dsrId })
+}
+```
+
+**What is not erased.** Opaque ids (`actorId`, `tenantId`, `requestId`), the
+event name and the time stay. Once you erase the user in your auth store,
+`actorId` no longer identifies anyone. Copies elsewhere are yours to erase: the
+events outbox, activity feeds, search indexes, logs and **backups**. Keep the
+request ledger outside the database and re-apply it after a restore. On a rolling
+deploy, upgrade every replica that runs `verify` before the first redaction or
+before turning on `erasable`. An older `@basaltkit/audit` reports those entries
+as `hash-mismatch`. There is no HTTP route, CLI command or MCP tool for
+erasure. Who may erase is the app's decision.
 
 #### Recording outside a request (jobs, scripts)
 
