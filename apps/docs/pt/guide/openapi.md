@@ -34,7 +34,52 @@ await app.container.get(FASTIFY).listen({ port: 3000 })
 O documento é gerado a partir das rotas registadas da app e dos seus schemas
 `body` / `query` / `params` / `response` — por isso `openapiPlugin` precisa de
 `fastifyPlugin` (que publica as rotas) presente. O `meta: { auth: true }` de uma
-rota torna-se automaticamente num requisito de segurança `bearerAuth`.
+rota torna-se automaticamente num requisito de segurança `bearerAuth`, e o
+`meta.scopes` num de API key — vê [Esquemas de segurança](#security-schemes-sessions-and-api-keys).
+
+## Esquemas de segurança: sessões e API keys {#security-schemes-sessions-and-api-keys}
+
+O `security` de cada operação é derivado do meta da rota:
+
+| Meta da rota | `security` | Notas |
+|---|---|---|
+| `scopes: ['orders:read']` | `[{ apiKeyAuth: [] }]` | mais `x-required-scopes: ['orders:read']`; mesmo com `auth: true`, porque só uma API key com os scopes passa |
+| `auth: true` | `[{ bearerAuth: [] }]` | mais `{ apiKeyAuth: [] }` como alternativa só com `apiKey.onAuthRoutes` e sem `meta.apiKey: false` |
+| nenhum | nenhum (público) | |
+
+`components.securitySchemes` lista só os esquemas que alguma operação usa:
+`bearerAuth` (HTTP bearer, JWT) e `apiKeyAuth`, um esquema `apiKey` no header que
+o `apiKeysPlugin` lê. A sua descrição diz que a chave também é aceite como
+`Authorization: Bearer <key>`, que uma chave sem `*` só alcança as operações que
+listam `x-required-scopes`, e lista todos os scopes que o documento usa.
+
+**Porquê `x-required-scopes`.** O documento é OpenAPI 3.0.3, que só permite
+scopes num requisito de segurança para esquemas OAuth2 e OpenID Connect; para um
+esquema `apiKey` o array tem de ser vazio. Os scopes de que uma operação precisa
+são por isso publicados na extensão `x-required-scopes` ao lado dela.
+
+**A opção `apiKey`.** Por omissão o esquema usa o header `x-api-key` e só aparece
+em rotas com `meta.scopes`. Passa o header quando o `apiKeysPlugin` usa um
+personalizado, e `false` para deixar as API keys fora do documento (o
+`x-required-scopes` continua a ser emitido):
+
+```ts
+apiKeysPlugin({ header: 'x-machine-key' })
+openapiPlugin({ info, apiKey: { header: 'x-machine-key' } })
+```
+
+`onAuthRoutes: true` oferece também a chave como alternativa à sessão nas rotas
+com `meta.auth`. Liga-o só quando isso é verdade para as tuas chaves: têm um
+`userId`, o `apiKeysPlugin` recebeu `users` (para que uma chave resolva
+`ctx().user`, que o `meta.auth` exige), e têm `*` ou o `apiKeysPlugin` define
+`allowNarrowKeysOnUnscopedRoutes`. Caso contrário essas rotas respondem 401/403 a
+uma chave e o documento afirmaria que a aceitam.
+
+**Idempotency-Key.** Com o `idempotencyPlugin` registado, as operações cujo
+método ele protege recebem o seu header (como configurado, por omissão
+`Idempotency-Key`) como parâmetro de header opcional, com o comportamento de
+replay, 409 e 422 descrito. Passa `idempotency: false` para o deixar de fora. O
+`generate:docs` escreve o mesmo documento que o plugin serve.
 
 ## Renderizar uma UI
 

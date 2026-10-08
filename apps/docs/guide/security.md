@@ -52,11 +52,24 @@ securityPlugin({
   rateLimit: {
     limit: 20,
     windowMs: 10_000,
-    key: (req) => req.headers['x-api-key'] as string ?? req.ip,
+    // The default. Behind a proxy, have the adapter resolve request.ip from
+    // the proxy you trust rather than reading a forwarding header here.
+    key: (req) => req.ip ?? 'unknown',
     skip: (req) => req.url.startsWith('/livez'),
   },
 })
 ```
+
+::: warning Never key the global limit by a credential header
+The global `key` runs **before authentication**, so it sees only what the
+client sent. A key such as `req.headers['x-api-key'] ?? req.ip` is a bypass: a
+client that sends a fresh made-up value on every request gets a fresh bucket
+every time and is never limited, and the flood of buckets pushes legitimate
+clients out of the store. Key the global limit by address only (`req.ip`, or a
+header your own proxy sets and strips from client requests). For a budget per
+API key, use `meta.rateLimit` with `key: 'apiKey'` (below): it reads the key the
+enricher **verified**, so a made-up key never gets a bucket of its own.
+:::
 
 The default store is in-memory (`MemoryRateLimitStore`). Its memory is bounded:
 expired buckets are swept as traffic arrives, and at most `maxEntries` (default
@@ -95,7 +108,8 @@ who the bucket belongs to:
 | `'user'` | `ctx().user.id` | expensive per-user actions: exports, AI calls, uploads |
 | `'tenant'` | `ctx().tenant.id` (shared by the tenant's users) | a per-organization quota |
 | `'user+tenant'` | one bucket per user per tenant | a user who belongs to several tenants |
-| `(ctx) => string` | whatever id you return (e.g. an API key id) | anything else |
+| `'apiKey'` | `ctx().apiKey.id` (a key `apiKeysPlugin` verified) | bursts per machine client |
+| `(ctx) => string` | whatever id you return | anything else |
 
 ```ts
 route({
@@ -119,7 +133,112 @@ rather than a bucket per spoofable header. Configure the adapter to resolve the
 client IP to get per-client buckets back. Keyed buckets use the same
 store (`MemoryRateLimitStore`, or Redis across instances). A keyed route still
 counts against the global per-IP limit on every adapter, because the pre-routing
-hook cannot know the user yet.
+hook cannot know the user yet. To give a family of paths a different per-IP
+ceiling, use [path-prefix budgets](#path-prefix-budgets).
+
+`'apiKey'` keys the bucket by `ctx().apiKey.id` — one budget per API key, so
+several machine clients behind one address no longer share one. Only a key that
+`apiKeysPlugin` **verified** becomes a bucket id; with no verified key (a
+session caller, an anonymous one, or an invalid key that `rejectInvalid: false`
+let through) the bucket falls back like any other missing id. A per-key budget
+multiplies with the number of keys a customer mints, so use it for bursts and
+put quotas on `'tenant'`.
+
+#### Several budgets on one route
+
+`meta.rateLimit` also takes an array. Every budget is enforced, in the order
+declared; the first one that refuses answers `429` and **the later ones are not
+charged** — so put the short burst budget first, and a request refused for
+bursting does not use up the daily quota:
+
+```ts
+import type { RouteRateLimits } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/v1/orders',
+  meta: {
+    scopes: ['orders:read'],
+    rateLimit: [
+      { limit: 10, windowMs: 1_000, key: 'apiKey' },        // burst, per key
+      { limit: 50_000, windowMs: 86_400_000, key: 'tenant' }, // daily, per customer
+    ] satisfies RouteRateLimits,
+  },
+  // …
+})
+```
+
+- `X-RateLimit-*` report the budget with the fewest requests left (on a tie, the
+  one that resets later); on a refusal they and `Retry-After` come from the
+  budget that refused.
+- The budgets are charged one after another (one store hit each), with no
+  atomicity across them.
+- Each array entry has its own counter, keyed by method, route and **position**:
+  reordering the entries remaps the counters. Changing a `limit` or `windowMs`
+  keeps the running window — editing a quota does not hand everyone a fresh one.
+- The array form (and `bucket`, below) is always charged in the route guard, on
+  every adapter, **on top of** the edge bucket (global or prefix). On Fastify
+  that differs from the single object, which is charged *instead of* the global
+  bucket: wrapping `{ limit, windowMs }` in an array puts the global per-IP limit
+  back on that route. If you relied on the Fastify replacement to lift the
+  ceiling, move to a [path prefix](#path-prefix-budgets), which does it on every
+  adapter.
+
+#### Shared buckets
+
+`bucket` names a budget shared by every route that declares it — one daily quota
+for a whole public API:
+
+```ts
+const daily = { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'public-api-daily' } as const
+
+route({ method: 'GET', url: '/v1/orders', meta: { rateLimit: [{ limit: 10, windowMs: 1_000, key: 'apiKey' }, daily] }, /* … */ })
+route({ method: 'POST', url: '/v1/orders', meta: { rateLimit: daily }, /* … */ })
+```
+
+Every declaration of one name must carry the same `limit`, `windowMs` and key
+string; the app **refuses to boot** (`InvalidRouteMetaError`, on every adapter)
+when they disagree. Function keys are not compared — two inline lambdas are
+different objects even when they mean the same. Names match
+`/^[A-Za-z0-9._:-]{1,64}$/`. A malformed array or `bucket` entry (empty array,
+a non-positive limit, an unknown key string) also refuses the boot; the single
+object keeps its historical lenient reading.
+
+#### Path-prefix budgets {#path-prefix-budgets}
+
+`rateLimit.prefixes` gives a family of paths its own edge budget, charged
+before routing **instead of** the global bucket — the way a public API under
+`/v1` gets a higher per-IP ceiling than the rest of the app while still paying a
+per-IP budget before any key is looked up:
+
+```ts
+securityPlugin({
+  rateLimit: {
+    limit: 300,
+    windowMs: 60_000,
+    prefixes: [{ prefix: '/v1', limit: 3_000, windowMs: 60_000 }],
+  },
+})
+```
+
+The longest matching prefix wins. Matching is on segment boundaries (`/v1`
+matches `/v1` and `/v1/orders`, never `/v10`) after a minimal normalisation:
+the query string is cut, runs of `/` collapse, case is ignored and a trailing
+`/` is dropped — there is no percent-decoding or dot-segment resolution. 404s,
+preflights and requests an enricher rejects are counted too. Each prefix may
+take its own `key(request)` (default: the global `key`, else the IP); like the
+global key it runs before authentication, so never read a credential header in
+it. `skip` skips prefix budgets too. A bad prefix (no leading `/`, a `?` or `#`,
+a non-positive limit, a duplicate) throws a `TypeError` when the plugin is
+created.
+
+Prefixes **set or lift** the edge budget for a path family; they are not a way
+to make one endpoint stricter, because a request that reaches the route through
+a path form the normaliser does not fold falls back to the global bucket. A
+budget that must hold for a specific endpoint belongs in its `meta.rateLimit`,
+which is bound to the matched route. On Fastify, a route's single-object
+IP-keyed `meta.rateLimit` still replaces the edge bucket (prefix or global), as
+before.
 
 ### CORS
 

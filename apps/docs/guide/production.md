@@ -11,7 +11,9 @@ that carries the full option table; nothing here restates one.
 
 - [ ] **Secrets are fail-closed** — sign with `secret()` so production refuses
       placeholders. See [Security](/guide/security#fail-closed-secrets-secret).
-- [ ] **Edge is protected** — `securityPlugin({ rateLimit, cors, headers })`.
+- [ ] **Edge is protected** — `securityPlugin({ rateLimit, cors, headers })`. The global
+      limit is keyed by address only; a public API for machine clients gets
+      `rateLimit.prefixes` and per-key budgets. See [Rate limiting](/guide/security#rate-limiting).
 - [ ] **Logins are throttled** — on by default in `@basaltkit/auth`.
 - [ ] **Mutations are idempotent** — `idempotencyPlugin()` for `POST`.
 - [ ] **The app boots on a cold start with production config** — the boot-time
