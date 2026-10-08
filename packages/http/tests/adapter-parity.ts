@@ -1915,6 +1915,18 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
           return { charge: runs }
         },
       }),
+      route({
+        method: 'POST',
+        url: '/attach',
+        body: upload({ maxBytes: 16 * 1024, maxFiles: 1 }),
+        meta: { signedIn: true },
+        async handler({ body }) {
+          runs += 1
+          let size = 0
+          for await (const file of body.files) for await (const chunk of file.stream) size += (chunk as Buffer).length
+          return { charge: runs, size }
+        },
+      }),
     )
     const json = (value: unknown) => Buffer.from(JSON.stringify(value))
     const headers = (key: string, extra: Record<string, string> = {}) => ({
@@ -2056,6 +2068,29 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
       expect(again.headers['content-type']).toMatch(/^application\/json/)
       expect(again.bytes.equals(first.bytes)).toBe(true)
       expect(runs).toBe(1)
+    })
+
+    it('an upload() refused while the handler streams it (413) is not recorded: the retry runs the handler', async () => {
+      const send = await boot()
+      const file = (bytes: number) =>
+        multipart([{ name: 'doc', filename: 'a.bin', type: 'application/octet-stream', data: Buffer.alloc(bytes, 1) }])
+      const uploadHeaders = (key: string) => ({ ...headers(key), 'content-type': contentType() })
+      // Streamed without a Content-Length: refused on the bytes received, after
+      // the handler started reading.
+      const oversize = await send({ method: 'POST', url: '/attach', headers: uploadHeaders('up-1'), body: chunked(file(40 * 1024), 8 * 1024) })
+      expect(oversize.status).toBe(413)
+      expect(codeOf(oversize)).toBe('PAYLOAD_TOO_LARGE')
+      const retry = await send({ method: 'POST', url: '/attach', headers: uploadHeaders('up-1'), body: file(10) })
+      expect(retry.status).toBe(200)
+      expect(retry.headers['idempotent-replayed']).toBeUndefined()
+      expect(retry.json).toEqual({ charge: 2, size: 10 })
+      // The same refusal from a declared Content-Length (before the handler)
+      // was already released; both paths now agree.
+      const declared = await send({ method: 'POST', url: '/attach', headers: uploadHeaders('up-2'), body: file(40 * 1024) })
+      expect(declared.status).toBe(413)
+      const again = await send({ method: 'POST', url: '/attach', headers: uploadHeaders('up-2'), body: file(10) })
+      expect(again.status).toBe(200)
+      expect(again.headers['idempotent-replayed']).toBeUndefined()
     })
 
     it("a retry-later status (429) is never recorded, even from the handler", async () => {

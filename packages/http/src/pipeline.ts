@@ -315,8 +315,11 @@ export async function runRoute(
       // A thrown route: record the client error the handler raised, or release
       // the key so a server failure, or a refusal before the handler ran, stays
       // retryable.
+      // An upload() body refused while the handler streamed it (too large,
+      // malformed, a refused file type) is a refusal of the request, not the
+      // handler's outcome: released like the same refusal raised up front.
       if (ticket) {
-        if (handlerStarted) await idempotency!.fail(ticket, toErrorResponse(error))
+        if (handlerStarted && !session?.refused(error)) await idempotency!.fail(ticket, toErrorResponse(error))
         else await idempotency!.abandon(ticket)
       }
       throw error

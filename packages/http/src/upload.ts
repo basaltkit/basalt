@@ -366,6 +366,17 @@ export class UploadSession {
     this.kick()
   }
 
+  /**
+   * Whether `error` is this upload's own refusal — a size limit, malformed
+   * framing, a refused file type, a client that closed early — raised while
+   * the handler was reading the body, rather than the handler's own outcome.
+   * The idempotency stage releases the key for it, as for the same refusal
+   * from a declared `Content-Length` before the handler ran.
+   */
+  refused(error: unknown): boolean {
+    return this.failure !== undefined && error === this.failure
+  }
+
   private declaredLength(): number | undefined {
     const raw = this.request.headers['content-length']
     const value = Array.isArray(raw) ? raw[0] : raw
