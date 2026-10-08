@@ -10,7 +10,7 @@ Self-contained HTML page to **manage API keys** for [`@basaltkit/auth`](https://
 
 ## What this module solves
 
-`@basaltkit/auth` already exposes the `POST/GET /apikeys` and `DELETE /apikeys/:id` routes (the plaintext key only appears on creation). This module is the **UI** on top of them: a page that lists the keys, lets you create a new one (revealing the secret once, with a copy button) and revoke existing ones.
+`@basaltkit/auth` already exposes the `POST/GET /apikeys` and `DELETE /apikeys/:id` routes (the plaintext key only appears on creation), plus `PATCH /apikeys/:id` and `POST /apikeys/:id/rotate`, which this page does not use yet. This module is the **UI** on top of them: a page that lists the keys, lets you create a new one (revealing the secret once, with a copy button) and revoke existing ones.
 
 ## Installation
 
