@@ -141,6 +141,11 @@ handler para o mesmo filtro.
 fundidos num objeto plano com os `required` certos — para o cliente saber
 exatamente o que enviar.
 
+**Forma dos argumentos.** O `arguments` tem de ser um objeto JSON (ou ser
+omitido). Um array, string, número ou `null` é recusado com JSON-RPC `-32602`
+antes de a rota correr, por isso uma chamada malformada nunca chega ao teu
+handler nem devolve ao cliente uma exceção interna (como um `TypeError`).
+
 **Coerção de argumentos.** Os clientes MCP e os LLMs enviam frequentemente
 números e booleanos como *strings* (`"7"`, `"true"`). Antes da validação, o
 bridge coage cada argumento para o tipo escalar que o campo Zod declara, por isso
@@ -409,6 +414,8 @@ texto é o mesmo corpo de erro que o HTTP teria devolvido (ex.:
 | O arranque lança `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) | Uma rota declara `meta.auth`/`meta.can`/`meta.teamRole` e nenhum plugin o impõe | Regista `authPlugin` / `permissionsPlugin` / `teamsPlugin` — vê [Segurança](/pt/guide/security) |
 | `isError: true` com um corpo `UNAUTHORIZED`/`FORBIDDEN` | A rota da tool está guardada e a chamada não levou credenciais (ou levou más) | Envia headers `Authorization`/tenant com o `POST /mcp`, ou `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Nome de tool não registado — rota sem `meta.mcp`, excluída pelo `filter`, ou renomeada | Verifica o `tools/list`; lembra os overrides via `meta.mcp.name` |
+| JSON-RPC `-32602` ``tools/call `arguments` must be an object`` | O cliente enviou `arguments` como array, string, número ou `null` | Envia um objeto de argumentos nomeados conforme o input schema da tool |
+| JSON-RPC `-32603` `Internal error` | Algo lançou fora de um resultado de tool (as falhas de tool em si voltam como `isError`) | O texto é genérico de propósito; vê a causa nos logs do servidor |
 | JSON-RPC `-32601` `Method not found` | O cliente chamou um método MCP que o servidor não implementa | Só existem `initialize`, `ping`, `tools/list`, `tools/call` (mais resources/prompts quando registados) |
 | Uma chamada de tool devolve `RATE_LIMITED` mais cedo do que o esperado | O `meta.rateLimit` próprio da rota-ferramenta aplica-se também através do `/mcp` (por ip do chamador) | Aumenta o orçamento da rota, ou passa uma `key` ao `securityPlugin({ rateLimit })` |
 | `403` `MCP_ORIGIN_FORBIDDEN` do `POST /mcp` | Um browser enviou um pedido de outra origem | Acrescenta a origem da página a `mcpRoutes({ allowedOrigins })` |

@@ -141,8 +141,17 @@ There are **two** ways for a tool to fail, and the difference matters:
   succeeds at the protocol level and the agent reads your message. This is what you
   want for bad arguments, a refused operation, a missing credential: the model can
   see the reason and try something else.
-- **A thrown error** — becomes a JSON-RPC `INTERNAL_ERROR` (`-32603`) carrying the
-  error's `message`. Reserve it for genuine bugs.
+- **A thrown error** — becomes a JSON-RPC `INTERNAL_ERROR` (`-32603`) with the
+  generic message `Internal error`: an exception's text can carry secrets, paths
+  or SQL, so it never reaches the client. The original error goes to the
+  server's `onError(error, message)` hook — log it there. An error that sets
+  `expose: true` keeps its own message. Reserve throwing for genuine bugs.
+
+`arguments` is checked before any tool runs: a `tools/call` whose `arguments` is
+present but not a JSON object (an array, string, number or `null`) is refused
+with `INVALID_PARAMS` (`-32602`), and so is a `prompts/get` whose `arguments` is
+not an object of string values. Validating the fields themselves is still the
+tool's job.
 
 ### The invoke context — signal, progress, elicit
 
@@ -415,6 +424,7 @@ and auth as HTTP.
 | `resources` | `McpResourceDef[]` | `[]` | Read-only context. Registering any enables `resources/list` + `resources/read` |
 | `prompts` | `McpPromptDef[]` | `[]` | Message templates. Registering any enables `prompts/list` + `prompts/get` |
 | `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt-mcp-core', version: '0.1.0' }` | What `initialize` reports — clients show this, so set it |
+| `onError` | `(error: unknown, message: JsonRpcRequest) => void` | none | Receives the original error when a tool, resource or prompt throws (the client only sees `Internal error`). Log it here; a throwing hook is ignored |
 
 ### `McpToolDef`
 
@@ -505,7 +515,9 @@ You only build this yourself when embedding `handleMessage` in your own transpor
 | `Unknown tool: <name>` | `-32602` (or a thrown `Error` from `callTool`) | dispatcher / `callTool` | No tool registered under that name |
 | ``resources/read requires a string `uri` `` · `Unknown resource: <uri>` | `-32602` | `dispatchResourceRead` | Missing/unknown resource URI |
 | ``prompts/get requires a string `name` `` · `Unknown prompt: <name>` | `-32602` | `dispatchPromptGet` | Missing/unknown prompt name |
-| *(the thrown error's message)* | `-32603` | `handleMessage` catch | A tool, resource or prompt **threw**. Prefer `isError: true` for expected failures |
+| ``tools/call `arguments` must be an object `` | `-32602` | `dispatchToolCall` | `params.arguments` is an array, string, number or `null`; the tool never runs |
+| ``prompts/get `arguments` must be an object of string values `` | `-32602` | `dispatchPromptGet` | `params.arguments` is not an object, or one of its values is not a string |
+| `Internal error` | `-32603` | `handleMessage` catch | A tool, resource or prompt **threw**. The real error goes to `onError`; set `expose: true` on an error to send its own message. Prefer `isError: true` for expected failures |
 
 - **The client shows the server as dead, immediately** — on stdio, something wrote
   to stdout that wasn't JSON-RPC. Route all logging to stderr.
