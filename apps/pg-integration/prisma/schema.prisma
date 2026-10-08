@@ -275,9 +275,22 @@ model InAppNotification {
   data         String?
   readAt       DateTime?
   at           DateTime
+  groupKey     String?
+  count        Int?
 
   @@index([recipientId, at])
+  @@index([recipientId, groupKey])
   @@map("in_app_notifications")
+}
+
+model NotificationPreference {
+  userId       String
+  notification String
+  channel      String
+  enabled      Boolean
+
+  @@id([userId, notification, channel])
+  @@map("notification_preferences")
 }
 
 

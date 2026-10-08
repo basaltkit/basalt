@@ -35,6 +35,19 @@ export interface NotificationDefinition<T = void> {
   channels: string[] | ((recipient: Notifiable, data: T) => string[])
   /** Renderers per channel — each returns that channel's message shape. */
   via: Record<string, (data: T, recipient: Notifiable) => unknown>
+  /**
+   * Per-channel default when the recipient has expressed no preference for it
+   * (no `channelPreferences` entry and no matching stored preference). Channels
+   * left out default to `true`. `{ sms: false }` makes SMS opt-in for this
+   * notification: it is sent only to recipients who turned it on.
+   */
+  defaults?: Partial<Record<string, boolean>>
+  /**
+   * Channels that ignore every opt-out — `channelPreferences` and stored
+   * preferences alike. For notifications a user must not be able to silence
+   * (a password reset, a security alert, a legal notice). Use sparingly.
+   */
+  mandatory?: readonly string[]
 }
 
 /**

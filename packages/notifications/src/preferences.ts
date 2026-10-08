@@ -3,7 +3,9 @@
  * `Notifiable.channelPreferences` opt-out. A preference targets a notification
  * name (or `*`) and a channel (or `*`); the **most specific** match wins, and
  * everything is opt-out by default (allowed unless a matching preference says
- * `enabled: false`).
+ * `enabled: false`). A notification can change that default per channel with
+ * `defaults`, and exempt channels from opting out with `mandatory` (see
+ * `defineNotification`); the `Notifier` applies both.
  */
 export interface NotificationPreference {
   userId: string
@@ -63,12 +65,21 @@ export class NotificationPreferences {
 
   /** Whether a (notification, channel) may be sent to a user — the most specific preference decides; default allowed. */
   async allowed(userId: string, notification: string, channel: string): Promise<boolean> {
+    return (await this.preference(userId, notification, channel)) ?? true
+  }
+
+  /**
+   * The user's stated choice for a (notification, channel): the `enabled` of
+   * the most specific matching preference, or `undefined` when none matches —
+   * which lets the caller apply a notification's own default instead.
+   */
+  async preference(userId: string, notification: string, channel: string): Promise<boolean | undefined> {
     let best: { rank: number; enabled: boolean } | undefined
     for (const pref of await this.store.list(userId)) {
       const rank = specificity(pref, notification, channel)
       if (rank < 0) continue
       if (!best || rank > best.rank) best = { rank, enabled: pref.enabled }
     }
-    return best ? best.enabled : true
+    return best?.enabled
   }
 }

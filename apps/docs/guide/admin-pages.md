@@ -152,21 +152,17 @@ These pages are convenience over your existing routes — they enforce nothing
 new. Put them behind authentication (they're mounted with `meta.auth`) and add a
 guard for admin-only screens. The underlying data routes already enforce their
 own guards (e.g. `teamRoutes()`'s admin actions require `teamRole: 'admin'`), but
-the page itself is worth gating too — mount your own copy with a permissions or
-team-role guard so non-admins never see it:
+the page itself is worth gating too. Every page factory takes `meta`, merged
+into its routes (`auth: true` is always kept on top), so non-admins never see it:
 
 ```ts
-import { route } from '@basaltkit/fastify'
-import { teamsPageHtml } from '@basaltkit/teams-ui'
-
-// Serve the page yourself behind an admin guard instead of teamsUiRoutes()
-route({
-  method: 'GET',
-  url: '/team/ui',
-  meta: { auth: true, teamRole: 'admin' }, // or meta.can: 'team:manage' with @basaltkit/permissions
-  handler: () => teamsPageHtml({ title: 'Team' }),
-})
+teamsUiRoutes({ meta: { teamRole: 'admin' } })              // or { can: 'team:manage' } with @basaltkit/permissions
+apiKeysUiRoutes({ meta: { can: 'apikeys:manage' } })
+billingUiRoutes({ plans, meta: { can: 'billing:manage' } }) // guards /billing/ui and /billing/info
 ```
+
+The same `meta` option exists on `commentRoutes()`, `fileRoutes()` and
+`inAppRoutes()` — for a guard, a rate limit or OpenAPI tags.
 
 Because these pages fetch same-origin with no embedded secrets, they're safe to
 serve from your app's origin.

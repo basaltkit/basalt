@@ -81,6 +81,12 @@ export interface CommentRoutesOptions {
    * (a confidential matter's comments are as confidential as the matter).
    */
   authorize?: (action: CommentAction, target: CommentTarget, user: CommentRouteUser) => boolean | Promise<boolean>
+  /**
+   * Extra route metadata merged into every route — a guard such as
+   * `{ can: 'comments:write' }`, a rate limit, OpenAPI tags. `auth: true` is
+   * always applied on top and cannot be switched off.
+   */
+  meta?: Record<string, unknown>
 }
 
 /**
@@ -102,6 +108,7 @@ export function defaultCommentPolicy(action: CommentAction, target: CommentTarge
 export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[] {
   const resource = z.object({ resourceType: z.string().min(1), resourceId: z.string().min(1) })
   const policy = options.authorize ?? defaultCommentPolicy
+  const meta = { ...options.meta, auth: true }
   const assertAllowed = async (action: CommentAction, target: CommentTarget): Promise<void> => {
     if ((await policy(action, target, currentUser())) !== true) throw new CommentForbiddenError()
   }
@@ -117,7 +124,7 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
     route({
       method: 'GET',
       url: '/comments',
-      meta: { auth: true },
+      meta,
       query: resource,
       async handler({ query }) {
         await assertAllowed('list', { resourceType: query.resourceType, resourceId: query.resourceId })
@@ -127,7 +134,7 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
     route({
       method: 'POST',
       url: '/comments',
-      meta: { auth: true },
+      meta,
       body: resource.extend({ body: z.string().min(1), parentId: z.string().optional() }),
       async handler({ body, reply }) {
         await assertAllowed('create', { resourceType: body.resourceType, resourceId: body.resourceId })
@@ -140,7 +147,7 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
     route({
       method: 'PATCH',
       url: '/comments/:id',
-      meta: { auth: true },
+      meta,
       params: z.object({ id: z.string() }),
       body: z.object({ body: z.string().min(1) }),
       async handler({ params, body }) {
@@ -151,7 +158,7 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
     route({
       method: 'DELETE',
       url: '/comments/:id',
-      meta: { auth: true },
+      meta,
       params: z.object({ id: z.string() }),
       async handler({ params, reply }) {
         await assertOnComment(params.id, 'delete')
@@ -162,7 +169,7 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
     route({
       method: 'POST',
       url: '/comments/:id/resolve',
-      meta: { auth: true },
+      meta,
       params: z.object({ id: z.string() }),
       async handler({ params }) {
         await assertOnComment(params.id, 'resolve')
@@ -172,7 +179,7 @@ export function commentRoutes(options: CommentRoutesOptions = {}): BasaltRoute[]
     route({
       method: 'POST',
       url: '/comments/:id/reopen',
-      meta: { auth: true },
+      meta,
       params: z.object({ id: z.string() }),
       async handler({ params }) {
         await assertOnComment(params.id, 'reopen')
