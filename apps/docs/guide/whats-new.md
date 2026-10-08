@@ -76,6 +76,12 @@ Shipped to `main` after the 1.12 release, all opt-in and non-breaking:
   `onAttempt` and `DeliveryResult.durationMs` report every delivery attempt,
   `headerPrefix` renames the `x-basalt-*` headers, and `signPayload()` /
   `verifySignature()` accept raw bytes — see [Webhooks](/guide/webhooks#sealing-secrets-at-rest).
+- **Inbound mail.** A new package, `@basaltkit/inbound-mail` 0.1, receives
+  email from a relay as signed raw bytes (one recipient per request, envelope
+  inside the signature), routes it by the signed recipient to tenant-aware
+  handlers, and parses it within limits, trusting `Authentication-Results` and
+  ARC only from servers you list. It ships with a reference Cloudflare Email
+  Routing Worker — see [Inbound mail](/guide/inbound-mail).
 
 ## Highlights
 

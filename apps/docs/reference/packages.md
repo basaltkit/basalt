@@ -32,6 +32,7 @@ works on its own; together they form the framework. Each package is versioned in
 | `@basaltkit/storage` | Local/S3/MinIO under one contract, tenant isolation, signed URLs |
 | `@basaltkit/storage-gcs` · `@basaltkit/storage-azure` | Google Cloud Storage & Azure Blob drivers |
 | `@basaltkit/mailer` | Typed declarative mails, SMTP/log/memory drivers, tenant sender |
+| `@basaltkit/inbound-mail` | Receive email: signed raw-byte deliveries from a relay, bounded MIME parsing with trusted A-R/ARC verdicts, address routing |
 | `@basaltkit/scheduler` | Fluent cron: `schedule.job(X).daily().at('03:00')`; `defineReconciler` re-dispatches stuck work |
 
 ## Queues
