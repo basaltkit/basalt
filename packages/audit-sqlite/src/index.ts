@@ -64,7 +64,8 @@ export function migrate(db: DatabaseSync): void {
   // Hash-chain and request columns, added to databases created before them.
   // (ADD COLUMN throws when the column already exists — ignore that.) Old rows
   // keep NULLs: `verify()` reports them as unchained (legacy), not as broken.
-  // `redaction` / `redacted_by`: the marker of an attested erasure (Audit.redact).
+  // `redaction` / `redacted_by`: the marker of an attested erasure (Audit.redact);
+  // `nonce`: the per-entry secret of a v3 hash (integrity.erasable).
   for (const column of [
     'chain TEXT',
     'seq INTEGER',
@@ -74,6 +75,7 @@ export function migrate(db: DatabaseSync): void {
     'user_agent TEXT',
     'redaction TEXT',
     'redacted_by TEXT',
+    'nonce TEXT',
   ]) {
     try {
       db.exec(`ALTER TABLE audit_entries ADD COLUMN ${column}`)
@@ -104,6 +106,7 @@ interface AuditRow {
   user_agent: string | null
   redaction: string | null
   redacted_by: string | null
+  nonce: string | null
 }
 
 /**
@@ -139,6 +142,7 @@ const toEntry = (r: AuditRow): AuditEntry => {
     ...(r.seq !== null ? { seq: r.seq } : {}),
     ...(r.prev_hash !== null ? { prevHash: r.prev_hash } : {}),
     ...(r.hash !== null ? { hash: r.hash } : {}),
+    ...(r.nonce !== null ? { nonce: r.nonce } : {}),
     ...(redaction !== undefined ? { redaction } : {}),
   }
 }
@@ -176,7 +180,7 @@ export class SqliteAuditStore implements AuditStore {
       const result = this.db
         .prepare(
           `UPDATE audit_entries
-              SET payload = ?, ip = ?, user_agent = ?, redaction = ?, redacted_by = ?
+              SET payload = ?, ip = ?, user_agent = ?, nonce = NULL, redaction = ?, redacted_by = ?
             WHERE id = ? AND hash IS ? AND redacted_by IS ?`,
         )
         .run(
@@ -203,8 +207,8 @@ export class SqliteAuditStore implements AuditStore {
       this.db
         .prepare(
           `INSERT INTO audit_entries
-             (id, source, event, payload, actor_id, tenant_id, request_id, at, chain, seq, prev_hash, hash, ip, user_agent)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, source, event, payload, actor_id, tenant_id, request_id, at, chain, seq, prev_hash, hash, ip, user_agent, nonce)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           entry.id,
@@ -221,6 +225,7 @@ export class SqliteAuditStore implements AuditStore {
           entry.hash ?? null,
           entry.ip ?? null,
           entry.userAgent ?? null,
+          entry.nonce ?? null,
         )
     } catch (error) {
       if (isChainConflict(error)) throw new AuditChainConflictError(entry.tenantId, entry.seq, { cause: error })

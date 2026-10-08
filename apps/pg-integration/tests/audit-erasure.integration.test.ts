@@ -54,7 +54,7 @@ describe.skipIf(!url)('@basaltkit/audit-prisma erasure against real PostgreSQL p
       await admin.$executeRawUnsafe(`GRANT SELECT, INSERT ON "audit_entries" TO ${role}`)
     }
     await admin.$executeRawUnsafe(
-      `GRANT UPDATE ("payload", "ip", "userAgent", "redaction", "redactedBy") ON "audit_entries" TO ${ERASER_ROLE}`,
+      `GRANT UPDATE ("payload", "ip", "userAgent", "nonce", "redaction", "redactedBy") ON "audit_entries" TO ${ERASER_ROLE}`,
     )
     for (const statement of guardStatements()) await admin.$executeRawUnsafe(statement)
     await admin.auditEntry.deleteMany()
@@ -91,6 +91,18 @@ describe.skipIf(!url)('@basaltkit/audit-prisma erasure against real PostgreSQL p
     await expect(eraser.$executeRawUnsafe(`DELETE FROM "audit_entries" WHERE "id" = $1`, entry.id)).rejects.toThrow(/permission denied/)
     // The guard trigger: even an allowed column may not clear the marker.
     await expect(eraser.$executeRawUnsafe(`UPDATE "audit_entries" SET "redactedBy" = NULL WHERE "id" = $1`, entry.id)).rejects.toThrow(/attested redaction/)
+  })
+
+  it('v3 (erasable): the nonce round-trips, is cleared by the eraser, and can never be restored', async () => {
+    const erasable: AuditOptions = { integrity: { mode: 'hash-chain', key: 'k'.repeat(32), keyId: 'k1', erasable: true } }
+    const appAudit = new Audit(prismaAuditStore(app).store, undefined, undefined, erasable)
+    const entry = await appAudit.record('v3', { email: 'a@b.co' })
+    expect(entry.hash).toMatch(/^v3:/)
+    const eraserAudit = new Audit(prismaAuditStore(eraser).store, undefined, undefined, erasable)
+    expect((await eraserAudit.systemRedact(entry.id, { payload: ['email'], residual: 'none' })).residual).toBe('none')
+    expect((await prismaAuditStore(app).store.get(entry.id))!.nonce).toBeUndefined()
+    expect(await appAudit.verify()).toMatchObject({ ok: true })
+    await expect(eraser.$executeRawUnsafe(`UPDATE "audit_entries" SET "nonce" = 'ab' WHERE "id" = $1`, entry.id)).rejects.toThrow(/attested redaction/)
   })
 
   it('a stale optimistic token is a conflict on a real database', async () => {

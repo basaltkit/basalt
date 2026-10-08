@@ -90,7 +90,7 @@ describe('SqliteAuditStore — erasure', () => {
     migrate(db)
     migrate(db) // idempotent
     const columns = (db.prepare('PRAGMA table_info(audit_entries)').all() as Array<{ name: string }>).map((c) => c.name)
-    expect(columns).toEqual(expect.arrayContaining(['redaction', 'redacted_by']))
+    expect(columns).toEqual(expect.arrayContaining(['redaction', 'redacted_by', 'nonce']))
     const store = new SqliteAuditStore(db)
     const audit = new Audit(store, undefined, undefined, keyed)
     // A legacy unchained row is redactable; its attestation starts the chain.
@@ -141,6 +141,20 @@ describe('SqliteAuditStore — erasure', () => {
   })
 })
 
+describe('SqliteAuditStore — v3 (erasable)', () => {
+  it('persists the nonce, verifies, and clears it on redaction', async () => {
+    const { db, store, audit } = setup({ integrity: { mode: 'hash-chain', key: 'k'.repeat(32), keyId: 'k1', erasable: true } })
+    const entry = await audit.record('x', { email: 'a@b.co' })
+    expect(entry.hash).toMatch(/^v3:hmac-sha256:k1:/)
+    expect((await store.get(entry.id))!.nonce).toBe(entry.nonce)
+    expect(await audit.verify()).toMatchObject({ ok: true })
+    const result = await audit.redact(entry.id, { payload: ['email'], residual: 'none' })
+    expect(result.residual).toBe('none')
+    expect(db.prepare('SELECT nonce FROM audit_entries WHERE id = ?').get(entry.id)).toEqual({ nonce: null })
+    expect(await audit.verify()).toMatchObject({ ok: true, redacted: 1 })
+  })
+})
+
 describe('README guard triggers', () => {
   it('abort a DELETE and a hash UPDATE, and let the attested redaction through', async () => {
     const { db, audit } = setup()
@@ -153,6 +167,8 @@ describe('README guard triggers', () => {
     expect(changed).toBe(true)
     // Clearing the marker after the fact is refused too.
     expect(() => db.prepare('UPDATE audit_entries SET redacted_by = NULL WHERE id = ?').run(entry.id)).toThrow(/attested redaction/)
+    // A cleared nonce can never be put back.
+    expect(() => db.prepare("UPDATE audit_entries SET nonce = 'ab' WHERE id = ?").run(entry.id)).toThrow(/attested redaction/)
     expect(await audit.verify()).toMatchObject({ ok: true, redacted: 1 })
   })
 })

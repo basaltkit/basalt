@@ -34,6 +34,8 @@ model AuditEntry {
   // the `audit:redacted` entry that vouches for it. NULL until a row is redacted.
   redaction  String?
   redactedBy String?
+  // v3 hashes (integrity.erasable): the per-entry secret, cleared by a redaction.
+  nonce      String?
 
   @@index([tenantId, at])
   // One writer per (chain, seq): concurrent replicas cannot fork a chain.

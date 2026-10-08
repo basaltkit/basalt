@@ -20,6 +20,7 @@ import {
   type AuditIntegrityKey,
   type AuditSigningKey,
   computeAuditHashV2,
+  computeAuditHashV3,
   parseAuditChainKey,
   parseAuditHash,
 } from './chain.js'
@@ -64,6 +65,13 @@ export interface AuditEntry {
    * its content is then authenticated by its `audit:redacted` attestation.
    */
   readonly hash?: string | undefined
+  /**
+   * v3 entries only (`integrity.erasable`): 256 random bits (hex) mixed into
+   * the hash, cleared when the entry is redacted — after which nobody can
+   * recompute the hash to confirm a guess of an erased value. Stores must
+   * round-trip it (column `nonce`).
+   */
+  readonly nonce?: string | undefined
   /**
    * Present once personal data was erased from the entry with
    * {@link Audit.redact}. Stores must round-trip it (columns `redaction` and
@@ -338,7 +346,7 @@ export class MemoryAuditStore implements AuditStore {
     const attestation = write.attestation
     const slot = attestation.seq === undefined ? undefined : `${auditChainKey(attestation.tenantId)}#${attestation.seq}`
     if (slot !== undefined && this.chainSlots.has(slot)) throw new AuditChainConflictError(attestation.tenantId, attestation.seq)
-    const { ip: _ip, userAgent: _userAgent, redaction: _redaction, ...rest } = current
+    const { ip: _ip, userAgent: _userAgent, nonce: _nonce, redaction: _redaction, ...rest } = current
     this.entries[index] = Object.freeze({
       ...rest,
       payload: frozenPayload(write.payload),
@@ -856,6 +864,16 @@ export interface AuditHashChainIntegrity {
    * are accepted under any key held here or as `key`. Requires `key`.
    */
   verifyKeys?: Array<AuditIntegrityKey | AuditSigningKey>
+  /**
+   * Write v3 entries: each carries a random `nonce` inside its hash, which
+   * {@link Audit.redact} destroys — so after an erasure the stored hash no
+   * longer lets anyone (the key holder included) confirm a guess of the erased
+   * value. Needs a store with `get()` that persists `nonce` (checked on the
+   * first write). Off by default: entries stay v2, byte for byte. Upgrade every
+   * verifier before turning it on — an older `@basaltkit/audit` reports v3
+   * entries as `hash-mismatch`.
+   */
+  erasable?: boolean
 }
 
 /** `'hash-chain'` (SHA-256) or {@link AuditHashChainIntegrity} (HMAC-SHA256 under a >=128-bit secret). */
@@ -1221,6 +1239,10 @@ type ChainStore = Required<Pick<AuditStore, 'chainHead' | 'readChain' | 'countUn
 
 export class Audit {
   private readonly chainEnabled: boolean
+  /** Write v3 (nonce) entries — `integrity.erasable`. */
+  private readonly erasable: boolean
+  /** `undefined` until the first v3 write is read back; then whether the store kept its nonce. */
+  private nonceRoundTrip: boolean | undefined
   /** Signs new entries; `undefined` = plain SHA-256. */
   private readonly signer: AuditSigningKey | undefined
   /** Every key verification may use, by id (the signer's included). Empty = unkeyed chain. */
@@ -1251,6 +1273,15 @@ export class Audit {
     this.chainEnabled = integrity !== 'none'
     if (typeof integrity === 'object' && integrity.mode !== 'hash-chain') {
       throw new TypeError(`Unknown audit integrity mode: ${String(integrity.mode)}`)
+    }
+    const erasable = typeof integrity === 'object' ? integrity.erasable : undefined
+    if (erasable !== undefined && typeof erasable !== 'boolean') throw new TypeError('Audit integrity `erasable` must be a boolean')
+    this.erasable = erasable === true
+    if (this.erasable && typeof store.get !== 'function') {
+      throw new TypeError(
+        'Audit integrity `erasable` needs a store implementing get() that persists `nonce` ' +
+          '(MemoryAuditStore, @basaltkit/audit-sqlite >= 2.1, @basaltkit/audit-prisma >= 2.1 with the `nonce` column).',
+      )
     }
     const keys = typeof integrity === 'object' ? keyRing(integrity) : { signer: undefined, verifyKeys: new Map() }
     this.signer = keys.signer
@@ -1451,7 +1482,7 @@ export class Audit {
         for (let attempt = 1; ; attempt++) {
           const attestationId = randomUUID()
           const redaction: AuditRedactionMarker = deepFreeze({ attestationId, ...erased })
-          const { ip: _ip, userAgent: _userAgent, redaction: _redaction, ...header } = row
+          const { ip: _ip, userAgent: _userAgent, nonce: _nonce, redaction: _redaction, ...header } = row
           const redacted: AuditEntry = Object.freeze({
             ...header,
             payload: frozenPayload(payload),
@@ -1492,6 +1523,7 @@ export class Audit {
               redaction,
               attestation,
             })
+            await this.assertNonceRoundTrip(attestation)
             return { entry: redacted, attestation, changed: true, residual }
           } catch (error) {
             // A concurrent redaction of the same entry won: re-read it and merge
@@ -1535,6 +1567,8 @@ export class Audit {
     const parsed = parseAuditHash(row.hash)
     if (parsed === undefined) return 'none'
     if (parsed.version === 1) return this.verifyKeys.size > 0 ? 'keyed' : 'public'
+    // v3: redaction destroys the nonce, so nobody can recompute the hash.
+    if (parsed.version === 3) return 'none'
     return parsed.alg === 'hmac-sha256' ? 'keyed' : 'public'
   }
 
@@ -1841,6 +1875,7 @@ export class Audit {
         const entry = await this.chainLink(draft)
         try {
           await store.append(entry)
+          await this.assertNonceRoundTrip(entry)
           return entry
         } catch (error) {
           // Another writer (a second replica) took this seq first: re-read the
@@ -1858,9 +1893,38 @@ export class Audit {
    */
   private async chainLink(draft: AuditEntry): Promise<AuditEntry> {
     if (!this.chainEnabled) return Object.freeze(draft)
+    if (this.erasable && this.nonceRoundTrip === false) throw this.nonceLost()
     const head = await (this.store as ChainStore).chainHead(draft.tenantId)
-    const linked = { ...draft, seq: (head?.seq ?? 0) + 1, prevHash: head?.hash ?? AUDIT_CHAIN_GENESIS }
-    return Object.freeze({ ...linked, hash: computeAuditHashV2(linked, this.signer) })
+    const linked = {
+      ...draft,
+      ...(this.erasable ? { nonce: randomBytes(32).toString('hex') } : {}),
+      seq: (head?.seq ?? 0) + 1,
+      prevHash: head?.hash ?? AUDIT_CHAIN_GENESIS,
+    }
+    const hash = this.erasable ? computeAuditHashV3(linked, this.signer) : computeAuditHashV2(linked, this.signer)
+    return Object.freeze({ ...linked, hash })
+  }
+
+  /**
+   * Fails closed when the store does not persist `nonce`: every v3 entry it
+   * stored would fail verification forever. Checked once, on the first v3
+   * write of this instance (read back with `get()`); a store found dropping
+   * the nonce makes every later write throw too.
+   */
+  private async assertNonceRoundTrip(entry: AuditEntry): Promise<void> {
+    if (entry.nonce === undefined || this.nonceRoundTrip === true) return
+    if (this.nonceRoundTrip === undefined) {
+      const stored = await this.store.get!(entry.id)
+      this.nonceRoundTrip = stored?.nonce === entry.nonce
+    }
+    if (!this.nonceRoundTrip) throw this.nonceLost()
+  }
+
+  private nonceLost(): TypeError {
+    return new TypeError(
+      `Audit integrity \`erasable\`: the store (${this.store.constructor.name}) does not persist the entry \`nonce\` — ` +
+        'add the `nonce` column (see the store README) before enabling `erasable`; v3 entries written without it cannot be verified.',
+    )
   }
 
   private async withChainLock<T>(key: string, fn: () => Promise<T>): Promise<T> {

@@ -61,9 +61,11 @@ auditPlugin({ store: a.store, integrity: 'hash-chain', requestContext: true })
 [`@basaltkit/audit` README](https://github.com/basaltkit/basalt/tree/main/packages/audit#erasing-personal-data-auditredact))
 work on this store as they are:
 
-- `migrate()` adds two nullable columns: `redaction` (the erased set, as stable
-  JSON) and `redacted_by` (the id of the `audit:redacted` attestation, also the
-  optimistic-concurrency token). Existing rows keep NULLs.
+- `migrate()` adds three nullable columns: `redaction` (the erased set, as
+  stable JSON), `redacted_by` (the id of the `audit:redacted` attestation, also
+  the optimistic-concurrency token) and `nonce` (the per-entry secret of a v3
+  hash, written with `integrity: { …, erasable: true }` and cleared by a
+  redaction). Existing rows keep NULLs.
 - `get(id)` reads one row; `redact(write)` runs in one `BEGIN IMMEDIATE`
   transaction — the row is updated only while its `hash` and `redacted_by` are
   still the ones the redaction was computed from (`AuditRedactionConflictError`
@@ -74,7 +76,8 @@ work on this store as they are:
 
 SQLite has no roles, so nothing stops a buggy `UPDATE` or `DELETE` on the table.
 These triggers do: they refuse every `DELETE`, and every `UPDATE` except an
-attested redaction (header and hash columns unchanged, `redacted_by` set). They
+attested redaction (header and hash columns unchanged, `redacted_by` set, a
+`nonce` never restored). They
 guard against **bugs, not attackers** — whoever can open the file can drop them.
 Install them once, after `migrate()` (`db.exec(sql)`); do not install them if
 your retention policy deletes old rows.
@@ -94,7 +97,7 @@ WHEN NEW.id IS NOT OLD.id OR NEW.source IS NOT OLD.source OR NEW.event IS NOT OL
   OR NEW.request_id IS NOT OLD.request_id OR NEW.at IS NOT OLD.at
   OR NEW.chain IS NOT OLD.chain OR NEW.seq IS NOT OLD.seq
   OR NEW.prev_hash IS NOT OLD.prev_hash OR NEW.hash IS NOT OLD.hash
-  OR NEW.redacted_by IS NULL
+  OR NEW.redacted_by IS NULL OR (OLD.nonce IS NULL AND NEW.nonce IS NOT NULL)
 BEGIN
   SELECT RAISE(ABORT, 'audit_entries: only an attested redaction may update a row');
 END;

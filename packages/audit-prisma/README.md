@@ -42,6 +42,7 @@ model AuditEntry {
   hash      String?
   redaction  String?  // attested erasure (audit.redact): the erased set
   redactedBy String?  // ... and the id of the audit:redacted entry
+  nonce      String?  // v3 hashes (integrity.erasable)
   @@index([tenantId, at])
   @@unique([chain, seq])
   @@map("audit_entries")
@@ -79,18 +80,23 @@ visits tenants that have rows but no chain, found with one `SELECT DISTINCT
 
 ### Upgrading from 2.0
 
-2.1 adds two nullable columns for [erasing personal data](#erasing-personal-data):
-`redaction` and `redactedBy`. Nothing writes them until you call
-`audit.redact()`, so an app that does not erase needs no migration. Before the
-first erasure, migrate — on PostgreSQL:
+2.1 adds three nullable columns for [erasing personal data](#erasing-personal-data):
+`redaction` and `redactedBy` (written by `audit.redact()`) and `nonce` (written
+only with `integrity: { …, erasable: true }`). Nothing writes them until you opt
+in, so an app that does neither needs no migration. Before the first erasure (or
+before turning `erasable` on), migrate — on PostgreSQL:
 
 ```sql
 ALTER TABLE "audit_entries"
   ADD COLUMN "redaction" TEXT,
-  ADD COLUMN "redactedBy" TEXT;
+  ADD COLUMN "redactedBy" TEXT,
+  ADD COLUMN "nonce" TEXT;
 ```
 
-On MySQL, `schema.mysql.prisma` makes them `TEXT` and `VARCHAR(191)`.
+On MySQL, `schema.mysql.prisma` makes them `TEXT`, `VARCHAR(191)` and
+`VARCHAR(191)`. With `erasable` on, `Audit` reads its first entry back and
+throws if the `nonce` did not round-trip, rather than writing v3 entries that
+could never verify.
 
 ### Harden the table
 
@@ -134,10 +140,10 @@ columns erasure writes:
 ```sql
 CREATE ROLE audit_eraser LOGIN PASSWORD '…';
 GRANT SELECT, INSERT ON "audit_entries" TO audit_eraser;
-GRANT UPDATE ("payload", "ip", "userAgent", "redaction", "redactedBy") ON "audit_entries" TO audit_eraser;
+GRANT UPDATE ("payload", "ip", "userAgent", "nonce", "redaction", "redactedBy") ON "audit_entries" TO audit_eraser;
 ```
 
-On MySQL: `GRANT SELECT, INSERT, UPDATE (payload, ip, userAgent, redaction, redactedBy) ON audit_entries TO 'audit_eraser'@'%'`.
+On MySQL: `GRANT SELECT, INSERT, UPDATE (payload, ip, userAgent, nonce, redaction, redactedBy) ON audit_entries TO 'audit_eraser'@'%'`.
 
 Give the data-subject-request job — and only it — a second client connected as
 that role, and an `Audit` configured like the application's:
@@ -151,7 +157,8 @@ The two instances can race safely: the store's optimistic check and the
 `(chain, seq)` constraint resolve it.
 
 Optionally, a trigger makes even the eraser role unable to touch anything but an
-attested redaction (header and hash columns unchanged, `redactedBy` set). It
+attested redaction (header and hash columns unchanged, `redactedBy` set, a
+`nonce` never restored). It
 guards against bugs and a stolen eraser credential alike, but not against the
 table owner:
 
@@ -164,7 +171,8 @@ BEGIN
      OR NEW."tenantId" IS DISTINCT FROM OLD."tenantId" OR NEW."requestId" IS DISTINCT FROM OLD."requestId"
      OR NEW."at" IS DISTINCT FROM OLD."at" OR NEW."chain" IS DISTINCT FROM OLD."chain"
      OR NEW."seq" IS DISTINCT FROM OLD."seq" OR NEW."prevHash" IS DISTINCT FROM OLD."prevHash"
-     OR NEW."hash" IS DISTINCT FROM OLD."hash" OR NEW."redactedBy" IS NULL THEN
+     OR NEW."hash" IS DISTINCT FROM OLD."hash" OR NEW."redactedBy" IS NULL
+     OR (OLD."nonce" IS NULL AND NEW."nonce" IS NOT NULL) THEN
     RAISE EXCEPTION 'audit_entries: only an attested redaction may update a row';
   END IF;
   RETURN NEW;
