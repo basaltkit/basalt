@@ -11,6 +11,10 @@ import {
   assertAuditQuery,
   AuditChainConflictError,
   auditChainKey,
+  AuditRedactionConflictError,
+  type AuditRedactionMarker,
+  type AuditRedactionWrite,
+  auditStableJson,
   type AuditChainHead,
   type AuditChainRange,
   type AuditEntry,
@@ -26,7 +30,8 @@ import {
  * Durable, SQLite-backed implementation of the `@basaltkit/audit` `AuditStore`, on
  * Node's built-in `node:sqlite`. Append-only by contract. Zero external
  * dependencies. The single-node reference backend; the production
- * (Postgres/MySQL) counterpart is `@basaltkit/audit-prisma`.
+ * (Postgres/MySQL) counterpart is `@basaltkit/audit-prisma`. The one in-place
+ * change is `redact()` — an attested erasure (see `Audit.redact`).
  *
  * Requires Node 22.5+ (stable and flag-free on Node 24; `--experimental-sqlite`
  * on 22.x).
@@ -59,7 +64,17 @@ export function migrate(db: DatabaseSync): void {
   // Hash-chain and request columns, added to databases created before them.
   // (ADD COLUMN throws when the column already exists — ignore that.) Old rows
   // keep NULLs: `verify()` reports them as unchained (legacy), not as broken.
-  for (const column of ['chain TEXT', 'seq INTEGER', 'prev_hash TEXT', 'hash TEXT', 'ip TEXT', 'user_agent TEXT']) {
+  // `redaction` / `redacted_by`: the marker of an attested erasure (Audit.redact).
+  for (const column of [
+    'chain TEXT',
+    'seq INTEGER',
+    'prev_hash TEXT',
+    'hash TEXT',
+    'ip TEXT',
+    'user_agent TEXT',
+    'redaction TEXT',
+    'redacted_by TEXT',
+  ]) {
     try {
       db.exec(`ALTER TABLE audit_entries ADD COLUMN ${column}`)
     } catch {
@@ -87,23 +102,46 @@ interface AuditRow {
   hash: string | null
   ip: string | null
   user_agent: string | null
+  redaction: string | null
+  redacted_by: string | null
 }
 
-const toEntry = (r: AuditRow): AuditEntry => ({
-  id: r.id,
-  source: r.source as AuditEntry['source'],
-  event: r.event,
-  payload: r.payload === null ? undefined : (JSON.parse(r.payload) as unknown),
-  actorId: r.actor_id ?? undefined,
-  tenantId: r.tenant_id ?? undefined,
-  requestId: r.request_id ?? undefined,
-  at: r.at,
-  ...(r.ip !== null ? { ip: r.ip } : {}),
-  ...(r.user_agent !== null ? { userAgent: r.user_agent } : {}),
-  ...(r.seq !== null ? { seq: r.seq } : {}),
-  ...(r.prev_hash !== null ? { prevHash: r.prev_hash } : {}),
-  ...(r.hash !== null ? { hash: r.hash } : {}),
-})
+/**
+ * The redaction marker of a row, or `undefined` when it has none. A half-set
+ * or unparsable marker is returned malformed rather than dropped, so
+ * `verify()` fails closed (`redaction-mismatch`) instead of silently reading
+ * the row as unredacted.
+ */
+function toMarker(r: AuditRow): AuditRedactionMarker | undefined {
+  if (r.redaction === null && r.redacted_by === null) return undefined
+  let erased: unknown
+  try {
+    erased = r.redaction === null ? undefined : (JSON.parse(r.redaction) as unknown)
+  } catch {
+    erased = undefined
+  }
+  return { ...(erased !== null && typeof erased === 'object' ? erased : {}), attestationId: r.redacted_by } as AuditRedactionMarker
+}
+
+const toEntry = (r: AuditRow): AuditEntry => {
+  const redaction = toMarker(r)
+  return {
+    id: r.id,
+    source: r.source as AuditEntry['source'],
+    event: r.event,
+    payload: r.payload === null ? undefined : (JSON.parse(r.payload) as unknown),
+    actorId: r.actor_id ?? undefined,
+    tenantId: r.tenant_id ?? undefined,
+    requestId: r.request_id ?? undefined,
+    at: r.at,
+    ...(r.ip !== null ? { ip: r.ip } : {}),
+    ...(r.user_agent !== null ? { userAgent: r.user_agent } : {}),
+    ...(r.seq !== null ? { seq: r.seq } : {}),
+    ...(r.prev_hash !== null ? { prevHash: r.prev_hash } : {}),
+    ...(r.hash !== null ? { hash: r.hash } : {}),
+    ...(redaction !== undefined ? { redaction } : {}),
+  }
+}
 
 /** The `(chain, seq)` unique index fired — as opposed to any other constraint. */
 const isChainConflict = (error: unknown): boolean =>
@@ -115,6 +153,52 @@ export class SqliteAuditStore implements AuditStore {
   constructor(private readonly db: DatabaseSync) {}
 
   async append(entry: AuditEntry): Promise<void> {
+    this.insert(entry)
+  }
+
+  async get(id: string): Promise<AuditEntry | undefined> {
+    if (typeof id !== 'string') throw new TypeError('get: `id` must be a string')
+    const row = this.db.prepare('SELECT * FROM audit_entries WHERE id = ?').get(id) as unknown as AuditRow | undefined
+    return row === undefined ? undefined : toEntry(row)
+  }
+
+  /**
+   * The attested erasure, in one `BEGIN IMMEDIATE` transaction: the row is
+   * updated only while its `hash` and `redacted_by` still equal `expect`
+   * (else {@link AuditRedactionConflictError}), and the attestation is inserted
+   * under the `(chain, seq)` unique index (else `AuditChainConflictError`).
+   * Any error rolls both back.
+   */
+  async redact(write: AuditRedactionWrite): Promise<void> {
+    const { attestationId, ...erased } = write.redaction
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = this.db
+        .prepare(
+          `UPDATE audit_entries
+              SET payload = ?, ip = ?, user_agent = ?, redaction = ?, redacted_by = ?
+            WHERE id = ? AND hash IS ? AND redacted_by IS ?`,
+        )
+        .run(
+          write.payload === undefined ? null : JSON.stringify(write.payload),
+          write.ip ?? null,
+          write.userAgent ?? null,
+          auditStableJson(erased),
+          attestationId,
+          write.id,
+          write.expect.hash ?? null,
+          write.expect.redactedBy ?? null,
+        )
+      if (Number(result.changes) !== 1) throw new AuditRedactionConflictError(write.id)
+      this.insert(write.attestation)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  private insert(entry: AuditEntry): void {
     try {
       this.db
         .prepare(
