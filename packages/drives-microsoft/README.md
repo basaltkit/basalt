@@ -161,6 +161,7 @@ outside it. A drive-level root pays nothing.
 | `tenant` | `common` | see [above](#which-authority-tenant) |
 | `scopes` | `offline_access User.Read Files.Read` | `offline_access` is added if missing |
 | `refreshScopes` | the connection's stored scopes | override only if you know why |
+| `listItemFields` | — | SharePoint column internal names to expand on listings, `getItem` and `/delta` (max 64). Values land in `item.raw.listItemFields` as primitives — read them with `sharePointFieldsOf(item)`. Unverified user data. |
 | `prompt` | — | `select_account`, `consent`, `login` |
 | `downloadHosts` | `.files.1drv.com`, `.sharepoint.com`, `.svc.ms` | see [SSRF](#ssrf-the-download-url-is-a-credential) |
 | `pageSize` | `200` | `$top`, clamped to 1…999 |

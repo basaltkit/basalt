@@ -56,6 +56,11 @@ export {
   toDriveChange,
   toDriveItem,
   toPath,
+  flattenFields,
+  sharePointFieldsOf,
+  SHAREPOINT_MAX_FIELDS,
+  SHAREPOINT_MAX_VALUE_CHARS,
+  type SharePointFieldValue,
   type GraphHashes,
   type GraphItem,
   type GraphPage,
@@ -196,6 +201,22 @@ const DEFAULT_SCOPES = ['offline_access', 'User.Read', 'Files.Read'] as const
 /** `common`, `organizations`, `consumers`, a tenant GUID or a verified domain. */
 const SAFE_TENANT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
+/** A SharePoint column's internal name: what `$select` inside `fields` accepts. */
+const SAFE_FIELD = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
+
+function validateListItemFields(fields: readonly string[] | undefined): readonly string[] {
+  if (fields === undefined) return []
+  if (fields.length > 64) throw new TypeError('microsoftDrive(): `listItemFields` accepts at most 64 column names.')
+  for (const name of fields) {
+    if (typeof name !== 'string' || !SAFE_FIELD.test(name)) {
+      // Interpolated into an OData `$expand`; validated rather than escaped,
+      // so a typo is a startup failure and nothing can widen the selection.
+      throw new TypeError(`microsoftDrive(): \`listItemFields\` entry ${JSON.stringify(name)} is not a SharePoint internal column name.`)
+    }
+  }
+  return [...new Set(fields)]
+}
+
 export interface MicrosoftDriveOptions {
   /** Application (client) id from the Entra ID app registration. */
   clientId: string
@@ -238,6 +259,18 @@ export interface MicrosoftDriveOptions {
   downloadHosts?: readonly string[]
   /** `$top` for listings and the change feed. Clamped to 1…999. Default 200. */
   pageSize?: number
+  /**
+   * SharePoint columns to expand on listings, `getItem` and the change feed,
+   * by **internal name** (`Matter`, `ClientName`, `DocStatus`). An explicit
+   * allow-list — there is no "all": a list item carries author ids, workflow
+   * state and whatever else the site added, and `raw` is persisted by sinks.
+   *
+   * Values land in `item.raw.listItemFields` as primitives (read them with
+   * {@link sharePointFieldsOf}); a personal OneDrive has no list item, so the
+   * key is absent. At most 64 names. Off by default, and when off `raw` is
+   * exactly `{ driveId }` as before.
+   */
+  listItemFields?: readonly string[]
   /** Hard ceiling for one upload. Default — and maximum — 4 MB. */
   uploadMaxBytes?: number
   /** Subscription lifetime to request. Clamped to Graph's maximum (~30 days). */
@@ -308,6 +341,9 @@ export class MicrosoftDrive implements DriveProvider {
   private readonly scopes: readonly string[]
   private readonly refreshScopes: readonly string[] | undefined
   private readonly pageSize: number
+  private readonly listItemFields: readonly string[]
+  /** `&$expand=listItem(...)` when `listItemFields` is set, else empty. */
+  private readonly expand: string
   private readonly ancestryMaxDepth: number
   private readonly uploadMaxBytes: number
   private readonly subscriptionTtl: number
@@ -327,6 +363,11 @@ export class MicrosoftDrive implements DriveProvider {
     this.scopes = options.scopes ?? DEFAULT_SCOPES
     this.refreshScopes = options.refreshScopes
     this.pageSize = Math.min(Math.max(1, options.pageSize ?? 200), GRAPH_MAX_PAGE_SIZE)
+    this.listItemFields = validateListItemFields(options.listItemFields)
+    this.expand =
+      this.listItemFields.length > 0
+        ? `&$expand=${encodeURIComponent(`listItem($expand=fields($select=${this.listItemFields.join(',')}))`)}`
+        : ''
     this.ancestryMaxDepth = Math.max(1, options.ancestryMaxDepth ?? 32)
     this.uploadMaxBytes = Math.min(options.uploadMaxBytes ?? GRAPH_SIMPLE_UPLOAD_MAX_BYTES, GRAPH_SIMPLE_UPLOAD_MAX_BYTES)
     this.subscriptionTtl = Math.min(options.subscriptionTtlMs ?? GRAPH_MAX_SUBSCRIPTION_MS, GRAPH_MAX_SUBSCRIPTION_MS)
@@ -492,11 +533,11 @@ export class MicrosoftDrive implements DriveProvider {
         ? openLinkCursor(options.cursor, 'list', GRAPH_HOST, this.name)
         : `${GRAPH_BASE}${itemResource(await this.confinedTarget(session, options.folderId))}/children` +
           `?$top=${Math.min(Math.max(1, options.limit ?? this.pageSize), GRAPH_MAX_PAGE_SIZE)}` +
-          `&$select=${ITEM_SELECT}`
+          `&$select=${ITEM_SELECT}${this.expand}`
     const page = await this.call<GraphPage>(session, url)
     const next = page['@odata.nextLink']
     return {
-      items: (page.value ?? []).map(toDriveItem),
+      items: (page.value ?? []).map((item) => toDriveItem(item, this.listItemFields)),
       ...(next !== undefined ? { cursor: sealListCursor(next) } : {}),
     }
   }
@@ -508,7 +549,7 @@ export class MicrosoftDrive implements DriveProvider {
     if (!(await this.withinRoot(session, root, externalId))) return null
     const response = await this.request(
       session,
-      `${GRAPH_BASE}${itemInDrive(root, externalId, this.name)}?$select=${ITEM_SELECT}`,
+      `${GRAPH_BASE}${itemInDrive(root, externalId, this.name)}?$select=${ITEM_SELECT}${this.expand}`,
     )
     if (!response.ok) {
       const error = toGraphError(response.status, await this.readText(response), {
@@ -521,7 +562,7 @@ export class MicrosoftDrive implements DriveProvider {
       if (error instanceof DriveItemNotFoundError) return null
       throw error
     }
-    return toDriveItem(await response.json<GraphItem>())
+    return toDriveItem(await response.json<GraphItem>(), this.listItemFields)
   }
 
   /**
@@ -656,7 +697,7 @@ export class MicrosoftDrive implements DriveProvider {
 
   async delta(session: DriveSession, cursor: string): Promise<DriveDelta> {
     const url = isDeltaStart(cursor)
-      ? `${GRAPH_BASE}${openDeltaStart(cursor, this.name)}/delta?$top=${this.pageSize}`
+      ? `${GRAPH_BASE}${openDeltaStart(cursor, this.name)}/delta?$top=${this.pageSize}${this.expand}`
       : openLinkCursor(cursor, 'delta', GRAPH_HOST, this.name)
     const page = await this.call<GraphPage>(session, url, {}, { delta: true })
     const next = page['@odata.nextLink']
@@ -667,7 +708,7 @@ export class MicrosoftDrive implements DriveProvider {
       throw new Error('microsoft: /delta returned neither an @odata.nextLink nor an @odata.deltaLink')
     }
     return {
-      changes: (page.value ?? []).map(toDriveChange),
+      changes: (page.value ?? []).map((item) => toDriveChange(item, this.listItemFields)),
       cursor: next !== undefined ? sealDeltaCursor(next) : sealDeltaCursor(final as string),
       hasMore: next !== undefined,
     }

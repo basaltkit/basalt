@@ -29,6 +29,11 @@ export interface GraphItem {
   deleted?: { state?: string }
   parentReference?: { driveId?: string; id?: string; path?: string; siteId?: string }
   /**
+   * The SharePoint list item behind a document-library file, present only when
+   * the request expanded it (`listItemFields`). A personal OneDrive has none.
+   */
+  listItem?: { fields?: Record<string, unknown> }
+  /**
    * A **pre-signed, short-lived URL that is itself a bearer credential**.
    *
    * Read in {@link GraphItem} only so `download` can use it immediately. It is
@@ -141,7 +146,7 @@ function safeDecode(value: string): string {
  *   and a Graph item carries user names, email addresses and sharing state that
  *   an app did not ask to store.
  */
-export function toDriveItem(item: GraphItem): DriveItem {
+export function toDriveItem(item: GraphItem, listItemFields?: readonly string[]): DriveItem {
   const isFolder = item.folder !== undefined
   const path = toPath(item)
   const checksum = toChecksum(item.file?.hashes)
@@ -149,6 +154,11 @@ export function toDriveItem(item: GraphItem): DriveItem {
   const createdAt = epoch(item.createdDateTime)
   const updatedAt = epoch(item.lastModifiedDateTime)
   const driveId = item.parentReference?.driveId
+  const columns = listItemFields !== undefined && listItemFields.length > 0 ? flattenFields(item.listItem?.fields, listItemFields) : undefined
+  const raw = {
+    ...(driveId !== undefined ? { driveId } : {}),
+    ...(columns !== undefined ? { listItemFields: columns } : {}),
+  }
   return {
     externalId: item.id ?? '',
     name: item.name ?? '',
@@ -174,8 +184,83 @@ export function toDriveItem(item: GraphItem): DriveItem {
     // one becomes an import job that fails, re-enqueues and fails again for
     // ever, on every sync, for as long as the shortcut exists.
     ...(item.package !== undefined || item.remoteItem !== undefined ? { exportOnly: true } : {}),
-    ...(driveId !== undefined ? { raw: { driveId } } : {}),
+    ...(Object.keys(raw).length > 0 ? { raw } : {}),
   }
+}
+
+/** A flattened SharePoint column value. */
+export type SharePointFieldValue = string | number | boolean | null
+
+/** At most this many columns are kept per item. */
+export const SHAREPOINT_MAX_FIELDS = 64
+/** A string value is cut to this many characters. */
+export const SHAREPOINT_MAX_VALUE_CHARS = 1024
+
+/**
+ * Flattens a list item's `fields` to the allow-listed columns, as primitives.
+ *
+ * Only the columns the app asked for are kept — Graph adds its own (`@odata.etag`,
+ * `id`, `ContentType`, author ids) and `raw` is persisted by sinks. Primitives
+ * pass through; the common object shapes become strings: a lookup or managed
+ * metadata value (`LookupValue`, `Label`), a person (`Email`, else
+ * `LookupValue`), and arrays of those joined with `"; "`. Anything else is
+ * dropped rather than stored as an opaque blob. Values are unverified data the
+ * tenant's users typed into SharePoint — treat them like any other user input.
+ */
+export function flattenFields(
+  fields: Record<string, unknown> | undefined,
+  allowed: readonly string[],
+): Record<string, SharePointFieldValue> | undefined {
+  if (fields === undefined || fields === null || typeof fields !== 'object') return undefined
+  const out: Record<string, SharePointFieldValue> = {}
+  let count = 0
+  for (const name of allowed) {
+    if (count >= SHAREPOINT_MAX_FIELDS) break
+    if (!Object.prototype.hasOwnProperty.call(fields, name)) continue
+    const value = flattenValue(fields[name])
+    if (value === undefined) continue
+    out[name] = value
+    count++
+  }
+  return out
+}
+
+function flattenValue(value: unknown): SharePointFieldValue | undefined {
+  if (value === null) return null
+  if (typeof value === 'string') return cap(value)
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'boolean') return value
+  if (Array.isArray(value)) {
+    const parts = value.map(objectLabel).filter((part): part is string => part !== undefined)
+    return parts.length > 0 ? cap(parts.join('; ')) : undefined
+  }
+  const label = objectLabel(value)
+  return label === undefined ? undefined : cap(label)
+}
+
+function objectLabel(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (value === null || typeof value !== 'object') return undefined
+  const shaped = value as { Email?: unknown; LookupValue?: unknown; Label?: unknown }
+  for (const candidate of [shaped.Email, shaped.LookupValue, shaped.Label]) {
+    if (typeof candidate === 'string' && candidate !== '') return candidate
+  }
+  return undefined
+}
+
+function cap(value: string): string {
+  return value.length > SHAREPOINT_MAX_VALUE_CHARS ? value.slice(0, SHAREPOINT_MAX_VALUE_CHARS) : value
+}
+
+/**
+ * The SharePoint columns an item was listed with, or `undefined` when the
+ * adapter was not configured with `listItemFields` or the item has no list
+ * item (a personal OneDrive, a folder in some libraries).
+ */
+export function sharePointFieldsOf(item: Pick<DriveItem, 'raw'>): Record<string, SharePointFieldValue> | undefined {
+  const fields = (item.raw as { listItemFields?: unknown } | undefined)?.listItemFields
+  return fields !== null && typeof fields === 'object' ? (fields as Record<string, SharePointFieldValue>) : undefined
 }
 
 /**
@@ -186,12 +271,12 @@ export function toDriveItem(item: GraphItem): DriveItem {
  * never needs the contract's path-only removal. The id is what makes
  * `DriveRemoval.targetId` resolvable here and `undefined` there.
  */
-export function toDriveChange(item: GraphItem): DriveChange {
+export function toDriveChange(item: GraphItem, listItemFields?: readonly string[]): DriveChange {
   if (item.deleted !== undefined) {
     const externalId = item.id
     return { type: 'removed', ...(externalId !== undefined ? { externalId } : {}) }
   }
-  return { type: 'upserted', item: toDriveItem(item) }
+  return { type: 'upserted', item: toDriveItem(item, listItemFields) }
 }
 
 /** Strips leading and trailing dots in linear time. */

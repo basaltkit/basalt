@@ -766,6 +766,42 @@ segmento é validado, e `/`, `?`, `#`, `%`, `.`, `..` e espaços são recusados 
 `DRIVE_ACCESS_DENIED`. Um `folderId` pode estreitar uma chamada a uma pasta mas
 nunca nomear outra drive.
 
+### Colunas do SharePoint
+
+Os ficheiros de uma biblioteca de documentos são itens de lista com colunas
+(processo, cliente, estado…). O adaptador pode trazer as que indicares em cada
+listagem, `getItem` e página do feed de alterações, sem um pedido por ficheiro:
+
+```ts
+import { microsoftDrive, sharePointFieldsOf } from '@basaltkit/drives-microsoft'
+
+microsoftDrive({ clientId, clientSecret, listItemFields: ['Matter', 'ClientName', 'DocStatus'] })
+
+const page = await drives.listItems(connection.id)
+for (const item of page.items) {
+  const columns = sharePointFieldsOf(item) // { Matter: 'ACME v. Globex', DocStatus: 'Signed' } | undefined
+}
+```
+
+- Os nomes são os nomes **internos** das colunas, validados no arranque. Não há
+  "todas": um item de lista traz ids de autores, estado de workflows e tudo o
+  que o site acrescentou, e o `raw` é persistido pelos sinks.
+- Os valores são achatados para primitivos em `item.raw.listItemFields`: um
+  valor de lookup ou de metadados geridos passa a ser o seu rótulo, uma pessoa
+  o seu email, e uma coluna multi-valor os rótulos unidos com `"; "`. Outras
+  formas são descartadas. No máximo 64 colunas, 1 KB por valor.
+- Um OneDrive pessoal não tem item de lista, por isso a chave simplesmente não
+  aparece. Com a opção por definir, o `raw` continua a ser exactamente
+  `{ driveId }`.
+- É exclusivo da Microsoft, por isso vive no adaptador e não no contrato das
+  drives.
+
+::: warning Dados não verificados
+Os valores das colunas são o que os utilizadores do tenant escreveram no
+SharePoint. Valida-os como qualquer outro input de utilizador antes de decidirem
+alguma coisa — em que processo um documento é arquivado, quem o pode ver.
+:::
+
 ### Quatro coisas que a Microsoft faz de forma diferente
 
 **O refresh token roda, sempre.** O antigo morre no instante em que um novo é
