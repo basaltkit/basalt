@@ -357,6 +357,65 @@ app.hooks.on('team:invited', ({ invitation, token }) =>
   mailer.send(InviteEmail, { url: `${APP_URL}/invite?token=${token}` }, { to: invitation.email }))
 ```
 
+### Aceitação automática com email verificado {#auto-accept-on-verified-email}
+
+O link é apenas a forma como o token viaja. O que o `accept` verifica é que o
+convite está vivo e que o email **verificado** de quem aceita é o endereço
+convidado. Quando alguém se regista com o endereço convidado e o confirma, os dois
+factos já estão provados, por isso obrigá-lo também a encontrar e abrir o email do
+convite não acrescenta nada. Adere com:
+
+```ts
+teamsPlugin({ acceptOnVerifiedEmail: true })
+```
+
+No `auth:email_verified` e no `auth:login`, o convite pendente do utilizador
+autenticado para o tenant **atual** (`ctx().tenant`) é aceite quando o seu email
+está verificado. As duas ordens funcionam: convidado e depois verificado, e uma
+conta já verificada convidada mais tarde (entra no próximo login). A mesma lógica
+está disponível diretamente como
+`teams.acceptByEmail({ tenantId, userId, email, emailVerified })`.
+
+- **As mesmas garantias do link.** Só um convite pendente, não revogado e não
+  expirado; o endereço canónico tem de coincidir; o compare-and-set no convite faz
+  com que chamadas concorrentes inscrevam uma só vez; uma pertença existente de
+  posto igual ou superior nunca é despromovida.
+- **Limitado ao tenant.** Só o tenant em que o utilizador está a entrar. No apex
+  (sem tenant) não acontece nada, e os convites para outros tenants continuam
+  pendentes: um endereço nunca é inscrito numa organização que não está a visitar.
+- **Nunca faz falhar o login.** Um erro (um store indisponível) é reportado
+  através de `team:auto_accept_failed` e o convite continua pendente.
+- **A política aplica-se a partir desse momento.** O `auth:login` só dispara
+  depois do MFA, mas, a partir do momento em que a pertença existe, a política do
+  tenant (exigir MFA aos membros, guards de role) aplica-se à conta. Planeia a
+  cerimónia como registar → confirmar → já é membro → inscrever o segundo fator.
+
+### Registo só por convite {#invite-only-registration}
+
+O `teamsInviteGate(teams)` é uma política de registo pronta para o
+`@basaltkit/auth`: no apex qualquer endereço se pode registar; num host de tenant
+só um endereço com um convite vivo para **esse** tenant. Só lê; o convite é
+consumido mais tarde (pelo link, ou pelo `acceptOnVerifiedEmail`).
+
+```ts
+import { authPlugin } from '@basaltkit/auth'
+import { TEAMS, teamsInviteGate, teamsPlugin } from '@basaltkit/teams'
+
+let app: BasaltApp
+app = createApp({
+  plugins: [
+    authPlugin({ users, secret, registerPolicy: teamsInviteGate(() => app.container.get(TEAMS)) }),
+    teamsPlugin({ acceptOnVerifiedEmail: true }),
+    // tenancy, tenantMembershipPlugin, …
+  ],
+})
+await app.boot()
+```
+
+Um registo recusado responde o mesmo `202` que um admitido e emite
+`auth:register_refused`, por isso a rota nunca revela quem foi convidado. Ver
+[Autenticação: política de registo](/pt/guide/auth#registration-policy).
+
 ## Listar membros e convites
 
 ```ts
@@ -488,6 +547,7 @@ de conceder o catálogo em cada tenant — vê
 | `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Hierarquia de roles; roles fora do mapa não têm rank (comparação exacta) |
 | `grantableRoles` | `TeamRole[]` | `[]` | Roles sem rank que um utilizador ativo pode ainda conceder; qualquer outro role fora de `roleRank` é recusado (`TEAM_ROLE_NOT_GRANTABLE`) |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
+| `acceptOnVerifiedEmail` | `boolean` | `false` | Aceitar o convite pendente do utilizador para o tenant atual no `auth:email_verified` / `auth:login` quando o email está verificado. Ver [Aceitação automática com email verificado](#auto-accept-on-verified-email) |
 
 `tenantMembershipPlugin(options)`:
 
@@ -544,6 +604,7 @@ de conceder o catálogo em cada tenant — vê
 | `team:joined` | `{ membership }` |
 | `team:role_changed` | `{ membership }` |
 | `team:member_removed` | `{ tenantId, userId }` |
+| `team:auto_accept_failed` | `{ tenantId, userId, error }` — o `acceptOnVerifiedEmail` não conseguiu inscrever; o login seguiu, o convite continua pendente |
 
 O fluxo completo — incluindo o encanamento de email — está no
 [cookbook do ciclo de vida da conta](/pt/cookbook/account-lifecycle).

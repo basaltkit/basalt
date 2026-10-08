@@ -244,9 +244,15 @@ auditoria na cadeia **central**. O guard é o que quebra a cadeia; prefixar as
 permissões de plataforma é higiene, não protecção.
 :::
 
-O registo em hosts de tenant está fechado: as pessoas entram num tenant por
-convite, não por descobrirem o subdomínio. Devolve 404 do `/auth/register`
-quando resolveu tenant. O registo no apex ou está fechado também (o staff é
+O registo em hosts de tenant é só por convite: as pessoas entram num tenant por
+convite, não por descobrirem o subdomínio. Declara-o uma vez com
+`authPlugin({ registerPolicy: teamsInviteGate(…) })` (ver
+[Equipas: registo só por convite](/pt/guide/teams#invite-only-registration)): um
+registo recusado responde o mesmo `202` que um admitido, por isso a rota não é um
+oráculo de quem foi convidado, e um primeiro login social também é recusado.
+Junta `teamsPlugin({ acceptOnVerifiedEmail: true })` para que o convidado que
+confirma o endereço já seja membro. Se os teus tenants nunca se registam no seu
+host, `authRoutes({ register: 'closed' })` responde um 404 estático. O registo no apex ou está fechado também (o staff é
 criado pela CLI) ou está aberto mas sem privilégios — uma conta no apex sem role
 de plataforma não consegue fazer nada.
 
@@ -422,9 +428,9 @@ consola de plataforma.
 - [ ] `tenantDb()` exige tenant; `centralDb()` recusa-o
 - [ ] nenhum `catch { return central }` em lado nenhum
 - [ ] rotas de plataforma declaram `platform: true` e um guard devolve 404 num host de tenant
-- [ ] `/auth/register` é 404 em hosts de tenant
+- [ ] `/auth/register` é só por convite em hosts de tenant (`registerPolicy: teamsInviteGate(…)`) ou `register: 'closed'`
 - [ ] um `authPlugin`; sem modelo de operador, sem segunda tabela de sessões
-- [ ] utilizadores criados pelo `AUTH`, nunca inseridos com hash feito à mão
+- [ ] utilizadores criados pelo `AUTH`, nunca inseridos com hash feito à mão (`register(…, { emailVerified: true })` quando o fluxo já provou o endereço)
 - [ ] a política de MFA responde pelos roles de plataforma
 - [ ] roles de tenant semeados sob o id do tenant no `onProvision`; roles de plataforma sob `GLOBAL_SCOPE` (importado) pelo store central
 - [ ] `can:` nas rotas; verificações por nome de role justificadas num comentário
