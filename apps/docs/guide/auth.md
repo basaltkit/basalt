@@ -392,9 +392,14 @@ way.
 
 The public `POST /auth/register` never creates a verified account: an
 `emailVerified` field in the body is ignored. A custom `UserSource` written
-before `create()` took the flag is patched through `update()`; with no
-`update()`, asking for a verified account fails with `UserUpdateUnsupportedError`
-instead of silently creating it unverified.
+before `create()` took the flag is patched through `update()`. A source that
+can do neither (no `update()`, a `create()` that ignores the flag) cannot record
+verification: `register(…, { emailVerified: true })` then fails with
+`UserUpdateUnsupportedError` after creating the account unverified, while a
+social login creates the account unverified, links it and signs the user in —
+it never fails half-way, which would leave an account every later login of that
+provider refuses. Persist `emailVerified` in `create()` (or implement
+`update()`) to get verified accounts.
 
 ## Refresh rotation with reuse detection
 
@@ -1049,7 +1054,8 @@ short display prefix — the plaintext is shown exactly once. Keys may optionall
 expire; expired keys are rejected by the server and omitted from listings.
 
 The plugin's guard enforces three boundaries on every key-authenticated request
-(`403` in each case, with an `auth:apikey_rejected` event):
+(`403` in each case, with an `auth:apikey_rejected` and an `auth:apikey_refused`
+event):
 
 - **Tenant binding.** A key created inside a tenant works only when the request
   resolves that same tenant — never in another one chosen through `x-tenant-id`,
@@ -1145,7 +1151,9 @@ Every refusal emits `auth:apikey_rejected`. For an invalid key the payload
 carries the presented key's display `prefix` (`mk_live_` plus six characters,
 what listings show — never the secret) and the client `ip`, so you can alert or
 throttle per caller. Because any anonymous client can trigger it, this hook is
-**not** recorded by `auditPlugin`'s defaults — see
+**not** recorded by `auditPlugin`'s defaults. A refusal of a key that verified
+(`tenant_mismatch`, `not_allowed`, `scope`) is also emitted as
+`auth:apikey_refused`, which **is** audited by default — see
 [which hooks are audited](/guide/persistence#which-hooks-are-audited).
 
 **A public API, end to end.** Machine clients often sit behind one address (an
@@ -1348,7 +1356,7 @@ users in.
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` on an account whose MFA is on — disable it with a code first |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | A `meta.auth` route got a cross-site, cookie-only state-changing request |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset, and for creating a verified account when `create()` drops `emailVerified` |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset, and for `register(…, { emailVerified: true })` when `create()` drops `emailVerified` |
 | `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, or a `registerPolicy` refused the first social / SSO login of an address |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars outside an explicit `NODE_ENV=development`/`test` |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`), or a key without `*` hit an identity-gated route that declares no `meta.scopes` |
@@ -1414,6 +1422,7 @@ users in.
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Security notification |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Audit trail |
 | `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; `prefix` is the display prefix of an invalid key, never the key. Not audited by default |
+| `auth:apikey_refused` | `{ id, reason, tenantId? }` | A key that verified was refused (`tenant_mismatch`, `not_allowed`, `scope`); emitted right after `auth:apikey_rejected`. Audited by default |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
 | `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
 | `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials and account links were revoked |

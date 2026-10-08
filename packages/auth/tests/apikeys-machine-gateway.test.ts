@@ -46,11 +46,15 @@ async function setup(adapter: (typeof availableAdapters)[number], keyOptions: Ap
   const store = new MemoryApiKeyStore()
   const keys = new ApiKeys({ store })
   const rejections: Rejection[] = []
+  const refusals: { id: string; reason: string; tenantId?: string }[] = []
   const recorder = definePlugin({
     name: 'test:rejections',
     register({ hooks }) {
       hooks.on('auth:apikey_rejected', (payload) => {
         rejections.push(payload as Rejection)
+      })
+      hooks.on('auth:apikey_refused', (payload) => {
+        refusals.push(payload)
       })
     },
   })
@@ -63,7 +67,7 @@ async function setup(adapter: (typeof availableAdapters)[number], keyOptions: Ap
     ],
     routes,
   )
-  return { keys, rejections, h: harness }
+  return { keys, rejections, refusals, h: harness }
 }
 
 describe.each(availableAdapters)('%s: apiKeysPlugin rejectInvalid (BK-083 a)', (adapter) => {
@@ -114,6 +118,19 @@ describe.each(availableAdapters)('%s: apiKeysPlugin rejectInvalid (BK-083 a)', (
     // fastify inject and express over loopback both report an address; hono's
     // in-process request() has no socket, so the IP is simply absent there.
     if (adapter !== 'hono') expect(typeof rejections[0]?.ip).toBe('string')
+  })
+
+  it('a VALID key refused also emits auth:apikey_refused (audited by default); an unknown key does not', async () => {
+    const { h, keys, rejections, refusals } = await setup(adapter)
+    const { record, key } = await keys.issue({ name: 'erp', scopes: ['invoices:read'] })
+    const res = await h.call({ method: 'GET', url: '/orders', headers: { 'x-api-key': key } })
+    expect(res.status).toBe(403)
+    expect(refusals).toEqual([{ id: record.id, reason: 'scope' }])
+    expect(rejections).toEqual([{ id: record.id, reason: 'scope' }])
+
+    await h.call({ method: 'GET', url: '/public', headers: { 'x-api-key': 'mk_live_abcdefDEADDEADDEADDEAD' } })
+    expect(rejections).toHaveLength(2)
+    expect(refusals).toHaveLength(1)
   })
 })
 

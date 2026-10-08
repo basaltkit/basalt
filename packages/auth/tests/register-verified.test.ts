@@ -101,12 +101,78 @@ describe('socialLogin creates a provider-verified account verified (BK-045)', ()
     expect(user.emailVerified).toBe(false)
     expect(seen[0]?.emailVerified).toBe(false)
   })
+})
 
-  it('no longer fails open: a source that drops the flag and has no update() throws', async () => {
-    const auth = new Auth({ users: new LegacyUserSource(), secret: SECRET, hasher: fastHasher })
-    await expect(auth.socialLogin('sso@acme.test', { emailVerified: true })).rejects.toBeInstanceOf(
-      UserUpdateUnsupportedError,
-    )
+/**
+ * W13: a first social login must never leave a half-created account behind.
+ * Each UserSource shape: full (memory), honours the flag without update(),
+ * drops the flag without update() (legacy custom), and a transient update()
+ * failure after the row exists.
+ */
+describe('socialLogin never orphans the account it creates (W13)', () => {
+  const identity = { provider: 'google', subject: 'sub-1' }
+
+  it('memory source: created verified, linked, later logins reach the same account', async () => {
+    const users = new MemoryUserSource()
+    const auth = new Auth({ users, secret: SECRET, hasher: fastHasher })
+    const first = await auth.socialLogin('sso@acme.test', { emailVerified: true, identity })
+    expect(first).toMatchObject({ created: true, user: { emailVerified: true } })
+    const again = await auth.socialLogin('sso@acme.test', { emailVerified: true, identity })
+    expect(again).toMatchObject({ created: false, user: { id: first.user.id, emailVerified: true } })
+  })
+
+  it('custom source without update() that honours create({ emailVerified }) is verified', async () => {
+    const inner = new MemoryUserSource()
+    const users: UserSource = {
+      findByEmail: (e) => inner.findByEmail(e),
+      findById: (id) => inner.findById(id),
+      create: (data) => inner.create(data),
+    }
+    const auth = new Auth({ users, secret: SECRET, hasher: fastHasher })
+    const { user } = await auth.socialLogin('sso@acme.test', { emailVerified: true, identity })
+    expect(user.emailVerified).toBe(true)
+  })
+
+  it('custom source without update() that drops the flag: no 500, no orphan, no lockout', async () => {
+    const hooks = new HookBus()
+    const seen = recordRegistered(hooks)
+    const users = new LegacyUserSource()
+    const auth = new Auth({ users, secret: SECRET, hasher: fastHasher, hooks })
+
+    const first = await auth.socialLogin('sso@acme.test', { emailVerified: true, identity })
+    // The source cannot record verification: the account says so truthfully.
+    expect(first).toMatchObject({ created: true, user: { emailVerified: false } })
+    expect(seen).toEqual([{ id: first.user.id, email: 'sso@acme.test', emailVerified: false }])
+    // Every later login reaches the same account through the link.
+    for (let i = 0; i < 3; i++) {
+      const again = await auth.socialLogin('sso@acme.test', { emailVerified: true, identity })
+      expect(again).toMatchObject({ created: false, user: { id: first.user.id } })
+    }
+  })
+
+  it('a transient update() failure after create: the retried login succeeds', async () => {
+    const inner = new MemoryUserSource()
+    let failNext = true
+    const users: UserSource = {
+      findByEmail: (e) => inner.findByEmail(e),
+      findById: (id) => inner.findById(id),
+      // Drops the flag, so the verification goes through update().
+      create: (data) => inner.create({ email: data.email, passwordHash: data.passwordHash }),
+      update: async (id, patch) => {
+        if (failNext) {
+          failNext = false
+          throw new Error('db down')
+        }
+        return inner.update(id, patch)
+      },
+    }
+    const auth = new Auth({ users, secret: SECRET, hasher: fastHasher })
+    await expect(auth.socialLogin('sso@acme.test', { emailVerified: true, identity })).rejects.toThrow('db down')
+    const retry = await auth.socialLogin('sso@acme.test', { emailVerified: true, identity })
+    expect(retry.user.emailVerified).toBe(true)
+    expect(await auth.socialLogin('sso@acme.test', { emailVerified: true, identity })).toMatchObject({
+      user: { id: retry.user.id, emailVerified: true },
+    })
   })
 })
 

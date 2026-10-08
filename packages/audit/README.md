@@ -69,7 +69,7 @@ await audit.record('data.export', { format: 'csv' })
 
 ### Automatic hook capture
 
-By default, hooks matching `auth:**`, `billing:**`, `tenancy:created`, or `permission:**` are recorded (not `tenancy:switched`, which fires on every request), except those in `DEFAULT_AUDIT_HOOK_EXCLUDES`: `auth:apikey_rejected`, which any anonymous client can trigger on every request by presenting a dead API key. You can replace the list:
+By default, hooks matching `auth:**`, `billing:**`, `tenancy:created`, or `permission:**` are recorded (not `tenancy:switched`, which fires on every request), except those in `DEFAULT_AUDIT_HOOK_EXCLUDES`: `auth:apikey_rejected`, which any anonymous client can trigger on every request by presenting a dead API key. Refusals of a key that did verify are still recorded, as `auth:apikey_refused`. You can replace the list:
 
 ```ts
 import { auditPlugin } from '@basaltkit/audit'

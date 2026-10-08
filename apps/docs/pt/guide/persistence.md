@@ -278,6 +278,13 @@ antes de alguém estar autenticado, por isso registá-lo deixava qualquer client
 anónimo acrescentar entradas ao trilho (serializado e encadeado por hash) de um
 tenant tão depressa quanto conseguisse enviar pedidos.
 
+As recusas de uma chave que **foi** verificada — usada noutro tenant
+(`tenant_mismatch`), numa rota só de sessão (`not_allowed`) ou além dos seus
+scopes (`scope`) — continuam auditadas por padrão: o `apiKeysPlugin` emite-as
+uma segunda vez como `auth:apikey_refused` (`{ id, reason, tenantId? }`), que o
+`auth:**` regista. Só quem tem a chave as consegue causar, e a entrada identifica
+a chave, por isso uma sondagem cross-tenant com uma chave real deixa sempre rasto.
+
 `hooks` aceita uma lista (o conjunto de inclusão) ou `{ include, exclude }`. Um
 hook é registado quando corresponde a um padrão de `include` e a nenhum de
 `exclude`; sem `exclude`, aplicam-se as exclusões padrão
@@ -285,13 +292,48 @@ hook é registado quando corresponde a um padrão de `include` e a nenhum de
 sempre registado — é assim que voltas a incluir um:
 
 ```ts
-auditPlugin({ hooks: ['auth:**', 'auth:apikey_rejected'] })               // regista também as recusas
+auditPlugin({ hooks: ['auth:**', 'auth:apikey_rejected'] })               // regista também todas as rejeições
 auditPlugin({ hooks: { include: ['auth:**', 'billing:**'], exclude: ['auth:login'] } })
 auditPlugin({ hooks: { include: ['auth:**'], exclude: [] } })             // sem exclusões padrão
 ```
 
-Se registares `auth:apikey_rejected`, limita-o tu (o payload traz o `prefix` de
-apresentação da chave e o `ip` do cliente para isso).
+Voltar a incluir `auth:apikey_rejected` regista duas vezes a recusa de uma chave
+válida (com os dois nomes) e uma vez cada chave desconhecida. Em vez de registar
+esse ruído, observa-o: o payload de uma chave inválida traz o `prefix` de
+apresentação e o `ip` do cliente, o suficiente para um sinal agregado como este:
+
+```ts
+import { definePlugin } from '@basaltkit/core'
+import { AUDIT } from '@basaltkit/audit'
+
+const WINDOW_MS = 60_000
+const THRESHOLD = 20
+
+// Uma entrada de auditoria por chamador por minuto quando passa o limiar —
+// nunca uma por pedido. Em processo: com várias instâncias, conta num store
+// partilhado (Redis).
+export const apiKeyBurstAlert = definePlugin({
+  name: 'app:apikey-burst',
+  register({ hooks, container }) {
+    let windowStart = Date.now()
+    let counts = new Map<string, number>()
+    hooks.on('auth:apikey_rejected', async ({ reason, ip, prefix }) => {
+      if (reason !== 'invalid') return // recusas de chaves válidas: auth:apikey_refused, já auditado
+      const now = Date.now()
+      if (now - windowStart >= WINDOW_MS) {
+        windowStart = now
+        counts = new Map()
+      }
+      const caller = ip ?? prefix ?? 'unknown'
+      const count = (counts.get(caller) ?? 0) + 1
+      counts.set(caller, count)
+      if (count === THRESHOLD) {
+        await container.get(AUDIT).record('security:apikey_invalid_burst', { ip, prefix, count, windowMs: WINDOW_MS })
+      }
+    })
+  },
+})
+```
 
 ### Trilho de auditoria verificável
 
