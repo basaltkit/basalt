@@ -14,7 +14,7 @@ BK-083: API key lifecycle columns. **Breaking: requires a database migration and
 
 Prisma selects every model column, so a client generated from the new schema fails every API-key query until the database has the columns. That makes this a major, not a minor; the 1.5 `expiresAt` minor broke apps exactly this way.
 
-To upgrade, copy the model from the reference schema (or run `basalt prisma:sync`), run `prisma generate`, then run `prisma migrate dev --name add_api_key_lifecycle`. With schema-per-tenant, run `basalt tenant:migrate` too.
+To upgrade, copy the model from the reference schema by hand (`basalt prisma:sync` only adds missing models, never new fields to an existing one), run `prisma generate`, then run `prisma migrate dev --name add_api_key_lifecycle`. With schema-per-tenant, run `basalt tenant:migrate` too.
 
 On PostgreSQL:
 

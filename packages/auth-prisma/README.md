@@ -87,8 +87,9 @@ This is a major because the database **and** the generated client must both
 have the columns. Prisma selects every column of the model, so a client
 generated from the new schema fails every API-key query until the database is
 migrated. A client generated from the old schema fails the new
-`previousHash` lookup. Copy the model from the reference schema (or run
-`basalt prisma:sync`), run `prisma generate`, then create the migration:
+`previousHash` lookup. Copy the model from the reference schema by hand (`basalt prisma:sync` only
+adds missing models, never new fields to an existing one), run
+`prisma generate`, then create the migration:
 
 ```bash
 prisma migrate dev --name add_api_key_lifecycle

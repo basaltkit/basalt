@@ -86,6 +86,14 @@ A hook named exactly (no wildcard) in `include` is always recorded, which is how
 
 Enrichment comes from the active context: `ctx().user.id` → `actorId`, `ctx().tenant.id` → `tenantId`, `ctx().requestId` → `requestId`.
 
+A request without a user (a service API key, a job) records no actor by default. To attribute such callers, pass an `actor` resolver in your own id format — it replaces the default `ctx().user?.id` for every entry, and a manual `record()` whose `scope.actorId` differs from it throws:
+
+```ts
+auditPlugin({
+  actor: (c) => c?.user?.id ?? (c?.apiKey?.serviceId ? `svc:${c.apiKey.serviceId}` : undefined),
+})
+```
+
 ### Automatic domain event capture
 
 If the container has an `EventBus` (`@basaltkit/events` registered), the plugin subscribes to `**` and records events that match the patterns. By default it records **everything**; you can narrow or disable it:

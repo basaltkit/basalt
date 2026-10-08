@@ -153,8 +153,9 @@ O 3.0 guarda o [ciclo de vida das API keys](#apikeys-rotation): `AuthApiKey`
 `previousHashExpiresAt`, `rotatedAt`, `allowedIps` e `meta`. O Prisma seleciona
 todas as colunas de um modelo, por isso, assim que o cliente é regenerado,
 **todas** as consultas de API keys falham até a base de dados ter as colunas.
-Copia o modelo de `@basaltkit/auth-prisma/schema.prisma` (ou corre
-`basalt prisma:sync`), corre `prisma generate` e depois
+Copia o modelo de `@basaltkit/auth-prisma/schema.prisma` à mão (o
+`basalt prisma:sync` só acrescenta modelos em falta, nunca campos novos a um
+modelo existente), corre `prisma generate` e depois
 `prisma migrate dev --name add_api_key_lifecycle` — com schema-per-tenant, em
 todos os schemas de tenant (`basalt tenant:migrate`). Todas as colunas novas são
 anuláveis ou têm por padrão uma lista vazia, por isso as chaves existentes
