@@ -5,6 +5,7 @@ import {
   httpFetcher,
   sendWith,
   errorDetailsParitySuite,
+  idempotencyParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
@@ -45,6 +46,7 @@ uploadParitySuite('express', driver)
 rawBodyParitySuite('express', driver)
 rateLimitKeyParitySuite('express', driver)
 errorDetailsParitySuite('express', driver)
+idempotencyParitySuite('express', driver)
 streamParitySuite('express', driver)
 corsPreflightParitySuite('express', driver)
 wireParitySuite('express', driver)

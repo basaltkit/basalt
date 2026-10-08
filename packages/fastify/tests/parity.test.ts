@@ -8,6 +8,7 @@ import {
   httpFetcher,
   sendWith,
   errorDetailsParitySuite,
+  idempotencyParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
@@ -45,6 +46,7 @@ uploadParitySuite('fastify', driver)
 rawBodyParitySuite('fastify', driver)
 rateLimitKeyParitySuite('fastify', driver)
 errorDetailsParitySuite('fastify', driver)
+idempotencyParitySuite('fastify', driver)
 streamParitySuite('fastify', driver)
 corsPreflightParitySuite('fastify', driver)
 wireParitySuite('fastify', driver)

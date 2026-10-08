@@ -554,7 +554,7 @@ most from being shared across instances:
 | Usage metering | `MemoryUsageStore` | `RedisUsageStore` — atomic `consume()` via Lua |
 | Webhook idempotency | `MemoryWebhookStore` | `RedisWebhookStore` — `SET NX EX` across restarts |
 | Rate limiting | `MemoryRateLimitStore` | `RedisRateLimitStore` (`@basaltkit/http`) — one atomic counter shared across instances |
-| Request idempotency | `MemoryIdempotencyStore` | `RedisIdempotencyStore` (`@basaltkit/fastify`) — replays a cached response across instances |
+| Request idempotency | `MemoryIdempotencyStore` | `RedisIdempotencyStore` (`@basaltkit/http`, any adapter) — replays a cached response across instances |
 | Queues | in-memory driver | RabbitMQ / Kafka / SQS driver packages |
 | Search | `MemorySearchDriver` | `MeilisearchDriver` (built in), `@basaltkit/search-postgres`, `@basaltkit/search-elasticsearch` |
 | Storage | local disk | S3 / GCS / Azure driver packages |
