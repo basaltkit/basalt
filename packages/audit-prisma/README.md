@@ -40,6 +40,8 @@ model AuditEntry {
   seq       Int?
   prevHash  String?
   hash      String?
+  redaction  String?  // attested erasure (audit.redact): the erased set
+  redactedBy String?  // ... and the id of the audit:redacted entry
   @@index([tenantId, at])
   @@unique([chain, seq])
   @@map("audit_entries")
@@ -75,6 +77,21 @@ is reported in `unverified` and fails the verification. `verifyAll()` also
 visits tenants that have rows but no chain, found with one `SELECT DISTINCT
 "tenantId"` (`auditTenants()`) rather than a read of the whole trail. With schema-per-tenant, migrate every tenant schema (`basalt tenant:migrate`).
 
+### Upgrading from 2.0
+
+2.1 adds two nullable columns for [erasing personal data](#erasing-personal-data):
+`redaction` and `redactedBy`. Nothing writes them until you call
+`audit.redact()`, so an app that does not erase needs no migration. Before the
+first erasure, migrate — on PostgreSQL:
+
+```sql
+ALTER TABLE "audit_entries"
+  ADD COLUMN "redaction" TEXT,
+  ADD COLUMN "redactedBy" TEXT;
+```
+
+On MySQL, `schema.mysql.prisma` makes them `TEXT` and `VARCHAR(191)`.
+
 ### Harden the table
 
 The `@@unique([chain, seq])` constraint is what stops two replicas from forking
@@ -88,12 +105,77 @@ REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
 GRANT SELECT, INSERT ON "audit_entries" TO app_role;
 ```
 
-Run migrations with a separate owner role. See the
+Run migrations with a separate owner role. This stays the default even if you
+erase personal data — erasure goes through a dedicated role, below. See the
 [`@basaltkit/audit` README](https://github.com/basaltkit/basalt/tree/main/packages/audit#verifiable-trail-hash-chain)
 for keyed chains (HMAC), anchoring the head, and `basalt audit:verify`.
 A `hash` (and `prevHash`) is self-describing — `v2:hmac-sha256:<keyId>:<hex>` —
 and holds up to 144 characters, which the `VARCHAR(191)` of
 `schema.mysql.prisma` fits; no migration is needed for key ids or key rotation.
+
+## Erasing personal data
+
+`audit.redact()` / `audit.systemRedact()` (see the
+[`@basaltkit/audit` README](https://github.com/basaltkit/basalt/tree/main/packages/audit#erasing-personal-data-auditredact))
+work on this store: `get()` reads one row (`findUnique`, or `findMany` on a
+client without it), and `redact()` runs in one interactive `$transaction` — an
+`updateMany` that only matches while the row's `hash` and `redactedBy` are
+unchanged (`AuditRedactionConflictError` otherwise), then the attestation's
+`create` under `@@unique([chain, seq])`. Any error rolls both back. A client
+without `$transaction` / `updateMany` is refused with
+`AuditRedactionRefusedError` (`'unsupported-store'`) before anything is written.
+
+### The eraser role
+
+Keep the blanket `REVOKE UPDATE` above for the application role. Erasure is a
+rare, privileged operation: give it its own role, which may update **only** the
+columns erasure writes:
+
+```sql
+CREATE ROLE audit_eraser LOGIN PASSWORD '…';
+GRANT SELECT, INSERT ON "audit_entries" TO audit_eraser;
+GRANT UPDATE ("payload", "ip", "userAgent", "redaction", "redactedBy") ON "audit_entries" TO audit_eraser;
+```
+
+On MySQL: `GRANT SELECT, INSERT, UPDATE (payload, ip, userAgent, redaction, redactedBy) ON audit_entries TO 'audit_eraser'@'%'`.
+
+Give the data-subject-request job — and only it — a second client connected as
+that role, and an `Audit` configured like the application's:
+
+```ts
+const eraserAudit = new Audit(prismaAuditStore(eraserPrisma).store, undefined, () => true, sameAuditOptions)
+await eraserAudit.systemRedact(entryId, { payload: ['customer.email'], reasonRef: 'DSR-2026-114' })
+```
+
+The two instances can race safely: the store's optimistic check and the
+`(chain, seq)` constraint resolve it.
+
+Optionally, a trigger makes even the eraser role unable to touch anything but an
+attested redaction (header and hash columns unchanged, `redactedBy` set). It
+guards against bugs and a stolen eraser credential alike, but not against the
+table owner:
+
+<!-- audit-prisma:postgres-guard -->
+```sql
+CREATE OR REPLACE FUNCTION audit_entries_redaction_only() RETURNS trigger AS $$
+BEGIN
+  IF NEW."id" IS DISTINCT FROM OLD."id" OR NEW."source" IS DISTINCT FROM OLD."source"
+     OR NEW."event" IS DISTINCT FROM OLD."event" OR NEW."actorId" IS DISTINCT FROM OLD."actorId"
+     OR NEW."tenantId" IS DISTINCT FROM OLD."tenantId" OR NEW."requestId" IS DISTINCT FROM OLD."requestId"
+     OR NEW."at" IS DISTINCT FROM OLD."at" OR NEW."chain" IS DISTINCT FROM OLD."chain"
+     OR NEW."seq" IS DISTINCT FROM OLD."seq" OR NEW."prevHash" IS DISTINCT FROM OLD."prevHash"
+     OR NEW."hash" IS DISTINCT FROM OLD."hash" OR NEW."redactedBy" IS NULL THEN
+    RAISE EXCEPTION 'audit_entries: only an attested redaction may update a row';
+  END IF;
+  RETURN NEW;
+END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER audit_entries_redaction_only
+  BEFORE UPDATE ON "audit_entries"
+  FOR EACH ROW EXECUTE FUNCTION audit_entries_redaction_only();
+```
+<!-- /audit-prisma:postgres-guard -->
 
 ## 2. Wire the store
 
@@ -138,8 +220,8 @@ See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.de
 
 ## Notes
 
-- **Append-only by contract** — no update or delete (enforce it in the database too — see above).
-- `PrismaAuditClient` also accepts an optional `count` delegate (every generated client has it), used by `verify()` to count unchained legacy rows.
+- **Append-only by contract** — no delete, and no update but the attested erasure (enforce it in the database too — see above).
+- `PrismaAuditClient` also accepts optional `count`, `findUnique` and `updateMany` delegates and `$transaction` (every generated client has them): `count` lets `verify()` count unchained legacy rows; the others back `get()` / `redact()`.
 - Queries return **newest-first** with the same filters as the in-memory store
   (`tenantId`, `actorId`, `since`, `chainedOnly`, and the event wildcard `auth:**`). `limit`
   always counts only pattern-matched rows.

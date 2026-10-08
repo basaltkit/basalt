@@ -36,6 +36,10 @@ model AuditEntry {
   seq       Int?
   prevHash  String?
   hash      String?
+  // Attested erasure (Audit.redact): the erased set (stable JSON) and the id of
+  // the `audit:redacted` entry that vouches for it. NULL until a row is redacted.
+  redaction  String?  @db.Text
+  redactedBy String?
 
   @@index([tenantId, at])
   // One writer per (chain, seq): concurrent replicas cannot fork a chain.

@@ -260,8 +260,17 @@ model AuditEntry {
   tenantId  String?
   requestId String?
   at        DateTime
+  ip        String?
+  userAgent String?
+  chain     String?
+  seq       Int?
+  prevHash  String?
+  hash      String?
+  redaction  String?
+  redactedBy String?
 
   @@index([tenantId, at])
+  @@unique([chain, seq])
   @@map("audit_entries")
 }
 
