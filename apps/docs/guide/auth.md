@@ -146,6 +146,22 @@ apiKeysPlugin({ store: s.apiKeys, users: s.users })
 webauthnPlugin({ config, verifier, credentials: s.passkeys }) // needs the AuthPasskey model
 ```
 
+::: warning Upgrading to auth-prisma 3.0
+3.0 stores the [API key lifecycle](#apikeys-rotation): `AuthApiKey`
+(`auth_api_keys`) gains `serviceId`, `previousHash` (unique),
+`previousHashExpiresAt`, `rotatedAt`, `allowedIps` and `meta`. Prisma selects
+every column of a model, so once the client is regenerated **every** API-key
+query fails until the database has the columns. Copy the model from
+`@basaltkit/auth-prisma/schema.prisma` (or run `basalt prisma:sync`), run
+`prisma generate`, then `prisma migrate dev --name add_api_key_lifecycle` — with
+schema-per-tenant, in every tenant schema (`basalt tenant:migrate`). All the new
+columns are nullable or default to an empty list, so existing keys keep working.
+Until the columns exist, API-key requests fail with
+`AUTH_API_KEY_SCHEMA_OUTDATED`, whose message carries the exact PostgreSQL and
+MySQL `ALTER TABLE` statements (also exported as
+`API_KEY_LIFECYCLE_MIGRATION_SQL`). `auth-sqlite` adds the columns itself.
+:::
+
 ::: warning Upgrading to auth-prisma 2.0
 2.0 adds two models: `AuthAccountLink` (`auth_account_links`, the OAuth/OIDC
 account links) and `AuthPasskey` (`auth_passkeys`, WebAuthn credentials). Copy
@@ -1046,7 +1062,10 @@ and `POST /auth/verify` (token valid 24h).
 `x-api-key`) and enforces `meta.scopes` on routes. Keys are created by a
 logged-in user through `apiKeyRoutes()` and stored only as a SHA-256 hash plus a
 short display prefix — the plaintext is shown exactly once. Keys may optionally
-expire; expired keys are rejected by the server and omitted from listings.
+expire; expired keys are rejected by the server and omitted from listings
+(unless asked for). A key can be [rotated](#apikeys-rotation), act as a
+[service](#apikeys-service) instead of a user, and be restricted to an
+[IP allowlist](#apikeys-allowlist).
 
 The plugin's guard enforces three boundaries on every key-authenticated request
 (`403` in each case, with an `auth:apikey_rejected` event):
@@ -1064,7 +1083,7 @@ The plugin's guard enforces three boundaries on every key-authenticated request
   looser behaviour.
 - **Session-only routes.** A route with `meta.apiKey: false` refuses every key
   (`AUTH_APIKEY_NOT_ALLOWED`). `apiKeyRoutes()` and `mfaRoutes()` declare it, so
-  a key can never mint, list or revoke keys, or change MFA.
+  a key can never mint, list, change, rotate or revoke keys, or change MFA.
 - **Listings follow the same rules.** The plugin registers a side-effect-free
   visibility check, so the [MCP `tools/list`](/guide/mcp#what-tools-list-shows)
   hides `meta.scopes` tools the key does not cover and `meta.apiKey: false` tools
@@ -1082,13 +1101,13 @@ const app = await createApp({
     fastifyPlugin({
       routes: [
         ...authRoutes(),
-        ...apiKeyRoutes(), // POST /apikeys, GET /apikeys, DELETE /apikeys/:id (login session only)
+        ...apiKeyRoutes(), // POST/GET /apikeys, PATCH/DELETE /apikeys/:id, POST /apikeys/:id/rotate (login session only)
         route({
           method: 'GET',
           url: '/reports',
           meta: { scopes: ['reports:read'] }, // needs a key with this scope (or `*`)
           async handler() {
-            const key = ctx().apiKey // { id, scopes, tenantId?, userId? }
+            const key = ctx().apiKey // { id, scopes, tenantId?, userId?, serviceId? }
             return { ok: true, keyId: key?.id }
           },
         }),
@@ -1147,6 +1166,156 @@ what listings show — never the secret) and the client `ip`, so you can alert o
 throttle per caller. Because any anonymous client can trigger it, this hook is
 **not** recorded by `auditPlugin`'s defaults — see
 [which hooks are audited](/guide/persistence#which-hooks-are-audited).
+
+### Rotating a key {#apikeys-rotation}
+
+`rotate()` replaces a key's secret and keeps its id, so its owner, scopes,
+`serviceId` and audit trail stay the same. The new plaintext is returned once:
+
+```ts
+const { record, key } = await apiKeys.rotate(id)                          // old secret dies now
+const next = await apiKeys.rotate(id, { graceMs: 24 * 60 * 60 * 1000 })   // old secret works one more day
+```
+
+- **`graceMs` defaults to 0**, so the answer to a leaked key is a plain
+  `rotate()`. A grace window gives a fleet time to pick up the new secret. It is
+  capped at `MAX_API_KEY_ROTATION_GRACE_MS` (30 days, the same cap as
+  [webhook secret rotation](/guide/webhooks)) and never outlives the key's own
+  `expiresAt` or a revocation.
+- **At most two secrets are live.** Rotating again during a grace window drops
+  the oldest secret at once.
+- **Compare-and-set.** Two concurrent rotations cannot both return a key: the
+  loser gets `409 AUTH_APIKEY_CONFLICT` (re-read the key and retry).
+- A revoked or expired key cannot be rotated back to life
+  (`404 AUTH_APIKEY_NOT_FOUND`): issue a new one.
+
+Over HTTP, `POST /apikeys/:id/rotate` with an optional `{ "graceMs": 3600000 }`
+answers `201` with the key info plus the new `key`. The event is
+`auth:apikey_rotated` (with `graceUntil` when a window was given), which
+`auditPlugin`'s defaults record.
+
+### Expiry and expired keys {#apikeys-expiry}
+
+`update()` changes `name`, `scopes`, `expiresAt`, `allowedIps` and `meta` in a
+single store write, after validating all of it; `null` clears a field.
+`setExpiry(id, expiresAt | null)` is the shorthand for expiry:
+
+```ts
+await apiKeys.setExpiry(id, Date.now() + 90 * 24 * 60 * 60 * 1000) // a future integer (ms)
+await apiKeys.setExpiry(id, null)                                    // never expires
+await apiKeys.update(id, { name: 'CI (prod)', scopes: ['reports:read'] })
+```
+
+**An expired key is dead**, like a revoked one: `rotate`, `update` and
+`setExpiry` all answer `404 AUTH_APIKEY_NOT_FOUND`, so nobody can renew a key
+past its expiry policy. Issue a new one instead. A past or non-integer
+`expiresAt` is `400 AUTH_APIKEY_EXPIRATION_INVALID`; to kill a key now, revoke it.
+
+`list()` omits expired keys unless you ask for them with
+`apiKeys.list({ userId, includeExpired: true })` or
+`GET /apikeys?includeExpired=true`, so a UI can show "expired yesterday".
+Revoked keys are never listed. `list()` re-applies the `tenantId` / `userId` /
+`serviceId` filter itself, so a custom store that ignores one never widens the
+result. Over HTTP, `PATCH /apikeys/:id` takes
+`{ name?, scopes?, expiresAt?: number | null, allowedIps?: string[] | null, meta?: object | null }`
+and emits `auth:apikey_updated` with the changed field **names** (never their values).
+
+### Service keys {#apikeys-service}
+
+A key acts either as a user (`userId`) or as a non-human service
+(`serviceId`), never both (`400 AUTH_APIKEY_INPUT_INVALID`). The `serviceId` is
+your own opaque id (1–128 printable characters, no spaces) and is immutable:
+
+```ts
+const { key } = await apiKeys.issue({
+  name: 'ERP sync',
+  serviceId: 'erp-sync',
+  tenantId: tenant.id,
+  scopes: ['invoices:read'],
+})
+
+route({
+  method: 'GET',
+  url: '/invoices',
+  meta: { scopes: ['invoices:read'] },
+  async handler() {
+    ctx().apiKey?.serviceId // 'erp-sync'; ctx().user is never set for a service key
+  },
+})
+```
+
+A service key is authorized by its **scopes and tenant binding only**. It never
+sets `ctx().user`, so routes gated by `meta.auth` or `meta.can` refuse it (they
+fail closed); give service routes a `meta.scopes`. Its id survives rotation,
+and `list({ serviceId })` finds the keys of one service. `apiKeyRoutes()` never
+creates or manages service keys (they have no user, so they are outside every
+caller's scope): mint them with `ApiKeys` behind your own permission check.
+
+By default the audit trail records no actor for a service key. To attribute
+one, give `auditPlugin` an [`actor` resolver](/guide/persistence#attributing-non-human-callers)
+that returns your own id format:
+
+```ts
+auditPlugin({
+  store,
+  actor: (c) => c?.user?.id ?? (c?.apiKey?.serviceId ? `svc:${c.apiKey.serviceId}` : undefined),
+})
+```
+
+### IP allowlist and metadata {#apikeys-allowlist}
+
+`allowedIps` restricts where a key works: IPv4/IPv6 addresses or CIDR
+networks, at most 32 (`API_KEY_ALLOWED_IPS_MAX`). Absent or empty means any
+address.
+
+```ts
+await apiKeys.issue({ name: 'Office', scopes: ['*'], allowedIps: ['203.0.113.0/24', '2001:db8::/64'] })
+await apiKeys.update(id, { allowedIps: null }) // lift the restriction
+```
+
+- Entries are validated and canonicalised at issue and update. IPv6 is
+  lower-cased and `::ffff:a.b.c.d` becomes IPv4. A CIDR that is not a network
+  address (`10.0.0.5/8`, usually a typo) or that carries a zone id is refused
+  (`400 AUTH_APIKEY_INPUT_INVALID`).
+- The request IP is normalised the same way (brackets and `%zone` stripped,
+  IPv4-mapped to IPv4), so Express's `::ffff:127.0.0.1` and Fastify's
+  `127.0.0.1` both match `127.0.0.0/8`.
+- A genuine key used from an address outside its list is **always** refused
+  with `403 AUTH_APIKEY_IP_NOT_ALLOWED`, whatever `rejectInvalid` says, and
+  emits `auth:apikey_rejected` with `reason: 'ip_not_allowed'`. Nothing is set
+  on `ctx()` and `lastUsedAt` is not touched.
+- **Fail closed:** a key with an allowlist is refused on a request without a
+  resolvable IP. The allowlist sees the IP your adapter resolved. Behind a
+  proxy, configure the [trusted proxy](/guide/adapters) (Fastify `trustProxy`,
+  Express `trust proxy`, Hono `getClientIp`), or every request appears to come
+  from the proxy. On a Hono runtime that exposes no socket address and has no
+  `getClientIp` (some edge runtimes), allowlisted keys are refused even though
+  they work on Node.
+
+`meta` is flat app metadata, such as who asked for the key, a ticket or a
+service account label. It holds at most 20 entries (`API_KEY_META_LIMITS`), with
+keys of `A-Z a-z 0-9 _ . -` up to 40 characters (never `__proto__`,
+`constructor` or `prototype`) and string values up to 500 characters. It is
+returned in listings, and it is never used for authorization nor copied into hooks.
+
+### Writing your own `ApiKeyStore` {#apikeys-custom-store}
+
+The memory store, `auth-sqlite` and `auth-prisma` implement everything above.
+A custom `ApiKeyStore` keeps working unchanged; the lifecycle calls (`rotate`,
+`update`, `setExpiry`, and the `PATCH` and rotate routes) then answer
+`501 AUTH_APIKEY_STORE_UNSUPPORTED`. To support them, implement the optional
+`update(id, patch, { ifHash? })`:
+
+- apply the patch atomically, and only to a **non-revoked** record (`null`
+  clears a field; ignore identity fields);
+- when `ifHash` is given, apply it only if the record's current `hash` still
+  equals it;
+- return the updated record, or `null` when nothing matched.
+
+Implementing `update` also commits the store to rotation grace: `findByHash`
+must return the record whose `previousHash` matches, too. `ApiKeys` re-checks
+the grace window, revocation, expiry and the list filters itself, so a store is
+never trusted with them.
 
 ## Brute-force lockout
 
@@ -1255,7 +1424,7 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | --- | --- | --- | --- |
 | `store` | `ApiKeyStore` | in-memory | Where key hashes live — durable in production, or keys die on redeploy |
 | `header` | `string` | `'x-api-key'` | Alternative header to `Authorization: Bearer mk_…`. Two **different** keys (one in each) → `400 AUTH_APIKEY_AMBIGUOUS`, never one silently winning |
-| `users` | `UserSource` | — | When set, a key carrying a `userId` also populates `ctx().user`, so scope-guarded routes can read the acting user |
+| `users` | `UserSource` | — | When set, a key carrying a `userId` also populates `ctx().user`, so scope-guarded routes can read the acting user. A service key (`serviceId`) never does |
 | `allowTenantlessKeys` | `boolean` | `false` | Let keys issued without a tenant act on tenant-scoped requests (trusted platform keys only) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Let a key without `*` reach `meta.auth`/`can`/`teamRole`/`audience` routes that declare no `meta.scopes` |
 | `rejectInvalid` | `boolean` | `false` | A presented key that does not verify → `401 AUTH_APIKEY_INVALID` + `WWW-Authenticate: Bearer error="invalid_token"`, instead of continuing as anonymous |
@@ -1323,8 +1492,13 @@ users in.
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | A key used outside the tenant it was issued in (or a tenantless key on a tenant-scoped request) |
 | `ApiKeyNotAllowedError` | `AUTH_APIKEY_NOT_ALLOWED` | 403 | A key used on a session-only route (`meta.apiKey: false`: key management, MFA) |
 | `ApiKeyAmbiguousError` | `AUTH_APIKEY_AMBIGUOUS` | 400 | Two different keys on one request (`Authorization: Bearer mk_…` and the key header) |
-| `ApiKeyForbiddenError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `DELETE /apikeys/:id` for a key outside the caller's tenant/user scope — a 404, never a 403, so key ids can't be probed |
-| `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: the database's `auth_api_keys` is missing a column (usually `expiresAt`, added in 1.5.0) — migrate it, in every tenant schema with schema-per-tenant |
+| `ApiKeyNotFoundError` | `AUTH_APIKEY_NOT_FOUND` | 404 | `PATCH`, `DELETE` or `POST …/rotate` on `/apikeys/:id` for a key outside the caller's tenant/user scope — a 404, never a 403, so key ids can't be probed. Also `rotate` / `update` / `setExpiry` on an unknown, revoked or expired key |
+| `ApiKeyExpirationError` | `AUTH_APIKEY_EXPIRATION_INVALID` | 400 | `expiresAt` in the past or not an integer (ms), at issue or update |
+| `ApiKeyInputError` | `AUTH_APIKEY_INPUT_INVALID` | 400 | A bad `allowedIps` entry, `meta` over its limits, `userId` together with `serviceId`, a malformed `serviceId`, or `graceMs` outside 0–30 days |
+| `ApiKeyConflictError` | `AUTH_APIKEY_CONFLICT` | 409 | A concurrent rotation or revocation changed the key first — re-read and retry |
+| `ApiKeyStoreUnsupportedError` | `AUTH_APIKEY_STORE_UNSUPPORTED` | 501 | Rotate, update or set expiry on a custom `ApiKeyStore` without `update` — see [your own store](#apikeys-custom-store) |
+| `ApiKeyIpNotAllowedError` | `AUTH_APIKEY_IP_NOT_ALLOWED` | 403 | A valid key used from an address outside its `allowedIps`, or with no resolvable client IP |
+| `ApiKeySchemaOutdatedError` | `AUTH_API_KEY_SCHEMA_OUTDATED` | 500 | `@basaltkit/auth-prisma`: the database's `auth_api_keys` is missing a column (`expiresAt`, added in 1.5.0, or the lifecycle columns of 3.0.0) — migrate it, in every tenant schema with schema-per-tenant |
 | `WebAuthnChallengeError` | `WEBAUTHN_CHALLENGE_INVALID` | 400 | The passkey challenge expired or was already used (they are single-use) |
 | `WebAuthnVerificationError` | `WEBAUTHN_VERIFICATION_FAILED` | 400 | The verifier rejected the browser's response |
 | `WebAuthnSubjectMismatchError` | `WEBAUTHN_SUBJECT_MISMATCH` | 403 | `finishRegistration` got a different `userId` than the challenge was issued for, or an authentication started for a user was answered with another user's passkey |
@@ -1380,8 +1554,10 @@ users in.
 | `auth:verify_requested` · `auth:email_verified` | `{ user, token }` · `{ user }` | **Email the token** — it is never returned over HTTP |
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Email the token**; the second confirms the change |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Security notification |
-| `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Audit trail |
-| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; `prefix` is the display prefix of an invalid key, never the key. Not audited by default |
+| `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId?, serviceId? }` · `{ id }` | Audit trail |
+| `auth:apikey_rotated` | `{ id, tenantId?, userId?, serviceId?, graceUntil? }` | Audit trail — `graceUntil` is when the replaced secret stops working |
+| `auth:apikey_updated` | `{ id, tenantId?, userId?, serviceId?, changes }` | Audit trail — `changes` names the fields (`name`, `scopes`, `expiresAt`, `allowedIps`, `meta`), never their values |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alerting — `reason` is `invalid`, `ip_not_allowed`, `tenant_mismatch`, `not_allowed` or `scope`; `prefix` is the display prefix of an invalid key, never the key. Not audited by default |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
 | `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
 | `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials and account links were revoked |

@@ -404,6 +404,24 @@ actor — unless you give it one:
   rather than writing into another tenant's chain. Both values must be non-empty
   printable strings of at most 256 characters. Never forward client input into it.
 
+#### Attributing non-human callers {#attributing-non-human-callers}
+
+Inside a request the actor is `ctx().user?.id`, so a caller without a user (a
+[service API key](/guide/auth#apikeys-service), for one) records no actor. The
+`actor` option resolves it your way, in your app's own id format:
+
+```ts
+auditPlugin({
+  store,
+  actor: (c) => c?.user?.id ?? (c?.apiKey?.serviceId ? `svc:${c.apiKey.serviceId}` : undefined),
+})
+```
+
+The resolved value is the request actor everywhere, so a manual `record()` whose
+`scope.actorId` differs from it throws, exactly as it does for a user. The option
+only changes what **new** entries record; existing entries and the chain are
+untouched, and without it nothing changes.
+
 ## Tenancy — `@basaltkit/tenancy-sqlite` / `@basaltkit/tenancy-prisma`
 
 The tenant registry is the foundation of a multi-tenant app, yet `@basaltkit/tenancy`

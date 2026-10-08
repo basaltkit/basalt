@@ -85,6 +85,20 @@ Entrou no `main` depois da publicação da 1.12, tudo opt-in e sem quebras:
   de entrega, `headerPrefix` muda o nome dos headers `x-basalt-*`, e
   `signPayload()` / `verifySignature()` aceitam bytes em bruto — vê
   [Webhooks](/pt/guide/webhooks#selar-secrets-em-repouso).
+- **Ciclo de vida das API keys.** `ApiKeys.rotate()` substitui o segredo de uma
+  chave e mantém o id, com uma janela de tolerância opcional (até 30 dias) para o
+  segredo antigo; `update()` / `setExpiry()` alteram uma chave numa só escrita;
+  `list({ includeExpired })` mostra as chaves expiradas. As chaves podem agir
+  como um **serviço** (`serviceId`, só scopes, nunca `ctx().user`), ter uma
+  **allowlist de IPs** (`403 AUTH_APIKEY_IP_NOT_ALLOWED`, falha fechada) e `meta`
+  plano. `apiKeyRoutes()` acrescenta `PATCH /apikeys/:id` e
+  `POST /apikeys/:id/rotate`. `auditPlugin({ actor })` pode atribuir chamadores
+  de serviço, e as sessões MCP ligam-se agora ao id de uma chave sem utilizador.
+  *(`@basaltkit/auth` 4.2, `audit` 3.1, `mcp` 5.1, `auth-sqlite` 2.1 — migração
+  automática.)* **Uma exceção ao "não disruptivo": o `@basaltkit/auth-prisma` 3.0
+  precisa de uma migração da base de dados** (`add_api_key_lifecycle`) — vê
+  [Atualizar para o auth-prisma 3.0](/pt/guide/auth#prisma-—-basaltkit-auth-prisma)
+  e [API keys](/pt/guide/auth#apikeys-rotation).
 
 ## Destaques
 
