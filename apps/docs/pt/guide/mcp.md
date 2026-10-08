@@ -379,6 +379,7 @@ As tabelas abaixo são as opções públicas completas dos quatro pontos de entr
 | `forwardHeaders` | `string[]` | nenhum | Headers extra que uma chamada de tool herda, além de `DEFAULT_FORWARDED_HEADERS` (ex.: um header de tenant próprio); todos os outros são descartados |
 | `redactErrorDetails` | `ErrorDetailsRedactor \| false` | `redactSensitiveDetails` | Filtra os `details` públicos de um erro lançado antes de entrarem num resultado de tool (ver [O que o modelo vê](#what-the-model-sees-when-a-tool-fails)); `false` envia-os como o HTTP enviaria. Uma rota substitui-o com `meta.mcp.redactErrorDetails` |
 | `reportError` | `HttpErrorReporter \| false` | reporter de consola | Recebe cada erro que uma chamada de tool lança, `internalDetails` incluído; `false` não reporta nada |
+| `onError` | `(error, message) => void \| false` | `reportMcpInternalError` (uma linha no stderr) | Recebe um erro que escapou ao tratamento da própria tool — o cliente só recebe `INTERNAL_ERROR` / `Internal error`. Nunca no stdout, que transporta o protocolo stdio; `false` silencia-o |
 
 ### `mcpRoutes(options)`
 

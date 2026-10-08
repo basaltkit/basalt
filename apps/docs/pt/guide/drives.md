@@ -433,6 +433,13 @@ como o `lastSyncedAt`:
 | `lastFailedAt` | uma sincronização falhada (melhor esforço: omitido num abort, ou quando outra escrita alterou a linha entretanto), um `drives.check()` falhado, e o refresh que encontrou a autorização morta |
 | `lastErrorCode` | o **código** de erro dessa falha (`DRIVE_CREDENTIALS_INVALID`, `DRIVE_RATE_LIMITED`, …) — nunca uma mensagem |
 
+Os campos só são marcados quando o store de ligações declara
+`persistsHealth: true` (o store em memória declara). Um store durável escrito
+antes destes campos existirem nunca os recebe num patch — continua a funcionar,
+as suas ligações simplesmente não reportam saúde, e o `drives.check()` continua
+a devolver `{ ok, code? }` sem escrever. Acrescenta as três colunas opcionais e
+depois activa a flag ([Escrever um store durável](#escrever-um-store-duravel) mais abaixo).
+
 Deliberadamente **não** são marcados num `listItems()`/`download()` normal com
 sucesso: seguir a saúde não acrescenta nenhuma escrita ao caminho quente, nem
 um incremento de revisão que possa competir com um refresh de token. Quando
@@ -1112,6 +1119,10 @@ Uma implementação de referência do store de ligações em Prisma:
 import type { DriveConnection, DriveConnectionPatch, DriveConnectionStore } from '@basaltkit/drives'
 
 export class PrismaDriveConnectionStore implements DriveConnectionStore {
+  // Só depois de existirem as colunas lastSucceededAt / lastFailedAt / lastErrorCode:
+  // sem isto o motor nunca envia essas chaves ao update().
+  readonly persistsHealth = true
+
   constructor(private readonly db: PrismaClient) {}
 
   async create(record: DriveConnection) {
@@ -1153,7 +1164,10 @@ export class PrismaDriveConnectionStore implements DriveConnectionStore {
 compare-and-set atómico; um par ler-e-depois-`update` não o é. Guarda `scopes`,
 `account` e `watch` como colunas JSON e o `secret` como texto — já vem cifrado.
 Os campos de saúde (`lastSucceededAt`, `lastFailedAt`, `lastErrorCode`) são
-colunas opcionais que têm de ser persistidas; a suite de contrato verifica-o.
+colunas opcionais, enviadas só a um store que declare `persistsHealth: true`.
+Acrescenta as colunas (e migra) **antes** de activar a flag: o `toPatch` acima
+espalha todas as chaves, e o Prisma recusa uma chave sem coluna (`Unknown
+argument`). Com a flag activa, a suite de contrato verifica que são persistidas.
 
 Depois valida a implementação com a mesma suite de conformidade que os stores
 em memória passam. Vem no subpath só para testes `@basaltkit/drives/testing` e
