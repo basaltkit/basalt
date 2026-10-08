@@ -1011,6 +1011,9 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
+      '@basaltkit/http':
+        specifier: workspace:^
+        version: link:../http
     devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:^

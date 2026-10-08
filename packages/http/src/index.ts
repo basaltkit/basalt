@@ -159,6 +159,15 @@ export {
 } from './route-visibility.js'
 export { redactUrl, REDACTED } from './redact-url.js'
 export {
+  describeRoutes,
+  findUnguardedRoutes,
+  type RouteTableEntry,
+  type RouteRow,
+  type RouteRequirement,
+  type FindUnguardedOptions,
+  type UnguardedRoute,
+} from './route-table.js'
+export {
   reportHttpError,
   httpErrorReporter,
   consoleSink,

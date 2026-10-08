@@ -708,6 +708,39 @@ fetch('/api/pay', { method: 'POST', headers: { authorization: `Bearer ${jwt}` } 
 setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 ```
 
+## Revisão de segurança das rotas — `basalt routes`
+
+`basalt routes` lista cada rota com as guardas que **declara**: `auth`, `can`,
+`rateLimit`, `tenant` e as outras chaves guardadas (`mfa`, `teamRole`, `scopes`,
+`subscribed`, `feature`). Duas formas de transformar isso num controlo:
+
+```bash
+# CI: termina com 1 quando uma rota não declara nem auth nem can (opt-outs explícitos passam)
+pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
+pnpm basalt routes --json > routes.json   # a tabela inteira, para rever ou comparar
+```
+
+```ts
+// Um teste vitest que arranca a app (sem listen) e verifica as mesmas linhas
+import { ensureMetadata } from '@basaltkit/core'
+import { describeRoutes, findUnguardedRoutes } from '@basaltkit/http'
+
+it('todas as rotas declaram auth + can', async () => {
+  const app = await buildApp().boot()
+  const rows = describeRoutes(ensureMetadata(app.container).get('http:routes'))
+  expect(findUnguardedRoutes(rows, { require: ['auth', 'can'] })).toEqual([])
+  await app.shutdown()
+})
+```
+
+`auth: false` (ou `public: true`) é um opt-out intencional e satisfaz os dois
+requisitos; `can: false` satisfaz `can`. **Só verifica o meta das rotas**: um
+rate limit global, tenancy por URL (`tenancyPlugin({ required: { except } })`),
+hooks ou middleware da app, e as rotas de borda que os plugins montam sozinhos
+(`healthPlugin`, `metricsPlugin`, `openapiPlugin`) não aparecem — um resultado
+limpo significa "todas as rotas pedem protecção"; é a verificação no arranque
+descrita acima que garante que há um guard a aplicá-la.
+
 ## Apanha regressões automaticamente — `ai:doctor`
 
 O `basalt ai:doctor` verifica estaticamente o teu projeto contra os invariantes

@@ -23,7 +23,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@basaltkit/core": "workspace:^"
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/http": "workspace:^"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:^",

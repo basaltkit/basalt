@@ -691,6 +691,39 @@ fetch('/api/pay', { method: 'POST', headers: { authorization: `Bearer ${jwt}` } 
 setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 ```
 
+## Route security review — `basalt routes`
+
+`basalt routes` lists every route with the guards it **declares**: `auth`, `can`,
+`rateLimit`, `tenant` and the other guarded keys (`mfa`, `teamRole`, `scopes`,
+`subscribed`, `feature`). Two ways to turn that into a gate:
+
+```bash
+# CI: exit 1 when a route declares neither auth nor can (explicit opt-outs pass)
+pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
+pnpm basalt routes --json > routes.json   # the whole table, for review or diffing
+```
+
+```ts
+// A vitest that boots the app (no listen) and asserts on the same rows
+import { ensureMetadata } from '@basaltkit/core'
+import { describeRoutes, findUnguardedRoutes } from '@basaltkit/http'
+
+it('every route declares auth + can', async () => {
+  const app = await buildApp().boot()
+  const rows = describeRoutes(ensureMetadata(app.container).get('http:routes'))
+  expect(findUnguardedRoutes(rows, { require: ['auth', 'can'] })).toEqual([])
+  await app.shutdown()
+})
+```
+
+`auth: false` (or `public: true`) is an intentional opt-out and satisfies both
+requirements; `can: false` satisfies `can`. **This checks route meta only**: an
+app-wide rate limit, URL-based tenancy (`tenancyPlugin({ required: { except } })`),
+app hooks or middleware, and the edge routes plugins mount themselves (`healthPlugin`,
+`metricsPlugin`, `openapiPlugin`) are invisible to it — a clean run means "every
+route asks for protection", while the boot check above guarantees a guard is there
+to enforce it.
+
 ## Catch regressions automatically — `ai:doctor`
 
 `basalt ai:doctor` statically checks your project against the framework's
