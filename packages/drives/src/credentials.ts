@@ -2,7 +2,7 @@ import { DriveCredentialsInvalidError } from './errors.js'
 import type { GuardedFetch } from './fetch.js'
 import type { DriveAuthorization, DriveTokens } from './provider.js'
 import type { DriveSecretBox } from './secret-box.js'
-import type { DriveConnection, DriveConnectionStore } from './store.js'
+import { healthPatch, type DriveConnection, type DriveConnectionStore } from './store.js'
 
 /**
  * Credential lifecycle: unseal, decide whether the access token is still good,
@@ -307,7 +307,10 @@ export class DriveCredentials {
         connection.id,
         // Health stamped in the same compare-and-set write: no extra write and
         // no extra revision bump on the refresh path.
-        { status: 'invalid', lastFailedAt: this.now(), lastErrorCode: 'DRIVE_CREDENTIALS_INVALID' },
+        {
+          status: 'invalid',
+          ...healthPatch(this.options.store, { lastFailedAt: this.now(), lastErrorCode: 'DRIVE_CREDENTIALS_INVALID' }),
+        },
         latest.revision,
       )
       if (updated) {

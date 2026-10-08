@@ -266,7 +266,7 @@ object.
 | `list(filter?)` | The tenant's connections, credentials stripped |
 | `get(id, tenantId?)` | One connection, or `DRIVE_CONNECTION_NOT_FOUND` |
 | `disconnect(id, options?)` | Emits `drive:disconnecting` (a throw vetoes unless `force: true`), revokes at the provider (default), unsubscribes, deletes the row, emits `drive:disconnected` |
-| `check(id, options?)` | Health probe: lists one item at the root, stamps `lastSucceededAt` or `lastFailedAt` + `lastErrorCode`, returns `{ ok, code? }` without throwing for a provider failure |
+| `check(id, options?)` | Health probe: lists one item at the root, stamps `lastSucceededAt` or `lastFailedAt` + `lastErrorCode` when the store declares `persistsHealth: true`, returns `{ ok, code? }` without throwing for a provider failure |
 | `forgetImports(id, tenantId?)` | Drops the dedup ledger so a later sync re-imports |
 | `rotateSecrets({ tenantIds? })` | Re-seals stored credentials under the active key (compare-and-set per row); returns `{ resealed, skippedConflicts, remainingOnOldKeys }`. Drop the old key only when `remainingOnOldKeys === 0` |
 | `listItems(id, options?)` | One page of a folder. `recursive: true` lists the subtree, `false` direct children; omitted, the adapter's default (Microsoft refuses `true` with `DRIVE_UNSUPPORTED`). The returned `cursor` is MAC-bound to the tenant, connection and listing mode; a cursor this engine did not issue is refused with `DRIVE_ACCESS_DENIED` |

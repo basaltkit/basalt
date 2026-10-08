@@ -418,6 +418,13 @@ Every connection view carries three health fields, all epoch milliseconds like
 | `lastFailedAt` | a failed sync (best effort: skipped for an abort, or when another write changed the row meanwhile), a failed `drives.check()`, and the refresh that found the grant dead |
 | `lastErrorCode` | the error **code** of that failure (`DRIVE_CREDENTIALS_INVALID`, `DRIVE_RATE_LIMITED`, …) — never a message |
 
+The fields are stamped only when the connection store declares
+`persistsHealth: true` (the in-memory store does). A durable store written
+before these fields existed never receives them in a patch — it keeps working,
+its connections simply report no health, and `drives.check()` still returns
+`{ ok, code? }` without writing. Add the three nullable columns, then set the
+flag ([Writing a durable store](#writing-a-durable-store) below).
+
 They are deliberately **not** stamped on an ordinary successful
 `listItems()`/`download()`: health tracking adds no write, and no revision bump
 that could race a token refresh, to the hot path. When you need a fresh answer,
@@ -1073,6 +1080,10 @@ A Prisma reference implementation of the connection store:
 import type { DriveConnection, DriveConnectionPatch, DriveConnectionStore } from '@basaltkit/drives'
 
 export class PrismaDriveConnectionStore implements DriveConnectionStore {
+  // Only once the lastSucceededAt / lastFailedAt / lastErrorCode columns exist:
+  // without it the engine never sends those keys to update().
+  readonly persistsHealth = true
+
   constructor(private readonly db: PrismaClient) {}
 
   async create(record: DriveConnection) {
@@ -1114,8 +1125,11 @@ export class PrismaDriveConnectionStore implements DriveConnectionStore {
 single atomic compare-and-set; a read-then-`update` pair is not. Store
 `scopes`, `account` and `watch` as JSON columns and the `secret` as text — it is
 already sealed. The health fields (`lastSucceededAt`, `lastFailedAt`,
-`lastErrorCode`) are nullable columns that must round-trip; the contract suite
-checks them.
+`lastErrorCode`) are nullable columns, sent only to a store that declares
+`persistsHealth: true`. Add the columns (and migrate) **before** setting the
+flag: `toPatch` above spreads every key, and Prisma rejects a key with no column
+(`Unknown argument`). With the flag set, the contract suite checks that they
+round-trip.
 
 Then check the implementation against the same conformance suite the in-memory
 stores pass. It ships on the test-only `@basaltkit/drives/testing` subpath and
