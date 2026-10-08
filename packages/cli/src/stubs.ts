@@ -29,6 +29,9 @@ export const DOCKERFILE = `# syntax=docker/dockerfile:1
 # Configuration comes from the environment (nothing loads .env here, and
 # .dockerignore keeps it out of the image). Database migrations are NOT run
 # by the image: apply them before rolling out (\`pnpm db:deploy\` in CI).
+#
+# Installs with pnpm from pnpm-lock.yaml. An app on npm/yarn/bun replaces the
+# pnpm install / exec / run / prune lines with its own package manager's.
 ARG NODE_VERSION=22
 ARG PNPM_VERSION=11
 
