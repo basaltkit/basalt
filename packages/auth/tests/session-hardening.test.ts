@@ -118,6 +118,23 @@ describe('sessionIdleTtl (BK-076)', () => {
     expect(touches).toEqual([])
   })
 
+  it('rollout: enabling it measures an untouched session from its creation (documented one-time sign-out)', async () => {
+    freezeClock(T0)
+    const store = new MemorySessionStore()
+    const users = new MemoryUserSource()
+    const before = new Auth({ users, secret, hasher: fastHasher, sessions: store })
+    const user = await before.register('rollout@acme.test', 'password123')
+    const old = await before.createSession(user.id)
+    vi.setSystemTime(T0 + 2 * 60 * MIN)
+    expect(await before.sessionUser(old.id)).not.toBeNull() // in use, but nothing touches it
+
+    const after = new Auth({ users, secret, hasher: fastHasher, sessions: store, sessionIdleTtl: '30m' })
+    const fresh = await after.createSession(user.id)
+    vi.setSystemTime(T0 + 2 * 60 * MIN + MIN)
+    expect(await after.sessionUser(old.id)).toBeNull()
+    expect(await after.sessionUser(fresh.id)).not.toBeNull()
+  })
+
   it('refuses a store without touch, and a non-positive window, at construction and at plugin registration', async () => {
     const legacy: SessionStore = {
       create: async (userId, ttl) => ({ id: 'x', userId, expiresAt: Date.now() + ttl }),

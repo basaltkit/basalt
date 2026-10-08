@@ -452,8 +452,13 @@ setting by that much. The store must implement `touch`: the memory store and
 `@basaltkit/auth-sqlite` do; `@basaltkit/auth-prisma` does with
 `prismaAuthStores(prisma, { trackSessionActivity: true })` after you add the
 `lastSeenAt` column. A store without it makes `authPlugin` fail at boot rather
-than silently not enforcing the timeout. Sessions created before the option was
-turned on start their idle clock on their next use.
+than silently not enforcing the timeout.
+
+When you turn the option on, a session row with no `lastSeenAt` (written before
+the store recorded it) starts its idle clock on its next use. A row that does
+carry one is measured from it — and while the option was off nothing touched
+it, so it still holds the creation time. Expect sessions older than
+`sessionIdleTtl` to be signed out once, on their next request, at rollout.
 
 A cookie named `__Host-…` or `__Secure-…` must follow the browser's prefix
 rules, or the browser silently drops it and every login "succeeds" without a
