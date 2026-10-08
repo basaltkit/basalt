@@ -66,6 +66,9 @@ function envelopeProblem(envelope: InboundEnvelope, oversize: number | undefined
     if (value.length > MAX_ADDRESS_LENGTH) return `envelope ${field} is longer than ${MAX_ADDRESS_LENGTH} characters`
     // eslint-disable-next-line no-control-regex
     if (/[\r\n\u0000,]/.test(value)) return `envelope ${field} must be a single address`
+    // HTTP header values are not reliably UTF-8 across stacks, so v1 carries
+    // printable ASCII only (SMTPUTF8 local parts are not supported).
+    if (/[^\x20-\x7e]/.test(value)) return `envelope ${field} must be printable ASCII`
   }
   if (envelope.to.trim() === '' || !envelope.to.includes('@')) return 'envelope to must be an address'
   if (oversize !== undefined) {

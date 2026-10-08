@@ -138,6 +138,8 @@ describe('signedDriver', () => {
     ['a comma list', { 'x-basalt-mail-to': 'a@in.example.com,b@in.example.com' }],
     ['NUL', { 'x-basalt-mail-to': 'a\u0000@in.example.com' }],
     ['no @', { 'x-basalt-mail-to': 'nobody' }],
+    ['a non-ASCII address', { 'x-basalt-mail-to': 'joão@in.example.com' }],
+    ['a tab', { 'x-basalt-mail-from': 'a\t@example.org' }],
     ['no recipient', { 'x-basalt-mail-to': undefined }],
     ['a 321-character address', { 'x-basalt-mail-to': `${'a'.repeat(310)}@example.com` }],
     ['a repeated header', { 'x-basalt-mail-to': ['a@in.example.com', 'b@in.example.com'] }],
