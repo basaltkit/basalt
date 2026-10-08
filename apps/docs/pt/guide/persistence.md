@@ -345,11 +345,16 @@ tem o SQL). Depois, faz a base de dados impor também o append-only:
 REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
 ```
 
+Mantém isto mesmo que apagues dados pessoais: o apagamento passa por um papel
+de apagamento dedicado, nunca pelo papel da aplicação (ver [abaixo](#erasing-personal-data-audit-redact)).
+
 #### Dados pessoais por evento (`fieldPolicies`)
 
 O trilho é append-only e a cadeia de hashes cobre cada payload, por isso um
-valor que lá chegue não pode ser apagado depois sem partir o `verify`. Mantém os
-dados pessoais de fora no momento da escrita. Os redactors trabalham sobre nomes
+valor que lá chegue só pode ser apagado depois através de um
+[`audit.redact()`](#erasing-personal-data-audit-redact) atestado, e um hash
+antigo pode ainda confirmar um palpite sobre ele. Mantém os dados pessoais de
+fora no momento da escrita. Os redactors trabalham sobre nomes
 de chaves e formatos de valores (`password`, uma string com cara de email); não
 sabem que as `notes` de um evento são dados de saúde. Declara isso por evento:
 
@@ -379,9 +384,91 @@ auditPlugin({
   vazio ou de protótipo (`__proto__`, `constructor`), ou um caminho com mais de 8
   segmentos lança um `TypeError`.
 
-Apagar um valor que já está na cadeia (um pedido de "direito ao apagamento")
-ainda não é suportado; exige um formato de cadeia que faça hash de um digest do
-payload, planeado como um RFC à parte.
+#### Apagar dados pessoais (`audit.redact`) {#erasing-personal-data-audit-redact}
+
+Para um valor que já está guardado (um pedido de "direito ao apagamento" do
+titular, ou um campo que nunca devia ter sido registado), `audit.redact()` apaga
+os campos escolhidos de uma entrada **no próprio registo** e mantém o `verify` a
+passar:
+
+```ts
+const { changed, residual } = await audit.redact(entryId, {
+  payload: ['customer.email', 'items[].note'], // caminhos de fieldPolicies, ou 'all'
+  ip: true,                                     // e/ou userAgent: true
+  reasonRef: 'DSR-2026-114',                    // referência opaca, não pessoal
+})
+```
+
+- Cada valor que um caminho alcança passa a `'[erased]'`; `ip`/`userAgent` são
+  removidos. Caminhos ausentes são ignorados, e um pedido que não muda nada não
+  escreve nada (`changed: false`). Apagar de novo junta-se ao marcador
+  `redaction` da entrada.
+- A entrada mantém o `hash` original, por isso as ligações da cadeia mantêm-se.
+  Na mesma transação é acrescentada à cadeia da própria entrada uma
+  **atestação `audit:redacted`**. Esta liga o `id`, o `seq` e o `hash` da entrada,
+  os campos apagados, um digest do novo estado e o `reasonRef`, e nunca os dados
+  apagados. O `verify` verifica a entrada apagada através dela, e qualquer
+  discrepância falha como `redaction-mismatch`. Também verifica cada atestação
+  no sentido inverso: a sua entrada tem de continuar apagada nesse estado ou num
+  posterior. Repor uma linha apagada a partir de um backup, ou voltar a uma
+  redação mais antiga, também falha. O resultado conta as entradas
+  apagadas em `redacted`.
+- O **âmbito** segue o `trail()`. Dentro de um contexto de tenant só as entradas
+  desse tenant são alcançáveis, e qualquer outro id dá `AuditEntryNotFoundError`
+  (404). Fora de um, passa `tenantId`. Uma app multi-tenant que precise de
+  alcançar qualquer tenant chama `audit.systemRedact()`, que é só para
+  ferramentas de confiança. Nunca lhe passes input do cliente.
+- **Recusado** (`AuditRedactionRefusedError`, nada é escrito): `'unverified'`
+  quando a entrada não verifica tal como está (para nunca abençoar conteúdo
+  adulterado), `'residual'` (ver abaixo), e `'unsupported-store'` quando o store
+  não tem `get()`/`redact()`. Os dois stores incluídos têm-nos.
+- `record('audit:redacted', …)` lança um erro. O prefixo de eventos `audit:` está
+  reservado a eventos do framework, por isso não o uses nos teus.
+
+**Resíduo.** Depois do apagamento, o hash antigo da entrada pode ainda confirmar
+um palpite sobre o valor apagado:
+
+| Hash da entrada | `residual` | Quem pode confirmar um palpite |
+|---|---|---|
+| nenhum (fora da cadeia), v3 | `'none'` | ninguém |
+| v2 HMAC (cadeia com chave) | `'keyed'` | quem tem a chave de integridade |
+| v2 SHA-256 (cadeia sem chave) | `'public'` | qualquer pessoa que leia a linha |
+
+`request.residual` é o máximo que aceitas, e o valor por omissão é `'keyed'`.
+Apagar de uma cadeia sem chave tem de ser assumido com `residual: 'public'`. Para
+as entradas escritas daqui em diante, define `integrity: { mode: 'hash-chain',
+key, erasable: true }`. Escreve hashes v3 com um nonce aleatório por entrada que
+o apagamento destrói, por isso o resíduo delas é `'none'`. Precisa da coluna
+`nonce` (o SQLite migra-a; no Prisma, acrescenta-a ao modelo) e está desligado
+por omissão.
+
+**O papel de apagamento.** O papel da aplicação mantém o `REVOKE UPDATE` (acima).
+O apagamento passa por um segundo papel da base de dados que só pode atualizar as
+colunas apagáveis, com um segundo store e um segundo `Audit` com as mesmas
+opções, entregue apenas ao job de apagamento. O [README do `@basaltkit/audit-prisma`](https://github.com/basaltkit/basalt/tree/main/packages/audit-prisma#the-eraser-role)
+tem o `GRANT` e um trigger de guarda opcional. Um pedido do titular passa então a
+ser lógica da app, autorizada por ti:
+
+```ts
+import { AUDIT_REDACTED_EVENT } from '@basaltkit/audit'
+
+// eraserAudit = new Audit(eraserStore, …mesmas opções que o Audit da app)
+for (const entry of await eraserAudit.systemTrail({ actorId: subjectId, limit: 1000 })) {
+  if (entry.event === AUDIT_REDACTED_EVENT) continue
+  await eraserAudit.systemRedact(entry.id, { payload: 'all', ip: true, userAgent: true, reasonRef: dsrId })
+}
+```
+
+**O que não é apagado.** Os ids opacos (`actorId`, `tenantId`, `requestId`), o
+nome do evento e a hora ficam. Depois de apagares o utilizador no teu store de
+auth, o `actorId` já não identifica ninguém. As cópias noutros sítios são tuas
+para apagar: o outbox de eventos, os feeds de atividade, os índices de pesquisa,
+os logs e os **backups**. Guarda o registo de pedidos fora da base de dados e
+volta a aplicá-lo depois de um restauro. Num deploy gradual, atualiza todas as
+réplicas que correm o `verify` antes do primeiro apagamento ou antes de ligar o
+`erasable`. Um `@basaltkit/audit` mais antigo reporta essas entradas como
+`hash-mismatch`. Não há rota HTTP, comando de CLI nem ferramenta MCP para
+apagar. Quem pode apagar é decisão da app.
 
 #### Registar fora de um pedido (jobs, scripts)
 

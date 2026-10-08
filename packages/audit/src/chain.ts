@@ -21,6 +21,10 @@ import type { AuditEntry } from './index.js'
  * - **v1** (legacy) — a bare 64-hex SHA-256 / HMAC-SHA256 over
  *   `prevHash + "\n" + canonicalAuditEntry(entry)`, naming neither. Still
  *   verified: under every key the verifier holds. See {@link computeAuditHash}.
+ * - **v3** (opt-in, `integrity.erasable`) — v2 plus a per-entry random `nonce`
+ *   in the canonical form: `v3:sha256:<hex>` / `v3:hmac-sha256:<keyId>:<hex>`.
+ *   Erasing the entry destroys the nonce, so its stored hash can no longer be
+ *   used to confirm a guess of the erased value. See {@link computeAuditHashV3}.
  */
 
 /** `prevHash` of the first entry of every chain. */
@@ -97,11 +101,12 @@ export const AUDIT_KEY_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
  *
  * Without `scheme` this is the v1 form. With it, the v2 form: the same fields
  * plus `alg` and `kid`, so the digest authenticates which algorithm and which
- * key produced it — relabelling an entry's key id breaks its hash.
+ * key produced it — relabelling an entry's key id breaks its hash. With
+ * `scheme.version: 3`, the v3 form: v2 plus the entry's `nonce`.
  */
 export function canonicalAuditEntry(
   entry: AuditEntry,
-  scheme?: { alg: AuditHashAlgorithm; keyId?: string | undefined },
+  scheme?: { alg: AuditHashAlgorithm; keyId?: string | undefined; version?: 2 | 3 },
 ): string {
   const fields = {
     id: entry.id,
@@ -116,9 +121,9 @@ export function canonicalAuditEntry(
     userAgent: entry.userAgent ?? null,
     payload: persistedPayload(entry.payload),
   }
-  return stableJson(
-    scheme === undefined ? { v: 1, ...fields } : { v: 2, alg: scheme.alg, kid: scheme.keyId ?? null, ...fields },
-  )
+  if (scheme === undefined) return stableJson({ v: 1, ...fields })
+  const v2 = { alg: scheme.alg, kid: scheme.keyId ?? null, ...fields }
+  return stableJson(scheme.version === 3 ? { v: 3, ...v2, nonce: entry.nonce ?? null } : { v: 2, ...v2 })
 }
 
 /** An integrity key: a secret of at least 128 bits. */
@@ -184,24 +189,39 @@ export function computeAuditHashV2(entry: AuditEntry, signer?: AuditSigningKey):
   return signer === undefined ? `v2:sha256:${digest}` : `v2:hmac-sha256:${signer.id}:${digest}`
 }
 
+/**
+ * The v3 hash of `entry` — {@link computeAuditHashV2} over the v3 canonical
+ * form, which adds the entry's `nonce`: `v3:sha256:<hex>` or
+ * `v3:hmac-sha256:<signer.id>:<hex>`. What `Audit` writes with
+ * `integrity.erasable`. Once an erasure clears the nonce, nobody can recompute
+ * the hash — so it no longer confirms a guess of an erased value.
+ */
+export function computeAuditHashV3(entry: AuditEntry, signer?: AuditSigningKey): string {
+  if (signer !== undefined) assertAuditKeyId(signer.id)
+  const alg: AuditHashAlgorithm = signer === undefined ? 'sha256' : 'hmac-sha256'
+  const material = `${entry.prevHash ?? AUDIT_CHAIN_GENESIS}\n${canonicalAuditEntry(entry, { alg, keyId: signer?.id, version: 3 })}`
+  const digest = (signer === undefined ? createHash('sha256') : createHmac('sha256', signer.key)).update(material).digest('hex')
+  return signer === undefined ? `v3:sha256:${digest}` : `v3:hmac-sha256:${signer.id}:${digest}`
+}
+
 /** A stored `hash`, split into its parts. */
 export type ParsedAuditHash =
   | { version: 1; digest: string }
-  | { version: 2; alg: 'sha256'; digest: string }
-  | { version: 2; alg: 'hmac-sha256'; keyId: string; digest: string }
+  | { version: 2 | 3; alg: 'sha256'; digest: string }
+  | { version: 2 | 3; alg: 'hmac-sha256'; keyId: string; digest: string }
 
-/** Parses a stored `hash`; `undefined` for anything that is neither format. */
+/** Parses a stored `hash`; `undefined` for anything that is none of the formats. */
 export function parseAuditHash(hash: unknown): ParsedAuditHash | undefined {
   if (typeof hash !== 'string') return undefined
   if (/^[0-9a-f]{64}$/.test(hash)) return { version: 1, digest: hash }
-  const plain = /^v2:sha256:([0-9a-f]{64})$/.exec(hash)
-  if (plain) return { version: 2, alg: 'sha256', digest: plain[1]! }
-  const keyed = /^v2:hmac-sha256:([A-Za-z0-9._-]{1,64}):([0-9a-f]{64})$/.exec(hash)
-  if (keyed) return { version: 2, alg: 'hmac-sha256', keyId: keyed[1]!, digest: keyed[2]! }
+  const plain = /^v([23]):sha256:([0-9a-f]{64})$/.exec(hash)
+  if (plain) return { version: plain[1] === '3' ? 3 : 2, alg: 'sha256', digest: plain[2]! }
+  const keyed = /^v([23]):hmac-sha256:([A-Za-z0-9._-]{1,64}):([0-9a-f]{64})$/.exec(hash)
+  if (keyed) return { version: keyed[1] === '3' ? 3 : 2, alg: 'hmac-sha256', keyId: keyed[2]!, digest: keyed[3]! }
   return undefined
 }
 
-/** Whether `value` is a well-formed stored hash (v1 or v2). */
+/** Whether `value` is a well-formed stored hash (v1, v2 or v3). */
 export function isAuditHash(value: unknown): value is string {
   return parseAuditHash(value) !== undefined
 }
@@ -217,9 +237,9 @@ function sameHash(a: string, b: string): boolean {
  * Checks an entry's stored `hash` against the keys a verifier holds, keyed by
  * id (empty = an unkeyed chain):
  *
- * - v2 `hmac-sha256` — recomputed under the key its id names;
+ * - v2 / v3 `hmac-sha256` — recomputed under the key its id names;
  *   `'unknown-key'` when the verifier does not hold that id.
- * - v2 `sha256` — accepted only by an unkeyed verifier. A keyed verifier
+ * - v2 / v3 `sha256` — accepted only by an unkeyed verifier. A keyed verifier
  *   refuses it as `'hash-mismatch'`: anyone can compute a plain SHA-256, so
  *   accepting one would let a writer without the key extend or rewrite the chain.
  * - v1 — an unkeyed verifier recomputes the SHA-256; a keyed one accepts the
@@ -237,10 +257,105 @@ export function checkAuditHash(
     for (const key of keys.values()) if (sameHash(computeAuditHash(entry, key), stored)) return 'ok'
     return 'hash-mismatch'
   }
+  const compute = parsed.version === 3 ? computeAuditHashV3 : computeAuditHashV2
   if (parsed.alg === 'sha256') {
-    return keys.size === 0 && sameHash(computeAuditHashV2(entry), stored) ? 'ok' : 'hash-mismatch'
+    return keys.size === 0 && sameHash(compute(entry), stored) ? 'ok' : 'hash-mismatch'
   }
   const key = keys.get(parsed.keyId)
   if (key === undefined) return 'unknown-key'
-  return sameHash(computeAuditHashV2(entry, { id: parsed.keyId, key }), stored) ? 'ok' : 'hash-mismatch'
+  return sameHash(compute(entry, { id: parsed.keyId, key }), stored) ? 'ok' : 'hash-mismatch'
+}
+
+// ── Erasure (RFC 0003) ────────────────────────────────────────────────────────
+
+/** The value an erased payload field (or a whole payload erased with `'all'`) holds. */
+export const AUDIT_ERASED = '[erased]'
+
+/**
+ * Event of the attestation `Audit.redact()` appends: it binds the redacted
+ * entry's id, `seq` and original `hash`, the erased fields and the digest of
+ * the entry's new state. Reserved — `record()` refuses it, and the whole
+ * `audit:` prefix is reserved for framework events.
+ */
+export const AUDIT_REDACTED_EVENT = 'audit:redacted'
+
+/**
+ * Digest of a redacted entry's state (`sha256:<hex>`): every header field, the
+ * payload as persisted, and the erased set of its redaction marker (its
+ * `attestationId` excluded). The `audit:redacted` attestation records it, and
+ * `verify()` recomputes it — so editing anything on a redacted row, header
+ * fields included, is detected although its original `hash` no longer covers
+ * the content.
+ */
+export function auditRedactionState(entry: AuditEntry): string {
+  const marker = entry.redaction
+  const state = {
+    r: 1,
+    id: entry.id,
+    seq: entry.seq ?? null,
+    tenantId: entry.tenantId ?? null,
+    at: entry.at,
+    source: entry.source,
+    event: entry.event,
+    actorId: entry.actorId ?? null,
+    requestId: entry.requestId ?? null,
+    ip: entry.ip ?? null,
+    userAgent: entry.userAgent ?? null,
+    payload: persistedPayload(entry.payload),
+    erased: marker === undefined ? null : { payload: marker.payload, ip: marker.ip, userAgent: marker.userAgent },
+  }
+  return `sha256:${createHash('sha256').update(stableJson(state)).digest('hex')}`
+}
+
+/**
+ * Stable JSON (object keys sorted at every level). Stores use it to persist
+ * the redaction marker, so the same marker always serializes the same way.
+ */
+export function auditStableJson(value: unknown): string {
+  return stableJson(value)
+}
+
+/**
+ * Thrown by a store's `redact()` when the entry no longer has the `hash` /
+ * `redactedBy` the redaction was computed from — a concurrent redaction (on
+ * another replica) got there first. Nothing was written; `Audit` re-reads the
+ * entry and merges into the newer state.
+ */
+export class AuditRedactionConflictError extends BasaltError {
+  constructor(entryId: string, options?: ErrorOptions) {
+    super('AUDIT_REDACTION_CONFLICT', `Audit entry ${entryId} was changed by a concurrent redaction.`, options)
+  }
+}
+
+/**
+ * The entry to redact does not exist — or belongs to another tenant than the
+ * scope of the call (the same error, so the API is no existence oracle).
+ */
+export class AuditEntryNotFoundError extends BasaltError {
+  readonly status = 404
+  constructor() {
+    super('AUDIT_ENTRY_NOT_FOUND', 'Audit entry not found.')
+  }
+}
+
+/** Why `Audit.redact()` refused — see {@link AuditRedactionRefusedError}. */
+export type AuditRedactionRefusal = 'unverified' | 'residual' | 'unsupported-store'
+
+/**
+ * `Audit.redact()` refused to erase, and wrote nothing:
+ *
+ * - `'unverified'` — the entry does not verify as it is now (tampered, signed
+ *   under a key this `Audit` does not hold, an attestation itself, or a chained
+ *   entry on an `Audit` without integrity). Redacting it would bless tampered
+ *   content with a fresh attestation.
+ * - `'residual'` — after erasure the entry's hash would still confirm a guess
+ *   of the erased value to more people than `request.residual` accepts.
+ * - `'unsupported-store'` — the store cannot redact (no `get` / `redact`).
+ */
+export class AuditRedactionRefusedError extends BasaltError {
+  readonly reason: AuditRedactionRefusal
+  constructor(reason: AuditRedactionRefusal, message: string) {
+    super('AUDIT_REDACTION_REFUSED', message, { details: { reason } })
+    this.reason = reason
+  }
 }
