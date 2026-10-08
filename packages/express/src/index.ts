@@ -244,30 +244,47 @@ function attachRawBody(request: HttpRequest, req: Request): void {
 }
 
 /**
- * The sink for the disposers enrichers return: they run once, when the Node
- * response has finished or closed — whichever comes first, and also for a
- * streamed body, an event stream, an error response or a client that went
- * away. Listeners are attached only when a disposer shows up, so routes
- * without one pay nothing.
+ * The sink for the disposers enrichers return. They run exactly once, when
+ * BOTH the route pipeline (`runRoute`) has settled AND the Node response has
+ * finished or closed — so a client that aborts while the handler is still
+ * running never pulls a resource (a leased database client) out from under
+ * it, and an event stream or a streamed body that outlives the
+ * handler is still covered until its last byte or its abort. Listeners are
+ * attached only when a disposer shows up, so routes without one pay nothing.
  */
-function disposeOnResponseEnd(
+function disposeAfterResponse(
   res: Response,
   onError: (error: unknown) => void,
-): (disposer: RequestDisposer) => void {
+): { onDispose: (disposer: RequestDisposer) => void; settled: () => void } {
   let disposers: RequestDisposers | undefined
-  return (disposer) => {
-    if (!disposers) {
-      disposers = new RequestDisposers(onError)
-      const run = (): void => void disposers!.run()
-      // Already over (the client left while an enricher was awaiting): 'close'
-      // has fired and will not again — run now, and add() runs late arrivals.
-      if (res.writableFinished || res.destroyed) run()
-      else {
-        res.once('finish', run)
-        res.once('close', run)
+  let handlerSettled = false
+  let responseEnded = false
+  const runIfDone = (): void => {
+    if (disposers && handlerSettled && responseEnded) void disposers.run()
+  }
+  return {
+    onDispose(disposer) {
+      if (!disposers) {
+        disposers = new RequestDisposers(onError)
+        // Already over (the client left while an enricher was awaiting):
+        // 'close' has fired and will not again.
+        if (res.writableFinished || res.destroyed) responseEnded = true
+        else {
+          const ended = (): void => {
+            responseEnded = true
+            runIfDone()
+          }
+          res.once('finish', ended)
+          res.once('close', ended)
+        }
       }
-    }
-    disposers.add(disposer)
+      // After run(), add() disposes a late arrival at once.
+      disposers.add(disposer)
+    },
+    settled() {
+      handlerSettled = true
+      runIfDone()
+    },
   }
 }
 
@@ -280,7 +297,7 @@ function basaltHandler(
 ) {
   return async (req: Request, res: Response): Promise<void> => {
     const reply = new ExpressReply(res)
-    const onDispose = disposeOnResponseEnd(res, (error) =>
+    const disposal = disposeAfterResponse(res, (error) =>
       reportSafely(onError, {
         error,
         status: 500,
@@ -299,8 +316,8 @@ function basaltHandler(
         ...(container ? { container } : {}),
         enrichers,
         guards,
-        onDispose,
-      })
+        onDispose: disposal.onDispose,
+      }).finally(disposal.settled)
       if (isSseResponse(result)) {
         res.writeHead(200, SSE_HEADERS)
         // Headers go out now, not with the first event: a stream that starts
