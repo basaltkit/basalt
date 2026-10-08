@@ -255,6 +255,10 @@ enroll/activate/status. `meta: { mfa: true }` requires MFA on one route
 `['pwd', 'mfa']`, `['fed', …]` for social login), refreshes keep it, the
 session cookie carries it HMAC-signed, and the request exposes it as
 `ctx().amr`. API-key requests are not subject to the policy. Off by default.
+Listing surfaces (MCP `tools/list`) hide `meta.mfa: true` routes — and, under
+`requireMfa: true`, every authenticated route — from a session without `'mfa'` in
+`ctx().amr`, through a side-effect-free `http:route-visibility` check. A
+`requireMfa` function is never called for a listing.
 
 **Encrypting secrets at rest.** `authPlugin({ mfaEncryption: { keys: [{ id, key }] } })`
 (or the shorthand `mfaEncryptionKey`) stores TOTP secrets as `bka2.<keyId>.…`
@@ -524,6 +528,10 @@ without `*` is refused on `meta.auth`/`can`/`teamRole`/`audience` routes that do
 declare `meta.scopes`; opt out with `allowNarrowKeysOnUnscopedRoutes: true`) and
 **session-only routes** (`meta.apiKey: false` refuses every key with
 `403 AUTH_APIKEY_NOT_ALLOWED` — `apiKeyRoutes()` and `mfaRoutes()` declare it).
+The plugin also registers a side-effect-free `http:route-visibility` check, so
+listing surfaces (MCP `tools/list`) hide `meta.scopes` routes from callers whose key
+does not hold every scope, and `meta.apiKey: false` routes from key holders. A
+listing emits no `auth:apikey_rejected`.
 
 ### Brute-force lockout (LoginThrottle)
 

@@ -324,10 +324,15 @@ limit and writes no audit or denial record:
 | the route has `meta.auth` and the caller has no `ctx().user` | built in, when a guard claims `auth` (e.g. `authPlugin`); under an edge-auth waiver nothing is hidden |
 | the route has `meta.teamRole` and the caller does not hold that role (or a higher one) in the current tenant | `teamsPlugin`'s visibility check (one membership read) |
 | the route has `meta.can` and the caller lacks one of its permissions (RBAC, current scope; `superAdmin` short-circuits) | `permissionsPlugin`'s visibility check (grant reads — no `permission:denied` record) |
+| the route has `meta.scopes` and the caller's API key does not hold every scope (or there is no key); or the route has `meta.apiKey: false` and the caller holds a key | `apiKeysPlugin`'s visibility check (reads `ctx().apiKey` only — no `auth:apikey_rejected` hook) |
+| the route has `meta.mfa: true` (or `authPlugin({ requireMfa: true })` applies) and the signed-in caller's session has no second factor (`ctx().amr` lacks `'mfa'`) | `authPlugin`'s visibility check (reads `ctx()` only — no MFA-store lookup) |
 | any key whose plugin registers a check in `http:route-visibility` | that plugin's `RouteVisibilityCheck` |
 
-**Not filtered** — listed, and refused on call: `mfa`, `scopes`,
-`subscribed`/`feature`, audiences, rate limits and anything a handler checks
+**Not filtered** — listed, and refused on call: `subscribed`/`feature` (deciding
+them needs an entitlement read per tool, and an entitlement check may meter
+usage — not something a listing may do), an MFA requirement from a
+`requireMfa` *function* policy (app code with no purity contract, so it is never
+called on a listing), audiences, rate limits and anything a handler checks
 itself (e.g. a policy it runs on a loaded resource with `authorize(user,
 permission, resource)` — there is no resource at listing time), and a
 [`meta.can` resource requirement](/guide/authorization#policies-in-the-guard-resource-requirements)
@@ -415,7 +420,7 @@ Protocol errors use JSON-RPC codes:
 | `415` from `POST /mcp` | The body was not sent as `Content-Type: application/json` | Send `application/json` (MCP clients do) |
 | `400` `Mcp-Session-Id header required` | A message other than `initialize` arrived without a session | Send `initialize` first and echo its `Mcp-Session-Id` (spec clients do), or `mcpRoutes({ sessions: false })` |
 | `404` `Session not found` | The session expired, was evicted or ended, the process restarted, another replica answered — or a different caller presented it | Re-initialize; behind replicas use sticky sessions |
-| A tool is missing from `tools/list` but callable | The caller statically fails its `meta.auth`/`meta.teamRole`/`meta.can` (listing hides it) | Expected; `mcpRoutes({ listVisibleOnly: false })` lists everything |
+| A tool is missing from `tools/list` but callable | The caller statically fails its `meta.auth`/`meta.teamRole`/`meta.can`/`meta.scopes`/`meta.mfa` (listing hides it) | Expected; `mcpRoutes({ listVisibleOnly: false })` lists everything |
 | Over stdio, `-32000` `Too many requests in flight` | More than `maxConcurrentRequests` calls at once on the connection | Wait for answers, or raise `serveMcpStdio(app, { maxConcurrentRequests })` |
 | A tool reads a header that arrives `undefined` | The header is not in the forwarded-header allowlist | `mcpPlugin({ forwardHeaders: ['x-my-header'] })` |
 | Claude Desktop shows a broken/dead server | Something printed to stdout — it is the JSON-RPC channel | `logLevel: 'silent'`, remove `console.log`; see the stdio checklist above |

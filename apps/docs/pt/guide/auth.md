@@ -587,6 +587,13 @@ não estão sujeitos à política; criar uma chave exige uma sessão com MFA sob
 ela. Independentemente da política, `meta: { auth: true, mfa: true }` exige
 MFA numa única rota (step-up para uma ação sensível). Desligado por omissão.
 
+As listagens seguem a mesma regra: o [`tools/list` do MCP](/pt/guide/mcp#what-tools-list-shows)
+esconde as rotas com `meta.mfa: true` (e, com `requireMfa: true`, todas as rotas
+autenticadas não isentas) a uma sessão sem `mfa` no `ctx().amr`. Essa
+verificação só lê o `ctx()`. Uma `requireMfa` **função** nunca é chamada numa
+listagem, por isso com uma política em função as rotas continuam listadas e o
+guard decide na chamada.
+
 ::: tip Escrever o teu próprio `MfaStore`
 Implementa os opcionais `consumeTotpStep(userId, step)` e
 `consumeRecoveryCode(userId, hash)` como atualizações condicionais que devolvem se
@@ -960,6 +967,11 @@ O guard do plugin impõe três fronteiras em cada pedido autenticado por chave
 - **Rotas só de sessão.** Uma rota com `meta.apiKey: false` recusa qualquer chave
   (`AUTH_APIKEY_NOT_ALLOWED`). `apiKeyRoutes()` e `mfaRoutes()` declaram-no, por isso
   uma chave nunca pode criar, listar ou revogar chaves, nem alterar o MFA.
+- **As listagens seguem as mesmas regras.** O plugin regista uma verificação de
+  visibilidade sem efeitos secundários, por isso o
+  [`tools/list` do MCP](/pt/guide/mcp#what-tools-list-shows) esconde as tools com
+  `meta.scopes` que a chave não cobre e as tools com `meta.apiKey: false` a quem
+  tem uma chave — sem emitir `auth:apikey_rejected`.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'
