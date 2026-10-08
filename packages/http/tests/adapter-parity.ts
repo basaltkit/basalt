@@ -1468,13 +1468,19 @@ export function routeTableParitySuite(adapter: string, driver: ParityDriver): vo
  * must run it exactly once — after a buffered reply, an error, a fully read
  * stream, an event stream the client closed, a download the client abandoned,
  * and when a later enricher rejects the request — and never while the body is
- * still being sent.
+ * still being sent, nor while the handler is still running after the client
+ * went away.
  */
 export function disposerParitySuite(adapter: string, driver: ParityDriver): void {
   describe(`${adapter}: request disposer parity (BK-077)`, () => {
     const disposed: string[] = []
     const sources: { big?: CountingSource } = {}
     let streamDone = false
+    // The slow handler: started, released by the test, and what it saw.
+    const slow: { started: boolean; release?: () => void; aliveAfterAbort?: boolean; finished: boolean } = {
+      started: false,
+      finished: false,
+    }
 
     const disposing = definePlugin({
       name: 'test:disposing',
@@ -1533,6 +1539,19 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
         url: '/events',
         handler: () => sse((events) => new Promise<void>((resolve) => events.onClose(resolve))),
       }),
+      route({
+        method: 'GET',
+        url: '/slow',
+        async handler() {
+          slow.started = true
+          await new Promise<void>((resolve) => (slow.release = resolve))
+          // Still using its resource after the client went away: the
+          // disposer must not have run yet.
+          slow.aliveAfterAbort = !disposed.includes('GET /slow')
+          slow.finished = true
+          return { ok: true }
+        },
+      }),
     ]
 
     let send: Send
@@ -1540,6 +1559,10 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
       disposed.length = 0
       streamDone = false
       delete sources.big
+      slow.started = false
+      slow.finished = false
+      delete slow.release
+      delete slow.aliveAfterAbort
       send = await driver.boot(routes, [disposing])
     }
     afterEach(() => driver.close())
@@ -1584,6 +1607,23 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
       expect(disposed).toEqual([])
       controller.abort()
       expect(await settled()).toEqual(['GET /big'])
+    })
+
+    it('runs once, only after the handler settled, when the client aborts mid-handler', async () => {
+      await boot()
+      const controller = new AbortController()
+      const pending = send.raw({ method: 'GET', url: '/slow', signal: controller.signal }).catch(() => undefined)
+      await until(() => slow.started, 'the handler to start')
+      controller.abort()
+      // Long enough for the server to see the connection close. (Not awaiting
+      // `pending`: an in-process driver only settles once the handler has.)
+      await settle(100)
+      expect(disposed).toEqual([])
+      slow.release!()
+      await pending
+      expect(await settled()).toEqual(['GET /slow'])
+      expect(slow.finished).toBe(true)
+      expect(slow.aliveAfterAbort).toBe(true)
     })
 
     it('runs once, only when the client closes an event stream', async () => {
