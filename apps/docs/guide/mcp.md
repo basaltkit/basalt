@@ -137,6 +137,11 @@ handler for the same filter.
 schemas, merged into one flat object with the right `required` fields — so the
 client knows exactly what to send.
 
+**Argument shape.** `arguments` must be a JSON object (or omitted). An array,
+string, number or `null` is refused with JSON-RPC `-32602` before the route runs,
+so a malformed call never reaches your handler and never echoes an internal
+exception (such as a `TypeError`) back to the client.
+
 **Argument coercion.** MCP clients and LLMs frequently send numbers and booleans
 as *strings* (`"7"`, `"true"`). Before validation the bridge coerces each
 argument to the scalar type its Zod field declares, so a `z.number()` field
@@ -398,6 +403,8 @@ Protocol errors use JSON-RPC codes:
 | Boot throws `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) | A route declares `meta.auth`/`meta.can`/`meta.teamRole` and no plugin enforces it | Register `authPlugin` / `permissionsPlugin` / `teamsPlugin` — see [Security](/guide/security) |
 | `isError: true` with an `UNAUTHORIZED`/`FORBIDDEN` body | The tool's route is guarded and the call carried no (or bad) credentials | Send `Authorization`/tenant headers with `POST /mcp`, or `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Tool name not registered — route missing `meta.mcp`, excluded by `filter`, or renamed | Check `tools/list`; remember overrides via `meta.mcp.name` |
+| JSON-RPC `-32602` ``tools/call `arguments` must be an object`` | The client sent `arguments` as an array, string, number or `null` | Send an object of named arguments matching the tool's input schema |
+| JSON-RPC `-32603` `Internal error` | Something threw outside a tool result (tool failures themselves come back as `isError`) | The text is deliberately generic; check the server logs for the cause |
 | JSON-RPC `-32601` `Method not found` | The client called an MCP method the server doesn't implement | Only `initialize`, `ping`, `tools/list`, `tools/call` (plus resources/prompts when registered) exist |
 | A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp` too (per caller ip) | Raise the route's budget, or pass a `key` to `securityPlugin({ rateLimit })` |
 | `403` `MCP_ORIGIN_FORBIDDEN` from `POST /mcp` | A browser sent a cross-origin request | Add the page's origin to `mcpRoutes({ allowedOrigins })` |

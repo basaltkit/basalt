@@ -141,7 +141,11 @@ vez de um `plan` já pronto (planeia internamente primeiro).</small>
 Uma falha de ferramenta **nunca** é um erro de protocolo: argumentos inválidos, um
 provider em falta, uma escrita recusada e um cancelamento voltam todos como um
 resultado normal com `isError: true` e a razão em `content` — para que o agente a
-possa ler e adaptar-se. Só JSON-RPC malformado produz um código de erro real.
+possa ler e adaptar-se. Só JSON-RPC malformado produz um código de erro real —
+incluindo um `arguments` que não é um objeto JSON (`-32602`). Uma exceção
+inesperada torna-se `-32603` com o texto genérico `Internal error`; o bin
+`basalt-ai-mcp` escreve a causa real no stderr (quem usa a API programática
+recebe-a pelo `onError`).
 
 ### `basalt_analyze`
 
@@ -414,6 +418,7 @@ streams de stdio.
 | `createProvider` | `() => AIProvider` | construído a partir do `env` | Injeta um modelo falso — sem rede, sem chaves |
 | `allowUnconfirmedApply` | `boolean` | `false` | Deixa o `basalt_make` aplicar sem confirmação por elicitation. Por omissão: recusa (falha fechado) |
 | `allowProduction` | `boolean` | `false` | Constrói mesmo com `NODE_ENV=production`. Por omissão: lança `AiMcpProductionError` (o `createAiMcpHttpServer` rejeita com ele) |
+| `onError` | `(error: unknown, message: JsonRpcRequest) => void` | nenhum (o bin regista no stderr) | Recebe o erro original quando uma ferramenta/recurso/prompt lança; o cliente só vê `Internal error` |
 | `input` | `NodeJS.ReadableStream` | `process.stdin` | Só stdio: ler JSON-RPC de outro stream (testes) |
 | `output` | `{ write(chunk: string): unknown }` | `process.stdout` | Só stdio: escrever JSON-RPC para outro destino (testes) |
 
@@ -474,6 +479,8 @@ malformado produz um código de erro de protocolo.
 | `Refusing to apply without confirmation — …` | `isError` | `basalt_make` | O cliente não suporta elicitation (ou transporte HTTP) e o servidor não arrancou com `--allow-unconfirmed-apply` |
 | `Cancelled.` | `isError` | qualquer ferramenta com modelo | Um `notifications/cancelled` abortou a chamada em curso |
 | `Unknown tool: <name>` | JSON-RPC `-32602` | `mcp-core` | O cliente chamou uma ferramenta que não é uma das cinco |
+| ``tools/call `arguments` must be an object`` | JSON-RPC `-32602` | `mcp-core` | O `arguments` era um array, string, número ou `null`; nenhuma ferramenta correu |
+| `Internal error` | JSON-RPC `-32603` | `mcp-core` | Uma ferramenta/recurso/prompt lançou inesperadamente; o bin imprime `basalt-ai-mcp: internal error in <method> — …` no stderr |
 | `Method not found: <method>` | JSON-RPC `-32601` | `mcp-core` | Um método MCP fora do conjunto implementado |
 | `Forbidden: host/origin not allowed` | HTTP `403` | `serveHttp` | O guard HTTP rejeitou um `Host`/`Origin` estranho antes do dispatch |
 | `Unauthorized` | HTTP `401` | `serveHttp` | O `--token` está definido e o bearer token do pedido falta ou está errado |

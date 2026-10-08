@@ -94,7 +94,7 @@ describe('McpServer — protocol surface', () => {
     const server = new McpServer({ tools: [boom] })
     const res = await server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'boom' } })
     expect(res?.error?.code).toBe(RPC_ERRORS.INTERNAL_ERROR)
-    expect(res?.error?.message).toBe('kaboom')
+    expect(res?.error?.message).toBe('Internal error')
 
     const asNotification = await server.handleMessage({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'boom' } })
     expect(asNotification).toBeNull()
