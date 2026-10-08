@@ -211,6 +211,12 @@ export function tenantClient<T extends object = Record<string, unknown>>(): T {
 /** `idleMs` of the pool prismaPlugin builds — see PrismaPluginOptions.idleMs. */
 const PLUGIN_POOL_IDLE_MS = 1_000
 
+/**
+ * How long prismaPlugin holds a client for a caller that never says when it is
+ * done (see `heldClient`): the 30s the time-based `get()` used to give.
+ */
+const LEGACY_HOLD_MS = 30_000
+
 export const DB = createToken<unknown>('db')
 export const DB_POOL = createToken<TenantClientPool<unknown>>('db:pool')
 
@@ -330,9 +336,22 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
         options.resolveClient ??
         (options.shards ? (tenantId: string) => options.shards!.for(tenantId) : undefined)
 
+      // A hand-out for callers that never say when they are done: a pipeline
+      // without disposers (`@basaltkit/http` < 2.8), a `tenancy:switched`
+      // without `via` (`@basaltkit/tenancy` < 3.2, a hand-rolled emit). The
+      // client is held for LEGACY_HOLD_MS — the 30s the pool's `get()` gave
+      // before leasing existed — then returned on its own, whatever the
+      // plugin's (1s) `idleMs`: those callers were sized for 30s.
+      const heldClient = async (tenantId: string): Promise<TClient> => {
+        const lease = await pool!.acquire(tenantId)
+        const timer = setTimeout(() => lease.release(), LEGACY_HOLD_MS)
+        ;(timer as { unref?: () => void }).unref?.()
+        return lease.client
+      }
+
       const clientFor = async (tenantId: string | undefined): Promise<unknown> => {
         if (resolveClient && tenantId !== undefined) return resolveClient(tenantId)
-        if (pool) return tenantId === undefined ? options.client : pool.get(tenantId)
+        if (pool) return tenantId === undefined ? options.client : heldClient(tenantId)
         return options.client
       }
 
@@ -359,38 +378,65 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
         for (const lease of slot.values()) lease.release()
         slot.clear()
       }
+      /**
+       * The request's lease slot, created on first use — by whichever of our
+       * enricher and the tenancy enricher's 'tenancy:switched' comes first, so
+       * registration order never matters and a request holds exactly one
+       * lease per tenant. Released by the request's own disposer sink
+       * (`ctx().onDispose`, `@basaltkit/http` >= 2.8) once the response ended,
+       * even when a later enricher or guard rejects the request.
+       */
+      const requestSlot = (
+        context: object,
+        onDispose: (disposer: () => void) => void,
+      ): Map<string, TenantClientLease<TClient>> => {
+        let slot = leases.get(context)
+        if (!slot) {
+          const own = new Map<string, TenantClientLease<TClient>>()
+          leases.set(context, own)
+          // Forgotten on release: a lease taken after the response ended
+          // (background work) opens a new slot, which a finished sink
+          // releases at once instead of leaking it.
+          onDispose(() => {
+            releaseAll(own)
+            if (leases.get(context) === own) leases.delete(context)
+          })
+          slot = own
+        }
+        return slot
+      }
+      /** The sink of a pipeline that honours disposers, if this context has one. */
+      const disposerSink = (context: object) => {
+        const sink = (context as { onDispose?: unknown }).onDispose
+        return typeof sink === 'function' ? (sink as (disposer: () => void) => void) : undefined
+      }
 
       // HTTP requests: attach the client to the request context.
       ensureMetadata(container).add(
         'http:enrichers',
-        async ({ context }: { context: { tenant?: { id: string }; db?: unknown } }) => {
-          if (!leased) {
-            const client = await clientFor(context.tenant?.id)
+        async ({ context }: { context: { tenant?: { id: string }; db?: unknown; onDispose?: unknown } }) => {
+          const tenantId = context.tenant?.id
+          const sink = leased ? disposerSink(context) : undefined
+          if (!sink) {
+            // Not leased (shared client, sharding, resolveClient), or a
+            // pipeline that would drop our disposer: lease nothing we cannot
+            // give back.
+            const client = await clientFor(tenantId)
             if (client !== undefined) context.db = client
             return undefined
           }
-          // Created before acquiring, so a 'tenancy:switched' from an
-          // enricher that runs after this one leases into the same slot and
-          // is released by the same disposer.
-          let slot = leases.get(context)
-          if (!slot) {
-            slot = new Map()
-            leases.set(context, slot)
-          }
-          const tenantId = context.tenant?.id
+          const slot = requestSlot(context, sink)
           if (tenantId === undefined) {
             if (options.client !== undefined) context.db = options.client
           } else {
             context.db = await leaseInto(slot, tenantId)
           }
-          // Run by the adapter once the response has ended — finished,
-          // streamed out, failed or abandoned by the client.
-          const own = slot
-          return () => releaseAll(own)
+          return undefined
         },
       )
 
-      // tenancy.run() / workers: attach when execution enters a tenant.
+      // tenancy.run() / workers / the tenancy request enricher: attach when
+      // execution enters a tenant.
       hooks.on('tenancy:switched', async (payload) => {
         const { tenant, via } = payload as { tenant: { id: string }; via?: 'run' | 'http' }
         const context = tryCtx()
@@ -402,16 +448,17 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
             slot = new Map()
             leases.set(context, slot)
           }
+          // An HTTP request (the tenancy enricher, or a switch from a handler):
+          // lease now, so an enricher between tenancy and us already sees
+          // ctx().db, and hand the release to the request.
+          const sink = slot ? undefined : disposerSink(context)
+          if (sink) slot = requestSlot(context, sink)
           if (slot) {
             context.db = await leaseInto(slot, tenant.id)
             return
           }
-          // The tenancy request enricher ran before ours: our enricher leases
-          // for this request when it runs — taking one here too would be a
-          // second, never-released lease.
-          if (via === 'http') return
-          // Emitted by something that never says when the context ends
-          // (older tenancy, a hand-rolled emit): the time-based hand-out.
+          // Nobody will say when this context ends (older tenancy, older
+          // http, a hand-rolled emit): the time-based hand-out below.
         }
         const client = await clientFor(tenant.id)
         // tenancy.run() copies the surrounding context, so `db` may still be

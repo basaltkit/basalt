@@ -21,6 +21,17 @@ declare module '@basaltkit/core' {
   interface RequestContext {
     /** Per-request DI scope — `scoped` instances live here. */
     container?: Container
+    /**
+     * Hands a {@link RequestDisposer} to the request: the adapter runs it once
+     * the response has really ended, exactly like one an enricher returns.
+     * For cleanup that is taken outside an enricher's return value — e.g. a
+     * `tenancy:switched` listener leasing a database client. Set by `runRoute`
+     * on the request context only (non-enumerable, so a context copied with a
+     * spread — `tenancy.run()` — does not inherit it); its presence tells a
+     * plugin that the running pipeline honours disposers. Absent outside an
+     * HTTP request and on pipelines older than `@basaltkit/http` 2.8.
+     */
+    onDispose?: (disposer: RequestDisposer) => void
   }
 }
 
@@ -225,6 +236,10 @@ export async function runRoute(
   // No sink from the caller: the disposers are run here, when the route is done.
   const local = pipeline.onDispose ? undefined : new RequestDisposers()
   const onDispose = pipeline.onDispose ?? ((disposer: RequestDisposer) => local!.add(disposer))
+  // Also reachable from the request context, for cleanup taken outside an
+  // enricher's return value. Non-enumerable: a context copied with a spread
+  // (tenancy.run()) is a different scope and must not hand work to this one.
+  Object.defineProperty(context, 'onDispose', { value: onDispose, enumerable: false })
   // `idempotencyPlugin` (any adapter): where its check runs for this request,
   // if the request is subject to it at all.
   const idempotency = idempotencyStageOf(pipeline.container)

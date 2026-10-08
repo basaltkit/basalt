@@ -46,6 +46,12 @@ export interface TenantClientLease<TClient> {
 export class TenantPoolExhaustedError extends BasaltError {
   readonly status = 503
   /**
+   * The message and details (tenant id, `max`, lease counts) describe the
+   * shared pool every tenant draws from: kept for the server log. The client
+   * gets the code and a neutral "Service unavailable."
+   */
+  readonly expose = false
+  /**
    * @param usage How the `max` slots were held when the wait gave up:
    *   `leased` clients have an open `acquire()` lease (a request or job is
    *   using them right now); `recentlyUsed` ones were only handed out by
