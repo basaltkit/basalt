@@ -68,6 +68,10 @@ Shipped to `main` after the 1.12 release, all opt-in and non-breaking:
   check after the route guards, so a revoked caller gets `401`/`403` instead of
   the cached success. Both will become the default in a future major — see
   [Idempotent mutations](/guide/security#idempotent-mutations-idempotencyplugin).
+- **Per-route headers.** `meta.headers` sets static response headers (say
+  `X-Robots-Tag: noindex` on a public share link) on every response the route
+  produces, its guard, validation and handler errors included — see
+  [Per-route headers](/guide/security#per-route-headers-meta-headers).
 - **Operable webhooks.** `secretBox` seals endpoint signing secrets at rest,
   `onAttempt` and `DeliveryResult.durationMs` report every delivery attempt,
   `headerPrefix` renames the `x-basalt-*` headers, and `signPayload()` /

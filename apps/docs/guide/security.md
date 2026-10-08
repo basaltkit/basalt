@@ -148,6 +148,35 @@ them all. A route that is safe to cache sets its own `Cache-Control` header,
 which replaces the default — do so on `meta.etag` routes (e.g.
 `private, no-cache`), since `no-store` keeps browsers from revalidating.
 
+### Per-route headers — `meta.headers`
+
+Some routes need headers the rest of the API does not: a public share link that
+search engines must not index, a download that must never be cached. Declare
+them on the route:
+
+```ts
+route({
+  method: 'POST',
+  url: '/s/:token',
+  meta: { headers: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  handler: /* … */,
+})
+```
+
+The pipeline sets them as soon as the route matches, before enrichers and
+guards, so they are on **every** response the route produces — the `200`, a
+guard's `401`/`403`, a validation `400`, a thrown `500` — on all three adapters.
+A header set by `reply.header()` would only reach the success path. They
+replace a global header of the same name (here `securityPlugin`'s
+`Cache-Control`), and a handler can still override one with `reply.header()`.
+
+The values are checked at boot (`InvalidRouteMetaError`): strings without CR,
+LF or other control characters, and never `Set-Cookie`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, hop-by-hop headers or `X-Request-Id`,
+which belong to the response or the adapter. A request that never reaches the
+route — a `404`, a rate-limit `429` or a malformed body rejected by the
+framework's parser — carries only the global headers.
+
 ## Resource limits & DoS resistance
 
 Beyond headers and rate limits, long-lived and slow connections can exhaust a
