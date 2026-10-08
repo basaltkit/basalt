@@ -218,6 +218,10 @@ page one ended.
 
 Callers without the hook are untouched: one driver call, same behaviour.
 
+`authorize` is the tool for engine hits. For database listings and counts, ask the
+policy for its list form instead — see
+[Policies decide one object, not a list](/guide/authorization#policies-decide-one-object-not-a-list).
+
 ## Rebuilding an index
 
 A rule fed by events knows only what was created after the rule existed. Add

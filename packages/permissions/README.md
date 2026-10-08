@@ -176,7 +176,21 @@ Fix it by registering the check, correcting the `resource:action` spelling, or d
 
 **The match is exact.** Only the policy's *own* actions count (`project:constructor` / `project:toString` are missing policies, never `Object.prototype`), only a two-segment `resource:action` selects a check (`project:update:billing` is not decided by `update`), and a check authorizes only when it returns `true`. `can()` refuses a permission that is not a non-empty string without whitespace (`TypeError`); a user without a non-empty string `id` makes `can`/`authorize`/`hasRole` throw `AuthRequiredGuardError` (401).
 
-**Policies decide one object, not a list.** Filtering a query's rows through `gate.can()` afterwards gives short pages and a wrong `total`. For listings, write one access predicate per resource (a Prisma `where`) used by both `findMany` and `count`, and keep the policy for single objects. See [Policies decide one object, not a list](https://basaltkit.dev/guide/authorization#policies-decide-one-object-not-a-list).
+**Policies decide one object, not a list.** Filtering a query's rows through `gate.can()` afterwards gives short pages and a wrong `total`. For listings, declare the list form of the check next to it and apply it in the query, reusing the same `where` for `findMany` and `count`:
+
+```ts
+const DocumentPolicy = definePolicy<Document, Prisma.DocumentWhereInput>(
+  'document',
+  { read: (user, doc) => doc.ownerId === user.id },
+  { filters: { read: (user) => ({ ownerId: user.id }) } }, // true = unrestricted, false = none
+)
+
+const f = await gate.listFilter<Prisma.DocumentWhereInput>(me, 'document:read')
+if (f.kind === 'none') return { rows: [], total: 0 }
+const where = f.kind === 'unrestricted' ? filter : { AND: [f.where, filter] }
+```
+
+`listFilter` fails closed: no filter for exactly `resource:action` throws `MissingPolicyFilterError` (`PERMISSION_FILTER_MISSING`), with no RBAC fallback; `superAdmin` answers `unrestricted`, as in `can()`. `unrestricted` never bypasses tenant isolation — the tenant is your data layer's. See [Policies decide one object, not a list](https://basaltkit.dev/guide/authorization#policies-decide-one-object-not-a-list).
 
 ### Super admin
 
