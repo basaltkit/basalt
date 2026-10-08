@@ -24,6 +24,8 @@ export {
 
 export {
   McpServer,
+  reportMcpInternalError,
+  type McpInternalErrorHook,
   MCP,
   mcpPlugin,
   mcpRoutes,
