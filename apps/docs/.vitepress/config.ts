@@ -135,6 +135,7 @@ export default defineConfig({
                 { text: 'Feature Flags', link: '/pt/guide/feature-flags' },
                 { text: 'Webhooks', link: '/pt/guide/webhooks' },
                 { text: 'Notifications', link: '/pt/guide/notifications' },
+                { text: 'Mail de entrada', link: '/pt/guide/inbound-mail' },
               ],
             },
             {
@@ -269,6 +270,7 @@ export default defineConfig({
             { text: 'Feature Flags', link: '/guide/feature-flags' },
             { text: 'Webhooks', link: '/guide/webhooks' },
                 { text: 'Notifications', link: '/guide/notifications' },
+                { text: 'Inbound mail', link: '/guide/inbound-mail' },
           ],
         },
         {

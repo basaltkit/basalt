@@ -1,0 +1,8 @@
+From: =?ISO-8859-1?Q?Jos=E9?= <jose@example.org>
+To: acme@in.example.com
+Subject: café =?ISO-8859-1?Q?ol=E1?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+
+Preço: 10 €

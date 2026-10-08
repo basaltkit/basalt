@@ -360,6 +360,14 @@ schedule.call('reverify-domains', async () => {
 A new owner of a lapsed domain can also take a stale verified claim over by
 publishing its `challenge()` record — see [Tenancy](/guide/tenancy#custom-domains-verified).
 
+### Inbound mail endpoint
+
+`inboundMailRoutes()` is unauthenticated until the signature over the bytes is
+checked, so it caps requests at 10 MiB (not the 1 MiB `rawBody()` default),
+answers unrouted addresses exactly like routed ones, and only believes
+`Authentication-Results` from servers you list. Add a `meta.rateLimit` — see
+[Inbound mail](/guide/inbound-mail#limits).
+
 ## Fail-closed secrets — `secret()`
 
 The most common production incident is shipping a placeholder signing key.

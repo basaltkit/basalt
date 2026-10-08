@@ -366,6 +366,14 @@ schedule.call('reverify-domains', async () => {
 O novo dono de um domínio expirado também pode tomar um claim verificado obsoleto
 publicando o seu registo de `challenge()` — vê [Tenancy](/pt/guide/tenancy#dominios-custom-verificados).
 
+### Endpoint de mail de entrada
+
+O `inboundMailRoutes()` não está autenticado até a assinatura sobre os bytes
+ser verificada, por isso limita os pedidos a 10 MiB (e não ao default de 1 MiB
+do `rawBody()`), responde a endereços sem rota exatamente como aos encaminhados
+e só acredita em `Authentication-Results` de servidores que indicares. Acrescenta
+um `meta.rateLimit` — vê [Mail de entrada](/pt/guide/inbound-mail#limites).
+
 ## Segredos fail-closed — `secret()`
 
 O incidente de produção mais comum é enviar uma chave de assinatura placeholder.
