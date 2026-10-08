@@ -127,4 +127,28 @@ describe.skipIf(!Ctor)('assertMigrated against a role without USAGE on the schem
       await db.close()
     }
   })
+
+  it('does not blame a schema outside the search_path (a tenant schema the role cannot use)', async () => {
+    const db = new Ctor!()
+    try {
+      await db.exec(`
+        CREATE SCHEMA tenant_a;
+        CREATE TABLE tenant_a._prisma_migrations (id text);
+        CREATE ROLE app_rw;
+        GRANT USAGE ON SCHEMA public TO app_rw;
+        REVOKE ALL ON SCHEMA tenant_a FROM PUBLIC;
+        SET ROLE app_rw;
+      `)
+      const client = {
+        $queryRawUnsafe: async (sql: string, ...values: unknown[]) =>
+          (await db.query<Record<string, unknown>>(sql, values)).rows,
+      }
+      const error = (await assertMigrated(client).catch((e: unknown) => e)) as DatabaseNotMigratedError
+      expect(error).toBeInstanceOf(DatabaseNotMigratedError)
+      expect(error.details).toMatchObject({ diagnosis: { code: 'DB_NOT_MIGRATED' } })
+      expect(error.message).not.toContain('tenant_a')
+    } finally {
+      await db.close()
+    }
+  })
 })

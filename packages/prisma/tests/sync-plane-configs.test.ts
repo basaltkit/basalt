@@ -88,4 +88,27 @@ describe('prisma:sync with targets — one config per plane (BK-030)', () => {
     const text = generateOnlyRootConfigTs('prisma/schema.prisma')
     expect(text).not.toMatch(/\bmigrations\s*:|\bdatasource\s*:/)
   })
+  it('refuses to give two planes that share a directory one config', async () => {
+    const root = project()
+    writeFileSync(join(root, 'prisma', 'tenant.prisma'), 'datasource db {\n  provider = "postgresql"\n}\n')
+    const before = process.cwd()
+    process.chdir(root)
+    const lines: string[] = []
+    try {
+      await prismaSyncCommand({
+        targets: {
+          central: { schemaPath: 'prisma/schema.prisma', domains: ['tenancy'] },
+          tenant: { schemaPath: 'prisma/tenant.prisma', domains: ['auth'] },
+        },
+      }).handle({
+        io: { log: (m: string) => void lines.push(m), error: (m: string) => void lines.push(m), table: () => {}, confirm: async () => true },
+        flags: { yes: true },
+        args: [],
+      })
+    } finally {
+      process.chdir(before)
+    }
+    expect(lines.join('\n')).toContain('[tenant] shares prisma with another plane')
+    expect(readFileSync(join(root, 'prisma', 'prisma.config.ts'), 'utf8')).toContain("schema: 'schema.prisma'")
+  })
 })
