@@ -279,8 +279,11 @@ migrada (`PRISMA_NOT_MIGRATED`), a mensagem diz o que falhou, que base de dados
 a app usou — `postgres://host:porta/nome` e a variável de onde veio, nunca o
 utilizador nem a password — e a correção: arranca o PostgreSQL
 (`docker compose up -d`, ou o teu serviço local), verifica o
-`MY_SAAS_DATABASE_URL`, corre `pnpm db:migrate`. Qualquer outro erro de arranque
-mantém o stack trace.
+`MY_SAAS_DATABASE_URL`, corre `pnpm db:migrate`. Uma base que recusa o role da
+app (`permission denied`, SQLSTATE `42501`) ou precisa de baseline (`P3005`) é
+identificada como tal, com o `GRANT` ou o `prisma migrate resolve` a correr — ver
+[Operações de base de dados](/pt/guide/database-operations). Qualquer outro erro
+de arranque mantém o stack trace.
 
 Dois hábitos que continuam a ajudar:
 

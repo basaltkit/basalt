@@ -273,8 +273,11 @@ PostgreSQL does not answer (`ECONNREFUSED`, Prisma `P1001`, or an
 (`PRISMA_NOT_MIGRATED`), the message says what failed, which database the app
 used — `postgres://host:port/name` and the variable it came from, never the
 user or password — and the fix: start PostgreSQL (`docker compose up -d`, or your
-local service), check `MY_SAAS_DATABASE_URL`, run `pnpm db:migrate`. Any other
-boot error keeps its stack trace.
+local service), check `MY_SAAS_DATABASE_URL`, run `pnpm db:migrate`. A database
+that refuses the app's role (`permission denied`, SQLSTATE `42501`) or needs a
+baseline (`P3005`) is named as such, with the `GRANT` or the
+`prisma migrate resolve` to run — see [Database operations](/guide/database-operations).
+Any other boot error keeps its stack trace.
 
 Two habits that still help:
 
