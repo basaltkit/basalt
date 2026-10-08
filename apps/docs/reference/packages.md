@@ -77,7 +77,7 @@ works on its own; together they form the framework. Each package is versioned in
 | `@basaltkit/files` | Upload pipeline over storage — type/size validation, per-tenant quota, metadata, scan hooks |
 | `@basaltkit/comments` | Per-resource comment threads — @mentions, resolve/reopen, events for realtime & notifications |
 | `@basaltkit/i18n` | Internationalization — context-resolved locale, typed catalogs with plurals, Intl formatting |
-| `@basaltkit/exports` · `@basaltkit/exports-xlsx` | Typed data exports → CSV/TSV/JSON/NDJSON and a zero-dep XLSX formatter |
+| `@basaltkit/exports` · `@basaltkit/exports-xlsx` | Typed data exports → CSV/TSV/JSON/NDJSON (BOM + locale numbers/dates) and a zero-dep XLSX formatter; strict CSV import (`defineImport`/`readImport`) |
 
 ## Self-contained UIs
 

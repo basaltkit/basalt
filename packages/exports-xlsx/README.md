@@ -70,7 +70,7 @@ defineExport<Invoice>({
 })
 ```
 
-- `Date` values become **date cells** (Excel serial numbers from the UTC instant) styled with the column's `format` or `dateFormat` (default `yyyy-mm-dd`).
+- `Date` values become **date cells** (Excel serial numbers from the UTC instant) styled with the column's `format` or `dateFormat` (default `yyyy-mm-dd`). A date before 1900-03-01 (outside what Excel serials represent correctly) stays ISO text.
 - Numbers in a column with a `format` get that number format (one `xl/styles.xml` style per distinct code).
 - `widths` (by column index) or the columns' `width` hints become `<cols>`; `freezeHeader` freezes row 1.
 - `sheetName` is validated (1–31 chars, none of `[ ] : * ? / \`, no leading/trailing `'`) and XML-escaped.

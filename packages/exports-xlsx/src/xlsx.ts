@@ -38,7 +38,7 @@ function cell(value: unknown, ref: string): string {
   return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(escapeControlChars(text))}</t></is></c>`
 }
 
-/** Days since 1899-12-30 (Excel's 1900 date system), from the UTC instant; `undefined` for a non-Date or invalid date. */
+/** Days since 1899-12-30 (Excel's 1900 date system), from the UTC instant; `undefined` for a non-Date, an invalid date or one before 1900-03-01. */
 function dateSerial(value: Date): number | undefined {
   let time: number
   try {
@@ -47,7 +47,12 @@ function dateSerial(value: Date): number | undefined {
   } catch {
     return undefined
   }
-  return Number.isFinite(time) ? time / 86_400_000 + 25_569 : undefined
+  if (!Number.isFinite(time)) return undefined
+  const serial = time / 86_400_000 + 25_569
+  // Excel's 1900 system counts a phantom 29 Feb 1900 (serial 60), so earlier
+  // serials name the wrong day, and it has no dates before 1900 at all: such a
+  // date stays ISO text rather than becoming a wrong (or negative) date cell.
+  return serial >= 61 ? serial : undefined
 }
 
 /** Assigns one `cellXfs` index per distinct number-format code (index 0 is the default style). */

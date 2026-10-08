@@ -134,6 +134,18 @@ describe('createXlsxFormatter', () => {
     expect(p['xl/styles.xml']).toContain('formatCode="#,##0.00"')
   })
 
+  it('keeps a date before 1900-03-01 as ISO text (outside what Excel serials represent correctly)', async () => {
+    const p = await parts(
+      createXlsxFormatter(),
+      ['D'],
+      [[new Date('1900-02-28T00:00:00Z')], [new Date('1850-01-01T00:00:00Z')], [new Date('1900-03-01T00:00:00Z')]],
+    )
+    const sheet = p['xl/worksheets/sheet1.xml']!
+    expect(sheet).toContain('<c r="A2" t="inlineStr"><is><t xml:space="preserve">1900-02-28T00:00:00.000Z</t></is></c>')
+    expect(sheet).toContain('<c r="A3" t="inlineStr"><is><t xml:space="preserve">1850-01-01T00:00:00.000Z</t></is></c>')
+    expect(sheet).toContain('<c r="A4" s="1"><v>61</v></c>')
+  })
+
   it('keeps the header row as text and a Date-branded object as text', async () => {
     const spoofed = Object.setPrototypeOf({ toISOString: () => 'spoof' }, Date.prototype)
     const p = await parts(createXlsxFormatter(), ['D'], [[spoofed]])

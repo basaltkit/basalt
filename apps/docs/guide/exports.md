@@ -198,7 +198,8 @@ configurable. `'dd/mm/yyyy'` uses the UTC calendar day; pass a function
 default instead of replacing it. `stream()` emits the same bytes, BOM included.
 
 For XLSX, `createXlsxFormatter` writes **real date cells** (Excel serial numbers
-with a date format, from the UTC instant) and applies per-column number formats,
+with a date format, from the UTC instant; a date before 1900-03-01, which Excel
+serials cannot represent correctly, stays ISO text) and applies per-column number formats,
 widths, a sheet name and a frozen header. The hints live on the export
 definition:
 
@@ -268,7 +269,8 @@ const { rows, errors, warnings } = await readImport(purchaseOrders, file)
   only as a thousands separator in groups of three. With a comma decimal,
   `1.250,50` is 1250.5 and `1 408 278,55` is 1408278.55, but `12.5` is
   `AMBIGUOUS_DECIMAL` — never silently read as 125 or 12.5, which is how a
-  price ends up off by a factor of 1 000. `'integer'` refuses a fraction.
+  price ends up off by a factor of 1 000. A group never starts with `0`
+  (`0.250` is ambiguous too, not 250). `'integer'` refuses a fraction.
 - **Dates** are `'dd/mm/yyyy'` or ISO (`yyyy-mm-dd`, or a timestamp with an
   offset), validated against the calendar (`31/02/2026` is `INVALID_DATE`),
   and come back as UTC midnight. For anything else pass a function as `parse`;
@@ -289,5 +291,6 @@ The low-level reader is exported too: `parseDelimited(input, { delimiter,
 quote, bom, maxRows, maxFieldLength })` is an RFC 4180 async iterator of
 `{ line, cells }` that throws `DelimitedParseError` (`code`
 `CSV_UNTERMINATED_QUOTE`, …, with `reason` and `line`). A leading BOM is
-stripped (`bom: 'forbid'` rejects it), and what `createCsvFormatter` writes
-reads back unchanged.
+stripped (`bom: 'forbid'` rejects it). What `createCsvFormatter` writes reads
+back with the same `delimiter` and `locale`: numbers and dates parse to the same
+values, while text the formula guard prefixed keeps its leading `'`.

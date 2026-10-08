@@ -61,7 +61,20 @@ export interface DelimitedFormatterOptions {
   locale?: LocaleSpec
 }
 
-const BOM = '﻿'
+const BOM = '\uFEFF'
+
+/** A locale whose separators collide would write numbers nobody can read back (`1.234.5`). */
+function validateLocale(locale: LocaleSpec): void {
+  if (locale.decimal !== ',' && locale.decimal !== '.') {
+    throw new TypeError(`LocaleSpec.decimal must be ',' or '.' (got ${JSON.stringify(locale.decimal)}).`)
+  }
+  const { thousands } = locale
+  if (thousands !== undefined && (thousands === '' || /\d/.test(thousands) || thousands.includes(locale.decimal))) {
+    throw new TypeError(
+      `LocaleSpec.thousands must be a non-empty separator with no digits and different from the decimal separator (got ${JSON.stringify(thousands)}).`,
+    )
+  }
+}
 
 function formatNumber(value: number | bigint, locale: LocaleSpec): string {
   const text = String(value)
@@ -96,7 +109,7 @@ function formatDate(value: Date, locale: LocaleSpec | undefined): string {
 // A locale only changes how an exempt number is spelled AFTER the guard decision,
 // so a localized negative (`-1 408 278,55`) stays unquoted while every string is
 // guarded exactly as before — the guard itself is deliberately not configurable.
-const FORMULA_TRIGGER = /^(?:[\t\r\n]|\s*[=+\-@＝＋－＠])/
+const FORMULA_TRIGGER = /^(?:[\t\r\n]|\s*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20])/
 
 const cell = (value: unknown, locale?: LocaleSpec): string => {
   if (value === null || value === undefined) return ''
@@ -124,6 +137,7 @@ export class DelimitedFormatter implements ExportFormatter {
     // Quote a field that contains the delimiter, a quote, or a line break.
     this.needsQuote = new RegExp(`["\\r\\n${delimiter === '\t' ? '\\t' : delimiter.replace(/[\\\]^-]/g, '\\$&')}]`)
     this.bom = options.bom ? BOM : ''
+    if (options.locale) validateLocale(options.locale)
     this.locale = options.locale
   }
 
