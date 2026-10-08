@@ -113,8 +113,12 @@ id falta (um chamador anónimo, nenhum tenant resolvido, ou a função não devo
 nada), o balde **recua para o IP do cliente**, e os baldes anónimos nunca se
 misturam com os de utilizadores autenticados. Quando o adaptador também não
 conseguiu resolver um IP (`request.ip` undefined — Hono num runtime sem
-`getClientIp`), todos esses pedidos partilham um só balde: falha fechada, em vez
-de um balde por header falsificável. Os baldes com chave usam o mesmo store (`MemoryRateLimitStore`, ou
+`getClientIp`, um `runRoute` feito à mão, uma tool MCP chamada por stdio ou
+através do `McpServer.callTool`), um chamador autenticado fica com a chave da sua
+identidade (`user:<id>|tenant:<id>`, como faria o `'user+tenant'`), e **todos os
+pedidos anónimos sem IP partilham um só balde `unknown`**: falha fechada, em vez
+de um balde por header falsificável. Configura o adaptador para resolver o IP do
+cliente e voltar a ter baldes por cliente. Os baldes com chave usam o mesmo store (`MemoryRateLimitStore`, ou
 Redis entre instâncias). Uma rota com chave continua a contar para o limite
 global por IP em todos os adaptadores, porque o hook anterior ao routing ainda
 não conhece o utilizador.
@@ -379,7 +383,12 @@ O conjunto guardado completo é `auth`, `can`, `teamRole`, `scopes`, `subscribed
 e `feature` (`GUARDED_META_KEYS`). As chaves que *relaxam* em vez de proteger
 ficam deliberadamente de fora — `meta.central` (salta a verificação de
 pertença ao tenant), `meta.mcp` (opta por expor a rota via MCP) e
-`meta.rateLimit` (travagem de abuso, não uma fronteira de autorização).
+`meta.rateLimit` (travagem de abuso, não uma fronteira de autorização). Um
+`meta.rateLimit` sem nenhum limitador registado (sem
+`securityPlugin({ rateLimit })`) não recusa o boot, mas o adaptador **avisa uma
+vez**, nomeando as rotas, que esses orçamentos não são aplicados. Silencia-o com
+`allowUnguardedMeta: ['rateLimit']` (ou `true`) quando uma edge exterior faz a
+travagem.
 
 Se a proteção acontecer genuinamente numa edge/gateway exterior, opta por sair
 explicitamente com a opção do adapter `allowUnguardedMeta: true` (ou

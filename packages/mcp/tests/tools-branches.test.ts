@@ -228,3 +228,15 @@ describe('reply capture and text encoding', () => {
     expect(res.content[0]!.text).toBe('')
   })
 })
+
+describe('malformed arguments on a direct invoke', () => {
+  it('turns a request-building failure into a sanitised isError result, not a throw', async () => {
+    const t = tool('get_projects_by_id_items_by_itemId')
+    // Bypasses the protocol-level shape check: `key in 'abc'` throws inside splitArgs.
+    const result = await t.invoke('abc' as unknown as Record<string, unknown>)
+    expect(result.isError).toBe(true)
+    const text = result.content.map((c) => c.text).join('')
+    expect(text).toContain('INTERNAL_ERROR')
+    expect(text).not.toMatch(/TypeError|Cannot use 'in' operator/)
+  })
+})

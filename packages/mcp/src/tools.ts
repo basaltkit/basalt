@@ -315,21 +315,26 @@ function makeInvoke(
   return async (args: Record<string, unknown>, callCtx?: ToolCallContext): Promise<McpToolResult> => {
     const signal = callCtx?.signal
     if (signal?.aborted) return cancelled()
-    const { params, query, body } = splitArgs(route, args ?? {})
-    const request: HttpRequest = {
-      method: route.method,
-      url: concreteUrl(route.url, params, query),
-      routePattern: route.url,
-      headers: filterHeaders(callCtx?.headers, allow),
-      params,
-      query,
-      body,
-      ...(callCtx?.ip !== undefined ? { ip: callCtx.ip } : {}),
-      raw: null,
-    }
-    if (signal) signals.set(request, signal)
     const reply = new CapturingReply()
+    let url = route.url
     try {
+      // Building the request (arg splitting/coercion, URL filling) can throw on
+      // malformed arguments: keep it inside the try so it ends as a sanitised
+      // `isError` result like any other failure, never as a raw protocol error.
+      const { params, query, body } = splitArgs(route, args ?? {})
+      url = concreteUrl(route.url, params, query)
+      const request: HttpRequest = {
+        method: route.method,
+        url,
+        routePattern: route.url,
+        headers: filterHeaders(callCtx?.headers, allow),
+        params,
+        query,
+        body,
+        ...(callCtx?.ip !== undefined ? { ip: callCtx.ip } : {}),
+        raw: null,
+      }
+      if (signal) signals.set(request, signal)
       const run = runRoute(route, request, reply, {
         container,
         enrichers: metadata.get<RequestEnricher>('http:enrichers'),
@@ -371,7 +376,7 @@ function makeInvoke(
       const { status, body: errorBody } = toErrorResponse(error, redact ? { redactDetails: redact } : {})
       if (report) {
         try {
-          report({ error, status, code: errorBody.error.code, method: route.method, url: request.url })
+          report({ error, status, code: errorBody.error.code, method: route.method, url })
         } catch {
           // A failing reporter must not turn a tool error into a transport one.
         }

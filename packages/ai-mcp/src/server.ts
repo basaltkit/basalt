@@ -6,6 +6,7 @@ import {
   serveHttp,
   serveStdio,
   type HttpHandle,
+  type McpServerOptions,
   type ServeHttpOptions,
   type ServeStdioOptions,
   type StdioHandle,
@@ -25,7 +26,14 @@ import { workflowPrompts } from './prompts/workflows.js'
 export const AI_MCP_VERSION: string = (createRequire(import.meta.url)('../package.json') as { version: string }).version
 const SERVER_INFO = { name: 'basalt-ai-mcp', version: AI_MCP_VERSION }
 
-export type AiMcpOptions = SessionOptions
+export interface AiMcpOptions extends SessionOptions {
+  /**
+   * Receives the original error when a tool/resource/prompt fails unexpectedly.
+   * The MCP client only sees a generic `Internal error`; the `basalt-ai-mcp`
+   * bin logs the real cause to stderr through this hook.
+   */
+  onError?: McpServerOptions['onError']
+}
 
 /**
  * Build the read-only AI MCP server: the `basalt_analyze` / `basalt_doctor`
@@ -44,6 +52,7 @@ export function buildAiMcpServer(options: AiMcpOptions = {}): McpServer {
     resources: [...projectResources(session), ...knowledgeResources()],
     prompts: workflowPrompts(),
     serverInfo: SERVER_INFO,
+    ...(options.onError ? { onError: options.onError } : {}),
   })
 }
 

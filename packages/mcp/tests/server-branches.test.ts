@@ -123,17 +123,16 @@ describe('McpServer.handleMessage — defaults and edge cases', () => {
     expect(res).toBeNull()
   })
 
-  it('surfaces an internal error when a tool call throws before dispatch', async () => {
-    // Non-object `arguments` makes splitArgs throw a TypeError → the catch path.
+  it('rejects non-object `arguments` with INVALID_PARAMS before dispatch', async () => {
     const res = await server().handleMessage({
       jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'get_item', arguments: 5 },
     })
-    expect(res?.error?.code).toBe(RPC_ERRORS.INTERNAL_ERROR)
-    expect(typeof res?.error?.message).toBe('string')
+    expect(res?.error?.code).toBe(RPC_ERRORS.INVALID_PARAMS)
+    expect(res?.error?.message).not.toMatch(/TypeError/)
   })
 
   it('stays silent when a notification throws during dispatch', async () => {
-    // Same throwing call, but as a notification (no id) → catch returns null.
+    // A request method sent as a notification (no id) is never executed or answered.
     const res = await server().handleMessage({
       jsonrpc: '2.0', method: 'tools/call', params: { name: 'get_item', arguments: 5 },
     })

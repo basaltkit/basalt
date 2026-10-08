@@ -1,5 +1,5 @@
 import { BasaltError, createToken, definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
-import type { HttpRequest, RequestEnricher, RouteGuard } from '@basaltkit/http'
+import type { HttpRequest, RequestEnricher, RouteGuard, RouteVisibilityCheck } from '@basaltkit/http'
 import {
   Auth,
   AuthRequiredError,
@@ -250,6 +250,23 @@ export function authPlugin(pluginOptions: AuthPluginOptions) {
         throw (await c.get(AUTH).isMfaEnabled(user.id)) ? new MfaStepUpRequiredError() : new MfaEnrollmentRequiredError()
       }
       metadata.add('http:guards', mfaGuard)
+
+      // Visibility (e.g. MCP `tools/list`): hide a route the caller statically
+      // cannot pass the MFA guard on. Pure — it reads only ctx() (`user`, `amr`,
+      // `apiKey`): no MFA-store lookup, no hooks, no writes. A `requireMfa`
+      // FUNCTION policy is never called here (it is app code with no purity
+      // contract), so those routes stay listed and the guard decides on call.
+      const mfaVisibility: RouteVisibilityCheck = ({ route, context }) => {
+        const declared = route.meta?.['mfa']
+        if (declared === false) return true
+        if (!context['user']) return true // meta.auth / the guard decide
+        let required = declared === true
+        if (!required && requireMfa === true && context['apiKey'] === undefined) required = true
+        if (!required) return true
+        const amr = context['amr']
+        return Array.isArray(amr) && amr.includes('mfa')
+      }
+      metadata.add('http:route-visibility', mfaVisibility)
     },
   })
 }

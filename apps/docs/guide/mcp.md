@@ -137,6 +137,11 @@ handler for the same filter.
 schemas, merged into one flat object with the right `required` fields — so the
 client knows exactly what to send.
 
+**Argument shape.** `arguments` must be a JSON object (or omitted). An array,
+string, number or `null` is refused with JSON-RPC `-32602` before the route runs,
+so a malformed call never reaches your handler and never echoes an internal
+exception (such as a `TypeError`) back to the client.
+
 **Argument coercion.** MCP clients and LLMs frequently send numbers and booleans
 as *strings* (`"7"`, `"true"`). Before validation the bridge coerces each
 argument to the scalar type its Zod field declares, so a `z.number()` field
@@ -319,10 +324,15 @@ limit and writes no audit or denial record:
 | the route has `meta.auth` and the caller has no `ctx().user` | built in, when a guard claims `auth` (e.g. `authPlugin`); under an edge-auth waiver nothing is hidden |
 | the route has `meta.teamRole` and the caller does not hold that role (or a higher one) in the current tenant | `teamsPlugin`'s visibility check (one membership read) |
 | the route has `meta.can` and the caller lacks one of its permissions (RBAC, current scope; `superAdmin` short-circuits) | `permissionsPlugin`'s visibility check (grant reads — no `permission:denied` record) |
+| the route has `meta.scopes` and the caller's API key does not hold every scope (or there is no key); or the route has `meta.apiKey: false` and the caller holds a key; or the route is identity-gated (`meta.auth`/`can`/`teamRole`/`audience`) with no `meta.scopes` and the caller's key is narrow (no `*`) | `apiKeysPlugin`'s visibility check (reads `ctx().apiKey` only — no `auth:apikey_rejected` hook) |
+| the route has `meta.mfa: true` (or `authPlugin({ requireMfa: true })` applies) and the signed-in caller's session has no second factor (`ctx().amr` lacks `'mfa'`) | `authPlugin`'s visibility check (reads `ctx()` only — no MFA-store lookup) |
 | any key whose plugin registers a check in `http:route-visibility` | that plugin's `RouteVisibilityCheck` |
 
-**Not filtered** — listed, and refused on call: `mfa`, `scopes`,
-`subscribed`/`feature`, audiences, rate limits and anything a handler checks
+**Not filtered** — listed, and refused on call: `subscribed`/`feature` (deciding
+them needs an entitlement read per tool, and an entitlement check may meter
+usage — not something a listing may do), an MFA requirement from a
+`requireMfa` *function* policy (app code with no purity contract, so it is never
+called on a listing), audiences, rate limits and anything a handler checks
 itself (e.g. a policy it runs on a loaded resource with `authorize(user,
 permission, resource)` — there is no resource at listing time), and a
 [`meta.can` resource requirement](/guide/authorization#policies-in-the-guard-resource-requirements)
@@ -338,6 +348,10 @@ On an exposed deployment, give `/mcp` its own rate-limit budget:
 bucket. A tool route's own `meta.rateLimit` is enforced by a route guard, so it
 applies to tool calls through `/mcp` too, keyed by the `/mcp` caller's ip,
 which the tool request inherits. (Auth and guards run identically on both paths.)
+A tool call with no caller ip — over stdio, or `MCP.callTool()` without `ip` —
+is keyed by the caller's identity (`ctx().user` / `ctx().tenant`) when there is
+one; every anonymous ip-less call shares a single fail-closed `unknown` bucket.
+Pass `ip` (or resolve it in the adapter) to get per-client buckets.
 
 
 ## Options reference
@@ -398,13 +412,15 @@ Protocol errors use JSON-RPC codes:
 | Boot throws `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) | A route declares `meta.auth`/`meta.can`/`meta.teamRole` and no plugin enforces it | Register `authPlugin` / `permissionsPlugin` / `teamsPlugin` — see [Security](/guide/security) |
 | `isError: true` with an `UNAUTHORIZED`/`FORBIDDEN` body | The tool's route is guarded and the call carried no (or bad) credentials | Send `Authorization`/tenant headers with `POST /mcp`, or `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Tool name not registered — route missing `meta.mcp`, excluded by `filter`, or renamed | Check `tools/list`; remember overrides via `meta.mcp.name` |
+| JSON-RPC `-32602` ``tools/call `arguments` must be an object`` | The client sent `arguments` as an array, string, number or `null` | Send an object of named arguments matching the tool's input schema |
+| JSON-RPC `-32603` `Internal error` | Something threw outside a tool result (tool failures themselves come back as `isError`) | The text is deliberately generic; check the server logs for the cause |
 | JSON-RPC `-32601` `Method not found` | The client called an MCP method the server doesn't implement | Only `initialize`, `ping`, `tools/list`, `tools/call` (plus resources/prompts when registered) exist |
-| A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp` too (per caller ip) | Raise the route's budget, or pass a `key` to `securityPlugin({ rateLimit })` |
+| A tool call returns `RATE_LIMITED` sooner than expected | The tool route's own `meta.rateLimit` applies through `/mcp` too (per caller ip; anonymous calls with no ip share one `unknown` bucket) | Raise the route's budget, pass a `key` to `securityPlugin({ rateLimit })`, or make sure the caller ip / identity is resolved |
 | `403` `MCP_ORIGIN_FORBIDDEN` from `POST /mcp` | A browser sent a cross-origin request | Add the page's origin to `mcpRoutes({ allowedOrigins })` |
 | `415` from `POST /mcp` | The body was not sent as `Content-Type: application/json` | Send `application/json` (MCP clients do) |
 | `400` `Mcp-Session-Id header required` | A message other than `initialize` arrived without a session | Send `initialize` first and echo its `Mcp-Session-Id` (spec clients do), or `mcpRoutes({ sessions: false })` |
 | `404` `Session not found` | The session expired, was evicted or ended, the process restarted, another replica answered — or a different caller presented it | Re-initialize; behind replicas use sticky sessions |
-| A tool is missing from `tools/list` but callable | The caller statically fails its `meta.auth`/`meta.teamRole`/`meta.can` (listing hides it) | Expected; `mcpRoutes({ listVisibleOnly: false })` lists everything |
+| A tool is missing from `tools/list` but callable | The caller statically fails its `meta.auth`/`meta.teamRole`/`meta.can`/`meta.scopes`/`meta.mfa` (listing hides it) | Expected; `mcpRoutes({ listVisibleOnly: false })` lists everything |
 | Over stdio, `-32000` `Too many requests in flight` | More than `maxConcurrentRequests` calls at once on the connection | Wait for answers, or raise `serveMcpStdio(app, { maxConcurrentRequests })` |
 | A tool reads a header that arrives `undefined` | The header is not in the forwarded-header allowlist | `mcpPlugin({ forwardHeaders: ['x-my-header'] })` |
 | Claude Desktop shows a broken/dead server | Something printed to stdout — it is the JSON-RPC channel | `logLevel: 'silent'`, remove `console.log`; see the stdio checklist above |
