@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Container } from '@basaltkit/core'
+import { Container, ctx } from '@basaltkit/core'
 import {
   RequestDisposers,
   route,
@@ -149,5 +149,27 @@ describe('runRoute disposers (BK-077)', () => {
       }),
     ).rejects.toThrow('no tenant')
     expect(log).toEqual(['a'])
+  })
+
+  it('exposes the sink as ctx().onDispose, request context only, not copied by a spread', async () => {
+    const sunk: RequestDisposer[] = []
+    let copied: unknown = 'unset'
+    const def = route({
+      method: 'GET',
+      url: '/',
+      handler: () => {
+        const context = ctx()
+        context.onDispose?.(() => undefined)
+        copied = { ...context }.onDispose
+        return { enumerable: Object.keys(context).includes('onDispose') }
+      },
+    })
+    const result = await runRoute(def, request(), reply(), {
+      container: new Container(),
+      onDispose: (disposer) => sunk.push(disposer),
+    })
+    expect(sunk).toHaveLength(1)
+    expect(result).toEqual({ enumerable: false })
+    expect(copied).toBeUndefined()
   })
 })

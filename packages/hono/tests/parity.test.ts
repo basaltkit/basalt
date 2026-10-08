@@ -29,6 +29,7 @@ import { fileRoutesParitySuite } from '../../files/tests/route-parity.js'
 import { commentRoutesParitySuite } from '../../comments/tests/route-parity.js'
 import { realtimeSseParitySuite } from '../../realtime/tests/sse-parity.js'
 import { centralOnlyParitySuite } from '../../tenancy/tests/central-only-parity.js'
+import { prismaLeaseParitySuite } from '../../prisma/tests/lease-parity.js'
 import { HONO, honoPlugin } from '../src/index.js'
 
 let app: BasaltApp | undefined
@@ -117,3 +118,4 @@ describe('hono: multipart on routes that are not upload() routes', () => {
 })
 disposerParitySuite('hono', driver)
 centralOnlyParitySuite('hono', driver)
+prismaLeaseParitySuite('hono', driver)
