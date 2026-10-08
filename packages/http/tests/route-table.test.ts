@@ -61,6 +61,19 @@ describe('describeRoutes (BK-025)', () => {
     expect(rate({ limit: '5' })).toBeNull()
   })
 
+  it('formats several budgets and shared buckets', () => {
+    const rate = (rateLimit: unknown) => describeRoutes([{ method: 'GET', url: '/', meta: { rateLimit } }])[0]?.rateLimit
+    expect(
+      rate([
+        { limit: 10, windowMs: 1_000, key: 'apiKey' },
+        { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'public-api-daily' },
+      ]),
+    ).toBe('10/1s per apiKey, 50000/24h per tenant [public-api-daily]')
+    expect(rate({ limit: 5, windowMs: 60_000, bucket: 'shared' })).toBe('5/1m [shared]')
+    expect(rate([{ limit: 'x' }, { limit: 1, windowMs: 1_000 }])).toBe('1/1s')
+    expect(rate([])).toBeNull()
+  })
+
   it('marks meta.tenant: false as exempt and meta.public as public', () => {
     const [row] = describeRoutes([{ method: 'GET', url: '/pricing', meta: { tenant: false, public: true } }])
     expect(row).toMatchObject({ tenant: 'exempt', public: true, auth: null })

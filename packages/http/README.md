@@ -314,7 +314,7 @@ run on every call.
 | `auth` | `boolean` (or plugin-specific) | `@basaltkit/auth` guard | Requires an authenticated user. Boot-checked. |
 | `can` | `string \| string[]` | `@basaltkit/permissions` guard | Requires the permission — an array means **all** are required. Boot-checked. |
 | `teamRole` | plugin-specific | `@basaltkit/teams` guard | Requires a team-membership rank. Boot-checked. |
-| `rateLimit` | `{ limit: number; windowMs: number; key?: RateLimitKey }` | `securityPlugin` | Per-route bucket at a stricter threshold, per IP (default), `'user'`, `'tenant'`, `'user+tenant'` or `(ctx) => id`. |
+| `rateLimit` | `RouteRateLimits` — `{ limit; windowMs; key?: RateLimitKey; bucket? }` or an array of them | `securityPlugin` | Per-route bucket(s) at a stricter threshold, per IP (default), `'user'`, `'tenant'`, `'user+tenant'`, `'apiKey'` or `(ctx) => id`; `bucket` shares one across routes. |
 | `etag` | `true` | the shared pipeline | Strong `ETag` + `304` on `If-None-Match`, for `GET`/`HEAD`. |
 | `headers` | `Record<string, string>` | the shared pipeline | Static response headers set as soon as the route matches — on its errors (guard `401`, validation `400`, thrown `500`) too. Boot-checked: no control characters; not `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, hop-by-hop or `x-request-id`. |
 | `summary` · `description` · `tags` · `operationId` | `string` · `string` · `string[]` · `string` | `openapiPlugin` | Operation metadata in the generated document. |
@@ -330,7 +330,7 @@ closed, loudly.
 `describeRoutes(entries)` normalises the `http:routes` bucket every adapter fills at
 boot into sorted `RouteRow`s — `{ method, url, auth, can, rateLimit, tenant, public, guards }`
 (`auth`/`can`/`rateLimit`/`tenant` are `null` when undeclared; `can: false` becomes
-`[]`; `rateLimit` reads `'10/1m per user'`; `tenant` is `'required' | 'exempt' | 'central'`).
+`[]`; `rateLimit` reads `'10/1m per user'`, several budgets joined by `', '` and a shared bucket as `' [name]'`; `tenant` is `'required' | 'exempt' | 'central'`).
 `findUnguardedRoutes(rows, { require: ['auth', 'can'], allow? })` returns the rows that
 do not declare the required guards, treating `auth: false` / `public: true` (and
 `can: false`, for `can`) as intentional; only `auth: true` — the one value `authPlugin`
@@ -711,6 +711,34 @@ to resolve the client IP to get per-client buckets back. The same `store` (memor
 is always charged by the guard, so on every adapter it also counts against the global
 per-IP bucket (the pre-routing hook cannot know the user). An unknown `key` string keeps
 the per-IP bucket.
+
+`'apiKey'` keys the bucket by `ctx().apiKey.id` — only a key `apiKeysPlugin` verified, so
+made-up keys fall back like any missing id. Never derive the **global** `rateLimit.key`
+from a credential header: it runs before authentication, and a client rotating made-up
+values would get a fresh bucket per request.
+
+**Several budgets, shared buckets.** `meta.rateLimit` also takes an array
+(`RouteRateLimits`): every budget is enforced in order, the first refusal answers 429 and
+the later ones are not charged (put the burst first). `bucket: 'name'` shares one budget
+across every route declaring it; all declarations must agree on `limit`, `windowMs` and key
+string, or the boot is refused (`InvalidRouteMetaError`). These forms are charged in the
+guard on every adapter, on top of the edge bucket — on Fastify that differs from the
+single object, which replaces the global bucket.
+
+```ts
+meta: {
+  rateLimit: [
+    { limit: 10, windowMs: 1_000, key: 'apiKey' },
+    { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'public-api-daily' },
+  ] satisfies RouteRateLimits,
+}
+```
+
+**Path-prefix budgets.** `rateLimit.prefixes: [{ prefix: '/v1', limit, windowMs, key? }]`
+charges matching paths on their own pre-routing bucket instead of the global one (longest
+prefix wins, segment-boundary match, minimal normalisation), on every adapter — the way to
+lift the per-IP ceiling for a public API. Prefixes set or lift a budget; a budget that
+must hold for one endpoint belongs in its `meta.rateLimit`.
 
 By default the plugin also sets a **restrictive CSP** — `DEFAULT_CSP`, i.e.
 `default-src 'none'; frame-ancestors 'none'` — which is right for a JSON API but blocks

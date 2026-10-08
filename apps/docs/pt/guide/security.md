@@ -53,11 +53,25 @@ securityPlugin({
   rateLimit: {
     limit: 20,
     windowMs: 10_000,
-    key: (req) => req.headers['x-api-key'] as string ?? req.ip,
+    // A predefinição. Atrás de um proxy, faz o adaptador resolver request.ip a
+    // partir do proxy em que confias, em vez de ler aqui um header de reencaminhamento.
+    key: (req) => req.ip ?? 'unknown',
     skip: (req) => req.url.startsWith('/livez'),
   },
 })
 ```
+
+::: warning Nunca chaveies o limite global por um header de credencial
+A `key` global corre **antes da autenticação**, por isso só vê o que o cliente
+enviou. Uma chave como `req.headers['x-api-key'] ?? req.ip` é um bypass: um
+cliente que envia um valor inventado novo em cada pedido recebe um balde novo
+de cada vez e nunca é limitado, e a avalanche de baldes empurra clientes
+legítimos para fora do store. Chaveia o limite global só pelo endereço
+(`req.ip`, ou um header que o teu próprio proxy define e remove dos pedidos dos
+clientes). Para um orçamento por API key, usa `meta.rateLimit` com
+`key: 'apiKey'` (abaixo): lê a chave que o enricher **verificou**, por isso uma
+chave inventada nunca recebe um balde próprio.
+:::
 
 O store por omissão é em memória (`MemoryRateLimitStore`). A sua memória é
 limitada: os baldes expirados são varridos à medida que chega tráfego, e são
@@ -96,7 +110,8 @@ partilha. `meta.rateLimit.key` escolhe a quem pertence o balde:
 | `'user'` | `ctx().user.id` | ações caras por utilizador: exportações, chamadas de IA, uploads |
 | `'tenant'` | `ctx().tenant.id` (partilhado pelos utilizadores do tenant) | uma quota por organização |
 | `'user+tenant'` | um balde por utilizador por tenant | um utilizador que pertence a vários tenants |
-| `(ctx) => string` | o id que devolveres (ex.: o id de uma API key) | qualquer outro caso |
+| `'apiKey'` | `ctx().apiKey.id` (uma chave que o `apiKeysPlugin` verificou) | rajadas por cliente máquina |
+| `(ctx) => string` | o id que devolveres | qualquer outro caso |
 
 ```ts
 route({
@@ -121,7 +136,112 @@ de um balde por header falsificável. Configura o adaptador para resolver o IP d
 cliente e voltar a ter baldes por cliente. Os baldes com chave usam o mesmo store (`MemoryRateLimitStore`, ou
 Redis entre instâncias). Uma rota com chave continua a contar para o limite
 global por IP em todos os adaptadores, porque o hook anterior ao routing ainda
-não conhece o utilizador.
+não conhece o utilizador. Para dar a uma família de caminhos outro teto por IP,
+usa [orçamentos por prefixo de caminho](#path-prefix-budgets).
+
+`'apiKey'` chaveia o balde por `ctx().apiKey.id` — um orçamento por API key,
+para que vários clientes máquina atrás de um mesmo endereço deixem de partilhar
+um só. Só uma chave que o `apiKeysPlugin` **verificou** se torna id de balde; sem
+chave verificada (um chamador com sessão, um anónimo, ou uma chave inválida que o
+`rejectInvalid: false` deixou passar) o balde recua como qualquer outro id em
+falta. Um orçamento por chave multiplica-se pelo número de chaves que um cliente
+cria, por isso usa-o para rajadas e põe as quotas em `'tenant'`.
+
+#### Vários orçamentos numa rota
+
+`meta.rateLimit` aceita também um array. Todos os orçamentos são impostos, pela
+ordem declarada; o primeiro que recusa responde `429` e **os seguintes não são
+cobrados** — por isso põe primeiro o orçamento curto de rajada, e um pedido
+recusado por rajada não gasta a quota diária:
+
+```ts
+import type { RouteRateLimits } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/v1/orders',
+  meta: {
+    scopes: ['orders:read'],
+    rateLimit: [
+      { limit: 10, windowMs: 1_000, key: 'apiKey' },        // rajada, por chave
+      { limit: 50_000, windowMs: 86_400_000, key: 'tenant' }, // diário, por cliente
+    ] satisfies RouteRateLimits,
+  },
+  // …
+})
+```
+
+- Os `X-RateLimit-*` reportam o orçamento com menos pedidos restantes (em
+  empate, o que reinicia mais tarde); numa recusa, eles e o `Retry-After` vêm do
+  orçamento que recusou.
+- Os orçamentos são cobrados um após o outro (um hit no store cada), sem
+  atomicidade entre eles.
+- Cada entrada do array tem o seu contador, chaveado por método, rota e
+  **posição**: reordenar as entradas remapeia os contadores. Mudar um `limit` ou
+  `windowMs` mantém a janela em curso — editar uma quota não dá a todos uma nova.
+- A forma de array (e `bucket`, abaixo) é sempre cobrada no guard de rota, em
+  todos os adaptadores, **além do** balde de borda (global ou de prefixo). Em
+  Fastify isto difere do objeto único, que é cobrado *em vez do* balde global:
+  embrulhar `{ limit, windowMs }` num array repõe o limite global por IP nessa
+  rota. Se dependias dessa substituição em Fastify para levantar o teto, passa a
+  um [prefixo de caminho](#path-prefix-budgets), que o faz em todos os adaptadores.
+
+#### Baldes partilhados
+
+`bucket` dá nome a um orçamento partilhado por todas as rotas que o declaram —
+uma quota diária para toda uma API pública:
+
+```ts
+const daily = { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'public-api-daily' } as const
+
+route({ method: 'GET', url: '/v1/orders', meta: { rateLimit: [{ limit: 10, windowMs: 1_000, key: 'apiKey' }, daily] }, /* … */ })
+route({ method: 'POST', url: '/v1/orders', meta: { rateLimit: daily }, /* … */ })
+```
+
+Todas as declarações de um nome têm de levar o mesmo `limit`, `windowMs` e
+string de chave; a app **recusa arrancar** (`InvalidRouteMetaError`, em todos os
+adaptadores) quando divergem. Chaves-função não são comparadas — duas lambdas
+inline são objetos diferentes mesmo quando significam o mesmo. Os nomes seguem
+`/^[A-Za-z0-9._:-]{1,64}$/`. Um array ou entrada com `bucket` malformado (array
+vazio, um limite não positivo, uma string de chave desconhecida) também recusa o
+arranque; o objeto único mantém a sua leitura tolerante de sempre.
+
+#### Orçamentos por prefixo de caminho {#path-prefix-budgets}
+
+`rateLimit.prefixes` dá a uma família de caminhos o seu próprio orçamento de
+borda, cobrado antes do routing **em vez do** balde global — é assim que uma API
+pública sob `/v1` recebe um teto por IP mais alto do que o resto da app,
+continuando a pagar um orçamento por IP antes de qualquer chave ser procurada:
+
+```ts
+securityPlugin({
+  rateLimit: {
+    limit: 300,
+    windowMs: 60_000,
+    prefixes: [{ prefix: '/v1', limit: 3_000, windowMs: 60_000 }],
+  },
+})
+```
+
+Ganha o prefixo correspondente mais longo. A correspondência é em fronteiras de
+segmento (`/v1` corresponde a `/v1` e `/v1/orders`, nunca a `/v10`) depois de
+uma normalização mínima: a query string é cortada, sequências de `/` colapsam,
+maiúsculas/minúsculas são ignoradas e um `/` final é removido — não há
+percent-decoding nem resolução de segmentos de ponto. 404s, preflights e pedidos
+que um enricher rejeita também contam. Cada prefixo pode ter a sua própria
+`key(request)` (por omissão: a `key` global, senão o IP); tal como a chave
+global corre antes da autenticação, por isso nunca leias nela um header de
+credencial. `skip` também salta os orçamentos de prefixo. Um prefixo inválido
+(sem `/` inicial, com `?` ou `#`, um limite não positivo, um duplicado) lança um
+`TypeError` quando o plugin é criado.
+
+Os prefixos **definem ou levantam** o orçamento de borda de uma família de
+caminhos; não servem para tornar um endpoint mais restrito, porque um pedido que
+chega à rota por uma forma de caminho que a normalização não dobra recua para o
+balde global. Um orçamento que tem de valer para um endpoint específico pertence
+ao seu `meta.rateLimit`, que está ligado à rota correspondente. Em Fastify, um
+`meta.rateLimit` de objeto único chaveado por IP continua a substituir o balde de
+borda (prefixo ou global), como antes.
 
 ### CORS
 

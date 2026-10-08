@@ -11,7 +11,9 @@ linha liga ao guia que traz a tabela de opções completa; nada aqui repete uma.
 
 - [ ] **Segredos são fail-closed** — assina com `secret()` para que a produção
       recuse placeholders. Ver [Segurança](/pt/guide/security#segredos-fail-closed-secret).
-- [ ] **A borda está protegida** — `securityPlugin({ rateLimit, cors, headers })`.
+- [ ] **A borda está protegida** — `securityPlugin({ rateLimit, cors, headers })`. O limite
+      global é chaveado só pelo endereço; uma API pública para clientes máquina
+      recebe `rateLimit.prefixes` e orçamentos por chave. Vê [Rate limiting](/pt/guide/security#rate-limiting).
 - [ ] **Logins são limitados** — ligado por predefinição em `@basaltkit/auth`.
 - [ ] **Mutações são idempotentes** — `idempotencyPlugin()` para `POST`.
 - [ ] **A app arranca a frio com a configuração de produção** — as guardas de boot
