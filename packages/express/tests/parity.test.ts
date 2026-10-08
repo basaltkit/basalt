@@ -16,6 +16,7 @@ import {
 } from '../../http/tests/adapter-parity.js'
 import { fileRoutesParitySuite } from '../../files/tests/route-parity.js'
 import { commentRoutesParitySuite } from '../../comments/tests/route-parity.js'
+import { realtimeSseParitySuite } from '../../realtime/tests/sse-parity.js'
 import { EXPRESS, expressPlugin } from '../src/index.js'
 
 let app: BasaltApp | undefined
@@ -52,3 +53,4 @@ wireParitySuite('express', driver)
 metaValidatorParitySuite('express', driver)
 fileRoutesParitySuite('express', driver)
 commentRoutesParitySuite('express', driver)
+realtimeSseParitySuite('express', driver)

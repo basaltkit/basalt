@@ -18,6 +18,7 @@ import {
 } from '../../http/tests/adapter-parity.js'
 import { fileRoutesParitySuite } from '../../files/tests/route-parity.js'
 import { commentRoutesParitySuite } from '../../comments/tests/route-parity.js'
+import { realtimeSseParitySuite } from '../../realtime/tests/sse-parity.js'
 import { HONO, honoPlugin } from '../src/index.js'
 
 let app: BasaltApp | undefined
@@ -72,6 +73,7 @@ wireParitySuite('hono', driver)
 metaValidatorParitySuite('hono', driver)
 fileRoutesParitySuite('hono', driver)
 commentRoutesParitySuite('hono', driver)
+realtimeSseParitySuite('hono', driver)
 
 describe('hono: multipart on routes that are not upload() routes', () => {
   const echo = route({

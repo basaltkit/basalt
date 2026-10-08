@@ -19,7 +19,7 @@ Seis peças, e apenas duas são específicas da framework:
 | --- | --- | --- |
 | `Realtime` (token `REALTIME`) | A fachada fluente que chamas: `to(tenant).channel(name).emit()` | o teu código |
 | `RealtimeHub` (token `REALTIME_HUB`) | Registo de connections, subscrições e presença; entrega aos sockets locais | um por processo |
-| `Connection` | `{ id, tenantId, userId?, send(), close() }` — construída a partir do teu socket/response por `websocketConnection()` / `sseConnection()` | por cliente |
+| `Connection` | `{ id, tenantId, userId?, send(), close() }` — construída a partir do teu socket/stream por `websocketConnection()` / `realtimeSse()` (`sseStreamConnection()`) / `sseConnection()` | por cliente |
 | `RealtimeBackplane` | Fan-out entre processos: `MemoryBackplane` (predefinição) ou `RedisBackplane` | processo / Redis |
 | Regras de ponte | Mapeiam um hook do core para um emit, fire-and-forget | em `app.hooks` |
 | `@basaltkit/realtime-client` | Cliente de browser: subscrição e religação automáticas | browser |
@@ -102,25 +102,50 @@ nunca conseguem ver o tráfego um do outro.
 ## Ligar um cliente (transporte)
 
 O core comunica com **connections**, não com sockets. Constrói uma `Connection` a
-partir do socket ou response do teu adaptador e regista-a — essa é toda a
-superfície específica da framework. `websocketConnection(meta, socket)` aceita
-qualquer socket ao estilo `ws` (`send(string)` + `close()`); `sseConnection(meta, io)`
-aceita o que quer que consiga escrever na resposta e terminá-la:
+partir do teu transporte e regista-a — essa é toda a superfície específica da
+framework.
+
+Para **SSE**, devolve o `sse()` do `@basaltkit/http` com `realtimeSse(hub, …)` como
+produtor. Corre sem alterações em Fastify, Express e Hono: regista a connection,
+junta-a aos canais (cada um passa pelo `authorize`) e remove-a quando o cliente
+sai.
 
 ```ts
-import { sseConnection, REALTIME_HUB } from '@basaltkit/realtime'
+import { ctx } from '@basaltkit/core'
+import { route, sse } from '@basaltkit/http'
+import { realtimeSse, REALTIME_HUB } from '@basaltkit/realtime'
 
 const hub = app.container.get(REALTIME_HUB)
 
-reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' })
-const conn = sseConnection(
-  { tenantId: tenant.id, userId: user.id },
-  { write: (chunk) => reply.raw.write(chunk), end: () => reply.raw.end() },
-)
-hub.register(conn)
-await hub.subscribe(conn.id, 'notes')
-reply.raw.on('close', () => hub.unregister(conn.id))
+route({
+  method: 'GET',
+  url: '/live',
+  meta: { auth: true },
+  handler: () => {
+    const { tenant, user } = ctx() as { tenant: { id: string }; user: { id: string } }
+    return sse(
+      realtimeSse(hub, {
+        meta: { tenantId: tenant.id, userId: user.id }, // da sessão, nunca do cliente
+        channels: ['notes', `user:${user.id}`],
+        onOpen: () => { /* opcional: enviar um snapshot */ },
+      }),
+      { heartbeatMs: 15_000 },
+    )
+  },
+})
 ```
+
+Um canal que o hub recusa fecha o stream — o `EventSource` voltaria a ligar e
+seria recusado de novo, por isso verifica o acesso no handler primeiro quando o
+cliente deve receber um `403`. A backpressure nunca remove um cliente lento: um
+envio que encontra o buffer cheio é contado, e o stream é fechado ao fim de
+`maxBackpressure` (por omissão 50) seguidos.
+
+Para **WebSockets**, `websocketConnection(meta, socket)` aceita qualquer socket ao
+estilo `ws` (`send(string)` + `close()`). O `sseConnection(meta, io)` de baixo
+nível continua disponível como saída de emergência para uma resposta que escreves
+tu (`{ write(chunk), end() }`, já enquadrada com `sseFrame`) — aí registar,
+subscrever e remover no fecho ficam a teu cargo.
 
 `ConnectionMeta` é `{ tenantId, userId?, id? }` — o `id` tem como predefinição um
 `randomUUID()`. **O `userId` é o que alimenta a presença**: uma connection
@@ -139,6 +164,7 @@ a ligar. Um
 socket que fecha limpamente continua registado até chamares
 `hub.unregister(conn.id)` — liga-o sempre ao evento de fecho do teu transporte,
 ou as subscrições e a presença ficam a vazar durante toda a vida do processo.
+(O `realtimeSse()` faz isto por ti.)
 :::
 
 ## Autorizar subscrições
