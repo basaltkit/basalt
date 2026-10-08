@@ -26,8 +26,9 @@ export interface InboundMail {
   oversize?: number
   receivedAt: Date
   /**
-   * A key that is stable across relay retries of this delivery and differs per
-   * recipient: `sha256hex(raw) + ':' + envelope.to`. It is derived only from
+   * A key that is stable across relay retries of this delivery (the same bytes
+   * re-posted; a retry by the sending server can carry new trace headers and
+   * so a new key) and differs per recipient: `sha256hex(raw) + ':' + envelope.to`. It is derived only from
    * signed data, never from headers the sender wrote (`Message-ID`), so one
    * sender cannot use it to suppress another tenant's mail. For an oversize
    * notice it is `'oversize:' + sha256hex(canonical)`, which covers the sender,

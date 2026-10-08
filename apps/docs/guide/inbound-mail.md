@@ -310,6 +310,14 @@ async handler({ mail }) {
 
 A database unique constraint on the key does the same job without a cache.
 
+The key is stable when the relay re-posts the same bytes (a Node relay that
+retries its `POST`). With the Cloudflare Worker above, a failed delivery is
+retried by the **sending server**: Email Routing receives the message again and
+adds fresh trace headers (`Received`, `ARC-Seal`, `Authentication-Results`), so
+the retry can carry a different key. Keep the handler's own work atomic (one
+transaction, or "store the bytes, then enqueue") so that a retry after a failure
+never finds half of it done.
+
 ## Oversize notices
 
 When a message is over the relay's ceiling, the Worker above does not forward
