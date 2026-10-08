@@ -342,12 +342,13 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
       // client is held for LEGACY_HOLD_MS — the 30s the pool's `get()` gave
       // before leasing existed — then returned on its own, whatever the
       // plugin's (1s) `idleMs`: those callers were sized for 30s.
-      const heldClient = async (tenantId: string): Promise<TClient> => {
-        const lease = await pool!.acquire(tenantId)
+      const holdForLegacyWindow = (lease: TenantClientLease<TClient>): TClient => {
         const timer = setTimeout(() => lease.release(), LEGACY_HOLD_MS)
         ;(timer as { unref?: () => void }).unref?.()
         return lease.client
       }
+      const heldClient = async (tenantId: string): Promise<TClient> =>
+        holdForLegacyWindow(await pool!.acquire(tenantId))
 
       const clientFor = async (tenantId: string | undefined): Promise<unknown> => {
         if (resolveClient && tenantId !== undefined) return resolveClient(tenantId)
@@ -364,6 +365,10 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
       // its `db` — are left untouched.
       const leased = pool !== undefined && resolveClient === undefined
       const leases = new WeakMap<object, Map<string, TenantClientLease<TClient>>>()
+      // Slots whose owner already ended (the request's disposer ran, or
+      // 'tenancy:exited' fired). Nothing will release them again, so a lease
+      // must never be parked in one — see leaseInto().
+      const closedSlots = new WeakSet<Map<string, TenantClientLease<TClient>>>()
       const leaseInto = async (
         slot: Map<string, TenantClientLease<TClient>>,
         tenantId: string,
@@ -371,10 +376,16 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
         const held = slot.get(tenantId)
         if (held) return held.client
         const lease = await pool!.acquire(tenantId)
+        // The owner ended before or while we acquired — a switch emitted on a
+        // request context after its response finished runs the slot's
+        // disposer synchronously, before this point. Parking the lease in the
+        // closed slot would leak it: fall back to the time-based hand-out.
+        if (closedSlots.has(slot)) return holdForLegacyWindow(lease)
         slot.set(tenantId, lease)
         return lease.client
       }
       const releaseAll = (slot: Map<string, TenantClientLease<TClient>>): void => {
+        closedSlots.add(slot)
         for (const lease of slot.values()) lease.release()
         slot.clear()
       }
@@ -395,8 +406,9 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
           const own = new Map<string, TenantClientLease<TClient>>()
           leases.set(context, own)
           // Forgotten on release: a lease taken after the response ended
-          // (background work) opens a new slot, which a finished sink
-          // releases at once instead of leaking it.
+          // (background work) opens a new slot, which a finished sink closes
+          // at once — leaseInto() then holds the client for the legacy
+          // window instead of parking it in the closed slot.
           onDispose(() => {
             releaseAll(own)
             if (leases.get(context) === own) leases.delete(context)

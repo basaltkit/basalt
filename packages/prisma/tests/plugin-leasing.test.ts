@@ -222,4 +222,48 @@ describe('prismaPlugin leases the tenant client per tenancy.run (BK-077)', () =>
       vi.useRealTimers()
     }
   })
+
+  it('never parks a lease in a request slot that already closed (switch after the response ended)', async () => {
+    let captured: object | undefined
+    app = await createApp({
+      plugins: [
+        prisma(),
+        fastifyPlugin({
+          routes: [
+            route({
+              method: 'GET',
+              url: '/capture',
+              handler: () => {
+                captured = ctx()
+                return { ok: true }
+              },
+            }),
+          ],
+        }),
+      ],
+    }).boot()
+    const counts = instrument(app.container.get(DB_POOL))
+    const server = app.container.get(FASTIFY)
+    expect((await server.inject({ method: 'GET', url: '/capture' })).statusCode).toBe(200)
+    // Let the request's disposer sink settle: it has run, so a disposer added
+    // now is invoked synchronously, on the spot.
+    await new Promise((resolve) => setImmediate(resolve))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const { runWithContext } = await import('@basaltkit/core')
+      // A hand-rolled switch (no `via`) on the finished request's context — a
+      // timer the handler left behind, a hook fired late.
+      await runWithContext(captured as never, async () => {
+        await app!.hooks.emit('tenancy:switched', { tenant: { id: 't1' } } as never)
+        expect((ctx().db as { tenantId: string }).tenantId).toBe('t1')
+      })
+      expect(counts.acquired).toBe(1)
+      expect(counts.released).toBe(0)
+      // Held for the legacy window, then returned — not leaked in an orphan slot.
+      vi.advanceTimersByTime(30_001)
+      expect(counts.released).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
