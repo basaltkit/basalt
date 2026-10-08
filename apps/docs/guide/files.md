@@ -612,8 +612,9 @@ container.
 | `download` | `boolean` | `true` | Mount `GET /files/:id/content`, the streamed download |
 | `upload` | `{ maxBytes, maxFiles?, allowedTypes? }` | — (off) | Mount `POST /files`, the streamed upload. `maxFiles` defaults to `1`; `allowedTypes` matches the **declared** type (`image/png`, `image/*`) |
 | `present` | `(record, user) => unknown` | `toPublicFile` | Shapes every record the routes answer with. The default keeps `path`, `checksum`, `tenantId`, `uploadedBy` and the scan `detail` server-side |
+| `meta` | `Record<string, unknown>` | — | Extra route metadata merged into every route — a guard (`{ can: 'files:read' }`), a rate limit, OpenAPI tags. `auth: true` is always applied on top |
 
-Every route declares `meta: { auth: true }` — there is no
+Every route declares `meta: { auth: true }` (plus whatever `meta` you pass) — there is no
 `auth: false` escape hatch, unlike `billingRoutes`. If authentication genuinely
 happens at an outer edge, waive the boot check with the adapter's
 `allowUnguardedMeta` instead of removing the meta.

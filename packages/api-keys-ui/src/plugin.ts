@@ -11,6 +11,12 @@ export interface ApiKeysUiOptions extends ApiKeysPageOptions {
    * to send no route-scoped CSP at all.
    */
   csp?: string | false
+  /**
+   * Extra route metadata merged into the page route — a guard such as
+   * `{ can: 'apikeys:manage' }`, a rate limit, OpenAPI tags. `auth: true` is
+   * always applied on top and cannot be switched off.
+   */
+  meta?: Record<string, unknown>
 }
 
 /**
@@ -21,11 +27,12 @@ export interface ApiKeysUiOptions extends ApiKeysPageOptions {
 export function apiKeysUiRoutes(options: ApiKeysUiOptions = {}): BasaltRoute[] {
   const html = apiKeysPageHtml(options)
   const csp = options.csp === false ? undefined : (options.csp ?? apiKeysPageCsp(options))
+  const meta = { ...options.meta, auth: true }
   return [
     route({
       method: 'GET',
       url: options.path ?? '/apikeys/ui',
-      meta: { auth: true },
+      meta,
       async handler({ reply }) {
         if (csp !== undefined) reply.header('content-security-policy', csp)
         return reply.header('content-type', 'text/html; charset=utf-8').send(html)

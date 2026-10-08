@@ -4,7 +4,7 @@ import { prismaActivityStore } from '@basaltkit/activity-prisma'
 import { prismaAuditStore } from '@basaltkit/audit-prisma'
 import { prismaAuthStores } from '@basaltkit/auth-prisma'
 import { prismaCommentsStore } from '@basaltkit/comments-prisma'
-import { prismaInAppStore } from '@basaltkit/notifications-prisma'
+import { prismaInAppStore, prismaPreferenceStore } from '@basaltkit/notifications-prisma'
 import { prismaAccessStore } from '@basaltkit/permissions-prisma'
 import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'
 import { prismaTeamsStores } from '@basaltkit/teams-prisma'
@@ -36,7 +36,7 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
       prisma.teamMembership.deleteMany(), prisma.teamInvitation.deleteMany(),
       prisma.subscription.deleteMany(), prisma.usageCounter.deleteMany(), prisma.webhookEvent.deleteMany(),
       prisma.comment.deleteMany(), prisma.auditEntry.deleteMany(), prisma.activityRecord.deleteMany(),
-      prisma.inAppNotification.deleteMany(), prisma.permUserRole.deleteMany(),
+      prisma.inAppNotification.deleteMany(), prisma.notificationPreference.deleteMany(), prisma.permUserRole.deleteMany(),
       prisma.permUserPermission.deleteMany(), prisma.permRolePermission.deleteMany(),
       prisma.permTemporaryGrant.deleteMany(), prisma.permDelegation.deleteMany(),
       prisma.tenantDomain.deleteMany(), prisma.tenant.deleteMany(),
@@ -159,6 +159,27 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     expect(await n.markRead('u1', 'n1')).toBe(true)
     expect(await n.markRead('u1', 'n1')).toBe(false) // already read
     expect(await n.unreadCount('u1')).toBe(0)
+  })
+
+  it('notifications: grouping, markAllRead, prune, durable preferences (BK-078)', async () => {
+    const n = prismaInAppStore(prisma).store
+    await n.upsertGroup({ id: 'g1', recipientId: 'u9', notification: 'c', title: 'Ana', at: 10, groupKey: 'doc:1' })
+    await n.upsertGroup({ id: 'g2', recipientId: 'u9', notification: 'c', title: 'Rui', at: 20, groupKey: 'doc:1' })
+    const rows = await n.list('u9')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'g1', title: 'Rui', count: 2, groupKey: 'doc:1' })
+    await n.append({ id: 'g3', recipientId: 'u9', notification: 'x', title: 'x', at: 30 })
+    expect(await n.markAllRead('u9')).toBe(2)
+    expect(await n.unreadCount('u9')).toBe(0)
+    expect(await n.prune({ readBefore: Date.now() + 1000 })).toBeGreaterThanOrEqual(2)
+    expect(await n.list('u9')).toEqual([])
+
+    const prefs = prismaPreferenceStore(prisma)
+    await prefs.set({ userId: 'u9', notification: '*', channel: 'sms', enabled: false })
+    await prefs.set({ userId: 'u9', notification: '*', channel: 'sms', enabled: true })
+    expect(await prefs.list('u9')).toEqual([{ userId: 'u9', notification: '*', channel: 'sms', enabled: true }])
+    await prefs.remove('u9', '*', 'sms')
+    expect(await prefs.list('u9')).toEqual([])
   })
 
   it('tenancy: open JSON records + unique custom-domain lookup', async () => {

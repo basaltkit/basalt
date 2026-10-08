@@ -97,3 +97,10 @@ describe('escaping + route-scoped CSP (S-5)', () => {
     expect(teamsPageCsp()).toContain("default-src 'none'")
   })
 })
+
+describe('teamsUiRoutes meta (BK-078)', () => {
+  it('merges extra meta and keeps auth on', () => {
+    expect(teamsUiRoutes({ meta: { teamRole: 'admin', auth: false } })[0]!.meta).toEqual({ teamRole: 'admin', auth: true })
+    expect(teamsUiRoutes()[0]!.meta).toEqual({ auth: true })
+  })
+})

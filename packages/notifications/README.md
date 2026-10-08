@@ -116,7 +116,20 @@ await prefs.optIn('u2', { notification: 'security.alert', channel: 'sms' }) // �
 
 The plugin passes these to the `Notifier` automatically, which **skips** any
 channel a user opted out of (reported in `skipped`). Everything is allowed by
-default; back the `PreferenceStore` with your database in production.
+default; back the `PreferenceStore` with your database in production —
+`sqliteInAppStore(path).preferences` (`@basaltkit/notifications-sqlite`) or
+`prismaPreferenceStore(prisma)` (`@basaltkit/notifications-prisma`).
+
+A definition can override the default per channel and exempt channels from
+opting out:
+
+```ts
+defineNotification({ name: 'digest.weekly', channels: ['mail', 'sms'], via, defaults: { sms: false } }) // SMS is opt-in
+defineNotification({ name: 'security.alert', channels: ['mail'], via, mandatory: ['mail'] })          // cannot be muted
+```
+
+Order of decision: `mandatory` → inline `channelPreferences: false` → most
+specific stored preference → inline `true` → `defaults[channel]` (default `true`).
 
 ### Digest (batching)
 
@@ -263,8 +276,10 @@ app.hooks.on('notification:failed', ({ notification, channel, recipientId, error
 | `schema` | `NotificationSchema<T>` | No | Schema with `safeParse` (Zod-compatible) |
 | `channels` | `string[] \| ((recipient, data) => string[])` | Yes | Delivery channels, fixed or per recipient |
 | `via` | `Record<string, (data, recipient) => unknown>` | Yes | Per-channel renderer — returns that channel's message |
+| `defaults` | `Partial<Record<string, boolean>>` | No | Per-channel default when the recipient stated no preference (`{ sms: false }` = opt-in) |
+| `mandatory` | `string[]` | No | Channels that ignore every opt-out (security/legal notices) |
 
-Message formats expected by the included channels: `via.mail` should return `MailChannelMessage` (`{ subject, text?, html? }`); `via.inApp` should return `InAppMessage` (`{ title, body?, data? }`).
+Message formats expected by the included channels: `via.mail` should return `MailChannelMessage` (`{ subject, text?, html? }`); `via.inApp` should return `InAppMessage` (`{ title, body?, data?, groupKey? }` — `groupKey` collapses unread repeats into one row with a `count`).
 
 ### `interface Notifiable`
 
@@ -308,8 +323,15 @@ Registers `NOTIFIER` (and `IN_APP` when the in-app channel is active). If `MAILE
 | `list` | `(recipientId, { unreadOnly?, limit? }?) => Promise<InAppNotification[]>` | Lists (most recent first) |
 | `markRead` | `(recipientId, id) => Promise<boolean>` | Marks as read; `false` if it doesn't exist or is already read |
 | `unreadCount` | `(recipientId) => Promise<number>` | Total unread |
+| `markAllRead?` | `(recipientId) => Promise<number>` | Optional: mark every unread one read in one operation |
+| `prune?` | `({ readBefore?, unreadBefore? }) => Promise<number>` | Optional: retention — delete old read/unread rows (all recipients) |
+| `upsertGroup?` | `(record & { groupKey }) => Promise<void>` | Optional: collapse onto the recipient's unread row with the same `groupKey` |
 
-`InAppNotification`: `{ id, recipientId, notification, title, body?, data?, readAt?, at }`.
+The optional methods are capabilities: callers check for them and fall back, so a store implementing only the first four keeps working. `MemoryInAppStore`, `SqliteInAppStore` and `PrismaInAppStore` implement all of them.
+
+`InAppNotification`: `{ id, recipientId, notification, title, body?, data?, readAt?, at, groupKey?, count? }`.
+
+`inAppRoutes({ prefix?, defaultLimit?, meta? })` serves `GET /me/notifications`, `/unread-count`, `POST /:id/read` and `POST /read-all` for the signed-in user. `meta` is merged into every route (`auth: true` always on top). `read-all` marks every unread notification — via `markAllRead` when the store has it, page by page otherwise.
 
 ### Other exports
 
