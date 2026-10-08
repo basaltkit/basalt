@@ -55,9 +55,56 @@ auditPlugin({ store: a.store, integrity: 'hash-chain', requestContext: true })
 - **Rows outside the chain** — `readUnchained()` finds every row of a tenant that is not in its chain: a row with `chain IS NULL` but a `seq`, or a `chain` name that is not the tenant's, is always reported by `verify()` (`unverified`, `ok: false`); a seq-less row only when it was written after the chain began. `trail({ chainedOnly: true })` leaves them out, and `verifyAll()` reports a chain name that maps to no tenant as `unknown-chain`. `verifyAll()` also visits tenants whose rows are all outside a chain, found with one `SELECT DISTINCT tenant_id` (`auditTenants()`) rather than a read of the whole trail.
 - SQLite has no roles to `REVOKE UPDATE, DELETE` from: protect the database file with filesystem permissions (only the app user can write it) and back it up; for a keyed chain see `integrity: { mode: 'hash-chain', key }` in the [`@basaltkit/audit` README](https://github.com/basaltkit/basalt/tree/main/packages/audit#verifiable-trail-hash-chain).
 
+## Erasing personal data
+
+`audit.redact()` / `audit.systemRedact()` (see the
+[`@basaltkit/audit` README](https://github.com/basaltkit/basalt/tree/main/packages/audit#erasing-personal-data-auditredact))
+work on this store as they are:
+
+- `migrate()` adds two nullable columns: `redaction` (the erased set, as stable
+  JSON) and `redacted_by` (the id of the `audit:redacted` attestation, also the
+  optimistic-concurrency token). Existing rows keep NULLs.
+- `get(id)` reads one row; `redact(write)` runs in one `BEGIN IMMEDIATE`
+  transaction — the row is updated only while its `hash` and `redacted_by` are
+  still the ones the redaction was computed from (`AuditRedactionConflictError`
+  otherwise), and the attestation is inserted under the `(chain, seq)` index
+  (`AuditChainConflictError`). Any error rolls both back.
+
+### Optional guard triggers
+
+SQLite has no roles, so nothing stops a buggy `UPDATE` or `DELETE` on the table.
+These triggers do: they refuse every `DELETE`, and every `UPDATE` except an
+attested redaction (header and hash columns unchanged, `redacted_by` set). They
+guard against **bugs, not attackers** — whoever can open the file can drop them.
+Install them once, after `migrate()` (`db.exec(sql)`); do not install them if
+your retention policy deletes old rows.
+
+<!-- audit-sqlite:guard-triggers -->
+```sql
+CREATE TRIGGER IF NOT EXISTS audit_entries_no_delete
+BEFORE DELETE ON audit_entries
+BEGIN
+  SELECT RAISE(ABORT, 'audit_entries is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS audit_entries_redaction_only
+BEFORE UPDATE ON audit_entries
+WHEN NEW.id IS NOT OLD.id OR NEW.source IS NOT OLD.source OR NEW.event IS NOT OLD.event
+  OR NEW.actor_id IS NOT OLD.actor_id OR NEW.tenant_id IS NOT OLD.tenant_id
+  OR NEW.request_id IS NOT OLD.request_id OR NEW.at IS NOT OLD.at
+  OR NEW.chain IS NOT OLD.chain OR NEW.seq IS NOT OLD.seq
+  OR NEW.prev_hash IS NOT OLD.prev_hash OR NEW.hash IS NOT OLD.hash
+  OR NEW.redacted_by IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'audit_entries: only an attested redaction may update a row');
+END;
+```
+<!-- /audit-sqlite:guard-triggers -->
+
 ## Notes
 
-- **Append-only by contract** — one `audit_entries` table, no update or delete.
+- **Append-only by contract** — one `audit_entries` table, no delete; the only
+  update is the attested erasure above.
 - Queries return **newest-first** with the same filters as the in-memory store:
   `tenantId`, `actorId`, `since`, `chainedOnly`, and the **event wildcard** (`auth:**`).
   `limit` always counts only pattern-matched rows. Every filter is type-checked
