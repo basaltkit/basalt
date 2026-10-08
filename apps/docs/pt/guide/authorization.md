@@ -147,6 +147,65 @@ utilizador sem `id` de texto não vazio não está autenticado: `can`/`authorize
 `hasRole` lançam `AuthRequiredGuardError` (401) em vez de avaliar — ou rebentar
 com — um chamador anónimo.
 
+### As políticas decidem um objeto, não uma lista
+
+Uma política responde sim/não sobre **um objeto já carregado**. Não responde a
+"que linhas pode este utilizador ver?". Corrê-la sobre as linhas *depois* da
+query parece certo com poucos dados e fica errado assim que a query é paginada
+ou agregada:
+
+- as páginas vêm curtas (20 linhas lidas, 7 sobrevivem ao filtro);
+- o `total` conta linhas que o utilizador não pode ver, e o mesmo acontece aos
+  facets e às contagens de `groupBy`;
+- com cursor, as linhas filtradas de uma página nunca aparecem, e a página
+  seguinte começa depois delas;
+- o `count` e o `findMany` não batem certo, e a UI mostra "42 resultados" sobre 3 linhas.
+
+A listagem precisa de um **predicado de acesso** que a base de dados aplique.
+Escreve-o uma vez por recurso, num único módulo, e usa-o em todas as queries que
+listam ou contam esse recurso:
+
+```ts
+// documents/access.ts: a fonte única da regra "quem vê que documento"
+export function documentAccessWhere(user: { id: string; roles: string[] }) {
+  if (user.roles.includes('admin')) return {}
+  return { OR: [{ ownerId: user.id }, { shares: { some: { userId: user.id } } }] }
+}
+
+export const DocumentPolicy = definePolicy<Document>('document', {
+  // A mesma regra, para um objeto (requisitos de recurso do meta.can, gate.can).
+  read: (user, doc) => doc.ownerId === user.id || doc.shares.some((s) => s.userId === user.id),
+})
+
+// documents/repository.ts
+export async function listDocuments(user: AppUser, filter: Prisma.DocumentWhereInput, page: Page) {
+  const where = { AND: [documentAccessWhere(user), filter] } // um objeto, reutilizado abaixo
+  const [rows, total] = await Promise.all([
+    prisma.document.findMany({ where, ...page }),
+    prisma.document.count({ where }),
+  ])
+  return { rows, total }
+}
+```
+
+- Compõe o predicado com `AND` em `findMany`, `count`, `groupBy`, `aggregate` e
+  nas queries de autocomplete. Constrói o `where` uma vez e passa o **mesmo
+  objeto** ao `count` e ao `findMany`.
+- Mantém o `definePolicy` para a decisão sobre um objeto (o
+  [requisito de recurso](#politicas-no-guard-requisitos-de-recurso) de uma rota,
+  um `gate.can(user, 'document:read', doc)` num handler) e escreve-o como a mesma
+  regra do predicado, para que a lista e a página de detalhe nunca discordem.
+- Testa o `total` e as contagens dos facets, não só as linhas: é aí que um
+  pós-filtro se nota.
+- O scope do tenant é outra coisa. A extensão de tenancy do `@basaltkit/prisma`
+  acrescenta o tenant a cada query; o predicado de acesso restringe ainda mais
+  dentro do tenant.
+- Para resultados de pesquisa full-text, o framework já tem o hook: o
+  [`authorize`](/pt/guide/search#quem-pode-ver-um-resultado) do
+  `@basaltkit/search` corre a tua política sobre os resultados, continua a pedir
+  ao driver até a página estar cheia, e indica em `totalExact` se o `total` pode
+  ser mostrado.
+
 ## Proteger rotas
 
 Regista o `permissionsPlugin` e declara a permissão que uma rota precisa com
