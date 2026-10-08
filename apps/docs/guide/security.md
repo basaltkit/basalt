@@ -340,6 +340,42 @@ migrating plaintext or `v1:` rows (an explicit `legacy` opt-in plus
 `auth.reencryptMfaSecret(userId)`) are covered in
 [Encrypting TOTP secrets at rest](/guide/auth#mfa-encryption).
 
+## Outbound HTTP & SSRF
+
+Any time your app fetches a URL it did not write — a tenant's "import from
+URL", an avatar link, a file a provider points at — that URL is hostile input:
+it can name `169.254.169.254`, a database on your private network, or a public
+host that redirects to one. Don't use bare `fetch` for it. `@basaltkit/webhooks`
+exports the streaming client `@basaltkit/drives` uses for every provider call:
+
+```ts
+import { createGuardedFetch, GuardedFetchError } from '@basaltkit/webhooks'
+
+const fetchUntrusted = createGuardedFetch({
+  maxBytes: 20 * 1024 * 1024, // required: abandoned mid-stream past this
+  timeoutMs: 15_000, // socket inactivity + each hop's wait for headers
+  deadlineMs: 120_000, // optional: the whole exchange, body included
+  allowedHosts: ['.example-cdn.com'], // optional: `.suffix` = subdomains only
+})
+
+const response = await fetchUntrusted(url)
+await files.upload(response.body, { name: 'import.pdf' }) // streamed, capped
+```
+
+What it enforces, on **every** redirect hop: `https:` only (widen with
+`allowedSchemes`), the optional host allowlist, DNS resolved once with every
+answer checked against private/loopback/link-local/CGNAT/ULA/reserved and
+IPv4-embedded IPv6 ranges, the socket **pinned** to the validated IP (no DNS
+rebinding), at most `maxRedirects` (3) hops with `authorization`/`cookie`
+dropped on a hop to another host, no `accept-encoding` (so a decompression bomb
+cannot hide behind the cap), and the byte cap counted on the wire.
+
+Refusals throw `GuardedFetchError` with `kind` `SSRF_BLOCKED`,
+`BODY_TOO_LARGE`, `TIMEOUT` or `TOO_MANY_REDIRECTS` (code `OUTBOUND_<kind>`).
+The message names the host, never the URL — a pre-signed URL is a credential —
+and `expose` is `false`, so a client only sees the code. `allowPrivateHosts` is
+the one escape hatch, for a self-hosted target on your own network.
+
 ## Shared responsibility — hardening your integration
 
 Basalt closes the vulnerabilities it *can* close on its own. Three things,

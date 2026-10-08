@@ -313,7 +313,7 @@ Every call resolves its tenant like `@basaltkit/files`: the context tenant wins,
 | `verifyHmacSignature(input)` | Constant-time HMAC over a **raw** body |
 | `contentVersion(item)` | The content identity used for dedup |
 | `withRetry(fn, policy?)` | Backoff honouring `Retry-After` |
-| `createDriveFetch(options)` | The guarded, SSRF-validated, capped HTTP client |
+| `createDriveFetch(options)` | The guarded, SSRF-validated, capped HTTP client — `@basaltkit/webhooks`' public `createGuardedFetch` plus the provider allowlist, `DRIVE_*` errors and rate-limit hints. For your own untrusted URLs use `createGuardedFetch` directly |
 
 ### Storage strategies
 

@@ -37,6 +37,19 @@ export {
   type ValidatedAddress,
   type ValidatedTarget,
 } from './ssrf.js'
+export {
+  createGuardedFetch,
+  capStream,
+  hostAllowed,
+  pinnedStreamTransport,
+  GuardedFetchError,
+  type GuardedFetch,
+  type GuardedFetchErrorKind,
+  type GuardedFetchOptions,
+  type GuardedRequestInit,
+  type GuardedResponse,
+  type GuardedTransport,
+} from './guarded-fetch.js'
 
 const currentTenantId = (): string | undefined => asTenantId((tryCtx() as { tenant?: { id?: unknown } } | undefined)?.tenant?.id)
 

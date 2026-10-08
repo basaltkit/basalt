@@ -347,6 +347,44 @@ conhece. A rotação de chaves e a migração de linhas em texto simples ou `v1:
 adesão `legacy` explícita mais `auth.reencryptMfaSecret(userId)`) estão em
 [Cifrar os segredos TOTP em repouso](/pt/guide/auth#mfa-encryption).
 
+## HTTP de saída & SSRF
+
+Sempre que a tua app vai buscar um URL que não escreveu — o "importar de URL" de
+um tenant, o link de um avatar, um ficheiro para o qual um fornecedor aponta —
+esse URL é input hostil: pode apontar para `169.254.169.254`, para uma base de
+dados na tua rede privada, ou para um host público que redireciona para uma.
+Não uses o `fetch` simples para isso. O `@basaltkit/webhooks` exporta o cliente
+em streaming que o `@basaltkit/drives` usa em todas as chamadas a fornecedores:
+
+```ts
+import { createGuardedFetch, GuardedFetchError } from '@basaltkit/webhooks'
+
+const fetchUntrusted = createGuardedFetch({
+  maxBytes: 20 * 1024 * 1024, // obrigatório: abandonado a meio do stream acima disto
+  timeoutMs: 15_000, // inactividade do socket + espera pelos headers em cada salto
+  deadlineMs: 120_000, // opcional: a troca inteira, corpo incluído
+  allowedHosts: ['.example-cdn.com'], // opcional: `.sufixo` = só subdomínios
+})
+
+const response = await fetchUntrusted(url)
+await files.upload(response.body, { name: 'import.pdf' }) // em streaming, com limite
+```
+
+O que impõe, em **cada** salto de redirect: só `https:` (alarga com
+`allowedSchemes`), a allowlist de hosts opcional, DNS resolvido uma vez com
+cada resposta verificada contra gamas privadas/loopback/link-local/CGNAT/ULA/
+reservadas e IPv6 com IPv4 embebido, o socket **fixado** no IP validado (sem DNS
+rebinding), no máximo `maxRedirects` (3) saltos com `authorization`/`cookie`
+removidos num salto para outro host, nenhum `accept-encoding` (para que uma
+bomba de descompressão não se esconda atrás do limite), e o limite de bytes
+contado no fio.
+
+As recusas lançam `GuardedFetchError` com `kind` `SSRF_BLOCKED`,
+`BODY_TOO_LARGE`, `TIMEOUT` ou `TOO_MANY_REDIRECTS` (código `OUTBOUND_<kind>`).
+A mensagem nomeia o host, nunca o URL — um URL pré-assinado é uma credencial —
+e `expose` é `false`, por isso um cliente só vê o código. O `allowPrivateHosts`
+é a única saída de emergência, para um alvo alojado na tua própria rede.
+
 ## Responsabilidade partilhada — reforçar a tua integração
 
 O Basalt fecha as vulnerabilidades que *consegue* fechar sozinho. Três coisas,
