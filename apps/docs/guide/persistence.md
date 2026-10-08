@@ -599,7 +599,15 @@ transaction** as the state change, and the two can never disagree. `pending`,
 attempt ceilings and `markPublished`/`markFailed` keep the in-memory semantics,
 now durable.
 
-now durable.
+::: tip The outbox table is framework infrastructure
+Give the outbox store the **plain** client and no row-level-security policy,
+like the `auth_*` and `perm_*` tables. The relay reads it with no tenant in
+context — under shared-schema RLS it would see nothing (or `tenancyExtension`
+would throw `PRISMA_TENANT_MISSING`), and under schema-per-tenant it lives in
+the central schema. Each entry still records its `tenantId`, and the webhook
+relay enters that tenant for the endpoint lookup (see
+[Webhooks → Schema-per-tenant](/guide/webhooks#schema-per-tenant)).
+:::
 
 ## Outbound webhooks — `@basaltkit/webhooks-sqlite` / `@basaltkit/webhooks-prisma`
 

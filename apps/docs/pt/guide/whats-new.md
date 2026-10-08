@@ -64,7 +64,7 @@ auditoria](#fechar-a-colheita-da-auditoria).
 
 ## Desde a 1.12 (por publicar)
 
-Entrou no `main` depois da publicação da 1.12, tudo opt-in e sem quebras:
+Entrou no `main` depois da publicação da 1.12, tudo sem quebras:
 
 - **Idempotência em todos os adapters.** O `idempotencyPlugin` passou de
   `@basaltkit/fastify` para o pipeline de rotas partilhado em `@basaltkit/http`,
@@ -85,6 +85,21 @@ Entrou no `main` depois da publicação da 1.12, tudo opt-in e sem quebras:
   de entrega, `headerPrefix` muda o nome dos headers `x-basalt-*`, e
   `signPayload()` / `verifySignature()` aceitam bytes em bruto — vê
   [Webhooks](/pt/guide/webhooks#selar-secrets-em-repouso).
+- **O outbox de webhooks funciona com endpoints por tenant.** Com schema por
+  tenant (ou base de dados por tenant) e o store de webhooks sobre
+  `tenantClient()`, cada entrada do relay falhava com `DB_UNAVAILABLE` e acabava
+  morta. O `tenancyPlugin` passa a publicar um sinal `'tenancy:run'`
+  (`TenantRunner`, minor do `@basaltkit/tenancy`), e o `webhooksPlugin` usa-o
+  para correr a pesquisa de endpoints de um `dispatch()` fora do pedido
+  delimitado por `tenantId` dentro de `tenancy.run` — só a pesquisa, nunca a
+  entrega, por isso um endpoint lento não consegue prender um cliente do pool.
+  `webhookOutboxPlugin({ tenantOnly: true })` ignora eventos emitidos sem tenant.
+  **Ativo por defeito** sempre que o `tenancyPlugin` está registado, o que as
+  apps em schema partilhado também notam: um `TenantSource.find` e um par
+  `tenancy:switched`/`tenancy:exited` por cada dispatch destes, e as entradas de
+  um tenant que já não existe acabam mortas (`TENANT_NOT_FOUND`) em vez de serem
+  entregues. Desativa com `webhooksPlugin({ runInTenant: false })` — vê
+  [Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant).
 
 ## Destaques
 
