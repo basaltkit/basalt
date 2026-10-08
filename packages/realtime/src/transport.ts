@@ -132,12 +132,17 @@ export function realtimeSse(
     // Wait for the client to go away: sse() ends the response as soon as the
     // producer returns. Registered first, so a disconnect during the
     // subscriptions below still unregisters.
-    const closed = new Promise<void>((resolve) =>
-      stream.onClose(() => {
-        hub.unregister(connection.id)
-        resolve()
-      }),
-    )
+    let done: () => void = () => {}
+    const closed = new Promise<void>((resolve) => {
+      done = resolve
+    })
+    stream.onClose(() => {
+      hub.unregister(connection.id)
+      done()
+    })
+    // A structural stream may not replay `onClose` to a listener added after
+    // it closed (http's does); never wait forever on one that already has.
+    if (stream.closed) done()
     if (!stream.closed) {
       hub.register(connection)
       for (const channel of options.channels) {
