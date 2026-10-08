@@ -244,3 +244,97 @@ export function checkAuditHash(
   if (key === undefined) return 'unknown-key'
   return sameHash(computeAuditHashV2(entry, { id: parsed.keyId, key }), stored) ? 'ok' : 'hash-mismatch'
 }
+
+// ── Erasure (RFC 0003) ────────────────────────────────────────────────────────
+
+/** The value an erased payload field (or a whole payload erased with `'all'`) holds. */
+export const AUDIT_ERASED = '[erased]'
+
+/**
+ * Event of the attestation `Audit.redact()` appends: it binds the redacted
+ * entry's id, `seq` and original `hash`, the erased fields and the digest of
+ * the entry's new state. Reserved — `record()` refuses it, and the whole
+ * `audit:` prefix is reserved for framework events.
+ */
+export const AUDIT_REDACTED_EVENT = 'audit:redacted'
+
+/**
+ * Digest of a redacted entry's state (`sha256:<hex>`): every header field, the
+ * payload as persisted, and the erased set of its redaction marker (its
+ * `attestationId` excluded). The `audit:redacted` attestation records it, and
+ * `verify()` recomputes it — so editing anything on a redacted row, header
+ * fields included, is detected although its original `hash` no longer covers
+ * the content.
+ */
+export function auditRedactionState(entry: AuditEntry): string {
+  const marker = entry.redaction
+  const state = {
+    r: 1,
+    id: entry.id,
+    seq: entry.seq ?? null,
+    tenantId: entry.tenantId ?? null,
+    at: entry.at,
+    source: entry.source,
+    event: entry.event,
+    actorId: entry.actorId ?? null,
+    requestId: entry.requestId ?? null,
+    ip: entry.ip ?? null,
+    userAgent: entry.userAgent ?? null,
+    payload: persistedPayload(entry.payload),
+    erased: marker === undefined ? null : { payload: marker.payload, ip: marker.ip, userAgent: marker.userAgent },
+  }
+  return `sha256:${createHash('sha256').update(stableJson(state)).digest('hex')}`
+}
+
+/**
+ * Stable JSON (object keys sorted at every level). Stores use it to persist
+ * the redaction marker, so the same marker always serializes the same way.
+ */
+export function auditStableJson(value: unknown): string {
+  return stableJson(value)
+}
+
+/**
+ * Thrown by a store's `redact()` when the entry no longer has the `hash` /
+ * `redactedBy` the redaction was computed from — a concurrent redaction (on
+ * another replica) got there first. Nothing was written; `Audit` re-reads the
+ * entry and merges into the newer state.
+ */
+export class AuditRedactionConflictError extends BasaltError {
+  constructor(entryId: string, options?: ErrorOptions) {
+    super('AUDIT_REDACTION_CONFLICT', `Audit entry ${entryId} was changed by a concurrent redaction.`, options)
+  }
+}
+
+/**
+ * The entry to redact does not exist — or belongs to another tenant than the
+ * scope of the call (the same error, so the API is no existence oracle).
+ */
+export class AuditEntryNotFoundError extends BasaltError {
+  readonly status = 404
+  constructor() {
+    super('AUDIT_ENTRY_NOT_FOUND', 'Audit entry not found.')
+  }
+}
+
+/** Why `Audit.redact()` refused — see {@link AuditRedactionRefusedError}. */
+export type AuditRedactionRefusal = 'unverified' | 'residual' | 'unsupported-store'
+
+/**
+ * `Audit.redact()` refused to erase, and wrote nothing:
+ *
+ * - `'unverified'` — the entry does not verify as it is now (tampered, signed
+ *   under a key this `Audit` does not hold, an attestation itself, or a chained
+ *   entry on an `Audit` without integrity). Redacting it would bless tampered
+ *   content with a fresh attestation.
+ * - `'residual'` — after erasure the entry's hash would still confirm a guess
+ *   of the erased value to more people than `request.residual` accepts.
+ * - `'unsupported-store'` — the store cannot redact (no `get` / `redact`).
+ */
+export class AuditRedactionRefusedError extends BasaltError {
+  readonly reason: AuditRedactionRefusal
+  constructor(reason: AuditRedactionRefusal, message: string) {
+    super('AUDIT_REDACTION_REFUSED', message, { details: { reason } })
+    this.reason = reason
+  }
+}
