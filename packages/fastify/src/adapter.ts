@@ -369,8 +369,12 @@ function disposeAfterResponse(
           res.once('close', ended)
         }
       }
-      // After run(), add() disposes a late arrival at once.
+      // After run(), add() disposes a late arrival at once. A FIRST
+      // registration that arrives when both conditions already hold (a
+      // handler's timer firing after the reply, a hook on the finished
+      // request context) has no event left to wait for: run it now.
       disposers.add(disposer)
+      runIfDone()
     },
     settled() {
       handlerSettled = true

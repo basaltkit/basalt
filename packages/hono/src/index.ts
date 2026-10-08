@@ -7,6 +7,7 @@ import {
   toErrorResponse,
   reportHttpError,
   RequestDisposers,
+  type RequestDisposer,
   type HttpErrorReporter,
   type HttpReply,
   type HttpRequest,
@@ -406,9 +407,17 @@ function handlerFor(
     const reply = new HonoReply(context)
     // Disposers enrichers return (a leased database client, …): run when the
     // response is complete — at once for a buffered body, at the end of the
-    // body for `stream()`/`sse()`.
+    // body for `stream()`/`sse()`. One registered for the first time after
+    // that point (a handler's timer, a hook on the finished request context)
+    // runs at once: `ended` marks it, and run() makes add() dispose directly.
     let disposers: RequestDisposers | undefined
     let streamed = false
+    let ended = false
+    const addDisposer = (disposer: RequestDisposer): void => {
+      const sink = disposersOf()
+      sink.add(disposer)
+      if (ended && !sink.ran) void sink.run()
+    }
     const disposersOf = (): RequestDisposers =>
       (disposers ??= new RequestDisposers((error) =>
         report(onError, {
@@ -443,15 +452,17 @@ function handlerFor(
         ...(container ? { container } : {}),
         enrichers,
         guards,
-        onDispose: (disposer) => disposersOf().add(disposer),
+        onDispose: addDisposer,
       })
       if (isSseResponse(result) || isStreamResponse(result)) {
         const response = isSseResponse(result)
           ? sseResponse(context, sseProducerOf(result))
           : await streamResponse(context, streamPayloadOf(result), onError)
-        if (!disposers) return response
+        // Always tracked for a streamed body, even with no disposer yet: the
+        // producer may register one while it streams, and that one must wait
+        // for the last byte or the abort, as on the Node adapters.
         streamed = true
-        return disposeWhenBodyEnds(response, context.req.raw.signal, disposers)
+        return disposeWhenBodyEnds(response, context.req.raw.signal, disposersOf())
       }
       return toResponse(reply, reply.sent ? reply.payload : result)
     } catch (error) {
@@ -470,7 +481,10 @@ function handlerFor(
       // (security headers, CORS, x-request-id) are kept on error responses.
       return toResponse(reply.code(status), body)
     } finally {
-      if (disposers && !streamed) await disposers.run()
+      if (!streamed) {
+        ended = true
+        if (disposers) await disposers.run()
+      }
     }
   }
 }

@@ -1535,6 +1535,8 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
         const take: RequestEnricher = ({ request }) => {
           const path = request.url.split('?')[0]
           const label = `${request.method} ${path}`
+          // The /late routes register their only disposer themselves.
+          if (path.startsWith('/late')) return undefined
           return () => {
             // A stream's disposer must not run before its body was sent.
             if (path === '/stream') disposed.push(streamDone ? label : `${label} (early)`)
@@ -1585,6 +1587,29 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
         method: 'GET',
         url: '/events',
         handler: () => sse((events) => new Promise<void>((resolve) => events.onClose(resolve))),
+      }),
+      route({
+        method: 'GET',
+        url: '/late',
+        handler() {
+          // The request's FIRST disposer, registered after the reply went out
+          // (a timer the handler left behind): it must still run, at once.
+          const onDispose = ctx().onDispose!
+          setTimeout(() => onDispose(() => void disposed.push('GET /late (late)')), 50)
+          return { ok: true }
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/late-events',
+        handler() {
+          const onDispose = ctx().onDispose!
+          return sse((events) => {
+            // First registered while the stream is open: it waits for the close.
+            onDispose(() => void disposed.push('GET /late-events (late)'))
+            return new Promise<void>((resolve) => events.onClose(resolve))
+          })
+        },
       }),
       route({
         method: 'GET',
@@ -1671,6 +1696,24 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
       expect(await settled()).toEqual(['GET /slow'])
       expect(slow.finished).toBe(true)
       expect(slow.aliveAfterAbort).toBe(true)
+    })
+
+    it('runs a disposer first registered after the response ended, at once', async () => {
+      await boot()
+      expect((await send({ method: 'GET', url: '/late' })).status).toBe(200)
+      expect(await settled()).toEqual(['GET /late (late)'])
+    })
+
+    it('holds a disposer first registered while an event stream is open until it closes', async () => {
+      await boot()
+      const controller = new AbortController()
+      const res = await send.raw({ method: 'GET', url: '/late-events', signal: controller.signal })
+      expect(res.status).toBe(200)
+      await settle(50)
+      expect(disposed).toEqual([])
+      controller.abort()
+      await res.body?.cancel().catch(() => {})
+      expect(await settled()).toEqual(['GET /late-events (late)'])
     })
 
     it('runs once, only when the client closes an event stream', async () => {
