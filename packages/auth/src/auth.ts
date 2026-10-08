@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { BasaltError, isProductionEnvironment, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
+import { BasaltError, isProductionEnvironment, parseDuration, tryCtx, type DurationInput, type HookBus } from '@basaltkit/core'
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle, type ThrottleStore } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
@@ -198,6 +198,35 @@ const isLinkPart = (value: unknown): value is string =>
  */
 export const canonicalEmail = (email: string): string => email.trim().toLowerCase()
 
+/**
+ * Account creation is not open here: the register route is configured
+ * `register: 'closed'`, or a {@link RegisterPolicy} refused a social / SSO
+ * login that would have created a new account. (A policy refusing the public
+ * register route never surfaces this — that route answers the same 202 as a
+ * success, so it cannot reveal who was invited.)
+ */
+export class RegistrationClosedError extends BasaltError {
+  readonly status = 404
+  constructor() {
+    super('AUTH_REGISTRATION_CLOSED', 'Registration is not available here.')
+  }
+}
+
+/**
+ * Decides whether a NEW account may be created for this address. `tenantId`
+ * is the tenant resolved for the request (`ctx().tenant?.id`), `undefined` on
+ * the apex / central plane. Return `false` to refuse. Throwing fails the
+ * request (fail closed). `@basaltkit/teams`' `teamsInviteGate(teams)` is the
+ * ready-made "invite-only on tenant hosts" policy.
+ */
+export type RegisterPolicy = (input: { email: string; tenantId?: string }) => boolean | Promise<boolean>
+
+/** The tenant id of the current request, read structurally (auth never imports tenancy). */
+const currentTenantId = (): string | undefined => {
+  const id = (tryCtx() as { tenant?: { id?: unknown } } | undefined)?.tenant?.id
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
+
 /** An MFA action needed an enrollment that doesn't exist. */
 export class MfaNotEnrolledError extends BasaltError {
   readonly status = 400
@@ -281,6 +310,14 @@ export interface AuthOptions {
    * lower-level {@link Auth.register} always throws on a duplicate. Default true.
    */
   enumerationSafeRegister?: boolean
+  /**
+   * Who may create a NEW account through the self-service paths: the public
+   * register route ({@link Auth.registerSafely}, unless `authRoutes({ register })`
+   * overrides it) and the create branch of {@link Auth.socialLogin}. Logins into
+   * existing accounts and the trusted {@link Auth.register} are never gated.
+   * Default: open.
+   */
+  registerPolicy?: RegisterPolicy
   /** Store for verification/reset tokens. Default: in-memory. */
   tokens?: AuthTokenStore
   /** Email-verification link lifetime. Default 24h. */
@@ -355,6 +392,7 @@ export class Auth {
   private readonly mfaBox: SecretBox | undefined
   private readonly tokenVersions: TokenVersionStore | undefined
   private readonly enumerationSafeRegister: boolean
+  private readonly registerPolicy: RegisterPolicy | undefined
 
   constructor(options: AuthOptions) {
     this.users = options.users
@@ -411,17 +449,40 @@ export class Auth {
         : undefined
     this.tokenVersions = options.tokenVersions
     this.enumerationSafeRegister = options.enumerationSafeRegister ?? true
+    this.registerPolicy = options.registerPolicy
   }
 
-  async register(rawEmail: string, password: string): Promise<PublicUser> {
+  /**
+   * Trusted, server-side account creation (seeding, a back-office, a flow that
+   * proved the address before creating the account). Throws
+   * {@link EmailTakenError} on a duplicate and is never gated by a
+   * {@link RegisterPolicy}. `emailVerified: true` creates the account already
+   * verified; `auth:registered` then carries the final state, so a mail hook
+   * can decide "unverified → send the verification link" on its own. Never
+   * forward this option from a request body.
+   */
+  async register(rawEmail: string, password: string, opts: { emailVerified?: boolean } = {}): Promise<PublicUser> {
     const email = canonicalEmail(rawEmail)
     if (await this.users.findByEmail(email)) throw new EmailTakenError()
-    const user = await this.users.create({
-      email,
-      passwordHash: await this.hasher.hash(password),
-    })
+    const user = await this.createUser(email, await this.hasher.hash(password), opts.emailVerified === true)
     await this.hooks?.emit('auth:registered', { user: publicUser(user) })
     return publicUser(user)
+  }
+
+  /**
+   * Creates the row with the requested verification state. A custom
+   * `UserSource` written before `create()` took `emailVerified` may drop the
+   * flag: it is then set through `update()`, and with no `update()` the call
+   * fails loudly rather than leave a provider-verified account unverified.
+   */
+  private async createUser(email: string, passwordHash: string, emailVerified: boolean): Promise<AuthUser> {
+    let user = await this.users.create(emailVerified ? { email, passwordHash, emailVerified: true } : { email, passwordHash })
+    if (emailVerified && user.emailVerified !== true) {
+      if (!this.users.update) throw new UserUpdateUnsupportedError()
+      user = (await this.users.update(user.id, { emailVerified: true })) ?? user
+      if (user.emailVerified !== true) throw new UserUpdateUnsupportedError()
+    }
+    return user
   }
 
   /**
@@ -463,6 +524,11 @@ export class Auth {
        * that legitimately re-issues subjects (a directory migration).
        */
       subjectConflict?: 'refuse' | 'link'
+      /**
+       * The tenant this login happens on, for the {@link RegisterPolicy}.
+       * Default: the current request's `ctx().tenant?.id`.
+       */
+      tenantId?: string
     } = {},
   ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean; amr: string[] }> {
     const email = canonicalEmail(rawEmail)
@@ -490,15 +556,22 @@ export class Auth {
     let user = await this.users.findByEmail(email)
     let created = false
     if (!user) {
-      user = await this.users.create({
+      // A social login is already an authenticated flow, so a refusal is said
+      // out loud (the provider vouched for the caller's address).
+      const tenantId = options.tenantId ?? currentTenantId()
+      if (this.registerPolicy && !(await this.registerPolicy(tenantId === undefined ? { email } : { email, tenantId }))) {
+        await this.hooks?.emit('auth:register_refused', { email, ...(tenantId !== undefined ? { tenantId } : {}), source: 'social' })
+        throw new RegistrationClosedError()
+      }
+      // Created with its final verification state, so `auth:registered`
+      // reports what the account really is.
+      user = await this.createUser(
         email,
-        passwordHash: await this.hasher.hash(randomBytes(32).toString('hex')),
-      })
+        await this.hasher.hash(randomBytes(32).toString('hex')),
+        options.emailVerified === true,
+      )
       created = true
       await this.hooks?.emit('auth:registered', { user: publicUser(user) })
-      if (options.emailVerified === true && this.users.update) {
-        user = (await this.users.update(user.id, { emailVerified: true })) ?? user
-      }
     } else {
       if (options.emailVerified !== true) throw new SocialLinkRefusedError()
       if (identity && options.subjectConflict !== 'link' && user.emailVerified) {
@@ -583,9 +656,28 @@ export class Auth {
    *
    * With `enumerationSafeRegister: false` it throws {@link EmailTakenError} on a
    * duplicate instead (the classic, enumerable behavior).
+   *
+   * A {@link RegisterPolicy} (`opts.policy`, else `registerPolicy` of the
+   * options; `null` = open) is asked first. A refusal creates nothing, does the
+   * same hashing work and emits `auth:register_refused` — the caller sees the
+   * same outcome as a success, so the response never tells who was invited.
+   * Never creates a verified account.
    */
-  async registerSafely(rawEmail: string, password: string): Promise<void> {
+  async registerSafely(
+    rawEmail: string,
+    password: string,
+    opts: { policy?: RegisterPolicy | null; tenantId?: string } = {},
+  ): Promise<void> {
     const email = canonicalEmail(rawEmail)
+    const policy = opts.policy === undefined ? this.registerPolicy : (opts.policy ?? undefined)
+    if (policy) {
+      const tenantId = opts.tenantId ?? currentTenantId()
+      if (!(await policy(tenantId === undefined ? { email } : { email, tenantId }))) {
+        await this.hasher.hash(password)
+        await this.hooks?.emit('auth:register_refused', { email, ...(tenantId !== undefined ? { tenantId } : {}), source: 'register' })
+        return
+      }
+    }
     const existing = await this.users.findByEmail(email)
     if (existing) {
       if (!this.enumerationSafeRegister) throw new EmailTakenError()
