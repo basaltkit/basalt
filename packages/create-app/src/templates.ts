@@ -668,9 +668,11 @@ model TenantDomain {
 }
 
 model AuthSession {
-  id        String   @id
-  userId    String
-  expiresAt DateTime
+  id         String    @id
+  userId     String
+  expiresAt  DateTime
+  /// Last use, for the idle timeout (trackSessionActivity: true).
+  lastSeenAt DateTime?
 
   @@index([userId])
   @@map("auth_sessions")

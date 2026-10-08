@@ -8,7 +8,7 @@ import {
   MfaStepUpRequiredError,
   type AuthOptions,
 } from './auth.js'
-import { publicUser } from './auth.js'
+import { assertSessionOptions, publicUser } from './auth.js'
 import type { PublicUser } from './stores.js'
 
 declare module '@basaltkit/core' {
@@ -158,6 +158,9 @@ export function authPlugin(pluginOptions: AuthPluginOptions) {
   return definePlugin({
     name: 'basalt:auth',
     register({ container, hooks }) {
+      // Fail at boot, not on the first request, on a cookie the browser would
+      // drop or an idle timeout the store cannot enforce.
+      assertSessionOptions(options)
       container.singleton(AUTH, () => new Auth({ ...options, hooks }))
       const metadata = ensureMetadata(container)
 

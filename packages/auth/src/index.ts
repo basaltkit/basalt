@@ -61,6 +61,8 @@ export {
   InvalidCredentialsError,
   EmailTakenError,
   WeakJwtSecretError,
+  SessionCookieConfigError,
+  SessionIdleConfigError,
   RefreshInvalidError,
   RefreshReusedError,
   AuthRequiredError,

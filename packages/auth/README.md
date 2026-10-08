@@ -580,8 +580,9 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `refreshTokens` | `RefreshTokenStore` | No | `MemoryRefreshTokenStore` | Refresh token storage. `markUsed` must be a **compare-and-swap** — see below. |
 | `accessTtl` | `DurationInput` | No | `'15m'` | Access token validity. |
 | `refreshTtl` | `DurationInput` | No | `'30d'` | Refresh token validity. |
-| `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity. |
-| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. |
+| `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity (absolute). |
+| `sessionIdleTtl` | `DurationInput` | No | — | Idle timeout: a session unused for longer is refused and deleted. Needs a session store with `touch` (memory, auth-sqlite, auth-prisma with `trackSessionActivity`); fails at boot otherwise. |
+| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value fails at boot (`AUTH_SESSION_COOKIE_INVALID`). |
 | `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
 | `throttleStore` | `ThrottleStore` | No | in-memory, per process | Counters of the default login / per-IP / email-request throttles — `RedisThrottleStore` for one budget across replicas. |
 | `requireMfa` | `boolean \| (user, context) => boolean \| Promise<boolean>` | No | off | Plugin only. Require a sign-in with MFA on every authenticated route except `meta.mfa: false` ones. |

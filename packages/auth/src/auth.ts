@@ -232,8 +232,90 @@ export interface SessionCookieOptions {
   /**
    * Whether to require HTTPS. Defaults to true unless `NODE_ENV` is explicitly
    * `development` or `test` (an unset NODE_ENV counts as production).
+   *
+   * A `__Host-` or `__Secure-` name implies `true` when unset, and refuses
+   * `false`: browsers silently drop such a cookie without `Secure`.
    */
   secure?: boolean
+}
+
+/** The session cookie options violate the rules of the cookie name's prefix. */
+export class SessionCookieConfigError extends BasaltError {
+  readonly status = 500
+  constructor(message: string) {
+    super('AUTH_SESSION_COOKIE_INVALID', message)
+  }
+}
+
+/** `sessionIdleTtl` cannot be honoured as configured. */
+export class SessionIdleConfigError extends BasaltError {
+  readonly status = 500
+  constructor(message: string) {
+    super('AUTH_SESSION_IDLE_CONFIG_INVALID', message)
+  }
+}
+
+/**
+ * Resolves the session cookie options, enforcing the cookie-prefix rules
+ * browsers apply (RFC 6265bis): `__Secure-` needs `Secure`; `__Host-` needs
+ * `Secure` and `Path=/` (and no `Domain`, which Basalt never sets). A
+ * violating cookie is not an error in the browser, it is silently dropped, so
+ * every login would "succeed" without a session. Unset values take the
+ * required ones; contradicting values fail at construction.
+ */
+function resolveSessionCookie(options: SessionCookieOptions | undefined): Required<SessionCookieOptions> {
+  const name = options?.name ?? 'basalt_session'
+  const host = name.startsWith('__Host-')
+  const prefixed = host || name.startsWith('__Secure-')
+  if (prefixed && options?.secure === false) {
+    throw new SessionCookieConfigError(
+      `sessionCookie: "${name}" requires secure: true — browsers drop a ${host ? '__Host-' : '__Secure-'} cookie without Secure.`,
+    )
+  }
+  if (host && options?.path !== undefined && options.path !== '/') {
+    throw new SessionCookieConfigError(
+      `sessionCookie: "${name}" requires path "/" (got "${options.path}") — browsers drop a __Host- cookie with any other path.`,
+    )
+  }
+  return {
+    name,
+    path: options?.path ?? '/',
+    httpOnly: options?.httpOnly ?? true,
+    sameSite: options?.sameSite ?? 'Lax',
+    secure: prefixed ? true : (options?.secure ?? isProductionEnvironment()),
+  }
+}
+
+/** Longest gap between two `touch` writes of one session: one minute. */
+const MAX_SESSION_TOUCH_INTERVAL_MS = 60_000
+
+/**
+ * Resolves `sessionIdleTtl` to milliseconds, or undefined when unset. Fails
+ * when it is not a positive duration or the session store cannot record
+ * activity (`touch`). `sessions` undefined means the built-in memory store.
+ */
+function resolveSessionIdle(idle: DurationInput | undefined, sessions: SessionStore | undefined): number | undefined {
+  if (idle === undefined) return undefined
+  const idleMs = parseDuration(idle)
+  if (!Number.isFinite(idleMs) || idleMs <= 0) {
+    throw new SessionIdleConfigError('sessionIdleTtl must be a positive duration.')
+  }
+  if (sessions !== undefined && typeof sessions.touch !== 'function') {
+    throw new SessionIdleConfigError(
+      'sessionIdleTtl needs a session store that implements touch(id, at) — the built-in memory, auth-sqlite and auth-prisma (trackSessionActivity: true) stores do.',
+    )
+  }
+  return idleMs
+}
+
+/**
+ * Validates the session options the way `new Auth()` does, without building
+ * it — so `authPlugin` refuses a bad configuration at registration rather
+ * than on the first request. Pure: no I/O.
+ */
+export function assertSessionOptions(options: Pick<AuthOptions, 'sessionCookie' | 'sessionIdleTtl' | 'sessions'>): void {
+  resolveSessionCookie(options.sessionCookie)
+  resolveSessionIdle(options.sessionIdleTtl, options.sessions)
 }
 
 export interface AuthOptions {
@@ -244,7 +326,19 @@ export interface AuthOptions {
   refreshTokens?: RefreshTokenStore
   accessTtl?: DurationInput
   refreshTtl?: DurationInput
+  /** Absolute lifetime of a server-side session. Default `30d`. */
   sessionTtl?: DurationInput
+  /**
+   * Idle timeout: a session unused for longer than this is refused and
+   * deleted, whatever its absolute `sessionTtl`. Activity is recorded with the
+   * store's `touch` at most once per `min(60s, sessionIdleTtl / 4)`, so the
+   * effective idle limit can be that much longer. Requires a session store
+   * that implements `touch` (memory, auth-sqlite, auth-prisma with
+   * `trackSessionActivity`); construction fails otherwise. Sessions created
+   * before it was enabled start their idle clock on their next use. Default:
+   * no idle timeout.
+   */
+  sessionIdleTtl?: DurationInput
   sessionCookie?: SessionCookieOptions
   hooks?: HookBus
   /** Brute-force lockout (per email). Enabled by default; pass `false` to disable. */
@@ -341,6 +435,8 @@ export class Auth {
   private readonly accessTtl: DurationInput
   private readonly refreshTtl: DurationInput
   private readonly sessionTtl: DurationInput
+  private readonly sessionIdleMs: number | undefined
+  private readonly sessionTouchEveryMs: number
   private readonly sessionCookie: Required<SessionCookieOptions>
   private readonly hooks: HookBus | undefined
   private readonly throttle: LoginThrottle | undefined
@@ -372,13 +468,9 @@ export class Auth {
     this.accessTtl = options.accessTtl ?? '15m'
     this.refreshTtl = options.refreshTtl ?? '30d'
     this.sessionTtl = options.sessionTtl ?? '30d'
-    this.sessionCookie = {
-      name: options.sessionCookie?.name ?? 'basalt_session',
-      path: options.sessionCookie?.path ?? '/',
-      httpOnly: options.sessionCookie?.httpOnly ?? true,
-      sameSite: options.sessionCookie?.sameSite ?? 'Lax',
-      secure: options.sessionCookie?.secure ?? isProductionEnvironment(),
-    }
+    this.sessionIdleMs = resolveSessionIdle(options.sessionIdleTtl, this.sessions)
+    this.sessionTouchEveryMs = Math.min(MAX_SESSION_TOUCH_INTERVAL_MS, (this.sessionIdleMs ?? 0) / 4)
+    this.sessionCookie = resolveSessionCookie(options.sessionCookie)
     this.hooks = options.hooks
     const shared = options.throttleStore ? { store: options.throttleStore } : {}
     this.throttle =
@@ -852,9 +944,30 @@ export class Auth {
   async sessionAuth(sessionId: string): Promise<{ user: AuthUser; amr?: string[] } | null> {
     const { rawId, amr } = this.parseSessionId(sessionId)
     const session = await this.sessions.find(rawId)
+    if (session && !(await this.sessionStillActive(rawId, session))) return null
     const user = session ? await this.users.findById(session.userId) : null
     if (!user) return null
     return amr ? { user, amr } : { user }
+  }
+
+  /**
+   * Applies the idle timeout: refuses (and deletes) a session idle for longer
+   * than `sessionIdleTtl`, otherwise records the activity, throttled. A no-op
+   * without `sessionIdleTtl`.
+   */
+  private async sessionStillActive(rawId: string, session: SessionRecord): Promise<boolean> {
+    const idleMs = this.sessionIdleMs
+    if (idleMs === undefined) return true
+    const now = Date.now()
+    const lastSeenAt = session.lastSeenAt
+    if (lastSeenAt !== undefined && now - lastSeenAt > idleMs) {
+      await this.sessions.delete(rawId)
+      return false
+    }
+    if (lastSeenAt === undefined || now - lastSeenAt >= this.sessionTouchEveryMs) {
+      await this.sessions.touch?.(rawId, now)
+    }
+    return true
   }
 
   async logout(sessionId: string): Promise<void> {

@@ -432,6 +432,42 @@ authPlugin({ users, secret, csrf: { trustedOrigins: ['https://app.example.com'] 
 authPlugin({ users, secret, csrf: false }) // não recomendado
 ```
 
+### Duração da sessão: timeout de inatividade e cookies `__Host-` {#session-hardening}
+
+`sessionTtl` (por omissão `30d`) é uma duração **absoluta**: uma sessão ativa
+termina nesse momento na mesma. `sessionIdleTtl` acrescenta um timeout de
+**inatividade** — uma sessão sem uso durante mais tempo é recusada (o pedido fica
+anónimo, por isso uma rota `meta.auth` responde `401`) e apagada:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  sessions: s.sessions,
+  sessionTtl: '12h',      // absoluta
+  sessionIdleTtl: '30m',  // inatividade
+  sessionCookie: { name: '__Host-session' },
+})
+```
+
+A atividade é registada com o `touch()` do store, no máximo uma vez por
+`min(60s, sessionIdleTtl / 4)`, por isso o limite efetivo de inatividade pode
+exceder a configuração nessa medida. O store tem de implementar `touch`: o store
+em memória e o `@basaltkit/auth-sqlite` implementam; o `@basaltkit/auth-prisma`
+implementa com `prismaAuthStores(prisma, { trackSessionActivity: true })` depois
+de acrescentares a coluna `lastSeenAt`. Um store sem `touch` faz o `authPlugin`
+falhar no arranque em vez de não aplicar o timeout em silêncio. As sessões
+criadas antes de ativares a opção começam a contar a inatividade no próximo uso.
+
+Um cookie chamado `__Host-…` ou `__Secure-…` tem de cumprir as regras de prefixo
+do browser, senão o browser descarta-o em silêncio e cada login «tem sucesso»
+sem sessão. O Basalt aplica-as: os dois prefixos implicam `Secure` quando
+`secure` não está definido, e `__Host-` implica `Path=/` (o Basalt nunca define
+`Domain`). Um `secure: false` contraditório, ou um cookie `__Host-` com outro
+`path`, falha no arranque com `AUTH_SESSION_COOKIE_INVALID`. `__Host-` é a
+escolha mais forte para um cookie de sessão: um subdomínio irmão não o consegue
+definir nem sombrear.
+
 ### Rotas de conta: `meta.account` e `meta.mfa` {#account-routes}
 
 Todas as rotas de `authRoutes()`, de `mfaRoutes()` e as duas de `oauthRoutes()`
@@ -1101,8 +1137,9 @@ plugin fornece:
 | `mfa` | `MfaStore` | em memória | Estado de inscrição TOTP e códigos de recuperação |
 | `accessTtl` | `DurationInput` | `'15m'` | Duração do access token. Curta por desenho — é o refresh token que sustenta a sessão |
 | `refreshTtl` | `DurationInput` | `'30d'` | Duração do refresh token — na prática, "quanto tempo até o utilizador ter de entrar outra vez" |
-| `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor |
-| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test` |
+| `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor (absoluta) |
+| `sessionIdleTtl` | `DurationInput` | — (sem timeout de inatividade) | Recusa e apaga uma sessão sem uso durante mais tempo; requer um store com `touch` ([detalhes](#session-hardening)) |
+| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test`. Um nome `__Host-`/`__Secure-` implica `Secure` (e `Path=/` para `__Host-`); um valor contraditório falha no arranque |
 | `verificationTtl` | `DurationInput` | `'24h'` | Duração do link de verificação de email |
 | `resetTtl` | `DurationInput` | `'1h'` | Duração do link de reposição de password; mantém-na curta |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 por 15m, por email) | Bloqueio por força bruta por email. `false` desativa-o — só em testes |
