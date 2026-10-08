@@ -1193,3 +1193,85 @@ export function wireParitySuite(adapter: string, driver: ParityDriver): void {
     })
   })
 }
+
+/**
+ * A second, separately instantiated copy of this package's `rawBody()` and
+ * `upload()` — what a feature package with its own nested `@basaltkit/http`
+ * hands the adapter (BK-038). The query string makes the module loader treat
+ * the same file as a distinct module, so its module-level state is not shared
+ * with the copy the adapter imported.
+ */
+async function secondCopy(): Promise<{ rawBody: typeof rawBody; upload: typeof upload }> {
+  const rawModule = (await import(/* @vite-ignore */ new URL('../dist/raw-body.js?copy=2', import.meta.url).href)) as {
+    rawBody: typeof rawBody
+  }
+  const uploadModule = (await import(/* @vite-ignore */ new URL('../dist/upload.js?copy=2', import.meta.url).href)) as {
+    upload: typeof upload
+  }
+  return { rawBody: rawModule.rawBody, upload: uploadModule.upload }
+}
+
+export function crossCopyParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: rawBody()/upload() from another copy of @basaltkit/http (BK-038)`, () => {
+    afterEach(() => driver.close())
+
+    it('is a genuinely separate module instance', async () => {
+      const copy = await secondCopy()
+      expect(copy.rawBody).not.toBe(rawBody)
+      expect(copy.upload).not.toBe(upload)
+    })
+
+    it('delivers the exact bytes to a rawBody() route built by the other copy', async () => {
+      const copy = await secondCopy()
+      const send = await driver.boot(
+        [
+          route({
+            method: 'POST',
+            url: '/hook',
+            body: copy.rawBody({ maxBytes: 1024 }),
+            handler: ({ body }) => ({ hex: body.bytes.toString('hex') }),
+          }),
+        ],
+        [],
+      )
+      const payload = Buffer.from('{"b": 1,  "a":2}', 'utf8')
+      const res = await send({ method: 'POST', url: '/hook', body: payload, headers: { 'content-type': 'application/json' } })
+      expect(res.status).toBe(200)
+      expect(res.json).toEqual({ hex: payload.toString('hex') })
+    })
+
+    it('streams files to an upload() route built by the other copy', async () => {
+      const copy = await secondCopy()
+      const send = await driver.boot(
+        [
+          route({
+            method: 'POST',
+            url: '/files',
+            body: copy.upload({ maxBytes: 64 * 1024, maxFiles: 2 }),
+            async handler({ body }) {
+              const files: { name: string; size: number }[] = []
+              for await (const file of body.files) {
+                let size = 0
+                for await (const chunk of file.stream) size += (chunk as Buffer).length
+                files.push({ name: file.filename, size })
+              }
+              return { files, fields: { ...body.fields } }
+            },
+          }),
+        ],
+        [],
+      )
+      const res = await send({
+        method: 'POST',
+        url: '/files',
+        body: multipart([
+          { name: 'title', value: 'Contract' },
+          { name: 'doc', filename: 'contract.pdf', type: 'application/pdf', data: '%PDF-1.7 body' },
+        ]),
+        headers: { 'content-type': contentType() },
+      })
+      expect(res.status).toBe(200)
+      expect(res.json).toEqual({ files: [{ name: 'contract.pdf', size: 13 }], fields: { title: 'Contract' } })
+    })
+  })
+}

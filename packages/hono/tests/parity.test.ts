@@ -10,6 +10,7 @@ import {
   metaValidatorParitySuite,
   rateLimitKeyParitySuite,
   rawBodyParitySuite,
+  crossCopyParitySuite,
   sendWith,
   streamParitySuite,
   uploadParitySuite,
@@ -63,6 +64,7 @@ const driver: ParityDriver = {
 
 uploadParitySuite('hono', driver)
 rawBodyParitySuite('hono', driver)
+crossCopyParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)
 streamParitySuite('hono', driver)

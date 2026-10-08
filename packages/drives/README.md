@@ -248,6 +248,12 @@ the neutral layer cannot see, supply them yourself with
 object.
 
 
+> **`@basaltkit/http` floor.** Keep the adapter's `@basaltkit/http` at 2.7.1 or
+> later: before it, a second nested copy of `@basaltkit/http` (this package
+> depends on it) made the `rawBody()` notification route invisible to the
+> adapter, which then failed closed. Without `notifications`, `driveRoutes()`
+> mounts the connect flow only.
+
 ## Reference
 
 ### `Drives`
