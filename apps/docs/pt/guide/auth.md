@@ -971,7 +971,8 @@ O guard do plugin impõe três fronteiras em cada pedido autenticado por chave
   visibilidade sem efeitos secundários, por isso o
   [`tools/list` do MCP](/pt/guide/mcp#what-tools-list-shows) esconde as tools com
   `meta.scopes` que a chave não cobre e as tools com `meta.apiKey: false` a quem
-  tem uma chave — sem emitir `auth:apikey_rejected`.
+  tem uma chave, e as rotas restritas por identidade sem `meta.scopes` às chaves
+  estreitas — sem emitir `auth:apikey_rejected`.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'

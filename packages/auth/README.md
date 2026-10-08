@@ -530,8 +530,8 @@ declare `meta.scopes`; opt out with `allowNarrowKeysOnUnscopedRoutes: true`) and
 `403 AUTH_APIKEY_NOT_ALLOWED` — `apiKeyRoutes()` and `mfaRoutes()` declare it).
 The plugin also registers a side-effect-free `http:route-visibility` check, so
 listing surfaces (MCP `tools/list`) hide `meta.scopes` routes from callers whose key
-does not hold every scope, and `meta.apiKey: false` routes from key holders. A
-listing emits no `auth:apikey_rejected`.
+does not hold every scope, `meta.apiKey: false` routes from key holders, and identity-gated routes without
+`meta.scopes` from narrow keys (no `*`). A listing emits no `auth:apikey_rejected`.
 
 ### Brute-force lockout (LoginThrottle)
 
