@@ -119,7 +119,7 @@ of them changes its own API.
 - `upload()` routes bind only params and query (their stream belongs to the
   handler and is not read); a different file under the same key still
   replays. Use a function fingerprint to bind more.
-- A `fingerprint` function that returns something other than a string is now
+- A `fingerprint` function that returns an object or array is now
   canonicalized (keys sorted at every level) instead of being hashed as
   `"[object Object]"` — the same for every object, a latent collision.
 
@@ -150,6 +150,11 @@ resolves the latest versions for you.
 
 **No data step.** Scope hashes are unchanged, and records stored by 2.x carry
 no fingerprint, so they never mismatch: they keep replaying until they expire.
+The exception is a record that 2.x *did* fingerprint under a mode whose hash
+changes with the upgrade: an app that drops an explicit `fingerprint: 'body'`
+to take the `'request'` default, or a function that returns an object or array.
+A retry that spans the deploy then gets `422`; keep the 2.x option until the
+records have expired (24 h by default) if that matters.
 
 **Custom stores.** No contract change, but a custom `IdempotencyStore` must
 persist `record.fingerprint` for completed records to be refused with `422`. A

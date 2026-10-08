@@ -128,7 +128,7 @@ intervalos de peer dos adapters acompanham); nenhum muda a sua própria API.
 - As rotas `upload()` associam só params e query (o stream pertence ao handler e
   não é lido); um ficheiro diferente sob a mesma chave continua a ser repetido.
   Usa uma função de fingerprint para associar mais.
-- Uma função `fingerprint` que devolve algo que não é uma string passa a ser
+- Uma função `fingerprint` que devolve um objeto ou array passa a ser
   canonicalizada (chaves ordenadas em todos os níveis) em vez de ser hasheada
   como `"[object Object]"` — igual para todos os objetos, uma colisão latente.
 
@@ -159,7 +159,12 @@ cópias e com as predefinições daquela de onde importa o `idempotencyPlugin`. 
 
 **Sem passo de dados.** Os hashes de scope não mudam, e os registos guardados
 pela 2.x não têm fingerprint, por isso nunca divergem: continuam a ser repetidos
-até expirarem.
+até expirarem. A exceção é um registo que a 2.x *já* tinha com fingerprint,
+num modo cujo hash muda com a atualização: uma app que retira um
+`fingerprint: 'body'` explícito para ficar com a predefinição `'request'`, ou
+uma função que devolve um objeto ou array. Uma nova tentativa que atravesse o
+deploy recebe então `422`; se isso importar, mantém a opção da 2.x até os
+registos expirarem (24 h por omissão).
 
 **Stores personalizados.** O contrato não muda, mas um `IdempotencyStore`
 personalizado tem de persistir `record.fingerprint` para que os registos
