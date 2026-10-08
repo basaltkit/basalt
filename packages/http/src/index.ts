@@ -62,6 +62,8 @@ export {
   type RateLimitResult,
   type RateLimitStore,
   type RouteRateLimit,
+  type RouteRateLimits,
+  type PrefixRateLimit,
   type RateLimitKey,
   type CorsOptions,
   type SecurityHeadersOptions,
@@ -97,6 +99,8 @@ export {
   type OpenApiPluginOptions,
   type OpenApiInfo,
   type OpenApiTag,
+  type GenerateOpenApiOptions,
+  type OpenApiApiKeyOptions,
   type RouteLike,
 } from './openapi.js'
 

@@ -534,6 +534,13 @@ listing surfaces (MCP `tools/list`) hide `meta.scopes` routes from callers whose
 does not hold every scope, `meta.apiKey: false` routes from key holders, and identity-gated routes without
 `meta.scopes` from narrow keys (no `*`). A listing emits no `auth:apikey_rejected`.
 
+**Rate limits and OpenAPI.** With `securityPlugin({ rateLimit })` from `@basaltkit/http`,
+`meta.rateLimit: { …, key: 'apiKey' }` budgets each verified key separately (an invalid
+key never gets a bucket of its own), and `rateLimit.prefixes` lifts the per-IP ceiling for
+an API's paths. `openapiPlugin` advertises `meta.scopes` routes with an `apiKeyAuth`
+scheme and `x-required-scopes`; if you change `header` here, pass the same one as
+`openapiPlugin({ apiKey: { header } })`.
+
 For machine clients: `rejectInvalid: true` answers a presented key that does not
 verify with `401 AUTH_APIKEY_INVALID` and `WWW-Authenticate: Bearer
 error="invalid_token"` (default: the request continues as anonymous), and

@@ -13,6 +13,7 @@ import { ctx, definePlugin, ensureMetadata, MetricsRegistry, type BasaltPlugin }
 import {
   describeRoutes,
   findUnguardedRoutes,
+  generateOpenApi,
   GUARDED_META_BUCKET,
   HTTP_SERVER,
   HttpError,
@@ -20,6 +21,7 @@ import {
   InvalidRouteMetaError,
   META_VALIDATORS_BUCKET,
   metricsPlugin,
+  openapiPlugin,
   sse,
   MAX_ERROR_DETAILS_BYTES,
   rawBody,
@@ -96,7 +98,7 @@ export function sendWith(fetcher: Fetcher): Send {
   return send
 }
 
-/** Sets `ctx().user` / `ctx().tenant` from headers (standing in for auth + tenancy) and guards `meta.signedIn`. */
+/** Sets `ctx().user` / `ctx().tenant` / `ctx().apiKey` from headers (standing in for auth + tenancy + API keys) and guards `meta.signedIn`. */
 const identity = (log: string[]) =>
   definePlugin({
     name: 'test:identity',
@@ -105,11 +107,13 @@ const identity = (log: string[]) =>
         log.push('enricher')
         const user = request.headers['x-user']
         const tenant = request.headers['x-tenant']
+        const key = request.headers['x-key']
         // Untyped on purpose: a package whose tests load @basaltkit/auth types
         // `ctx().user` as its full user, which this stand-in does not build.
         const scope = context as unknown as Record<string, unknown>
         if (typeof user === 'string' && user) scope['user'] = { id: user }
         if (typeof tenant === 'string' && tenant) scope['tenant'] = { id: tenant }
+        if (typeof key === 'string' && key) scope['apiKey'] = { id: key, scopes: ['*'] }
       }
       const guard: RouteGuard = ({ route: r, context }) => {
         log.push('guard')
@@ -460,6 +464,137 @@ export function rateLimitKeyParitySuite(adapter: string, driver: ParityDriver): 
       expect(await get('/by-user')).toBe(200)
       expect(await get('/by-user')).toBe(429)
       expect(await get('/by-user', 'alice')).toBe(200)
+    })
+  })
+}
+
+/**
+ * BK-083 (g): per-API-key budgets, several budgets per route, shared buckets
+ * and path-prefix edge budgets behave identically on every adapter.
+ */
+export function rateLimitBucketsParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: rate-limit buckets parity (BK-083 g)`, () => {
+    let send: Send
+    afterEach(() => driver.close())
+    const ok = () => ({ ok: true })
+    const call = async (url: string, headers: Record<string, string> = {}, method = 'GET') => {
+      const res = await send({ method, url, headers })
+      return {
+        status: res.status,
+        limit: res.headers['x-ratelimit-limit'],
+        remaining: res.headers['x-ratelimit-remaining'],
+        retryAfter: res.headers['retry-after'],
+      }
+    }
+    const boot = (routes: BasaltRoute[], rateLimit: Parameters<typeof securityPlugin>[0] = {}) =>
+      driver.boot(routes, [identity([]), securityPlugin({ rateLimit: { limit: 1_000, windowMs: 60_000 }, headers: false, ...rateLimit })])
+
+    it("key 'apiKey': two keys behind one IP get separate budgets", async () => {
+      send = await boot([route({ method: 'GET', url: '/k', meta: { rateLimit: { limit: 1, windowMs: 60_000, key: 'apiKey' } }, handler: ok })])
+      expect((await call('/k', { 'x-key': 'k1' })).status).toBe(200)
+      expect((await call('/k', { 'x-key': 'k1' })).status).toBe(429)
+      expect((await call('/k', { 'x-key': 'k2' })).status).toBe(200)
+    })
+
+    it('an array enforces every budget; headers follow the most constraining, Retry-After the refusing one', async () => {
+      send = await boot([
+        route({
+          method: 'GET',
+          url: '/multi',
+          meta: {
+            rateLimit: [
+              { limit: 3, windowMs: 1_000, key: 'apiKey' },
+              { limit: 2, windowMs: 60_000, key: 'tenant' },
+            ],
+          },
+          handler: ok,
+        }),
+      ])
+      const who = { 'x-key': 'k1', 'x-tenant': 't1' }
+      expect(await call('/multi', who)).toEqual({ status: 200, limit: '2', remaining: '1', retryAfter: undefined })
+      expect(await call('/multi', who)).toEqual({ status: 200, limit: '2', remaining: '0', retryAfter: undefined })
+      expect(await call('/multi', who)).toEqual({ status: 429, limit: '2', remaining: '0', retryAfter: '60' })
+    })
+
+    it('a shared bucket is one counter across routes', async () => {
+      const daily = { limit: 2, windowMs: 86_400_000, key: 'tenant', bucket: 'daily' }
+      send = await boot([
+        route({ method: 'GET', url: '/a', meta: { rateLimit: daily }, handler: ok }),
+        route({ method: 'POST', url: '/b', meta: { rateLimit: [daily] }, handler: ok }),
+      ])
+      expect((await call('/a', { 'x-tenant': 't1' })).status).toBe(200)
+      expect((await call('/b', { 'x-tenant': 't1' }, 'POST')).status).toBe(200)
+      expect((await call('/a', { 'x-tenant': 't1' })).status).toBe(429)
+      expect((await call('/a', { 'x-tenant': 't2' })).status).toBe(200)
+    })
+
+    it('a conflicting shared bucket refuses the boot', async () => {
+      const boot2 = boot([
+        route({ method: 'GET', url: '/a', meta: { rateLimit: { limit: 2, windowMs: 1_000, bucket: 'b' } }, handler: ok }),
+        route({ method: 'GET', url: '/b', meta: { rateLimit: { limit: 3, windowMs: 1_000, bucket: 'b' } }, handler: ok }),
+      ])
+      await expect(boot2).rejects.toBeInstanceOf(InvalidRouteMetaError)
+    })
+
+    it('a malformed array refuses the boot', async () => {
+      await expect(boot([route({ method: 'GET', url: '/a', meta: { rateLimit: [] }, handler: ok })])).rejects.toBeInstanceOf(
+        InvalidRouteMetaError,
+      )
+    })
+
+    it('a path prefix lifts the global per-IP ceiling for its family of paths', async () => {
+      send = await boot(
+        [route({ method: 'GET', url: '/v1/orders', handler: ok }), route({ method: 'GET', url: '/app', handler: ok })],
+        { rateLimit: { limit: 2, windowMs: 60_000, prefixes: [{ prefix: '/v1', limit: 5, windowMs: 60_000 }] } },
+      )
+      const statuses: number[] = []
+      for (let i = 0; i < 6; i++) statuses.push((await call('/v1/orders')).status)
+      expect(statuses).toEqual([200, 200, 200, 200, 200, 429])
+      expect((await call('/V1/Orders?x=1')).limit).toBe('5')
+      expect((await call('/app')).limit).toBe('2')
+    })
+  })
+}
+
+/** The served OpenAPI document is the same on every adapter. */
+export function openApiParitySuite(adapter: string, driver: ParityDriver): void {
+  describe(`${adapter}: OpenAPI document parity (BK-083 h)`, () => {
+    afterEach(() => driver.close())
+    it('serves the same /openapi.json', async () => {
+      const routes = [
+          route({ method: 'GET', url: '/orders', meta: { scopes: ['orders:read'], tags: ['orders'] }, handler: () => [] }),
+          route({ method: 'POST', url: '/orders', meta: { scopes: ['orders:write'] }, body: z.object({ sku: z.string() }), handler: () => ({}) }),
+          route({ method: 'GET', url: '/me', meta: { auth: true }, handler: () => ({}) }),
+          route({ method: 'GET', url: '/session-only', meta: { auth: true, apiKey: false }, handler: () => ({}) }),
+          route({ method: 'GET', url: '/public', handler: () => ({}) }),
+      ]
+      const info = { title: 'Parity', version: '1.0.0' }
+      const apiKey = { header: 'x-api-key', onAuthRoutes: true }
+      // Stands in for authPlugin + apiKeysPlugin, which claim these keys.
+      const claims = definePlugin({
+        name: 'test:openapi-claims',
+        register({ container }) {
+          ensureMetadata(container).add(GUARDED_META_BUCKET, 'auth')
+          ensureMetadata(container).add(GUARDED_META_BUCKET, 'scopes')
+        },
+      })
+      const send = await driver.boot(routes, [claims, idempotencyPlugin(), openapiPlugin({ info, apiKey })])
+      const doc = (await send({ method: 'GET', url: '/openapi.json' })).json as Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(doc['paths']['/orders']['get']['security']).toEqual([{ apiKeyAuth: [] }])
+      expect(doc['paths']['/orders']['post']['x-required-scopes']).toEqual(['orders:write'])
+      expect(doc['paths']['/orders']['post']['parameters'][0]['name']).toBe('Idempotency-Key')
+      expect(doc['paths']['/me']['get']['security']).toEqual([{ bearerAuth: [] }, { apiKeyAuth: [] }])
+      expect(doc['paths']['/session-only']['get']['security']).toEqual([{ bearerAuth: [] }])
+      expect(doc['paths']['/public']['get']['security']).toBeUndefined()
+      // The whole document equals the adapter-free generation: any
+      // adapter-specific drift fails here, on every adapter alike.
+      const expected = generateOpenApi(
+        routes.map((r) => ({ method: r.method, url: r.url, meta: r.meta ?? {}, ...(r.body ? { body: r.body } : {}) })),
+        info,
+        [],
+        { apiKey, idempotency: { header: 'Idempotency-Key', methods: ['POST'] } },
+      )
+      expect(doc).toEqual(JSON.parse(JSON.stringify(expected)))
     })
   })
 }

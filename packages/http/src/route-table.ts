@@ -46,7 +46,10 @@ export interface RouteRow {
    * `null` when undeclared.
    */
   can: string[] | null
-  /** `meta.rateLimit` as `'<limit>/<window>'` (plus `' per <key>'`), or `null`. */
+  /**
+   * `meta.rateLimit` as `'<limit>/<window>'` (plus `' per <key>'` and, for a
+   * shared bucket, `' [<name>]'`); several budgets are joined by `', '`. `null` when absent.
+   */
   rateLimit: string | null
   /**
    * The route's tenancy declaration: `'required'` (`meta.tenant: true`),
@@ -132,11 +135,21 @@ function canOf(value: unknown): string[] | null {
 }
 
 function rateLimitOf(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const entries = value.map(rateLimitEntryOf).filter((entry): entry is string => entry !== null)
+    return entries.length > 0 ? entries.join(', ') : null
+  }
+  return rateLimitEntryOf(value)
+}
+
+/** One budget as `'<limit>/<window>'`, plus `' per <key>'` and `' [<shared bucket>]'`. */
+function rateLimitEntryOf(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null
-  const { limit, windowMs, key } = value as Record<string, unknown>
+  const { limit, windowMs, key, bucket } = value as Record<string, unknown>
   if (typeof limit !== 'number' || typeof windowMs !== 'number') return null
   const per = typeof key === 'function' ? ' per custom key' : typeof key === 'string' && key !== 'ip' ? ` per ${key}` : ''
-  return `${limit}/${formatWindow(windowMs)}${per}`
+  const shared = typeof bucket === 'string' ? ` [${bucket}]` : ''
+  return `${limit}/${formatWindow(windowMs)}${per}${shared}`
 }
 
 function formatWindow(ms: number): string {
