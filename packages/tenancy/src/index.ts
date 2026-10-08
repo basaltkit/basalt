@@ -12,6 +12,7 @@ import {
   InvalidTenantIdError,
   assertValidTenantId,
   isValidTenantId,
+  CentralOnlyRouteError,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -32,6 +33,7 @@ export {
   RESERVED_TENANT_IDS,
   assertValidTenantId,
   isValidTenantId,
+  CentralOnlyRouteError,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -528,7 +530,9 @@ export function isTenantRequired(
   // sits next to the handler, so a central route stays central through a
   // rename, and a reviewer sees the decision without opening the app config.
   const declared = meta?.['tenant']
-  if (declared === false) return false
+  // 'never' is stricter than `false`: a central-only route not only runs
+  // without a tenant, it refuses one (enforced by the enricher, not here).
+  if (declared === false || declared === 'never') return false
   if (declared === true) return true
   if (!required) return false
   if (required === true) return true
@@ -602,6 +606,18 @@ export interface TenancyPluginOptions {
    * ```ts
    * route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
    * ```
+   *
+   * `meta.tenant` takes three values:
+   *
+   * - `true` — the route needs a tenant (404 `TENANCY_NOT_RESOLVED` without one).
+   * - `false` — the route works with or without one (account routes served on
+   *   the apex and on tenant hosts alike).
+   * - `'never'` — central plane only: when a tenant resolves, the request is
+   *   answered with the same 404 an unmatched route gets, before any guard runs
+   *   and without entering the tenant's context. Use it on the SaaS owner's
+   *   console (`/platform/*`): plans, tenant approval, operator roles.
+   *
+   * Any other value refuses the boot.
    */
   required?: boolean | { except: (string | RegExp)[] }
   /**
@@ -736,6 +752,22 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
           }),
       )
       registerTenantCommands(container, options)
+      // Boot-time check of `meta.tenant` (every adapter runs the
+      // `http:meta-validators` bucket over its routes). A typo such as
+      // `tenant: 'none'` or `tenant: 'false'` would otherwise silently fall
+      // back to the app-wide default — for a central-only route, that means
+      // serving tenant hosts. Structural signature: no @basaltkit/http import.
+      ensureMetadata(container).add(
+        'http:meta-validators',
+        ({ route }: { route: { meta?: Record<string, unknown> | undefined } }): string | undefined => {
+          const declared = route.meta?.['tenant']
+          if (declared === undefined || declared === true || declared === false || declared === 'never') return
+          return (
+            `meta.tenant ${JSON.stringify(declared) ?? String(declared)} is not valid ` +
+            `(expected true, false or 'never')`
+          )
+        },
+      )
       // Marker other plugins read to adopt tenant-safe defaults (e.g.
       // @basaltkit/cache fails closed on a missing tenant scope when this app
       // is multi-tenant). String-keyed metadata — no package coupling.
@@ -761,6 +793,13 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
             params: (request.params ?? {}) as Record<string, string>,
             ...(request.url !== undefined ? { url: request.url } : {}),
           })
+          // A central-only route refuses a resolved tenant here, in the
+          // enricher, because enrichers run before guards on every adapter:
+          // the caller gets the plain "route not found" body, never a 401/403
+          // that would confirm the route exists. The tenant is neither
+          // attached nor announced (`tenancy:switched`), so nothing downstream
+          // — a tenant-scoped db client, the audit chain — ever sees it.
+          if (tenant && route?.meta?.['tenant'] === 'never') throw new CentralOnlyRouteError()
           if (!tenant) {
             if (isTenantRequired(options.required, request.url, route?.meta)) {
               throw new TenancyNotResolvedError()

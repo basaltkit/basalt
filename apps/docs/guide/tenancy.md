@@ -585,6 +585,42 @@ A route that declares `meta: { tenant: false }` still *resolves* a tenant when
 one is present, so `ctx().tenant` is populated on `acme.example.com/pricing`.
 Only the requirement is lifted.
 
+#### Central-only routes: `tenant: 'never'`
+
+Some routes must not run inside a tenant at all — the SaaS owner's console:
+plans, tenant approval, operator roles. `tenant: false` is not enough there: on
+`acme.example.com/platform/plans` the tenant still resolves, the request runs
+against Acme's storage, and a tenant owner holding `'*'` satisfies
+`can: 'platform:…'`. Declare those routes `'never'`:
+
+```ts
+route({
+  method: 'GET',
+  url: '/platform/plans',
+  meta: { tenant: 'never', auth: true, can: 'platform:plans.read' },
+  handler,
+})
+```
+
+When a tenant resolves on such a route, the request is answered with the body
+an unmatched route gets — `404 { error: { code: 'NOT_FOUND', message: 'Route not
+found.' } }` (`CentralOnlyRouteError`) — before any guard runs, so a 401 or 403
+never reveals that the route exists. The tenant is not attached to the context
+and `tenancy:switched` is not emitted. On the apex, where no tenant resolves, the
+route runs normally. The behaviour is the same on Fastify, Express and Hono.
+
+| `meta.tenant` | No tenant resolved | A tenant resolved |
+| --- | --- | --- |
+| *(absent)* | app-wide `required` decides | runs in the tenant |
+| `true` | `404 TENANCY_NOT_RESOLVED` | runs in the tenant |
+| `false` | runs without a tenant | runs in the tenant |
+| `'never'` | runs without a tenant | `404 NOT_FOUND`, handler not run |
+
+Any other value (`'none'`, `'false'`, `0`) refuses the boot with
+`HTTP_INVALID_ROUTE_META`, because a typo would otherwise fall back to the
+app-wide default and serve the route on tenant hosts. `basalt ai doctor` warns
+about routes that pair `tenant: false` with a `platform:` permission.
+
 Exempting a path only lifts the tenant requirement. Auth, subscription checks
 and every other guard still run.
 
@@ -962,6 +998,7 @@ the lookup fails — the claim stands and `add()` throws `DOMAIN_TAKEN`.
 | `InvalidTenantIdError` | `TENANT_ID_INVALID` | 400 | `tenancy.create()`, `tenancy.run()`, `provision(id)`, `destroy(id)` (or `MemoryTenantSource.create()/save()`) with an id outside the tenant-id grammar or a reserved id. Nothing is written |
 | `TenantResolutionConflictError` | `TENANCY_CONFLICT` | 400 | `onConflict: 'error'` and two resolvers loaded different tenants (e.g. an `x-tenant-id` that disagrees with the `Host`) |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` and no resolver produced a ref that loaded a tenant |
+| `CentralOnlyRouteError` | `NOT_FOUND` | 404 | A tenant resolved on a route declared `meta: { tenant: 'never' }`; the body is the plain "route not found" one |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, or `forEach()` on a `TenantSource` without `list()` |
 | `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | A request resolved to a tenant whose status is `provisioning`, `failed` or `deleting`. 503, not 404: the tenant exists and the client may retry |
 | `TenantSuspendedError` | `TENANT_SUSPENDED` | 403 | A request resolved to a tenant whose status is `suspended`. Retrying will not help |

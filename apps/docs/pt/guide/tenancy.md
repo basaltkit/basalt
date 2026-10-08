@@ -599,6 +599,42 @@ Uma rota com `meta: { tenant: false }` continua a *resolver* o tenant quando ele
 existe, portanto o `ctx().tenant` está preenchido em
 `acme.example.com/pricing`. O que se levanta é só a exigência.
 
+#### Rotas só do plano central: `tenant: 'never'`
+
+Algumas rotas não podem correr dentro de um tenant de todo — a consola do dono do
+SaaS: planos, aprovação de tenants, roles de operador. Aí o `tenant: false` não
+chega: em `acme.example.com/platform/plans` o tenant continua a resolver, o
+pedido corre contra o armazenamento da Acme, e um owner de tenant com `'*'`
+satisfaz `can: 'platform:…'`. Declara essas rotas como `'never'`:
+
+```ts
+route({
+  method: 'GET',
+  url: '/platform/plans',
+  meta: { tenant: 'never', auth: true, can: 'platform:plans.read' },
+  handler,
+})
+```
+
+Quando um tenant resolve numa rota destas, o pedido recebe o corpo de uma rota
+inexistente — `404 { error: { code: 'NOT_FOUND', message: 'Route not found.' } }`
+(`CentralOnlyRouteError`) — antes de qualquer guard, por isso nenhum 401 ou 403
+revela que a rota existe. O tenant não é ligado ao contexto e o
+`tenancy:switched` não é emitido. No apex, onde nenhum tenant resolve, a rota
+corre normalmente. O comportamento é igual em Fastify, Express e Hono.
+
+| `meta.tenant` | Nenhum tenant resolvido | Um tenant resolvido |
+| --- | --- | --- |
+| *(ausente)* | decide o `required` da app | corre no tenant |
+| `true` | `404 TENANCY_NOT_RESOLVED` | corre no tenant |
+| `false` | corre sem tenant | corre no tenant |
+| `'never'` | corre sem tenant | `404 NOT_FOUND`, o handler não corre |
+
+Qualquer outro valor (`'none'`, `'false'`, `0`) recusa o arranque com
+`HTTP_INVALID_ROUTE_META`, porque um erro de escrita cairia no default da app e
+serviria a rota em hosts de tenant. O `basalt ai doctor` avisa de rotas que
+juntam `tenant: false` a uma permissão `platform:`.
+
 Isentar um caminho levanta apenas a exigência de tenant. A autenticação, as
 verificações de subscrição e todas as outras proteções continuam a correr.
 
@@ -984,6 +1020,7 @@ consulta falhar — o claim mantém-se e o `add()` lança `DOMAIN_TAKEN`.
 | `InvalidTenantIdError` | `TENANT_ID_INVALID` | 400 | `tenancy.create()`, `tenancy.run()`, `provision(id)`, `destroy(id)` (ou `MemoryTenantSource.create()/save()`) com um id fora da gramática de ids de tenant ou um id reservado. Nada é escrito |
 | `TenantResolutionConflictError` | `TENANCY_CONFLICT` | 400 | `onConflict: 'error'` e dois resolvers carregaram tenants diferentes (p. ex. um `x-tenant-id` que contradiz o `Host`) |
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` e nenhum resolver produziu uma referência que carregasse um tenant |
+| `CentralOnlyRouteError` | `NOT_FOUND` | 404 | Um tenant resolveu numa rota declarada `meta: { tenant: 'never' }`; o corpo é o de «rota inexistente» |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, ou `forEach()` sobre um `TenantSource` sem `list()` |
 | `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | Um pedido resolveu para um tenant com estado `provisioning`, `failed` ou `deleting`. 503, e não 404: o tenant existe e o cliente pode voltar a tentar |
 | `TenantSuspendedError` | `TENANT_SUSPENDED` | 403 | Um pedido resolveu para um tenant com estado `suspended`. Voltar a tentar não ajuda |

@@ -369,7 +369,7 @@ const centralAccess = prismaAccessStore(prisma).store
 await centralAccess.grantToRole(PLATFORM_ADMIN, ['tenant:approve', 'platform:read'], GLOBAL_SCOPE)
 
 route({ method: 'POST', url: '/central/admin/tenants/:id/approve',
-        meta: { tenant: false, auth: true, can: 'tenant:approve' }, handler })
+        meta: { tenant: 'never', auth: true, can: 'tenant:approve' }, handler })
 ```
 
 O scope é `GLOBAL_SCOPE`, não uma string tua. Um pedido sem tenant é avaliado
@@ -379,8 +379,11 @@ a rota acima negaria precisamente o administrador que acabaste de criar, e nada
 te diz porquê. Vê
 [o scope global não pode ser um tenant](/pt/guide/authorization#o-scope-global-nao-pode-ser-um-tenant).
 
-`meta: { tenant: false, auth: true, can: '…' }` — as mesmas três chaves que
-qualquer rota de tenant usa. Nomeia o primeiro administrador pela CLI, não por
+`meta: { tenant: 'never', auth: true, can: '…' }` — as mesmas três chaves que
+qualquer rota de tenant usa. `'never'`, não `false`: uma rota de plataforma
+alcançada num host de tenant responde 404 antes de qualquer guard, em vez de
+correr dentro desse tenant (vê
+[rotas só do plano central](/pt/guide/tenancy#rotas-so-do-plano-central-tenant-never)). Nomeia o primeiro administrador pela CLI, não por
 uma rota: o primeiro não tem quem o nomeie, e um endpoint desprotegido para
 «criar o primeiro» é a porta que fica aberta porque ninguém se lembra de a
 fechar. Quem corre um comando no servidor já alcança a base de dados.

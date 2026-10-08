@@ -246,6 +246,24 @@ export class TenancyNotResolvedError extends BasaltError {
 }
 
 /**
+ * A request resolved to a tenant, but the route declares `meta: { tenant:
+ * 'never' }` — it belongs to the central plane only (the SaaS owner's console,
+ * plan management, operator roles) and must never run against a tenant's
+ * storage.
+ *
+ * The body is exactly the one every adapter serves for an unmatched route
+ * (`{ error: { code: 'NOT_FOUND', message: 'Route not found.' } }`): from a
+ * tenant host, the route does not exist. A distinct code, or a 401/403 from a
+ * later guard, would tell a probe that something lives there.
+ */
+export class CentralOnlyRouteError extends BasaltError {
+  readonly status = 404
+  constructor() {
+    super('NOT_FOUND', 'Route not found.')
+  }
+}
+
+/**
  * Two resolvers named different tenants for the same request and the plugin
  * runs with `onConflict: 'error'`. 400: the request contradicts itself (e.g. an
  * `x-tenant-id` header that disagrees with the Host).
