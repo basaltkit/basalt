@@ -35,7 +35,7 @@ model AuthUser {
   emailVerified Boolean @default(false)
   @@map("auth_users")
 }
-model AuthSession        { id String @id  userId String  expiresAt DateTime  @@index([userId]) @@map("auth_sessions") }
+model AuthSession        { id String @id  userId String  expiresAt DateTime  lastSeenAt DateTime?  @@index([userId]) @@map("auth_sessions") }
 model AuthRefreshToken   { token String @id  familyId String  userId String  expiresAt DateTime  usedAt DateTime?  @@index([familyId]) @@index([userId]) @@map("auth_refresh_tokens") }
 model AuthToken          { token String @id  userId String  purpose String  expiresAt DateTime  usedAt DateTime?  @@index([userId, purpose]) @@map("auth_tokens") }
 model AuthApiKey         { id String @id  name String  prefix String  hash String @unique  tenantId String?  userId String?  scopes String[]  createdAt DateTime  expiresAt DateTime?  lastUsedAt DateTime?  revokedAt DateTime?  @@map("auth_api_keys") }
@@ -53,6 +53,23 @@ Then `prisma migrate dev` (or `prisma db push`) and `prisma generate`.
 > `@basaltkit/auth-sqlite`.
 >
 > **MySQL:** use `schema.mysql.prisma` instead — see [MySQL](#mysql).
+
+## Session idle timeout (2.1)
+
+`authPlugin({ sessionIdleTtl })` needs a session store that records activity.
+`PrismaSessionStore` does so only when asked, because it writes a column an
+existing database may not have yet:
+
+1. Add `lastSeenAt DateTime?` to `AuthSession` (it is in the reference schemas)
+   and migrate — `prisma migrate dev --name auth_session_last_seen`, in every
+   tenant schema with schema-per-tenant. On PostgreSQL:
+   `ALTER TABLE "auth_sessions" ADD COLUMN "lastSeenAt" TIMESTAMP(3);`
+2. Turn it on: `prismaAuthStores(prisma, { trackSessionActivity: true })` (or
+   `new PrismaSessionStore(prisma, { trackSessionActivity: true })`).
+
+Without the option nothing changes: no column is read or written, and
+`authPlugin` refuses `sessionIdleTtl` at boot instead of not enforcing it.
+Sessions that existed before start their idle clock on their next use.
 
 ## Upgrading to 2.0
 

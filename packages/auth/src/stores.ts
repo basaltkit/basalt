@@ -399,6 +399,12 @@ export interface SessionRecord {
   id: string
   userId: string
   expiresAt: number
+  /**
+   * Last time the session was used (ms), for the idle timeout
+   * (`AuthOptions.sessionIdleTtl`). Stores that implement `touch` set it at
+   * creation and return it from `find`; absent on rows written before.
+   */
+  lastSeenAt?: number
 }
 
 export interface SessionStore {
@@ -412,6 +418,12 @@ export interface SessionStore {
    * Optional so existing stores keep compiling; implement it to close the gap.
    */
   deleteAllForUser?(userId: string): Promise<void>
+  /**
+   * Records activity on a session (`lastSeenAt = at`); `id` is the raw id, as
+   * for `find`. Required by `AuthOptions.sessionIdleTtl`, optional otherwise.
+   * Auth throttles the calls, so a store sees at most a few per idle window.
+   */
+  touch?(id: string, at: number): Promise<void>
 }
 
 export class MemorySessionStore implements SessionStore {
@@ -422,9 +434,10 @@ export class MemorySessionStore implements SessionStore {
     // of the session table can't be replayed as a live session.
     const rawId = randomBytes(32).toString('base64url')
     const hashed = hashSessionId(rawId)
-    const expiresAt = Date.now() + ttlMs
-    this.sessions.set(hashed, { id: hashed, userId, expiresAt })
-    return { id: rawId, userId, expiresAt }
+    const now = Date.now()
+    const expiresAt = now + ttlMs
+    this.sessions.set(hashed, { id: hashed, userId, expiresAt, lastSeenAt: now })
+    return { id: rawId, userId, expiresAt, lastSeenAt: now }
   }
 
   async find(id: string): Promise<SessionRecord | null> {
@@ -436,11 +449,21 @@ export class MemorySessionStore implements SessionStore {
       return null
     }
     // Echo the id the caller queried with (never the stored hash).
-    return { id, userId: record.userId, expiresAt: record.expiresAt }
+    return {
+      id,
+      userId: record.userId,
+      expiresAt: record.expiresAt,
+      ...(record.lastSeenAt !== undefined ? { lastSeenAt: record.lastSeenAt } : {}),
+    }
   }
 
   async delete(id: string): Promise<boolean> {
     return this.sessions.delete(hashSessionId(id))
+  }
+
+  async touch(id: string, at: number): Promise<void> {
+    const record = this.sessions.get(hashSessionId(id))
+    if (record) record.lastSeenAt = at
   }
 
   async deleteAllForUser(userId: string): Promise<void> {

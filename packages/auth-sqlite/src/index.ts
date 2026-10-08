@@ -85,9 +85,10 @@ export function migrate(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens (user_id, purpose);
 
     CREATE TABLE IF NOT EXISTS auth_sessions (
-      id         TEXT PRIMARY KEY,
-      user_id    TEXT NOT NULL,
-      expires_at INTEGER NOT NULL
+      id           TEXT PRIMARY KEY,
+      user_id      TEXT NOT NULL,
+      expires_at   INTEGER NOT NULL,
+      last_seen_at INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
@@ -155,6 +156,14 @@ export function migrate(db: DatabaseSync): void {
     db.exec('ALTER TABLE auth_api_keys ADD COLUMN expires_at INTEGER')
   } catch {
     // Existing databases already have the column.
+  }
+
+  // Session activity for the idle timeout (AuthOptions.sessionIdleTtl).
+  // Existing rows stay NULL and start their idle clock on their next use.
+  try {
+    db.exec('ALTER TABLE auth_sessions ADD COLUMN last_seen_at INTEGER')
+  } catch {
+    /* column already present */
   }
 
   // Emails are case-insensitive identities: enforce it for new rows. A legacy
@@ -359,6 +368,7 @@ interface SessionRow {
   id: string
   user_id: string
   expires_at: number
+  last_seen_at: number | null
 }
 
 export class SqliteSessionStore implements SessionStore {
@@ -368,11 +378,12 @@ export class SqliteSessionStore implements SessionStore {
     // Mint a raw id for the client (cookie), but store its hash so a dump of
     // auth_sessions can't be replayed as a live session.
     const rawId = randomBytes(32).toString('base64url')
-    const expiresAt = nowMs() + ttlMs
+    const now = nowMs()
+    const expiresAt = now + ttlMs
     this.db
-      .prepare('INSERT INTO auth_sessions (id, user_id, expires_at) VALUES (?, ?, ?)')
-      .run(hashSessionId(rawId), userId, expiresAt)
-    return { id: rawId, userId, expiresAt }
+      .prepare('INSERT INTO auth_sessions (id, user_id, expires_at, last_seen_at) VALUES (?, ?, ?, ?)')
+      .run(hashSessionId(rawId), userId, expiresAt, now)
+    return { id: rawId, userId, expiresAt, lastSeenAt: now }
   }
 
   async find(id: string): Promise<SessionRecord | null> {
@@ -386,12 +397,21 @@ export class SqliteSessionStore implements SessionStore {
       return null
     }
     // Echo the id the caller queried with (never the stored hash).
-    return { id, userId: row.user_id, expiresAt: row.expires_at }
+    return {
+      id,
+      userId: row.user_id,
+      expiresAt: row.expires_at,
+      ...(row.last_seen_at !== null && row.last_seen_at !== undefined ? { lastSeenAt: row.last_seen_at } : {}),
+    }
   }
 
   async delete(id: string): Promise<boolean> {
     const info = this.db.prepare('DELETE FROM auth_sessions WHERE id = ?').run(hashSessionId(id))
     return info.changes > 0
+  }
+
+  async touch(id: string, at: number): Promise<void> {
+    this.db.prepare('UPDATE auth_sessions SET last_seen_at = ? WHERE id = ?').run(at, hashSessionId(id))
   }
 
   async deleteAllForUser(userId: string): Promise<void> {

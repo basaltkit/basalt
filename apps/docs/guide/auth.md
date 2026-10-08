@@ -428,6 +428,41 @@ authPlugin({ users, secret, csrf: { trustedOrigins: ['https://app.example.com'] 
 authPlugin({ users, secret, csrf: false }) // not recommended
 ```
 
+### Session lifetime: idle timeout and `__Host-` cookies {#session-hardening}
+
+`sessionTtl` (default `30d`) is an **absolute** lifetime: an active session
+still ends then. `sessionIdleTtl` adds an **idle** timeout — a session unused
+for longer is refused (the request is anonymous, so a `meta.auth` route answers
+`401`) and deleted:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  sessions: s.sessions,
+  sessionTtl: '12h',      // absolute
+  sessionIdleTtl: '30m',  // idle
+  sessionCookie: { name: '__Host-session' },
+})
+```
+
+Activity is recorded with the store's `touch()`, at most once per
+`min(60s, sessionIdleTtl / 4)`, so the effective idle limit can exceed the
+setting by that much. The store must implement `touch`: the memory store and
+`@basaltkit/auth-sqlite` do; `@basaltkit/auth-prisma` does with
+`prismaAuthStores(prisma, { trackSessionActivity: true })` after you add the
+`lastSeenAt` column. A store without it makes `authPlugin` fail at boot rather
+than silently not enforcing the timeout. Sessions created before the option was
+turned on start their idle clock on their next use.
+
+A cookie named `__Host-…` or `__Secure-…` must follow the browser's prefix
+rules, or the browser silently drops it and every login "succeeds" without a
+session. Basalt applies them: both prefixes imply `Secure` when `secure` is
+unset, and `__Host-` implies `Path=/` (Basalt never sets `Domain`). A
+contradicting `secure: false`, or a `__Host-` cookie with another `path`, fails
+at boot with `AUTH_SESSION_COOKIE_INVALID`. `__Host-` is the strongest choice
+for a session cookie: a sibling subdomain cannot set or shadow it.
+
 ### Account routes: `meta.account` and `meta.mfa` {#account-routes}
 
 Every `authRoutes()` route, every `mfaRoutes()` route and both `oauthRoutes()`
@@ -1096,8 +1131,9 @@ the plugin supplies:
 | `mfa` | `MfaStore` | in-memory | TOTP enrollment state and recovery codes |
 | `accessTtl` | `DurationInput` | `'15m'` | Access-token lifetime. Short by design — the refresh token is what carries the session |
 | `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
-| `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime |
-| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test` |
+| `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime (absolute) |
+| `sessionIdleTtl` | `DurationInput` | — (no idle timeout) | Refuse and delete a session unused for longer; needs a store with `touch` ([details](#session-hardening)) |
+| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value fails at boot |
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
