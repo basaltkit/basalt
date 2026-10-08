@@ -126,7 +126,9 @@ Read this list before upgrading.
   handler runs (a guard's `401`/`403`, the rate limiter's `429`, a validation
   `400`) releases the `Idempotency-Key` instead of being replayed for the whole
   TTL, so a client that signs in again or honours `Retry-After` gets its
-  operation run on the retry. `408`, `425` and `429` are never recorded, even
+  operation run on the retry. So does an `upload()` body refused while the
+  handler streams it (`413` over a limit, `400` malformed, `415` a refused file
+  type): retry with a smaller file under the same key and the handler runs. `408`, `425` and `429` are never recorded, even
   from the handler. Any other handler `4xx` is still replayed byte for byte.
   Identical on Fastify, Express and Hono.
 - **The check runs after the enrichers** (and before the guards, unless
@@ -169,12 +171,16 @@ See [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyp
   running, which could disconnect its leased client mid-query. Disposers now
   run exactly once, after the handler has settled *and* the response has ended
   or been aborted, as Hono already did. `stream()` and `sse()` bodies stay
-  covered until their last byte or until the client leaves.
+  covered until their last byte or until the client leaves. A disposer handed
+  to `ctx().onDispose()` after that point (from a timer the handler left behind,
+  say) runs at once, on every adapter.
 - **`ctx().db` after the response is not protected.** The lease ends with the
   response, and the client then stays reserved for only 1 s. Work that outlives
   the reply must `await` before replying, or run in `tenancy.run()` /
   `DB_POOL.use()`. If you used `DB_POOL.get()` on the plugin's pool for work
-  longer than 1 s, switch to `DB_POOL.use()` or pass `idleMs` explicitly.
+  longer than 1 s, switch to `DB_POOL.use()` or pass `idleMs` explicitly. A
+  `tenancy:switched` emitted on a request's context after its response ended
+  gets the legacy 30 s hand-out, never a lease that nothing returns.
 - **Size `max` by the distinct tenants active within a few seconds.**
   Over-subscribing no longer answers `503`; it churns: an idle client is closed
   and a new one opened on each request. Monitor how often your `forTenant`
@@ -225,14 +231,20 @@ Each used to boot and misbehave silently; each has a one-line fix.
   [Erasing personal data](/guide/persistence#erasing-personal-data-audit-redact).
 - **Auth — custom `UserSource` without `update()`.** `create()` now receives
   `emailVerified`; persist it to get verified social and trusted accounts. A
-  source that neither persists it nor implements `update()` still signs social
-  users in, unverified as before, but `register(…, { emailVerified: true })`
-  throws `AUTH_UPDATE_UNSUPPORTED`.
-- **Auth — boot warning without a rate limiter.** `authRoutes()` declares
-  `meta.rateLimit`. Without `securityPlugin({ rateLimit })` the app now prints
-  one `console.warn` at boot naming those routes. Register the limiter, pass
-  `authRoutes({ rateLimit: false })`, or set `allowUnguardedMeta: ['rateLimit']`
-  on the adapter if an outer edge throttles.
+  source that neither persists it nor implements `update()` still signs OAuth
+  users in through identity linking, unverified as before. Two cases still
+  fail on such a source: a SAML user (no linked identity) is refused on the
+  second login, as before this release; and `register(…, { emailVerified: true })`
+  throws `AUTH_UPDATE_UNSUPPORTED` *after* `create()` wrote the row, so the
+  account exists, unverified. Implement `update()` (or persist `emailVerified`
+  in `create()`) to avoid both.
+- **Boot warning for `meta.rateLimit` without a rate limiter.** When any route
+  declares `meta.rateLimit` — `authRoutes()` does, and so may your own routes —
+  and `securityPlugin({ rateLimit })` is not registered, the app now prints one
+  `console.warn` at boot naming those routes, because nothing enforces the
+  limit. Register the limiter, pass `authRoutes({ rateLimit: false })` for the
+  auth routes, or silence it with `allowUnguardedMeta: ['rateLimit']` (or
+  `true`) on the adapter plugin if an outer edge throttles.
 - **Webhooks — `runInTenant` is on by default.** With `tenancyPlugin`
   registered, each off-request `dispatch()` scoped by a `tenantId` makes one
   `TenantSource.find` call and fires `tenancy:switched`/`tenancy:exited`; under
@@ -257,8 +269,21 @@ Each used to boot and misbehave silently; each has a one-line fix.
   answers `Internal error`, and its cause now goes to stderr by default. Use
   `mcpPlugin({ onError })` to send it elsewhere, or `onError: false` to silence
   it.
+- **MCP — no idempotency key in tool calls.** A tool call never forwards
+  `Idempotency-Key` (or the header set by `idempotencyPlugin({ header })`) to
+  the route, even when it is listed in `forwardHeaders`: a replay would hand
+  the model the recorded error body without the tool result's redaction. Each
+  tool call runs the handler; deduplicate inside the handler if you need to.
+- **Tenancy — `basalt prisma:sync` does not add the new `TenantDomain`
+  columns.** The bundled model gains `verificationToken`, `verified`,
+  `createdAt` and `verifiedAt`. `prisma:sync` only adds missing models, so an
+  app that already has `TenantDomain` must add the four fields by hand (copy
+  them from `@basaltkit/tenancy-prisma/prisma/schema.prisma`) and run a
+  migration before deploying a client generated from the new model.
 - **Route table — `central-only`.** `basalt routes` and `describeRoutes()` show
-  `meta.tenant: 'never'` as `central-only` instead of a blank cell.
+  `meta.tenant: 'never'` as `central-only` instead of a blank cell. The
+  `RouteRow.tenant` union gains `'central-only'`: code with an exhaustive
+  `switch` over it must add the case.
 
 ## Highlights
 

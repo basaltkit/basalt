@@ -139,7 +139,10 @@ aplicações vêem. Lê esta lista antes de actualizar.
   correr (o `401`/`403` de um guard, o `429` do rate limiter, um `400` de
   validação) liberta a `Idempotency-Key` em vez de ser replicada durante todo o
   TTL, por isso um cliente que volta a autenticar-se ou respeita o `Retry-After`
-  vê a operação executada no retry. `408`, `425` e `429` nunca são registados,
+  vê a operação executada no retry. O mesmo vale para um corpo `upload()`
+  recusado enquanto o handler o lê em stream (`413` acima de um limite, `400`
+  malformado, `415` um tipo de ficheiro recusado): repete com um ficheiro mais
+  pequeno e a mesma chave e o handler corre. `408`, `425` e `429` nunca são registados,
   mesmo vindos do handler. Os outros `4xx` do handler continuam a ser
   replicados byte a byte. Idêntico em Fastify, Express e Hono.
 - **A verificação corre depois dos enrichers** (e antes dos guards, salvo
@@ -184,13 +187,17 @@ Vê [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idemp
   disposers correm agora exactamente uma vez, depois de o handler terminar *e*
   de a resposta ter acabado ou sido abortada, como o Hono já fazia. Os corpos
   `stream()` e `sse()` continuam cobertos até ao último byte ou até o cliente
-  sair.
+  sair. Um disposer entregue ao `ctx().onDispose()` depois desse ponto (a partir
+  de um timer que o handler deixou, por exemplo) corre de imediato, em todos os
+  adapters.
 - **O `ctx().db` depois da resposta não está protegido.** O lease acaba com a
   resposta, e o cliente fica reservado só mais 1 s. Trabalho que sobrevive à
   resposta tem de fazer `await` antes de responder, ou correr em
   `tenancy.run()` / `DB_POOL.use()`. Se usavas `DB_POOL.get()` no pool do plugin
   para trabalho com mais de 1 s, passa para `DB_POOL.use()` ou indica `idleMs`
-  explicitamente.
+  explicitamente. Um `tenancy:switched` emitido no contexto de um pedido depois
+  de a resposta acabar recebe a cedência legada de 30 s, nunca um lease que
+  ninguém devolve.
 - **Dimensiona o `max` pelos tenants distintos activos em poucos segundos.**
   Exceder o pool já não responde `503`; gera rotação: um cliente inactivo é
   fechado e um novo aberto em cada pedido. Monitoriza quantas vezes corre a tua
@@ -244,13 +251,21 @@ de uma linha.
 - **Auth — `UserSource` própria sem `update()`.** O `create()` passa a receber
   `emailVerified`; persiste-o para ter contas sociais e de confiança
   verificadas. Uma source que não o persiste nem implementa `update()` continua
-  a autenticar utilizadores sociais, não verificados como antes, mas
-  `register(…, { emailVerified: true })` lança `AUTH_UPDATE_UNSUPPORTED`.
-- **Auth — aviso no arranque sem rate limiter.** O `authRoutes()` declara
-  `meta.rateLimit`. Sem `securityPlugin({ rateLimit })` a app imprime agora um
-  `console.warn` no arranque com essas rotas. Regista o limiter, passa
-  `authRoutes({ rateLimit: false })`, ou define
-  `allowUnguardedMeta: ['rateLimit']` no adapter se um edge à frente já limita.
+  a autenticar utilizadores OAuth através da ligação de identidades, não
+  verificados como antes. Dois casos continuam a falhar nessa source: um
+  utilizador SAML (sem identidade ligada) é recusado no segundo login, como já
+  acontecia antes desta versão; e `register(…, { emailVerified: true })` lança
+  `AUTH_UPDATE_UNSUPPORTED` *depois* de o `create()` ter escrito a linha, por
+  isso a conta fica criada, não verificada. Implementa `update()` (ou persiste
+  `emailVerified` no `create()`) para evitar ambos.
+- **Aviso no arranque para `meta.rateLimit` sem rate limiter.** Quando
+  qualquer rota declara `meta.rateLimit` — o `authRoutes()` declara, e as tuas
+  próprias rotas também podem — e o `securityPlugin({ rateLimit })` não está
+  registado, a app imprime agora um `console.warn` no arranque com essas rotas,
+  porque nada aplica o limite. Regista o limiter, passa
+  `authRoutes({ rateLimit: false })` para as rotas de auth, ou silencia-o com
+  `allowUnguardedMeta: ['rateLimit']` (ou `true`) no plugin do adapter se um
+  edge à frente já limita.
 - **Webhooks — `runInTenant` ligado por defeito.** Com o `tenancyPlugin`
   registado, cada `dispatch()` fora do pedido delimitado por `tenantId` faz uma
   chamada a `TenantSource.find` e dispara `tenancy:switched`/`tenancy:exited`;
@@ -275,8 +290,22 @@ de uma linha.
   continua a responder `Internal error`, e a causa vai agora para o stderr por
   defeito. Usa `mcpPlugin({ onError })` para a enviar para outro lado, ou
   `onError: false` para a silenciar.
+- **MCP — sem chave de idempotência nas chamadas de tools.** Uma chamada de
+  tool nunca encaminha a `Idempotency-Key` (nem o header definido por
+  `idempotencyPlugin({ header })`) para a rota, mesmo listada em
+  `forwardHeaders`: um replay entregaria ao modelo o corpo de erro gravado sem
+  a redação do resultado da tool. Cada chamada corre o handler; deduplica dentro
+  do handler se precisares.
+- **Tenancy — o `basalt prisma:sync` não acrescenta as novas colunas de
+  `TenantDomain`.** O modelo incluído ganha `verificationToken`, `verified`,
+  `createdAt` e `verifiedAt`. O `prisma:sync` só acrescenta modelos em falta,
+  por isso uma app que já tem `TenantDomain` tem de acrescentar os quatro campos
+  à mão (copia-os de `@basaltkit/tenancy-prisma/prisma/schema.prisma`) e correr
+  uma migração antes de publicar um cliente gerado a partir do novo modelo.
 - **Tabela de rotas — `central-only`.** O `basalt routes` e o `describeRoutes()`
   mostram `meta.tenant: 'never'` como `central-only` em vez de uma célula vazia.
+  A união `RouteRow.tenant` ganha `'central-only'`: código com um `switch`
+  exaustivo sobre ela tem de acrescentar o caso.
 
 ## Destaques
 
