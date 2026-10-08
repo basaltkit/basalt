@@ -38,6 +38,14 @@ describe('auditPlugin hook selection (BK-083)', () => {
     expect(DEFAULT_AUDIT_HOOK_EXCLUDES).toContain('auth:apikey_rejected')
   })
 
+  it('records refusals of a VALID key (auth:apikey_refused) by default (W10)', async () => {
+    const { app, audit } = await boot()
+    await flood(app, 5)
+    await emit(app, 'auth:apikey_refused', { id: 'key_1', reason: 'tenant_mismatch', tenantId: 't2' })
+    expect(await events(audit)).toEqual(['auth:apikey_refused'])
+    expect(DEFAULT_AUDIT_HOOK_EXCLUDES).not.toContain('auth:apikey_refused')
+  })
+
   it('a plain list keeps the default excludes', async () => {
     const { app, audit } = await boot({ hooks: ['auth:**'] })
     await flood(app, 3)

@@ -396,9 +396,14 @@ da mesma forma.
 
 O `POST /auth/register` público nunca cria uma conta verificada: um campo
 `emailVerified` no corpo é ignorado. Um `UserSource` próprio escrito antes de o
-`create()` aceitar a flag é corrigido através do `update()`; sem `update()`, pedir
-uma conta verificada falha com `UserUpdateUnsupportedError` em vez de a criar, em
-silêncio, não verificada.
+`create()` aceitar a flag é corrigido através do `update()`. Uma fonte que não
+consegue nenhuma das duas (sem `update()`, um `create()` que ignora a flag) não
+consegue guardar a verificação: o `register(…, { emailVerified: true })` falha
+então com `UserUpdateUnsupportedError` depois de criar a conta não verificada,
+enquanto um login social cria a conta não verificada, liga-a e autentica o
+utilizador — nunca falha a meio, o que deixaria uma conta que todos os logins
+seguintes desse fornecedor recusam. Persiste o `emailVerified` no `create()` (ou
+implementa o `update()`) para teres contas verificadas.
 
 ## Rotação de refresh com deteção de reutilização
 
@@ -1059,7 +1064,8 @@ uma vez. Podem ter uma expiração opcional; chaves expiradas são rejeitadas pe
 servidor e omitidas das listagens.
 
 O guard do plugin impõe três fronteiras em cada pedido autenticado por chave
-(`403` em cada caso, com um evento `auth:apikey_rejected`):
+(`403` em cada caso, com um evento `auth:apikey_rejected` e um
+`auth:apikey_refused`):
 
 - **Ligação ao tenant.** Uma chave criada dentro de um tenant só funciona quando o
   pedido resolve esse mesmo tenant — nunca noutro escolhido via `x-tenant-id`, um
@@ -1151,7 +1157,9 @@ Cada recusa emite `auth:apikey_rejected`. Para uma chave inválida, o payload tr
 o `prefix` de apresentação da chave (`mk_live_` mais seis caracteres, o que as
 listagens mostram — nunca o segredo) e o `ip` do cliente, para poderes alertar
 ou limitar por chamador. Como qualquer cliente anónimo o consegue disparar, este
-hook **não** é registado pelos padrões do `auditPlugin` — vê
+hook **não** é registado pelos padrões do `auditPlugin`. A recusa de uma chave
+que foi verificada (`tenant_mismatch`, `not_allowed`, `scope`) é também emitida
+como `auth:apikey_refused`, que **é** auditado por padrão — vê
 [que hooks são auditados](/pt/guide/persistence#which-hooks-are-audited).
 
 **Uma API pública, de ponta a ponta.** Os clientes máquina estão muitas vezes
@@ -1357,7 +1365,7 @@ autenticar os utilizadores.
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` numa conta com MFA ativo — desativa-o primeiro com um código |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | Uma rota `meta.auth` recebeu um pedido cross-site, só com cookie, que altera estado |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | O orçamento de logins falhados por email ou por IP esgotou-se; traz `retryAfterMs` |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição, e para criar uma conta verificada quando o `create()` ignora o `emailVerified` |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição, e para o `register(…, { emailVerified: true })` quando o `create()` ignora o `emailVerified` |
 | `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, ou uma `registerPolicy` recusou o primeiro login social / SSO de um endereço |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | arranque | `secret` em falta, ou com menos de 32 caracteres fora de um `NODE_ENV=development`/`test` explícito |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | Uma rota com `meta.scopes` foi chamada sem uma API key que tenha esse scope (ou `*`), ou uma chave sem `*` chamou uma rota protegida por identidade que não declara `meta.scopes` |
@@ -1425,6 +1433,7 @@ autenticar os utilizadores.
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Notificação de segurança |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Trilho de auditoria |
 | `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alertas — `reason` é `invalid`, `tenant_mismatch`, `not_allowed` ou `scope`; `prefix` é o prefixo de apresentação de uma chave inválida, nunca a chave. Não auditado por padrão |
+| `auth:apikey_refused` | `{ id, reason, tenantId? }` | Uma chave verificada foi recusada (`tenant_mismatch`, `not_allowed`, `scope`); emitido logo após o `auth:apikey_rejected`. Auditado por padrão |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | Alertas de força bruta de MFA e de bloqueio |
 | `auth:refresh_reused` | `{ userId, familyId }` | Alertas de roubo de token — um refresh token consumido voltou |
 | `auth:social_account_adopted` | `{ user }` | Um login social verificado assumiu uma conta não verificada; as credenciais antigas e as ligações de contas foram revogadas |
