@@ -456,8 +456,13 @@ exceder a configuração nessa medida. O store tem de implementar `touch`: o sto
 em memória e o `@basaltkit/auth-sqlite` implementam; o `@basaltkit/auth-prisma`
 implementa com `prismaAuthStores(prisma, { trackSessionActivity: true })` depois
 de acrescentares a coluna `lastSeenAt`. Um store sem `touch` faz o `authPlugin`
-falhar no arranque em vez de não aplicar o timeout em silêncio. As sessões
-criadas antes de ativares a opção começam a contar a inatividade no próximo uso.
+falhar no arranque em vez de não aplicar o timeout em silêncio.
+
+Quando ativas a opção, uma sessão sem `lastSeenAt` (gravada antes de o store o
+registar) começa a contar a inatividade no próximo uso. Uma sessão que já o tem
+é medida a partir dele — e, com a opção desligada, nada o atualizou, por isso
+ainda guarda a hora de criação. Conta que as sessões mais antigas do que
+`sessionIdleTtl` terminem uma vez, no pedido seguinte, quando ativares a opção.
 
 Um cookie chamado `__Host-…` ou `__Secure-…` tem de cumprir as regras de prefixo
 do browser, senão o browser descarta-o em silêncio e cada login «tem sucesso»

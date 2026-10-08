@@ -334,9 +334,11 @@ export interface AuthOptions {
    * store's `touch` at most once per `min(60s, sessionIdleTtl / 4)`, so the
    * effective idle limit can be that much longer. Requires a session store
    * that implements `touch` (memory, auth-sqlite, auth-prisma with
-   * `trackSessionActivity`); construction fails otherwise. Sessions created
-   * before it was enabled start their idle clock on their next use. Default:
-   * no idle timeout.
+   * `trackSessionActivity`); construction fails otherwise. A session with no
+   * `lastSeenAt` (a legacy row) starts its idle clock on its next use; one
+   * that has it is measured from it, and nothing touches it while this option
+   * is off, so enabling it signs out sessions created longer ago than the
+   * window once. Default: no idle timeout.
    */
   sessionIdleTtl?: DurationInput
   sessionCookie?: SessionCookieOptions

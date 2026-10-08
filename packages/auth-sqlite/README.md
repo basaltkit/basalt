@@ -148,7 +148,9 @@ things up yourself.
 - **Session activity** (`last_seen_at`) is recorded by `touch()`, which
   `authPlugin({ sessionIdleTtl })` uses for its idle timeout. `migrate()` adds
   the column to an existing `auth_sessions` table; rows written before start
-  their idle clock on their next use.
+  their idle clock on their next use. New rows record their creation time, and
+  nothing updates it while `sessionIdleTtl` is off, so turning the option on
+  later signs out sessions older than the window once.
 - `node:sqlite` is synchronous; the methods stay `async` to honor the contracts,
   so there's no behavioral difference for callers.
 

@@ -69,7 +69,10 @@ existing database may not have yet:
 
 Without the option nothing changes: no column is read or written, and
 `authPlugin` refuses `sessionIdleTtl` at boot instead of not enforcing it.
-Sessions that existed before start their idle clock on their next use.
+Sessions written before `trackSessionActivity` was on (`lastSeenAt` null) start
+their idle clock on their next use. Rows written with it on record their
+creation time, and nothing updates it while `sessionIdleTtl` is off, so turning
+the idle timeout on later signs out sessions older than the window once.
 
 ## Upgrading to 2.0
 
