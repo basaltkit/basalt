@@ -58,7 +58,11 @@ key, webhooks that respect a port policy and a fan-out cap, and more. See
 
 ## Since 1.12 (unreleased)
 
-Shipped to `main` after the 1.12 release, all non-breaking:
+Shipped to `main` after the 1.12 release as minors and patches — no package
+needs a major, but some defaults change and a few configurations now refuse to
+boot. Read [Behaviour changes & upgrade notes](#behaviour-changes-and-upgrade-notes)
+before upgrading.
+
 
 - **Idempotency on every adapter.** `idempotencyPlugin` moved from
   `@basaltkit/fastify` into the shared route pipeline in `@basaltkit/http`, so
@@ -96,6 +100,165 @@ Shipped to `main` after the 1.12 release, all non-breaking:
   handlers, and parses it within limits, trusting `Authentication-Results` and
   ARC only from servers you list. It ships with a reference Cloudflare Email
   Routing Worker — see [Inbound mail](/guide/inbound-mail).
+- **Tenant clients leased per request.** `prismaPlugin` (`@basaltkit/prisma`
+  3.1) now leases a tenant's pooled client for each HTTP request and each
+  `tenancy.run()`, and gives it back when the response ends, through the new
+  request disposers (`RequestDisposer`, `ctx().onDispose()`) in
+  `@basaltkit/http` 2.8 and every adapter. Before, a client counted as in use
+  for `idleMs` (30 s) after every request, so on defaults the 11th distinct
+  tenant within 30 s waited 10 s for a `503` while nothing was running. The pool
+  the plugin builds now defaults `idleMs` to 1 s, a grace period rather than a
+  request budget — see [The per-tenant client pool](/guide/database-per-tenant#the-per-tenant-client-pool).
+
+### Behaviour changes & upgrade notes {#behaviour-changes-and-upgrade-notes}
+
+No package needs a major, but these minors change what some applications see.
+Read this list before upgrading.
+
+#### Idempotency
+
+- **Raw Fastify handlers lose idempotency.** `idempotencyPlugin` now covers
+  Basalt `route()` definitions only. A handler registered directly on the
+  Fastify instance (`fastify.post(...)`, outside `fastifyPlugin({ routes })`)
+  that relied on the old Fastify-only hook is no longer guarded. Move it to
+  `route()`. No boot warning flags these, so check your raw POST handlers.
+- **Only what the handler did is recorded.** A refusal raised before the
+  handler runs (a guard's `401`/`403`, the rate limiter's `429`, a validation
+  `400`) releases the `Idempotency-Key` instead of being replayed for the whole
+  TTL, so a client that signs in again or honours `Retry-After` gets its
+  operation run on the retry. `408`, `425` and `429` are never recorded, even
+  from the handler. Any other handler `4xx` is still replayed byte for byte.
+  Identical on Fastify, Express and Hono.
+- **The check runs after the enrichers** (and before the guards, unless
+  `replayAfterGuards: true`). A replay is decided after the tenant is resolved,
+  so a suspended tenant gets its `403` instead of the cached response.
+- **What the scope covers.** The replay scope is the caller's credentials, the
+  raw `x-tenant-id`/`host` headers, the method, the route *pattern* and the key.
+  It does **not** include a tenant resolved from the path or a token claim, nor
+  the concrete path params: the same credential reusing a key on `/t/acme/...`
+  and `/t/globex/...`, or on `/orders/1/pay` and `/orders/2/pay`, receives the
+  first response. Mint a fresh key per operation and tenant, and bind it to the
+  URL with `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
+  `fingerprint: 'body'` covers the body only, not the query string or params.
+- **Rolling deploys with `fingerprint`.** `RedisIdempotencyStore` writes
+  in-flight reservations as `pending:<fingerprint>`, which older instances
+  misread. Deploy the new release everywhere first, then turn `fingerprint` on.
+  Empty responses (`204`) are now recorded and replayed.
+- **An enricher that sends a reply ends the request.** After `reply.send()` in
+  an enricher, the remaining enrichers, the guards and the handler no longer
+  run.
+
+See [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyplugin).
+
+#### Request disposers and Prisma leases
+
+- **Leases need `@basaltkit/http` 2.8.** `prismaPlugin` leases only when the
+  pipeline releases the lease at the end of the response: `@basaltkit/http`
+  2.8 with an adapter from the same release, and `@basaltkit/tenancy` 3.2 for
+  `tenancy.run()`. With older versions nothing leaks: the plugin holds the
+  client for 30 s and then returns it, as `pool.get()` did. `@basaltkit/http`
+  is now an optional peer of `@basaltkit/prisma`. Upgrade http, your adapter
+  and tenancy together with prisma.
+- **Registration order no longer matters for `ctx().db`.** The lease is taken
+  as soon as the tenant is known, so an enricher registered between
+  `tenancyPlugin` and `prismaPlugin` (auth, say) sees `ctx().db`. Each request
+  holds exactly one lease, released even when a later enricher or guard rejects
+  the request.
+- **Disposers wait for the handler.** On a client abort mid-request, Fastify
+  and Express used to run enricher disposers while the handler was still
+  running, which could disconnect its leased client mid-query. Disposers now
+  run exactly once, after the handler has settled *and* the response has ended
+  or been aborted, as Hono already did. `stream()` and `sse()` bodies stay
+  covered until their last byte or until the client leaves.
+- **`ctx().db` after the response is not protected.** The lease ends with the
+  response, and the client then stays reserved for only 1 s. Work that outlives
+  the reply must `await` before replying, or run in `tenancy.run()` /
+  `DB_POOL.use()`. If you used `DB_POOL.get()` on the plugin's pool for work
+  longer than 1 s, switch to `DB_POOL.use()` or pass `idleMs` explicitly.
+- **Size `max` by the distinct tenants active within a few seconds.**
+  Over-subscribing no longer answers `503`; it churns: an idle client is closed
+  and a new one opened on each request. Monitor how often your `forTenant`
+  factory runs.
+- **`PRISMA_POOL_EXHAUSTED` bodies are neutral.** The `503` carries only the
+  code and "Service unavailable.". `max`, `leased`, `recentlyUsed` and the
+  tenant id go to the server log only.
+
+#### Configurations that now refuse to boot
+
+Each used to boot and misbehave silently; each has a one-line fix.
+
+- **`@basaltkit/auth`: a prefixed session cookie with `secure: false`.** A
+  `sessionCookie.name` starting with `__Host-` or `__Secure-` together with an
+  explicit `secure: false` (including the common
+  `secure: process.env.NODE_ENV === 'production'` in dev and test), or a
+  `__Host-` cookie with a `path` other than `/`, throws
+  `AUTH_SESSION_COOKIE_INVALID`. Drop `secure`/`path`, or use an unprefixed name
+  outside production: `name: isProd ? '__Host-sid' : 'sid'`. Browsers already
+  dropped those cookies.
+- **`@basaltkit/tenancy`: `meta.tenant` must be `true`, `false` or `'never'`.**
+  Any other value (`'none'`, `'false'`) refuses the boot with
+  `HTTP_INVALID_ROUTE_META` instead of falling back to the app-wide default.
+- **`@basaltkit/http`: `meta.headers` is always validated.** It must be a
+  record of string values without control characters and must not set
+  `set-cookie`, `content-type`, `content-length`, `transfer-encoding`,
+  hop-by-hop headers or `x-request-id`. A route that used `meta.headers` for
+  something of its own fails with `HTTP_INVALID_ROUTE_META`: rename the field.
+- **`@basaltkit/http`: malformed `meta.rateLimit` arrays or `bucket` entries**,
+  and routes sharing a `bucket` that disagree on limit, window or key, refuse
+  the boot with `HTTP_INVALID_ROUTE_META`. The single-object `rateLimit`
+  (no `bucket`) keeps its lenient parse.
+
+#### Other changes
+
+- **Audit — API key refusals.** `auth:apikey_rejected` is no longer recorded by
+  default, because any anonymous client could flood the trail with unknown
+  keys. Refusals of a key that *did* verify (`tenant_mismatch`, `not_allowed`,
+  `scope`) are still recorded, under the new `auth:apikey_refused` hook. A
+  custom `hooks` list applies the default excludes too. To record every
+  rejection again, name it: `hooks: ['auth:**', 'auth:apikey_rejected']` (a
+  valid-key refusal is then recorded twice) — or use the throttled listener in
+  [Which hooks are audited](/guide/persistence#which-hooks-are-audited).
+- **Audit — erasable chains.** Upgrade every service that runs
+  `audit.verify()` before the first `audit.redact()` or before turning on
+  `integrity: { mode: 'hash-chain', erasable: true }`: older releases report v3 entries and
+  redacted entries as `hash-mismatch`. See
+  [Erasing personal data](/guide/persistence#erasing-personal-data-audit-redact).
+- **Auth — custom `UserSource` without `update()`.** `create()` now receives
+  `emailVerified`; persist it to get verified social and trusted accounts. A
+  source that neither persists it nor implements `update()` still signs social
+  users in, unverified as before, but `register(…, { emailVerified: true })`
+  throws `AUTH_UPDATE_UNSUPPORTED`.
+- **Auth — boot warning without a rate limiter.** `authRoutes()` declares
+  `meta.rateLimit`. Without `securityPlugin({ rateLimit })` the app now prints
+  one `console.warn` at boot naming those routes. Register the limiter, pass
+  `authRoutes({ rateLimit: false })`, or set `allowUnguardedMeta: ['rateLimit']`
+  on the adapter if an outer edge throttles.
+- **Webhooks — `runInTenant` is on by default.** With `tenancyPlugin`
+  registered, each off-request `dispatch()` scoped by a `tenantId` makes one
+  `TenantSource.find` call and fires `tenancy:switched`/`tenancy:exited`; under
+  schema- or database-per-tenant `prismaPlugin` also leases that tenant's client,
+  which can fail with `PRISMA_POOL_EXHAUSTED` when the pool is saturated. A
+  deleted tenant or an invalid id rejects with `TENANT_NOT_FOUND` /
+  `TENANT_ID_INVALID`, and its outbox entries dead-letter after `maxAttempts`.
+  If your webhook tables are central, pass `webhooksPlugin({ runInTenant: false })`
+  — see [what it costs](/guide/webhooks#run-in-tenant-costs).
+- **Drives — connection health is opt-in per store.** `lastSucceededAt`,
+  `lastFailedAt` and `lastErrorCode` are written only to a store that declares
+  `persistsHealth: true` (the in-memory store does). A durable store keeps
+  working unchanged and reports no health. To turn it on, add the three
+  nullable columns, migrate, then set `readonly persistsHealth = true` — see
+  [Connection health](/guide/drives#connection-health).
+- **Notifications — `preference()` replaces `allowed()` in the `Notifier`.**
+  The `Notifier` decides each channel through
+  `NotificationPreferences.preference()`, then the notification's `defaults` and
+  `mandatory`. A subclass or wrapper that overrides `allowed()` is no longer
+  consulted: override `preference()` instead.
+- **MCP — internal errors are logged.** An error that escapes a tool still
+  answers `Internal error`, and its cause now goes to stderr by default. Use
+  `mcpPlugin({ onError })` to send it elsewhere, or `onError: false` to silence
+  it.
+- **Route table — `central-only`.** `basalt routes` and `describeRoutes()` show
+  `meta.tenant: 'never'` as `central-only` instead of a blank cell.
 
 ## Highlights
 
@@ -353,7 +516,7 @@ likely to reach an application.
 | `queue` 3 | two different jobs under one name; `attempts: 0`; job context with a tenant outside the grammar | rename, or `queuedOn(…, { name })`; `attempts` ≥ 1; pass the same `validateTenantId` to the queue plugin |
 | `subscriptions` 5 | `swap()` onto a paid plan with no gateway subscription (`402`); `subscribe()` to a paid plan on Paddle or Lemon Squeezy (`501`); non-positive-integer usage | `swap(id, plan, { allowUnpaid: true })`; `checkout()` |
 | `search` 2 | a bare `reindex()` outside a tenant when tenancy is registered; `limit` over 1000, `offset` over 10000; filters on undeclared fields or with `null` values | `reindex(name, { all: true })`; `searchPlugin({ maxLimit, maxOffset })`; declare the field `filterable` |
-| `prisma` 3 | a new tenant while every pooled client is in use — `503` after `acquireTimeoutMs` | size `max` for concurrently active tenants; keep `idleMs` above the longest request, or `pool.use(tenantId, fn)` |
+| `prisma` 3 | a new tenant while every pooled client is in use — `503` after `acquireTimeoutMs` | size `max` for concurrently active tenants; on `prisma` 3.0 keep `idleMs` above the longest request, or `pool.use(tenantId, fn)` — from 3.1 requests hold a lease instead (see [upgrade notes](#behaviour-changes-and-upgrade-notes)) |
 | `audit` 2 | `verify()` / `verifyAll()` fail for rows outside the chain written after it began | `legacyUntil` for a known, benign source such as a rolling deploy |
 
 ### Data steps
