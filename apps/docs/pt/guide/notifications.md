@@ -179,6 +179,20 @@ mailerPlugin({
   servidor de dev no browser que renderiza cada mail com dados de exemplo,
   através da validação de schema e do `layout` reais.
 
+### Receber mail (inbound)
+
+O mailer só **envia**. O Basalt não tem um pacote de mail de entrada: os
+fornecedores (Postmark, SendGrid Inbound Parse, rotas do Mailgun, SES → SNS)
+entregam as mensagens recebidas a um endpoint HTTP, muitas vezes como os bytes
+`message/rfc822` em bruto. Recebe-as numa
+[rota `rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook),
+que entrega ao handler os bytes intactos em todos os adapters, e — quando o
+fornecedor assina com um HMAC sobre o corpo — verifica esses bytes diretamente
+com [`verifySignature(header, body.bytes, secret)`](/pt/guide/webhooks#verificar-bytes-raw)
+antes de fazer o parse do MIME com a biblioteca que preferires. Nunca
+descodifiques os bytes para string primeiro: uma mensagem que não seja UTF-8
+válido deixaria de bater com a assinatura.
+
 ## SMS e WhatsApp
 
 Entrega através de um `SmsSender` **agnóstico de fornecedor** — implementa um
