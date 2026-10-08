@@ -316,6 +316,28 @@ Rewriting the URL host to the validated IP is not an option for plain `fetch`: i
 | `deriveDeliveryId` | function | `(idempotencyKey, endpointId) => string` — the stable delivery id used by the outbox |
 | `webhookOutboxDispatch` | function | `(webhooks, { onPermanentFailure?, maxTrackedEntries? }?) => OutboxDispatch` |
 
+### Streaming guarded fetch (for any untrusted URL)
+
+`createGuardedFetch(options)` is the SSRF guard as a **streaming** HTTP client,
+for downloading URLs you do not control (a tenant's "import from URL", a
+provider download link). `@basaltkit/drives` uses it for every provider call.
+
+```ts
+import { createGuardedFetch } from '@basaltkit/webhooks'
+
+const fetchUntrusted = createGuardedFetch({ maxBytes: 20 * 1024 * 1024, timeoutMs: 15_000 })
+const response = await fetchUntrusted(url) // response.body is a capped Readable
+```
+
+Per hop: scheme (`https:` by default) and optional host allowlist (`.suffix` =
+subdomains only), DNS resolved once and every address validated, socket pinned
+to the validated IP, redirects followed manually (max 3, credentials dropped
+across hosts), no `accept-encoding`, byte cap enforced mid-stream, inactivity
+timeout plus optional `deadlineMs`. Refusals throw `GuardedFetchError`
+(`kind`: `SSRF_BLOCKED` · `BODY_TOO_LARGE` · `TIMEOUT` · `TOO_MANY_REDIRECTS`)
+naming the host, never the URL. Also exported: `hostAllowed`, `capStream`,
+`pinnedStreamTransport`.
+
 ## Common errors and solutions (FAQ)
 
 **The recipient says the signature is invalid** — They need to verify the HMAC over the **raw body** of the request, byte for byte. If they `JSON.parse` and re-serialize, the bytes change and verification fails. Also confirm both sides use the same secret.

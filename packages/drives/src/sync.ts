@@ -1,5 +1,5 @@
 import type { Drives } from './drives.js'
-import { DriveCursorResetError } from './errors.js'
+import { DriveCursorResetError, errorCodeOf } from './errors.js'
 import type { DriveChange, DriveDelta, DriveItem } from './provider.js'
 import type { DriveConnection, DriveImportStrategy } from './store.js'
 
@@ -238,16 +238,18 @@ export async function syncConnection(
     })
   }
 
+  // Hoisted so the failure path can stamp health against the last revision
+  // this run itself wrote or read.
+  let revision = connection.revision
   try {
     let cursor = connection.cursor
-    let revision = connection.revision
 
     /** Persists progress after every page, so a crash costs one page, not the run. */
     const persist = async (next: string | undefined, synced: boolean): Promise<void> => {
       const updated = await store.update(
         connection.tenantId,
         connection.id,
-        { cursor: next, ...(synced ? { lastSyncedAt: now() } : {}) },
+        { cursor: next, ...(synced ? { lastSyncedAt: now(), lastSucceededAt: now() } : {}) },
         revision,
       )
       if (updated) {
@@ -367,6 +369,24 @@ export async function syncConnection(
     await hooks?.emit('drive:sync_completed', { ...result, tenantId: connection.tenantId, provider: connection.provider })
     return result
   } catch (error) {
+    // Best effort, and a compare-and-set against the revision this run last
+    // saw: a health stamp must never mask the sync error, and it must never
+    // bump a revision another writer (a refresh, a concurrent sync) is about
+    // to compare against. Losing the stamp to such a write costs nothing — a
+    // refresh that condemned the grant already stamped it in its own write.
+    // A caller's abort is not a connection failure and is not stamped.
+    if (!options.signal?.aborted) {
+      try {
+        await store.update(
+          connection.tenantId,
+          connection.id,
+          { lastFailedAt: now(), lastErrorCode: errorCodeOf(error) },
+          revision,
+        )
+      } catch {
+        // ignored on purpose — see above
+      }
+    }
     await hooks?.emit('drive:sync_failed', {
       tenantId: connection.tenantId,
       connectionId: connection.id,

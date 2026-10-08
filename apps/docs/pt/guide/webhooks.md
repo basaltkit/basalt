@@ -523,6 +523,11 @@ que o parsing de URL reescreve para `[::ffff:7f00:1]`), IPv4-compatible, NAT64
 (`64:ff9b::/96`) ou 6to4 (`2002::/16`) — é avaliado por esse endereço IPv4, e as
 gamas Teredo, NAT64 de uso local, discard e de documentação são recusadas.
 
+A mesma guarda está disponível para os teus próprios pedidos de saída como um
+cliente em **streaming** — `createGuardedFetch()` — que devolve o corpo (com
+limite) em vez de o descartar, por isso serve para descarregar. Ver
+[HTTP de saída & SSRF](/pt/guide/security#http-de-saida-ssrf).
+
 ### Política de portas
 
 A verificação de endereço público não ajuda quando o alvo é o Redis exposto de
@@ -832,6 +837,9 @@ shutdown (best-effort).
 | `webhookOutboxDispatch` | `(webhooks, options?) => OutboxDispatch` | Adapta um `WebhookManager` a um dispatch de outbox; só lança em falhas transitórias, com ids de entrega estáveis |
 | `pinnedFetch` | `(url, init) => Promise<Response>` | Cliente compatível com `fetch` sobre o transporte fixado — o delegado de um `fetchImpl` próprio |
 | `deriveDeliveryId` | `(idempotencyKey, endpointId) => string` | O `id` de entrega determinístico usado pelo outbox / `idempotencyKey` |
+| `createGuardedFetch` | `(options) => (url, init?) => Promise<GuardedResponse>` | Cliente em streaming com guarda SSRF: revalidação e fixação de IP em cada salto, limite de bytes a meio do stream, sem redirect automático, sem descompressão; lança `GuardedFetchError` (`SSRF_BLOCKED` · `BODY_TOO_LARGE` · `TIMEOUT` · `TOO_MANY_REDIRECTS`) |
+| `hostAllowed` | `(host, allowed) => boolean` | O predicado da allowlist: host exacto, ou `.sufixo` só para subdomínios |
+| `capStream` | `(source, maxBytes, exceeded?) => Readable` | Envolve um stream para que falhe acima de `maxBytes`, destruindo a origem |
 
 ## Modos de falha e resolução de problemas
 

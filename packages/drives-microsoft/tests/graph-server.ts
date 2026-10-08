@@ -54,6 +54,8 @@ export interface FakeGraphFile {
   /** A "Shared with me" shortcut: the bytes live in another drive. */
   isShortcut?: boolean
   isFolder?: boolean
+  /** SharePoint list item columns, as Graph returns them under `listItem.fields`. */
+  listItemFields?: Record<string, unknown>
 }
 
 interface Item {
@@ -71,6 +73,7 @@ interface Item {
   remoteItem?: { id: string; driveId: string }
   deleted?: { state: string }
   parentReference?: { driveId: string; id?: string; path?: string }
+  listItem?: { fields: Record<string, unknown> }
 }
 
 export interface FakeGraphOptions {
@@ -162,6 +165,7 @@ export class FakeGraph {
         : { file: { mimeType: file.mimeType ?? 'text/plain', ...(Object.keys(hashes).length > 0 ? { hashes } : {}) } }),
       ...(file.isPackage === true ? { package: { type: 'oneNote' } } : {}),
       ...(file.isShortcut === true ? { remoteItem: { id: `remote-${file.id}`, driveId: 'b!somebody-else' } } : {}),
+      ...(file.listItemFields !== undefined ? { listItem: { fields: file.listItemFields } } : {}),
     }
     this.files.set(file.id, item)
     this.log.push(strip(item))
@@ -363,6 +367,10 @@ export class FakeGraph {
         continue
       }
       if (projected[field] !== undefined) picked[field] = projected[field]
+    }
+    // Like Graph: a navigation property is returned only when expanded.
+    if ((url.searchParams.get('$expand') ?? '').startsWith('listItem') && projected['listItem'] !== undefined) {
+      picked['listItem'] = projected['listItem']
     }
     return picked
   }
