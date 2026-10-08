@@ -86,7 +86,12 @@ Generated code is safe to ship as a starting point:
   `requireTenantId()` — no tenant resolved means `TENANT_REQUIRED` (400), never
   a shared view — by-id writes use `updateMany`/`deleteMany` so another
   tenant's row is simply "not found", and the Prisma model gets an indexed
-  `tenantId` column. `--no-tenant` turns it off.
+  `tenantId` column. `--no-tenant` turns it off. With `--tenant=schema` or
+  `--tenant=database` (schema-/database-per-tenant) the model has **no**
+  `tenantId` column and queries are unfiltered on the tenant's own `db()`
+  client — still fail-closed, every access starts with `requireTenantId()`.
+  The isolation mode is never guessed; set a project default with
+  `generatorCommands({ tenant: 'schema' })`.
 - After generating, a short **security note** says which of the two applies.
   Row-level authorization (who may read or write which rows) is still yours to
   add.
@@ -113,6 +118,7 @@ Options (common to all `make:*` commands, unless noted):
 | `--no-register` | (only `make:resource`) Doesn't touch `src/app.ts` |
 | `--public` | Generates routes WITHOUT `meta.auth` (anonymous access). Default: every route requires an authenticated user. Alias: `--no-auth` |
 | `--tenant` / `--no-tenant` | Forces tenant scoping on/off. Default: on when `package.json` depends on `@basaltkit/tenancy` |
+| `--tenant=column\|schema\|database` | How tenants are isolated: `column` (default) adds an indexed `tenantId` and filters on it; `schema`/`database` emit no `tenantId` column and rely on the per-tenant client (still `requireTenantId()` first) |
 | `--crud` / `--no-crud` | (only `make:service`) Forces the CRUD service or the minimal one. Default: CRUD when the sibling `<name>.repository.ts` and `<name>.schema.ts` are already in the target directory, minimal when they are not |
 
 ### `--prisma` — real persistence with a database
@@ -179,7 +185,7 @@ pnpm basalt make:test Invoice          # tests/invoice.test.ts
 Without a name, any command prints usage and returns exit code 1:
 
 ```
-Usage: basalt make:resource <Name> [--dir=<path>] [--force] [--prisma] [--soft-delete] [--public] [--tenant|--no-tenant]
+Usage: basalt make:resource <Name> [--dir=<path>] [--force] [--prisma] [--soft-delete] [--public] [--tenant[=column|schema|database]|--no-tenant]
 ```
 
 ### Services that are not CRUD

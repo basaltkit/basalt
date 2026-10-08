@@ -4,6 +4,8 @@
 TSV, JSON e NDJSON de raiz (zero dependências), com uma junção de formatador
 plugável para XLSX/PDF. Foi feito para correr de forma assíncrona via
 [`@basaltkit/queue`](/pt/guide/queues) e armazenar o resultado com `@basaltkit/files`.
+Também lê CSV: o [`defineImport`/`readImport`](#importar-csv) lê um ficheiro com
+números e datas estritos por locale e um relatório de erros por linha.
 
 [[toc]]
 
@@ -42,7 +44,9 @@ const result = await exports.run(usersExport, users, 'csv')
 // { content: Buffer, contentType: 'text/csv', filename: 'users.csv', format: 'csv', rowCount: 1 }
 ```
 
-CSV/TSV fazem quoting corretamente (RFC 4180), as datas renderizam como ISO, e
+CSV/TSV fazem quoting corretamente (RFC 4180), as datas renderizam como ISO (vê
+[locales pt](#exportar-para-excel-erp-em-locales-pt) para um BOM, `;` e
+`1 408 278,55`), e
 `run` aceita um array **ou** um `AsyncIterable`. O `run` faz sempre **buffer** —
 recolhe todas as linhas e devolve o ficheiro inteiro num único `Buffer`; para
 grandes volumes de dados usa o [`stream()`](#exportacoes-grandes-em-stream).
@@ -159,7 +163,140 @@ precisam dos tamanhos e CRCs, por isso a folha inteira é construída em memóri
 usa o `run()`, não o `stream()`.
 
 Para adicionar outro formato (PDF, ODS…), implementa `ExportFormatter.render(headers,
-rows) → Buffer` e regista-o da mesma forma — sem alterações à definição de
-exportação. Implementa também o `renderStream(headers, rows: AsyncIterable<unknown[]>)
-→ AsyncIterable<string | Buffer>` opcional (com bytes idênticos ao `render`) para
-tornar o formato streamable.
+rows, columns?) → Buffer` e regista-o da mesma forma — sem alterações à definição de
+exportação. Implementa também o `renderStream(headers, rows: AsyncIterable<unknown[]>,
+columns?) → AsyncIterable<string | Buffer>` opcional (com bytes idênticos ao `render`)
+para tornar o formato streamable. O `columns` traz o `header` de cada coluna e as
+dicas opcionais `type`, `format` e `width`; um formatador pode ignorá-lo.
+
+## Exportar para Excel/ERP em locales pt
+
+Um ficheiro que uma folha de cálculo ou um ERP num locale de língua portuguesa
+abra sem retoques precisa de três coisas que os valores por omissão não fazem: um
+BOM UTF-8 (sem ele o Excel em Windows lê `Número` como `NÃºmero`), `;` como
+separador, e números/datas escritos à maneira local (`1 408 278,55`,
+`14/03/2026`). O `createCsvFormatter` faz as três:
+
+```ts
+import { createCsvFormatter, exportsPlugin } from '@basaltkit/exports'
+
+const ptCsv = createCsvFormatter({
+  delimiter: ';',
+  bom: true,
+  locale: { decimal: ',', thousands: ' ', date: 'dd/mm/yyyy' },
+})
+
+exportsPlugin({ formatters: [ptCsv] }) // regista-se como 'csv', substituindo o de omissão
+// 1408278.55 → 1 408 278,55 · -1408278.55 → -1 408 278,55 · Date → 14/03/2026
+```
+
+Passa **números e `Date`s, não strings já formatadas**: o locale só muda a forma
+como um número primitivo é escrito *depois* de a proteção contra injeção de
+fórmulas o ter isentado, por isso o `-1 408 278,55` de uma nota de crédito
+continua a ser um número, enquanto uma string como `'-1408278,55'` continua
+protegida (`'-1408278,55`) — a proteção não é configurável. O `'dd/mm/yyyy'` usa
+o dia do calendário UTC; passa uma função (`date: (d) => …`) para outra coisa
+qualquer. Com `format: 'csv-pt'` regista-se ao lado do de omissão em vez de o
+substituir. O `stream()` emite os mesmos bytes, BOM incluído.
+
+Para XLSX, o `createXlsxFormatter` escreve **células de data verdadeiras**
+(números de série do Excel com um formato de data, a partir do instante UTC;
+uma data anterior a 1900-03-01, que os números de série do Excel não representam
+correctamente, fica como texto ISO) e
+aplica formatos de número por coluna, larguras, um nome de folha e um cabeçalho
+fixo. As dicas ficam na definição da exportação:
+
+```ts
+import { createXlsxFormatter } from '@basaltkit/exports-xlsx'
+
+const invoicesExport = defineExport<Invoice>({
+  name: 'invoices',
+  columns: [
+    { header: 'Número', value: (i) => i.number, width: 16 },
+    { header: 'Data', value: (i) => i.issuedAt, type: 'date' },
+    { header: 'Total', value: (i) => i.total, type: 'number', format: '#,##0.00', width: 14 },
+  ],
+})
+
+exportsPlugin({
+  formatters: [ptCsv, createXlsxFormatter({ sheetName: 'Facturas', freezeHeader: true, dateFormat: 'dd/mm/yyyy' })],
+})
+```
+
+| Opção do `createXlsxFormatter` | Omissão | Efeito |
+| --- | --- | --- |
+| `sheetName` | `'Sheet1'` | Nome da folha; 1–31 caracteres, nenhum de `[ ] : * ? / \`, sem começar/acabar em `'` (caso contrário lança `TypeError`) |
+| `freezeHeader` | `false` | Mantém a linha de cabeçalho visível ao fazer scroll |
+| `dateFormat` | `'yyyy-mm-dd'` | Formato das células de data cuja coluna não tem `format` |
+| `widths` | — | Larguras das colunas por índice; sobrepõem-se ao `width` das colunas |
+| `format` | `'xlsx'` | Nome do formato com que se regista |
+
+O `xlsxFormatter` simples não muda (datas como texto ISO, sem estilos). Os
+formatos de número são formatos de apresentação: a célula guarda o número em
+bruto, por isso o Excel mostra-o com o separador decimal de quem o abre.
+
+## Importar CSV
+
+O caminho inverso — ler o que um ERP ou uma folha de cálculo exporta — vem no
+mesmo pacote. O `defineImport` declara as colunas uma vez; o `readImport` lê um
+ficheiro (uma `string`, um `Uint8Array` ou um `AsyncIterable` de pedaços, por
+exemplo o stream de um upload) e devolve as linhas lidas e um relatório de erros
+por linha para um ecrã de pré-visualização. **Nunca lança por causa de dados
+maus.**
+
+```ts
+import { defineImport, readImport } from '@basaltkit/exports'
+
+const purchaseOrders = defineImport<{ number: string; quantity: number; unitPrice: number; dueDate: Date | null }>({
+  name: 'purchase-orders',
+  delimiter: ';',
+  locale: { decimal: ',', thousands: ' ', date: 'dd/mm/yyyy' },
+  maxRows: 2000,
+  columns: [
+    { key: 'number', headers: ['Número', 'Nº'], required: true },
+    { key: 'quantity', headers: ['Quantidade', 'Qtd'], required: true, parse: 'integer' },
+    { key: 'unitPrice', headers: ['Preço unitário'], required: true, parse: 'decimal' },
+    { key: 'dueDate', headers: ['Data de entrega'], parse: 'date' },
+  ],
+})
+
+const { rows, errors, warnings } = await readImport(purchaseOrders, file)
+// rows:   [{ line: 2, value: { number: 'PO-1', quantity: 1000, unitPrice: 1250.5, dueDate: Date } }, …]
+// errors: [{ line: 7, column: 'unitPrice', code: 'AMBIGUOUS_DECIMAL', message: '"12.5" is ambiguous: …' }]
+```
+
+- **Cabeçalhos por nome**, em qualquer ordem, com sinónimos; a comparação
+  ignora maiúsculas, acentos e espaços repetidos (`PREÇO  UNITÁRIO` corresponde a
+  `Preço unitário`). Uma coluna `required` em falta, ou dois cabeçalhos para a
+  mesma coluna, falham o ficheiro; um cabeçalho desconhecido é um aviso
+  (`unknownColumns: 'error'` para o recusar).
+- **Números estritos.** O separador que não é o decimal só é aceite como
+  separador de milhares, em grupos de três. Com vírgula decimal, `1.250,50` é
+  1250,5 e `1 408 278,55` é 1408278,55, mas `12.5` é `AMBIGUOUS_DECIMAL` — nunca
+  lido em silêncio como 125 ou 12,5, que é como um preço acaba errado por um
+  factor de 1 000. Um grupo nunca começa por `0` (`0.250` também é ambíguo, não
+  250). O `'integer'` recusa casas decimais.
+- **Datas** em `'dd/mm/yyyy'` ou ISO (`yyyy-mm-dd`, ou um timestamp com
+  offset), validadas contra o calendário (`31/02/2026` é `INVALID_DATE`), e
+  devolvidas como meia-noite UTC. Para outra coisa qualquer passa uma função em
+  `parse`; um throw passa a `INVALID_VALUE` com a sua mensagem.
+- **Erros por linha.** As células são aparadas (trim); uma célula opcional vazia
+  é `null`, uma obrigatória vazia é `REQUIRED`. Uma linha com algum erro, ou com
+  o número errado de campos (`COLUMN_COUNT`), fica fora de `rows`, e cada célula
+  má tem o seu `{ line, column, code, message }` — `line` é a linha física do
+  ficheiro, contada também através das quebras de linha dentro de campos entre
+  aspas. O `maxErrors` (por omissão 1 000) limita o relatório.
+- **Falha fechado num ficheiro malformado.** Umas aspas que nunca fecham, texto
+  depois de umas aspas de fecho, umas aspas dentro de um campo sem aspas, UTF-8
+  inválido, um campo maior que `maxFieldLength`, ou mais de `maxRows` linhas de
+  dados (por omissão 10 000, verificado durante o stream, antes de ler o resto)
+  devolvem esse único erro e **nenhuma linha** — um ficheiro truncado nunca é
+  importado a meio.
+
+O leitor de baixo nível também é exportado: `parseDelimited(input, { delimiter,
+quote, bom, maxRows, maxFieldLength })` é um iterador assíncrono RFC 4180 de
+`{ line, cells }` que lança `DelimitedParseError` (`code`
+`CSV_UNTERMINATED_QUOTE`, …, com `reason` e `line`). Um BOM inicial é removido
+(`bom: 'forbid'` recusa-o). O que o `createCsvFormatter` escreve volta a ser
+lido com o mesmo `delimiter` e `locale`: números e datas dão os mesmos valores,
+e o texto a que a protecção contra fórmulas acrescentou um `'` mantém-no.

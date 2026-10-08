@@ -77,7 +77,7 @@ Cada um funciona por si só; juntos formam o framework. Cada pacote é versionad
 | `@basaltkit/files` | Pipeline de upload sobre o storage — validação de tipo/tamanho, quota por tenant, metadados, hooks de scan |
 | `@basaltkit/comments` | Threads de comentários por recurso — @mentions, resolver/reabrir, eventos para realtime e notificações |
 | `@basaltkit/i18n` | Internacionalização — locale resolvido pelo contexto, catálogos tipados com plurais, formatação Intl |
-| `@basaltkit/exports` · `@basaltkit/exports-xlsx` | Exportações de dados tipadas → CSV/TSV/JSON/NDJSON e um formatador XLSX zero-dep |
+| `@basaltkit/exports` · `@basaltkit/exports-xlsx` | Exportações de dados tipadas → CSV/TSV/JSON/NDJSON (BOM + números/datas por locale) e um formatador XLSX zero-dep; importação CSV estrita (`defineImport`/`readImport`) |
 
 ## UIs autossuficientes
 

@@ -45,14 +45,25 @@ export interface GeneratorOptions {
    */
   auth?: boolean
   /**
-   * Treat the resource as tenant-owned: the repository scopes every read and
-   * write to the context tenant via `requireTenantId()` from
-   * `@basaltkit/tenancy` (fail-closed: no tenant → 400, never unscoped), and
-   * the Prisma model gets an indexed `tenantId` column. Default: `false` here;
-   * the `make:*` CLI commands turn it on when the project depends on
-   * `@basaltkit/tenancy` (opt out with `--no-tenant`).
+   * Treat the resource as tenant-owned, and say how tenants are isolated.
+   * Every mode is fail-closed: each repository call starts with
+   * `requireTenantId()` from `@basaltkit/tenancy` (no tenant → 400, never
+   * unscoped).
+   *
+   * - `true` / `'column'` — a shared database: the Prisma model gets an indexed
+   *   `tenantId` column and every query filters on it.
+   * - `'schema'` / `'database'` — schema- or database-per-tenant: isolation is
+   *   physical, so the model has **no** `tenantId` column and queries are not
+   *   filtered; they run on the tenant's own client from `db()`, which
+   *   `prismaPlugin` resolves per tenant. The in-memory repository is
+   *   partitioned per tenant in every mode.
+   *
+   * Default: `false` here; the `make:*` CLI commands turn on `'column'` when
+   * the project depends on `@basaltkit/tenancy` (opt out with `--no-tenant`).
+   * The isolation mode is never guessed — pass `--tenant=schema` /
+   * `--tenant=database`, or set it in `generatorCommands({ tenant: 'schema' })`.
    */
-  tenant?: boolean
+  tenant?: boolean | TenantMode
   /**
    * Shape of the generated service.
    *
@@ -69,6 +80,17 @@ export interface GeneratorOptions {
    * compile (TS2307). Force either shape with `--crud` / `--no-crud`.
    */
   crud?: boolean
+}
+
+/** How a tenant-owned resource is isolated: a `tenantId` column, or a schema/database per tenant. */
+export type TenantMode = 'column' | 'schema' | 'database'
+
+export const TENANT_MODES: readonly TenantMode[] = ['column', 'schema', 'database']
+
+/** The isolation mode `options.tenant` asks for, or `undefined` when the resource is not tenant-owned. */
+export function tenantMode(options: GeneratorOptions): TenantMode | undefined {
+  if (options.tenant === true) return 'column'
+  return options.tenant === false || options.tenant === undefined ? undefined : options.tenant
 }
 
 const dir = (n: Names) => `src/modules/${n.kebab}`
@@ -118,7 +140,7 @@ const repositoryInterface = (n: Names, soft: boolean): string => `export interfa
   delete(id: string): Promise<boolean>${soft ? '\n  restore(id: string): Promise<boolean>' : ''}
 }`
 
-function prismaRepository(n: Names, soft: boolean, prismaClient?: PrismaClientRef, tenant = false): string {
+function prismaRepository(n: Names, soft: boolean, prismaClient?: PrismaClientRef, tenant?: TenantMode): string {
   const rowType = soft
     ? '{ id: string; name: string; createdAt: Date; updatedAt: Date; deletedAt: Date | null }'
     : '{ id: string; name: string; createdAt: Date; updatedAt: Date }'
@@ -132,7 +154,7 @@ function prismaRepository(n: Names, soft: boolean, prismaClient?: PrismaClientRe
   name: r.name,
   createdAt: r.createdAt.toISOString(),
   updatedAt: r.updatedAt.toISOString(),`
-  if (tenant) return tenantPrismaRepository(n, soft, rowType, mapper, prismaClient)
+  if (tenant === 'column') return tenantPrismaRepository(n, soft, rowType, mapper, prismaClient)
   const listCall = soft ? 'findMany({ where: { deletedAt: null } })' : 'findMany()'
   const findCall = soft ? 'findFirst({ where: { id, deletedAt: null } })' : 'findUnique({ where: { id } })'
   const deleteBody = soft
@@ -151,8 +173,28 @@ function prismaRepository(n: Names, soft: boolean, prismaClient?: PrismaClientRe
   }`
     : ''
   const client = prismaClient ?? { import: '@prisma/client', type: 'PrismaClient' }
+  const isolated = tenant === 'schema' || tenant === 'database'
+  const docs = isolated
+    ? `/**
+ * Prisma-backed, tenant-owned with ${tenant}-per-tenant isolation: each tenant's
+ * rows live in its own ${tenant}, so the model has no \`tenantId\` column and
+ * queries carry no tenant filter. Every access first requires a resolved tenant
+ * (\`requireTenantId()\` throws TENANT_REQUIRED, 400 — never a query without one)
+ * and then runs on that tenant's client from \`db()\`, which prismaPlugin
+ * (\`${tenant === 'schema' ? 'schemaPerTenant' : 'forTenant'}\`) resolves per tenant. Requires a \`${n.pascal}\` model in the
+ * tenant schema.prisma.
+ */`
+    : `/** Prisma-backed. Requires prismaPlugin configured and a \`${n.pascal}\` model in schema.prisma. */`
+  const records = isolated
+    ? `  private get records() {
+    requireTenantId() // fail closed: no tenant, no tenant client, no query
+    return db<${client.type}>().${n.camel}
+  }`
+    : `  private get records() {
+    return db<${client.type}>().${n.camel}
+  }`
   return `import { createToken } from '@basaltkit/core'
-import { db } from '@basaltkit/prisma'
+import { db } from '@basaltkit/prisma'${isolated ? `\nimport { requireTenantId } from '@basaltkit/tenancy'` : ''}
 import type { ${client.type} } from '${client.import}'
 import type { ${n.pascal}, Create${n.pascal}Input, Update${n.pascal}Input } from './${n.kebab}.schema.js'
 
@@ -163,11 +205,9 @@ ${mapper}
 
 ${repositoryInterface(n, soft)}
 
-/** Prisma-backed. Requires prismaPlugin configured and a \`${n.pascal}\` model in schema.prisma. */
+${docs}
 export class Prisma${n.pascal}Repository implements ${n.pascal}Repository {
-  private get records() {
-    return db<${client.type}>().${n.camel}
-  }
+${records}
 
   async list(): Promise<${n.pascal}[]> {
     return (await this.records.${listCall}).map(to${n.pascal})
@@ -377,8 +417,8 @@ export function repositoryFile(n: Names, options: GeneratorOptions = {}): Genera
   return {
     path: `${dir(n)}/${n.kebab}.repository.ts`,
     content: options.prisma
-      ? prismaRepository(n, soft, options.prismaClient, options.tenant === true)
-      : memoryRepository(n, soft, options.tenant === true),
+      ? prismaRepository(n, soft, options.prismaClient, tenantMode(options))
+      : memoryRepository(n, soft, tenantMode(options) !== undefined),
   }
 }
 
@@ -481,11 +521,17 @@ export const ${n.camel}Plugin = definePlugin({
 /** Prisma model block to paste into schema.prisma (emitted with --prisma). */
 export function prismaModelFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
   const soft = options.softDelete ? '\n  deletedAt DateTime?' : ''
-  const tenantColumn = options.tenant ? '\n  tenantId  String' : ''
-  const tenantIndex = options.tenant ? '\n\n  @@index([tenantId])' : ''
+  const mode = tenantMode(options)
+  const tenantColumn = mode === 'column' ? '\n  tenantId  String' : ''
+  const tenantIndex = mode === 'column' ? '\n\n  @@index([tenantId])' : ''
+  const header =
+    mode === 'schema' || mode === 'database'
+      ? `// Add this model to the TENANT schema.prisma (${mode}-per-tenant: no tenantId column —
+// each tenant has its own ${mode}), then migrate every tenant.`
+      : '// Add this model to your schema.prisma, then run `prisma migrate dev`.'
   return {
     path: `${dir(n)}/${n.kebab}.prisma`,
-    content: `// Add this model to your schema.prisma, then run \`prisma migrate dev\`.
+    content: `${header}
 model ${n.pascal} {
   id        String   @id @default(cuid())${tenantColumn}
   name      String
@@ -599,7 +645,7 @@ ${restoreRoute}]${authApply}
 
 export function testFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
   const auth = options.auth !== false
-  const tenant = options.tenant === true
+  const tenant = tenantMode(options) !== undefined
   const coreImport = auth ? `\nimport { definePlugin, ensureMetadata } from '@basaltkit/core'` : ''
   const fastifyImport = auth ? 'fastifyPlugin, HttpError, type RouteGuard' : 'fastifyPlugin'
   const authStub = auth
