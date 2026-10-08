@@ -19,4 +19,9 @@ Additive:
   that ignore every opt-out. Enforced by `Notifier`; `allowed()` is unchanged and
   the new `NotificationPreferences.preference()` returns `undefined` when no
   preference matches.
+- **Behaviour change for custom preferences:** `Notifier` now decides each
+  channel through `preference()` (then the notification's `defaults` and
+  `mandatory`), not `allowed()`. A subclass or wrapper that overrides
+  `allowed()` to change delivery is no longer consulted — override
+  `preference()` instead (`undefined` means "no stated preference").
 - `inAppRoutes({ meta })` merges extra route metadata; `auth: true` is always kept.

@@ -832,8 +832,11 @@ Under [schema-per-tenant](/guide/database-per-tenant) you have two layouts.
 **Simplest: keep the webhook tables central.** Give `prismaWebhookStore` the
 plain central client. Every endpoint already carries its `tenantId` and every
 dispatch is scoped by it, so isolation does not depend on the schema — and
-everything on this page, the outbox relay included, works unchanged. Prefer
-this unless you need each tenant's endpoints inside its own schema.
+everything on this page, the outbox relay included, works unchanged. Pass
+`webhooksPlugin({ runInTenant: false })` with this layout: the lookup does not
+need the tenant, and the default would enter it on every off-request dispatch
+([what that costs](#run-in-tenant-costs)). Prefer this unless you need each
+tenant's endpoints inside its own schema.
 
 **Endpoints per tenant.** Give the Prisma store a client that resolves per call
 instead of a fixed one — no special store mode is needed:
@@ -896,6 +899,33 @@ await tenancy.run(job.tenantId, () =>
 Opt out with `webhooksPlugin({ runInTenant: false })`; without `tenancyPlugin`
 (or with a `@basaltkit/tenancy` older than the `'tenancy:run'` signal) the lookup
 runs in the caller's context, as before.
+
+#### `runInTenant` is on by default — what it costs {#run-in-tenant-costs}
+
+With `tenancyPlugin` registered, **every** dispatch scoped by an explicit
+`tenantId` outside a tenant context runs its endpoint lookup inside
+`tenancy.run` — whatever the store's layout, shared schema and central tables
+included. Per such dispatch:
+
+- **One `TenantSource.find`.** A transient failure of it (the tenant directory
+  is unreachable) rejects the dispatch; an outbox entry is retried like any
+  failed delivery.
+- **The `tenancy:switched` / `tenancy:exited` hooks fire**, so every listener
+  runs. Under schema- or database-per-tenant, `prismaPlugin` leases the tenant's
+  pooled client for the lookup — even when the webhook store is central and
+  never uses it. The lease can open or evict a pool slot, waits up to
+  `acquireTimeoutMs` when the pool is saturated, then fails with
+  `PRISMA_POOL_EXHAUSTED`.
+- **An unknown or invalid tenant rejects before any delivery** —
+  `TENANT_NOT_FOUND` for a deleted tenant, `TENANT_ID_INVALID` for an id that
+  fails the tenant-id grammar. The relay retries the entry and dead-letters it
+  after `maxAttempts`.
+
+Set `runInTenant: false` when the webhook tables are central (shared schema, or a
+plain client under schema- or database-per-tenant): the lookup does not need the
+tenant, and opting out removes the `find`, the hooks and the pool lease. A
+deleted tenant's endpoints then keep receiving deliveries until you remove them.
+Keep the default when endpoints live per tenant (`tenantClient()`).
 
 ### Which backend?
 
