@@ -538,6 +538,62 @@ export class Drives {
     )
   }
 
+  /**
+   * Re-seals every stored credential under the active (first) key, for a key
+   * rotation that must also reach **dormant** connections — an active one
+   * re-seals by itself at its next refresh, a connection nobody uses never
+   * refreshes.
+   *
+   * The tenant ids come from the app, deliberately: the store contract has no
+   * cross-tenant listing, and adding one to serve a maintenance job would hand
+   * every caller a way to read across tenants. Iterate your own tenant table.
+   * When omitted, the call's tenant resolves like every other method (the
+   * context tenant, or the single-tenant key). With a tenant in context, every
+   * id must equal it (`DRIVE_TENANT_MISMATCH`) — this is a job, not a request.
+   *
+   * Each write is a compare-and-set on the row's revision; a row that changed
+   * under us (a refresh, which re-seals with the active key anyway) is counted
+   * in `skippedConflicts` rather than overwritten. A secret sealed with a key
+   * no longer in the ring throws {@link DriveSecretKeyUnknownError}: restore
+   * that key before running the rotation.
+   *
+   * Runbook: prepend the new key → run this over every tenant id → confirm
+   * `remainingOnOldKeys === 0` → drop the old key.
+   */
+  async rotateSecrets(options: { tenantIds?: Iterable<string> } = {}): Promise<{
+    resealed: number
+    skippedConflicts: number
+    remainingOnOldKeys: number
+  }> {
+    const scopes =
+      options.tenantIds === undefined
+        ? [this.tenant(undefined, 'rotateSecrets')]
+        : [...new Set(options.tenantIds)].map((id) => this.tenant(id, 'rotateSecrets'))
+    let resealed = 0
+    let skippedConflicts = 0
+    let remainingOnOldKeys = 0
+    const active = this.box.activeKeyId
+    for (const tenantId of scopes) {
+      for (const connection of await this.store.list(tenantId)) {
+        // Same backstop as `list()`: a store that ignores its tenant argument
+        // must not get another tenant's rows rewritten.
+        if (connection.tenantId !== tenantId) continue
+        const context = { tenantId, connectionId: connection.id, provider: connection.provider }
+        const next = this.box.reseal(connection.secret, context)
+        if (next === null) continue
+        const updated = await this.store.update(tenantId, connection.id, { secret: next }, connection.revision)
+        if (updated) {
+          resealed++
+          continue
+        }
+        skippedConflicts++
+        const latest = await this.store.find(tenantId, connection.id)
+        if (latest && latest.tenantId === tenantId && this.box.keyIdOf(latest.secret) !== active) remainingOnOldKeys++
+      }
+    }
+    return { resealed, skippedConflicts, remainingOnOldKeys }
+  }
+
   /** Drops the dedup ledger for a connection, so a later sync re-imports everything. */
   async forgetImports(connectionId: string, tenantId?: string): Promise<number> {
     const scope = this.tenant(tenantId, 'forgetImports')
