@@ -107,8 +107,10 @@ const app = createApp({
       // First key seals; the rest stay readable, so rotation is a rolling change.
       keys: [{ id: '2026-09', key: env.DRIVES_ENCRYPTION_KEY }],
       secret: env.APP_SECRET,
-      store: prismaDriveConnectionStore(db),
-      ledger: prismaDriveImportLedger(db),
+      // Your durable implementations. Omitted, both are in-memory (tests only).
+      // Validate them with `runDriveStoreContract` from `@basaltkit/drives/testing`.
+      store: yourDriveConnectionStore,
+      ledger: yourDriveImportLedger,
     }),
   ],
 })

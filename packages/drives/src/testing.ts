@@ -510,3 +510,9 @@ function strip(item: DriveItem & { content?: string }): DriveItem {
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
+
+export {
+  runDriveStoreContract,
+  type DriveStoreContractHarness,
+  type DriveStoreContractSubject,
+} from './store-contract.js'
