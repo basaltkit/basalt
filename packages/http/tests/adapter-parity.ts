@@ -1437,12 +1437,14 @@ export function routeTableParitySuite(adapter: string, driver: ParityDriver): vo
           }),
           route({ method: 'GET', url: '/pricing', meta: { auth: false, tenant: false }, handler }),
           route({ method: 'GET', url: '/open', handler }),
+          route({ method: 'GET', url: '/console', meta: { auth: true, can: false, tenant: 'never' }, handler }),
         ],
         [guards],
       )
       expect((await send({ method: 'GET', url: '/livez' })).status).toBe(200)
       const rows = describeRoutes(bucket)
       expect(rows).toEqual([
+        { method: 'GET', url: '/console', auth: true, can: [], rateLimit: null, tenant: 'central-only', public: false, guards: [] },
         { method: 'GET', url: '/open', auth: null, can: null, rateLimit: null, tenant: null, public: false, guards: [] },
         { method: 'GET', url: '/pricing', auth: false, can: null, rateLimit: null, tenant: 'exempt', public: true, guards: [] },
         { method: 'GET', url: '/projects', auth: true, can: ['projects:read'], rateLimit: null, tenant: null, public: false, guards: [] },

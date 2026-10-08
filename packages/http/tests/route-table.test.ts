@@ -74,6 +74,14 @@ describe('describeRoutes (BK-025)', () => {
     expect(rate([])).toBeNull()
   })
 
+  it("marks meta.tenant: 'never' as central-only, even alongside meta.central", () => {
+    const rows = describeRoutes([
+      { method: 'GET', url: '/console', meta: { tenant: 'never' } },
+      { method: 'GET', url: '/console/both', meta: { tenant: 'never', central: true } },
+    ])
+    expect(rows.map((row) => row.tenant)).toEqual(['central-only', 'central-only'])
+  })
+
   it('marks meta.tenant: false as exempt and meta.public as public', () => {
     const [row] = describeRoutes([{ method: 'GET', url: '/pricing', meta: { tenant: false, public: true } }])
     expect(row).toMatchObject({ tenant: 'exempt', public: true, auth: null })

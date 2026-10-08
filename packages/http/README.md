@@ -330,7 +330,7 @@ closed, loudly.
 `describeRoutes(entries)` normalises the `http:routes` bucket every adapter fills at
 boot into sorted `RouteRow`s — `{ method, url, auth, can, rateLimit, tenant, public, guards }`
 (`auth`/`can`/`rateLimit`/`tenant` are `null` when undeclared; `can: false` becomes
-`[]`; `rateLimit` reads `'10/1m per user'`, several budgets joined by `', '` and a shared bucket as `' [name]'`; `tenant` is `'required' | 'exempt' | 'central'`).
+`[]`; `rateLimit` reads `'10/1m per user'`, several budgets joined by `', '` and a shared bucket as `' [name]'`; `tenant` is `'required' | 'exempt' | 'central-only' | 'central'`, where `'central-only'` is `meta.tenant: 'never'`).
 `findUnguardedRoutes(rows, { require: ['auth', 'can'], allow? })` returns the rows that
 do not declare the required guards, treating `auth: false` / `public: true` (and
 `can: false`, for `can`) as intentional; only `auth: true` — the one value `authPlugin`
