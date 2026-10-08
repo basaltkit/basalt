@@ -11,6 +11,7 @@ import {
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
+  routeTableParitySuite,
   rateLimitKeyParitySuite,
   rawBodyParitySuite,
   streamParitySuite,
@@ -49,6 +50,7 @@ streamParitySuite('fastify', driver)
 corsPreflightParitySuite('fastify', driver)
 wireParitySuite('fastify', driver)
 metaValidatorParitySuite('fastify', driver)
+routeTableParitySuite('fastify', driver)
 
 describe('fastify: multipart on routes that are not upload() routes', () => {
   it('still answers 415 (the pass-through parser only serves upload() routes)', async () => {

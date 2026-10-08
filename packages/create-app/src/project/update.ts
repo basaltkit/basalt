@@ -11,6 +11,7 @@ import {
 } from '../latest-versions.js'
 import { BASALT_PROJECT_SCRIPT } from '../templates.js'
 import type { ProjectContext } from './context.js'
+import { planProductionPath } from './production.js'
 import { extendManifest, MANIFEST_PATH, serializeManifest } from './manifest.js'
 import {
   DEPENDENCY_SECTIONS,
@@ -343,6 +344,19 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
       patched['.env.example'] = exampleAfter
       toolingNotes.push('.env.example: header now says dev/CLI load .env automatically and `start` does not')
     }
+
+    // The production path (BK-026): tsconfig.build.json, a `build` script, the
+    // Dockerfile — offered when missing, never overwriting what the app has.
+    const production = await planProductionPath(ctx.dir, files['package.json']?.after ?? ctx.packageJsonText, ctx.pm)
+    if (production.packageJsonText !== (files['package.json']?.after ?? ctx.packageJsonText)) {
+      files['package.json'] = { before: ctx.packageJsonText, after: production.packageJsonText }
+    }
+    for (const [path, content] of Object.entries(production.files)) {
+      files[path] = { before: undefined, after: content }
+      patched[path] = content
+    }
+    toolingNotes.push(...production.notes)
+    manual.push(...production.manual)
 
     if (ctx.manifest && Object.keys(patched).length > 0) {
       files[MANIFEST_PATH] = {

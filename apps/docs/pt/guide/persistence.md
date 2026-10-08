@@ -131,6 +131,53 @@ instâncias partilhem uma base de dados. Ambos implementam os contratos de store
 idênticos, por isso trocar é uma mudança de uma linha.
 :::
 
+### Prisma com pnpm: o cliente gerado
+
+O Prisma 7 precisa de um `output` explícito no generator, e para onde ele aponta
+decide se a app corre em `node` puro depois do build. O que o create-basalt gera
+(e o que copiar para uma app mais antiga):
+
+```prisma
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"   // fora do src/: o tsc nunca copia estes ficheiros .js
+}
+```
+
+```json
+{
+  "imports": { "#db/*": "./generated/prisma/*" },
+  "dependencies": {
+    "@prisma/client": "^7.10.0",
+    "@prisma/client-runtime-utils": "^7.10.0"
+  }
+}
+```
+
+```ts
+// src/db.ts — o mesmo especificador resolve a partir do src/ (tsx, vitest) e do dist/src/ (node)
+import { PrismaClient } from '#db/client.js'
+```
+
+- **Fora do `src/`.** Um cliente gerado em `src/generated` passa no typecheck e
+  corre com tsx, mas o `tsc` só emite o que compila — os ficheiros `.js` gerados
+  nunca chegam ao `dist/`, e o `node dist/src/server.js` falha com
+  `ERR_MODULE_NOT_FOUND`. O alias `imports` evita tanto um script de cópia como um
+  caminho relativo que difere entre `src/` e `dist/src/`.
+- **`@prisma/client-runtime-utils` como dependência direta.** O
+  `runtime/client.js` gerado pede-o pelo nome. Com pnpm é só uma dependência
+  transitiva do `@prisma/client`, guardada no armazém virtual onde um ficheiro do
+  teu projeto não chega — por isso declara-o, com a mesma versão do
+  `@prisma/client`. Não é preciso `publicHoistPattern` nem `node-linker=hoisted`.
+- **Aprova os scripts de build da CLI.** O pnpm 11 falha a instalação enquanto o
+  build de uma dependência estiver por aprovar; o `pnpm-workspace.yaml` do
+  scaffold lista `prisma` e `@prisma/engines` em `allowBuilds`.
+
+O `create-basalt doctor` assinala um cliente gerado dentro do `src/` e um
+`@prisma/client-runtime-utils` em falta; o `create-basalt update` acrescenta a
+dependência e imprime a mudança a fazer. A imagem em si está em
+[Ir para produção](/pt/guide/production#build-e-envio).
+
 ## Teams — `@basaltkit/teams-sqlite` / `@basaltkit/teams-prisma`
 
 `@basaltkit/teams` mantém memberships e convites por trás do mesmo tipo de contrato de

@@ -6,6 +6,8 @@ export { parseArgv, type ParsedArgv } from './parse.js'
 export {
   builtinCommands,
   routesCommand,
+  routeAllowPattern,
+  UNGUARDED_SCOPE_NOTE,
   scheduleListCommand,
   type RouteMetadata,
   type ScheduleMetadata,
@@ -40,3 +42,4 @@ export {
   type PublishFs,
   type PublishResult,
 } from './publish.js'
+export { DOCKERFILE, DOCKERIGNORE, CI_WORKFLOW, EDITORCONFIG, PRODUCTION_ENTRY } from './stubs.js'
