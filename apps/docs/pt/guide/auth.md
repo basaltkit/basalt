@@ -1003,6 +1003,36 @@ tratado pelo `apiKeysPlugin`. Se as chaves "não funcionam", provavelmente falta
 `apiKeysPlugin()`.
 :::
 
+### Chaves para clientes máquina {#apikeys-machine-clients}
+
+Uma chave apresentada que não verifica (desconhecida, revogada, expirada, mal
+formada) é ignorada por padrão: o pedido continua como anónimo e respondem os
+guards da própria rota — `401 AUTH_REQUIRED` numa rota `meta.auth`, `403
+AUTH_SCOPE_REQUIRED` numa rota `meta.scopes`, ou a resposta pública. Um cliente
+máquina não consegue então distinguir «a minha chave morreu» de «falta-me um
+scope». Ativa uma recusa clara:
+
+```ts
+apiKeysPlugin({ users, rejectInvalid: true })
+// chave morta → 401 { error: { code: 'AUTH_APIKEY_INVALID', … } }
+//               WWW-Authenticate: Bearer error="invalid_token"
+```
+
+A recusa acontece antes de qualquer guard, de forma idêntica em fastify, express
+e hono. Um pedido sem chave nenhuma não é afetado.
+
+O `verify()` regista `lastUsedAt`, mas no máximo uma vez por `touchEveryMs` por
+chave (60 s por padrão), por isso um cliente que consulta a cada segundo custa
+uma escrita no store por minuto em vez de uma por pedido. O `lastUsedAt` é exato
+dentro dessa janela; `touchEveryMs: 0` escreve em cada pedido.
+
+Cada recusa emite `auth:apikey_rejected`. Para uma chave inválida, o payload traz
+o `prefix` de apresentação da chave (`mk_live_` mais seis caracteres, o que as
+listagens mostram — nunca o segredo) e o `ip` do cliente, para poderes alertar
+ou limitar por chamador. Como qualquer cliente anónimo o consegue disparar, este
+hook **não** é registado pelos padrões do `auditPlugin` — vê
+[que hooks são auditados](/pt/guide/persistence#which-hooks-are-audited).
+
 ## Bloqueio por força bruta
 
 Ativo por padrão: 5 tentativas falhadas por email em 15 minutos → `AccountLockedError`
@@ -1112,6 +1142,8 @@ ambos.
 | `users` | `UserSource` | — | Quando definido, uma chave com `userId` também preenche `ctx().user`, para que as rotas protegidas por scopes leiam o utilizador que age |
 | `allowTenantlessKeys` | `boolean` | `false` | Deixa chaves emitidas sem tenant agir em pedidos com tenant (só chaves de plataforma de confiança) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Deixa uma chave sem `*` alcançar rotas `meta.auth`/`can`/`teamRole`/`audience` que não declaram `meta.scopes` |
+| `rejectInvalid` | `boolean` | `false` | Uma chave apresentada que não verifica → `401 AUTH_APIKEY_INVALID` + `WWW-Authenticate: Bearer error="invalid_token"`, em vez de continuar como anónimo |
+| `touchEveryMs` | `number` | `60_000` | Intervalo mínimo entre duas escritas de `lastUsedAt` para uma chave; `0` escreve em cada pedido |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 
 `webauthnPlugin(options)` e a sua `config`:
@@ -1233,7 +1265,7 @@ autenticar os utilizadores.
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Envia o token por email**; o segundo confirma a alteração |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Notificação de segurança |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Trilho de auditoria |
-| `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alertas — `reason` é `invalid`, `tenant_mismatch`, `not_allowed` ou `scope`; nunca a chave |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alertas — `reason` é `invalid`, `tenant_mismatch`, `not_allowed` ou `scope`; `prefix` é o prefixo de apresentação de uma chave inválida, nunca a chave. Não auditado por padrão |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | Alertas de força bruta de MFA e de bloqueio |
 | `auth:refresh_reused` | `{ userId, familyId }` | Alertas de roubo de token — um refresh token consumido voltou |
 | `auth:social_account_adopted` | `{ user }` | Um login social verificado assumiu uma conta não verificada; as credenciais antigas e as ligações de contas foram revogadas |

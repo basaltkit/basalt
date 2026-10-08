@@ -222,6 +222,30 @@ apaga-as com `pruneExpired()` a partir de um job agendado. `@basaltkit/flags` n�
 flags são declaradas em código e avaliadas deterministicamente, sem nada para
 persistir.
 
+### Que hooks são auditados {#which-hooks-are-audited}
+
+O `auditPlugin` regista os hooks de ciclo de vida que correspondem a `auth:**`,
+`billing:**`, `tenancy:created` e `permission:**`, **exceto**
+`auth:apikey_rejected`: dispara em cada pedido que apresenta uma API key morta,
+antes de alguém estar autenticado, por isso registá-lo deixava qualquer cliente
+anónimo acrescentar entradas ao trilho (serializado e encadeado por hash) de um
+tenant tão depressa quanto conseguisse enviar pedidos.
+
+`hooks` aceita uma lista (o conjunto de inclusão) ou `{ include, exclude }`. Um
+hook é registado quando corresponde a um padrão de `include` e a nenhum de
+`exclude`; sem `exclude`, aplicam-se as exclusões padrão
+(`DEFAULT_AUDIT_HOOK_EXCLUDES`). Um hook nomeado **exatamente** em `include` é
+sempre registado — é assim que voltas a incluir um:
+
+```ts
+auditPlugin({ hooks: ['auth:**', 'auth:apikey_rejected'] })               // regista também as recusas
+auditPlugin({ hooks: { include: ['auth:**', 'billing:**'], exclude: ['auth:login'] } })
+auditPlugin({ hooks: { include: ['auth:**'], exclude: [] } })             // sem exclusões padrão
+```
+
+Se registares `auth:apikey_rejected`, limita-o tu (o payload traz o `prefix` de
+apresentação da chave e o `ip` do cliente para isso).
+
 ### Trilho de auditoria verificável
 
 Ambos os stores de audit suportam um trilho **à prova de adulteração** (tamper-evident) e o contexto do pedido:

@@ -217,6 +217,29 @@ that does not wire them needs neither. Expired rows are inert; delete them with
 `pruneExpired()` from a scheduled job. `@basaltkit/flags` needs no backend — feature flags
 are declared in code and evaluated deterministically, with nothing to persist.
 
+### Which hooks are audited {#which-hooks-are-audited}
+
+`auditPlugin` records lifecycle hooks matching `auth:**`, `billing:**`,
+`tenancy:created` and `permission:**`, **except** `auth:apikey_rejected`: it
+fires for every request that presents a dead API key, before anyone is
+authenticated, so recording it let any anonymous client append to a tenant's
+(serialized, hash-chained) trail as fast as it could send requests.
+
+`hooks` takes a list (the include set) or `{ include, exclude }`. A hook is
+recorded when it matches an `include` pattern and no `exclude` pattern; without
+`exclude`, the default excludes (`DEFAULT_AUDIT_HOOK_EXCLUDES`) apply. A hook
+named **exactly** in `include` is always recorded — that is how you opt one back
+in:
+
+```ts
+auditPlugin({ hooks: ['auth:**', 'auth:apikey_rejected'] })               // record rejections too
+auditPlugin({ hooks: { include: ['auth:**', 'billing:**'], exclude: ['auth:login'] } })
+auditPlugin({ hooks: { include: ['auth:**'], exclude: [] } })             // no default excludes
+```
+
+If you record `auth:apikey_rejected`, throttle it yourself (its payload carries
+the key's display `prefix` and the client `ip` for that).
+
 ### Verifiable audit trail
 
 Both audit stores support a **tamper-evident** trail and the request context:
