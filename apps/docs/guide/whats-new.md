@@ -327,6 +327,17 @@ Only one, and only for forms added in this release:
   `central-only` in the table are the same thing). The new `describeRoutes()`
   reads `RouteRow.tenant` from `meta.tenant` only; `meta.central: true` (the
   teams membership bypass) is listed among the guards as `central`.
+- **Apps scaffolded with `--prisma` by create-basalt 1.8–1.11 — change one
+  script.** Their `db:seed` is `tsx prisma/seed.ts`, which loads no `.env`, so
+  `pnpm db:seed` fails with `ENV_INVALID` (database URL and app secret missing)
+  unless you export the variables; and Prisma 7's `migrate dev` never runs the
+  seed, so the `demo` tenant the resolvers expect was never created (the
+  "creates the tables and seeds the demo tenant" next step was wrong). In
+  `package.json`, set `"db:seed": "prisma db seed"` — `prisma.config.ts` then
+  loads `.env` and runs the `migrations.seed` command it already declares —
+  and run `pnpm db:seed` after `pnpm db:migrate`. Nothing rewrites the script
+  for you: `create-basalt doctor` flags it and `create-basalt update` prints
+  the line.
 
 ## Highlights
 

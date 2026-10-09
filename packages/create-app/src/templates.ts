@@ -60,6 +60,9 @@ export const thirdPartyVersionOf = (pkg: string): string => {
  * same entry the Dockerfile's CMD runs. `start:dev` keeps the old tsx start.
  */
 export const BUILD_SCRIPT = 'tsc -p tsconfig.build.json'
+
+/** The `db:seed` script of a `--prisma` scaffold with tenancy (prisma.config.ts loads .env, then runs `migrations.seed`). */
+export const DB_SEED_SCRIPT = 'prisma db seed'
 export const START_SCRIPT = `node --enable-source-maps ${PRODUCTION_ENTRY}`
 export const START_DEV_SCRIPT = 'tsx src/server.ts'
 /** The `start` script every create-basalt release before the production path wrote. */
@@ -181,7 +184,7 @@ export function packageJson(options: ProjectOptions): string {
               // .env (the seed imports src/env.ts, which needs the database URL),
               // then runs the `migrations.seed` command it declares. Prisma 7's
               // `migrate dev` no longer seeds on its own.
-              ...(options.tenancy ? { 'db:seed': 'prisma db seed' } : {}),
+              ...(options.tenancy ? { 'db:seed': DB_SEED_SCRIPT } : {}),
             }
           : {}),
       },
