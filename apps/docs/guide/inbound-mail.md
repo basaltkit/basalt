@@ -284,7 +284,7 @@ for (const attachment of parsed.attachments) {
 `parsed.html` is untrusted HTML. The package never renders it, fetches its
 `cid:` or remote resources, or sanitises it. Sanitise it before display, and
 serve any page that shows it with a strict CSP through
-[per-route headers](/guide/security#per-route-headers-—-meta-headers).
+[per-route headers](/guide/security#per-route-headers-—-meta-responseheaders).
 
 ## Idempotency
 

@@ -275,7 +275,7 @@ desativar tudo. Uma rota que pode ser guardada em cache define o seu próprio
 `Cache-Control`, que substitui o valor por omissão — fá-lo nas rotas `meta.etag`
 (p. ex. `private, no-cache`), já que `no-store` impede o browser de revalidar.
 
-### Cabeçalhos por rota — `meta.headers`
+### Cabeçalhos por rota — `meta.responseHeaders`
 
 Algumas rotas precisam de cabeçalhos que o resto da API não precisa: um link de
 partilha público que os motores de busca não devem indexar, um download que
@@ -285,7 +285,7 @@ nunca deve ir para cache. Declara-os na rota:
 route({
   method: 'POST',
   url: '/s/:token',
-  meta: { headers: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  meta: { responseHeaders: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
   handler: /* … */,
 })
 ```
@@ -297,6 +297,20 @@ adapters. Um cabeçalho posto com `reply.header()` só chegaria ao caminho de
 sucesso. Substituem um cabeçalho global com o mesmo nome (aqui o
 `Cache-Control` do `securityPlugin`), e um handler continua a poder sobrepor-se
 a um deles com `reply.header()`.
+
+Os valores são verificados no arranque em todos os adapters: strings sem CR, LF
+nem outros caracteres de controlo, e nunca `Set-Cookie`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, cabeçalhos hop-by-hop nem `X-Request-Id`,
+que pertencem à resposta ou ao adapter. Uma rota cujo registo viola uma regra
+recebe um aviso no arranque que a nomeia, e o seu registo `responseHeaders` é
+ignorado **por inteiro** — nenhum dos seus cabeçalhos é enviado, nem os
+válidos, e o pedido nunca falha por causa disso. A próxima major recusa esse
+arranque.
+
+A chave é `responseHeaders`, não `headers`: a meta da rota também é tua, e nada
+lê nem envia `meta.headers`. Um pedido que nunca chega à rota — um `404`, um
+`429` do rate limit ou um corpo malformado rejeitado pelo parser da framework —
+leva só os cabeçalhos globais.
 
 Os valores são verificados no arranque (`InvalidRouteMetaError`): strings sem
 CR, LF ou outros caracteres de controlo, e nunca `Set-Cookie`, `Content-Type`,
@@ -1015,8 +1029,9 @@ setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 `rateLimit`, `tenant` e as outras chaves guardadas (`mfa`, `teamRole`, `scopes`,
 `subscribed`, `feature`). A coluna `tenant` mostra `required` (`meta.tenant: true`),
 `exempt` (`meta.tenant: false`), `central-only` (`meta.tenant: 'never'` — a rota
-rejeita qualquer pedido que resolva um tenant), `central` (`meta.central: true`), ou
-fica vazia quando a rota herda o default da app; verifica `row.tenant ===
+rejeita qualquer pedido que resolva um tenant), ou fica vazia quando a rota herda o
+default da app. A coluna reflete só o `meta.tenant`: o `meta.central: true` (o bypass
+de membership do `@basaltkit/teams`) aparece na coluna de guardas como `central`; verifica `row.tenant ===
 'central-only'` para fixar uma rota de consola ao plano central. Duas formas de
 transformar isso num controlo:
 

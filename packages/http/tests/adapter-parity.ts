@@ -543,6 +543,23 @@ export function rateLimitBucketsParitySuite(adapter: string, driver: ParityDrive
       )
     })
 
+    it('a legacy object without a string bucket keeps its lenient parse (bucket: null, unknown key, bad limit)', async () => {
+      send = await boot([
+        route({ method: 'GET', url: '/n1', meta: { rateLimit: { limit: 1, windowMs: 60_000, bucket: null } as never }, handler: ok }),
+        route({ method: 'GET', url: '/n2', meta: { rateLimit: { limit: 1, windowMs: 60_000, bucket: null } as never }, handler: ok }),
+        route({ method: 'GET', url: '/unknown-key', meta: { rateLimit: { limit: 5, windowMs: 60_000, key: 'unknown' } as never }, handler: ok }),
+        route({ method: 'GET', url: '/bad-limit', meta: { rateLimit: { limit: 'x' } as never }, handler: ok }),
+        route({ method: 'GET', url: '/arr', meta: { rateLimit: [{ limit: 5, windowMs: 60_000, bucket: null }] as never }, handler: ok }),
+      ])
+      // bucket: null is enforced per route with the legacy key, exactly as before this release.
+      expect((await call('/n1')).status).toBe(200)
+      expect((await call('/n1')).status).toBe(429)
+      expect((await call('/n2')).status).toBe(200)
+      expect((await call('/unknown-key')).status).toBe(200)
+      expect((await call('/bad-limit')).status).toBe(200)
+      expect((await call('/arr')).status).toBe(200)
+    })
+
     it('a path prefix lifts the global per-IP ceiling for its family of paths', async () => {
       send = await boot(
         [route({ method: 'GET', url: '/v1/orders', handler: ok }), route({ method: 'GET', url: '/app', handler: ok })],
@@ -2150,12 +2167,12 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
 }
 
 /**
- * Route-scoped static headers (BK-085): `meta.headers` is set as soon as the
+ * Route-scoped static headers (BK-085): `meta.responseHeaders` is set as soon as the
  * route matches, so it is on every response the route produces — success and
  * the errors raised by guards, validation or the handler — on every adapter.
  */
 export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): void {
-  describe(`${adapter}: route meta.headers parity (BK-085)`, () => {
+  describe(`${adapter}: route meta.responseHeaders parity (BK-085)`, () => {
     afterEach(() => driver.close())
     const shareHeaders = { 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store' }
     const routes = [
@@ -2164,13 +2181,13 @@ export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): 
         url: '/share/:id',
         params: z.object({ id: z.string() }),
         body: z.object({ password: z.string() }),
-        meta: { signedIn: true, headers: shareHeaders },
+        meta: { signedIn: true, responseHeaders: shareHeaders },
         handler: ({ params }) => ({ id: params.id }),
       }),
       route({
         method: 'GET',
         url: '/share/boom',
-        meta: { headers: shareHeaders },
+        meta: { responseHeaders: shareHeaders },
         handler: () => {
           throw new Error('kaboom')
         },
@@ -2178,7 +2195,7 @@ export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): 
       route({
         method: 'GET',
         url: '/share/override',
-        meta: { headers: shareHeaders },
+        meta: { responseHeaders: shareHeaders },
         handler: ({ reply }) => {
           reply.header('Cache-Control', 'private, max-age=60')
           return { ok: true }
@@ -2227,17 +2244,37 @@ export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): 
       expect(plain.headers['x-robots-tag']).toBeUndefined()
     })
 
-    it('an invalid meta.headers refuses the boot', async () => {
-      const bad = [
-        route({ method: 'GET', url: '/crlf', meta: { headers: { 'X-Note': 'a\r\nSet-Cookie: x=1' } }, handler: () => 'x' }),
-        route({ method: 'GET', url: '/cookie', meta: { headers: { 'Set-Cookie': 'a=1' } }, handler: () => 'x' }),
-        route({ method: 'GET', url: '/number', meta: { headers: { 'X-Count': 1 } }, handler: () => 'x' }),
-      ]
-      const booting = driver.boot(bad, [])
-      await expect(booting).rejects.toBeInstanceOf(InvalidRouteMetaError)
-      await booting.catch((error: InvalidRouteMetaError) => {
-        expect(error.problems.map((p) => p.route)).toEqual(['GET /crlf', 'GET /cookie', 'GET /number'])
-      })
+    it('an invalid meta.responseHeaders boots, warns once, and none of its headers is sent', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const bad = [
+          route({ method: 'GET', url: '/crlf', meta: { responseHeaders: { 'X-Note': 'a\r\nSet-Cookie: x=1', 'X-Ok': 'fine' } }, handler: () => 'x' }),
+          route({ method: 'GET', url: '/cookie', meta: { responseHeaders: { 'Set-Cookie': 'a=1' } }, handler: () => 'x' }),
+          route({ method: 'GET', url: '/number', meta: { responseHeaders: { 'X-Count': 1 } as never }, handler: () => 'x' }),
+          // The old name is app-owned data: never sent, never validated.
+          route({ method: 'GET', url: '/old-name', meta: { headers: { 'x-a': 'b' } }, handler: () => 'x' }),
+        ]
+        const send = await driver.boot(bad, [])
+        const warnings = warn.mock.calls.map((call) => String(call[0])).filter((m) => m.includes('meta.responseHeaders'))
+        expect(warnings).toHaveLength(1)
+        for (const name of ['GET /crlf', 'GET /cookie', 'GET /number']) expect(warnings[0]).toContain(name)
+        expect(warnings[0]).not.toContain('/old-name')
+        const crlf = await send({ method: 'GET', url: '/crlf' })
+        expect(crlf.status).toBe(200)
+        expect(crlf.headers['x-note']).toBeUndefined()
+        expect(crlf.headers['x-ok']).toBeUndefined()
+        const cookie = await send({ method: 'GET', url: '/cookie' })
+        expect(cookie.status).toBe(200)
+        expect(cookie.headers['set-cookie']).toBeUndefined()
+        const number = await send({ method: 'GET', url: '/number' })
+        expect(number.status).toBe(200)
+        expect(number.headers['x-count']).toBeUndefined()
+        const old = await send({ method: 'GET', url: '/old-name' })
+        expect(old.status).toBe(200)
+        expect(old.headers['x-a']).toBeUndefined()
+      } finally {
+        warn.mockRestore()
+      }
     })
   })
 }
