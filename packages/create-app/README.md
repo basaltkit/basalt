@@ -191,7 +191,8 @@ the next restart.
 pnpm create basalt my-app --prisma
 cd my-app && pnpm install     # postinstall runs `prisma generate`
 # .env already points MY_APP_DATABASE_URL at postgres://…@localhost:5432/my_app — start PostgreSQL or edit it
-pnpm db:migrate               # prisma migrate dev — creates the tables and seeds `demo`
+pnpm db:migrate               # prisma migrate dev — creates the tables
+pnpm db:seed                  # prisma db seed — the `demo` tenant
 pnpm dev
 ```
 
