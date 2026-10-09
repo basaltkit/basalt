@@ -273,6 +273,13 @@ recipient stated nothing does `defaults[channel]` (default `true`) apply.
 `NotificationPreferences.allowed()` is unchanged (default allow); the new
 `preference()` returns `undefined` when nothing matches.
 
+A `NotificationPreferences` subclass that overrides `allowed()` (quiet hours,
+compliance blocks, plan gating) keeps working: the notifier detects the
+override and lets it decide, as before — its answer is final, `defaults` do not
+apply to it, and `mandatory` channels still bypass it. Overriding `allowed()`
+is deprecated: override `preference()` instead (return `undefined` for "no
+stated preference"). The next major stops consulting an `allowed()` override.
+
 ## The in-app inbox
 
 `inAppRoutes()` serves the bell for the **signed-in** user — the recipient is
