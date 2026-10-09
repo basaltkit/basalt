@@ -262,13 +262,21 @@ export interface SessionCookieOptions {
    * Whether to require HTTPS. Defaults to true unless `NODE_ENV` is explicitly
    * `development` or `test` (an unset NODE_ENV counts as production).
    *
-   * A `__Host-` or `__Secure-` name implies `true` when unset, and refuses
-   * `false`: browsers silently drop such a cookie without `Secure`.
+   * A `__Host-` or `__Secure-` name implies `true` when unset (in every
+   * environment): browsers silently drop such a cookie without `Secure`. An
+   * explicit `false` is kept as given but warns at boot; it is refused from
+   * the next major.
    */
   secure?: boolean
 }
 
-/** The session cookie options violate the rules of the cookie name's prefix. */
+/**
+ * The session cookie options violate the rules of the cookie name's prefix.
+ *
+ * Exported ahead of time: today such a configuration only warns at boot (the
+ * cookie is emitted as configured, as before); from the next major it is
+ * thrown with code `AUTH_SESSION_COOKIE_INVALID`.
+ */
 export class SessionCookieConfigError extends BasaltError {
   readonly status = 500
   constructor(message: string) {
@@ -285,33 +293,50 @@ export class SessionIdleConfigError extends BasaltError {
 }
 
 /**
- * Resolves the session cookie options, enforcing the cookie-prefix rules
+ * Session cookie options already warned about. Keyed on the `sessionCookie`
+ * object, not on the `Auth` instance: `authPlugin` validates the options at
+ * registration and the `AUTH` singleton resolves them again with the same
+ * `sessionCookie` reference, so one configuration warns once.
+ */
+const warnedSessionCookies = new WeakSet<SessionCookieOptions>()
+
+/**
+ * Resolves the session cookie options against the cookie-prefix rules
  * browsers apply (RFC 6265bis): `__Secure-` needs `Secure`; `__Host-` needs
  * `Secure` and `Path=/` (and no `Domain`, which Basalt never sets). A
  * violating cookie is not an error in the browser, it is silently dropped, so
- * every login would "succeed" without a session. Unset values take the
- * required ones; contradicting values fail at construction.
+ * every login would "succeed" without a session.
+ *
+ * An unset `secure` on a prefixed name takes `true`. Contradicting values
+ * (`secure: false`, a `__Host-` path other than `/`) are emitted as given and
+ * warn once at boot; they are refused from the next major.
  */
 function resolveSessionCookie(options: SessionCookieOptions | undefined): Required<SessionCookieOptions> {
   const name = options?.name ?? 'basalt_session'
   const host = name.startsWith('__Host-')
   const prefixed = host || name.startsWith('__Secure-')
-  if (prefixed && options?.secure === false) {
-    throw new SessionCookieConfigError(
-      `sessionCookie: "${name}" requires secure: true — browsers drop a ${host ? '__Host-' : '__Secure-'} cookie without Secure.`,
-    )
-  }
-  if (host && options?.path !== undefined && options.path !== '/') {
-    throw new SessionCookieConfigError(
-      `sessionCookie: "${name}" requires path "/" (got "${options.path}") — browsers drop a __Host- cookie with any other path.`,
-    )
+  if (prefixed && options && !warnedSessionCookies.has(options)) {
+    const problems: string[] = []
+    if (options.secure === false) problems.push('secure: true')
+    if (host && options.path !== undefined && options.path !== '/') problems.push('path "/"')
+    if (problems.length > 0) {
+      warnedSessionCookies.add(options)
+      console.warn(
+        `[basalt] sessionCookie: "${name}" requires ${problems.join(' / ')} - browsers drop it; this will refuse to boot in the next major.`,
+      )
+    } else if (options.secure === undefined && !isProductionEnvironment()) {
+      warnedSessionCookies.add(options)
+      console.warn(
+        `[basalt] sessionCookie "${name}": Secure is implied by the prefix (it was not before outside production). Test clients over plain http will not send it back; use an unprefixed name outside production, or set secure explicitly (secure: true silences this).`,
+      )
+    }
   }
   return {
     name,
     path: options?.path ?? '/',
     httpOnly: options?.httpOnly ?? true,
     sameSite: options?.sameSite ?? 'Lax',
-    secure: prefixed ? true : (options?.secure ?? isProductionEnvironment()),
+    secure: options?.secure ?? (prefixed ? true : isProductionEnvironment()),
   }
 }
 

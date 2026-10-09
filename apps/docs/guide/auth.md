@@ -538,10 +538,19 @@ it, so it still holds the creation time. Expect sessions older than
 A cookie named `__Host-…` or `__Secure-…` must follow the browser's prefix
 rules, or the browser silently drops it and every login "succeeds" without a
 session. Basalt applies them: both prefixes imply `Secure` when `secure` is
-unset, and `__Host-` implies `Path=/` (Basalt never sets `Domain`). A
-contradicting `secure: false`, or a `__Host-` cookie with another `path`, fails
-at boot with `AUTH_SESSION_COOKIE_INVALID`. `__Host-` is the strongest choice
-for a session cookie: a sibling subdomain cannot set or shadow it.
+unset — in every environment, so it also works on `http://localhost` — and
+`__Host-` implies `Path=/` (Basalt never sets `Domain`). Outside production
+that implied `Secure` logs a one-time boot warning: cookie jars in test clients
+(supertest, tough-cookie) do not send a `Secure` cookie back over plain `http`,
+so use an unprefixed name outside production (`name: isProd ? '__Host-sid' :
+'sid'`) or set `secure: true` explicitly, which silences it.
+
+A contradicting `secure: false` (including `secure: process.env.NODE_ENV ===
+'production'` in dev and test), or a `__Host-` cookie with another `path`, still
+boots and the cookie is emitted as configured, but it logs a boot warning: the
+browser drops that cookie. The next major refuses it at boot with
+`AUTH_SESSION_COOKIE_INVALID`. `__Host-` is the strongest choice for a session
+cookie: a sibling subdomain cannot set or shadow it.
 
 ### Account routes: `meta.account` and `meta.mfa` {#account-routes}
 
@@ -1260,7 +1269,7 @@ the plugin supplies:
 | `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime (absolute) |
 | `sessionIdleTtl` | `DurationInput` | — (no idle timeout) | Refuse and delete a session unused for longer; needs a store with `touch` ([details](#session-hardening)) |
-| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value fails at boot |
+| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value warns at boot (refused in the next major) |
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |

@@ -542,11 +542,20 @@ ainda guarda a hora de criação. Conta que as sessões mais antigas do que
 Um cookie chamado `__Host-…` ou `__Secure-…` tem de cumprir as regras de prefixo
 do browser, senão o browser descarta-o em silêncio e cada login «tem sucesso»
 sem sessão. O Basalt aplica-as: os dois prefixos implicam `Secure` quando
-`secure` não está definido, e `__Host-` implica `Path=/` (o Basalt nunca define
-`Domain`). Um `secure: false` contraditório, ou um cookie `__Host-` com outro
-`path`, falha no arranque com `AUTH_SESSION_COOKIE_INVALID`. `__Host-` é a
-escolha mais forte para um cookie de sessão: um subdomínio irmão não o consegue
-definir nem sombrear.
+`secure` não está definido — em qualquer ambiente, por isso também funciona em
+`http://localhost` — e `__Host-` implica `Path=/` (o Basalt nunca define
+`Domain`). Fora de produção, esse `Secure` implícito regista um aviso único no
+arranque: os cookie jars dos clientes de teste (supertest, tough-cookie) não
+devolvem um cookie `Secure` sobre `http` simples, por isso usa um nome sem
+prefixo fora de produção (`name: isProd ? '__Host-sid' : 'sid'`) ou define
+`secure: true` explicitamente, o que silencia o aviso.
+
+Um `secure: false` contraditório (incluindo `secure: process.env.NODE_ENV ===
+'production'` em dev e testes), ou um cookie `__Host-` com outro `path`, continua
+a arrancar e o cookie é emitido tal como configurado, mas regista um aviso no
+arranque: o browser descarta esse cookie. A próxima major recusa-o no arranque
+com `AUTH_SESSION_COOKIE_INVALID`. `__Host-` é a escolha mais forte para um
+cookie de sessão: um subdomínio irmão não o consegue definir nem sombrear.
 
 ### Rotas de conta: `meta.account` e `meta.mfa` {#account-routes}
 
@@ -1268,7 +1277,7 @@ plugin fornece:
 | `refreshTtl` | `DurationInput` | `'30d'` | Duração do refresh token — na prática, "quanto tempo até o utilizador ter de entrar outra vez" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor (absoluta) |
 | `sessionIdleTtl` | `DurationInput` | — (sem timeout de inatividade) | Recusa e apaga uma sessão sem uso durante mais tempo; requer um store com `touch` ([detalhes](#session-hardening)) |
-| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test`. Um nome `__Host-`/`__Secure-` implica `Secure` (e `Path=/` para `__Host-`); um valor contraditório falha no arranque |
+| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test`. Um nome `__Host-`/`__Secure-` implica `Secure` (e `Path=/` para `__Host-`); um valor contraditório gera um aviso no arranque (recusado na próxima major) |
 | `verificationTtl` | `DurationInput` | `'24h'` | Duração do link de verificação de email |
 | `resetTtl` | `DurationInput` | `'1h'` | Duração do link de reposição de password; mantém-na curta |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 por 15m, por email) | Bloqueio por força bruta por email. `false` desativa-o — só em testes |
