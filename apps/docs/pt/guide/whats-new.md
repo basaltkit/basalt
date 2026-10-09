@@ -353,6 +353,18 @@ Só uma, e só para formas acrescentadas nesta versão:
   o `central-only` na tabela são a mesma coisa). O novo `describeRoutes()` lê o
   `RouteRow.tenant` só do `meta.tenant`; o `meta.central: true` (o bypass de
   membership do teams) aparece nas guardas como `central`.
+- **Apps criadas com `--prisma` pelo create-basalt 1.8–1.11 — muda um
+  script.** O seu `db:seed` é `tsx prisma/seed.ts`, que não carrega o `.env`,
+  por isso o `pnpm db:seed` falha com `ENV_INVALID` (URL da base de dados e
+  segredo da app em falta) salvo se exportares as variáveis; e o `migrate dev`
+  do Prisma 7 nunca corre o seed, por isso o tenant `demo` que os resolvers
+  esperam nunca foi criado (o passo seguinte «creates the tables and seeds the
+  demo tenant» estava errado). No `package.json`, define
+  `"db:seed": "prisma db seed"` — o `prisma.config.ts` passa a carregar o
+  `.env` e corre o comando `migrations.seed` que já declara — e corre
+  `pnpm db:seed` depois do `pnpm db:migrate`. Nada reescreve o script por ti:
+  o `create-basalt doctor` assinala-o e o `create-basalt update` mostra a
+  linha.
 
 ## Destaques
 

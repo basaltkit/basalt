@@ -177,7 +177,9 @@ try {
     // the app asserts at boot that it reached the MIGRATED database.
     // .env is already written with a local URL (pnpm dev / pnpm basalt load it).
     steps.push(`# start PostgreSQL, or edit ${envPrefix(result.options.name)}_DATABASE_URL in .env`)
-    steps.push(`${pm} run db:migrate${flags.tenancy ? '   # creates the tables and seeds the demo tenant' : '   # creates the tables'}`)
+    steps.push(`${pm} run db:migrate   # creates the tables`)
+    // Prisma 7's `migrate dev` no longer seeds: the demo tenant is its own step.
+    if (flags.tenancy) steps.push(`${pm} run db:seed      # the demo tenant the resolvers expect`)
   }
   steps.push(`${pm} run dev${flags.ui ? '        # API on :3000' : ''}`)
   // `web` is a pnpm workspace member (pnpm-workspace.yaml); `dev:web` runs its

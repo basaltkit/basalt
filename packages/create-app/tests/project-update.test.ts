@@ -415,6 +415,25 @@ describe('update — project tooling', () => {
     expect(await read(dir, 'pnpm-workspace.yaml')).toContain("  - '@basaltkit/*'\n  - create-basalt\n")
   })
 
+  it('prints (never applies) the db:seed replacement for a 1.8–1.11 --prisma app', async () => {
+    const dir = await scaffold('old-seed', { prisma: true })
+    const pkg = JSON.parse(await read(dir, 'package.json'))
+    pkg.scripts['db:seed'] = 'tsx prisma/seed.ts'
+    await write(dir, 'package.json', `${JSON.stringify(pkg, null, 2)}\n`)
+    const plan = await planUpdate(await loadProject(dir), { registry: { fetch: await registryFor(dir) } })
+    const step = plan.manual.find((entry) => entry.includes('db:seed'))
+    expect(step).toContain('"db:seed": "prisma db seed"')
+    expect(plan.files['package.json']?.after ?? '').not.toContain('"db:seed": "prisma db seed"')
+    const h = harness(dir, { fetch: await registryFor(dir) })
+    expect(await runProjectCommand(['update', '--yes', '--no-install'], h.deps)).toBe(0)
+    expect(h.output()).toContain('"db:seed": "prisma db seed"')
+    expect(JSON.parse(await read(dir, 'package.json')).scripts['db:seed']).toBe('tsx prisma/seed.ts')
+    // The current scaffold has nothing to print.
+    const fresh = await scaffold('new-seed', { prisma: true })
+    const freshPlan = await planUpdate(await loadProject(fresh), { registry: { fetch: await registryFor(fresh) } })
+    expect(freshPlan.manual.some((entry) => entry.includes('db:seed'))).toBe(false)
+  })
+
   it('--no-tooling leaves the project tooling alone', async () => {
     const dir = await scaffold('no-tooling', { cli: true })
     const old = await legacy('2026-09-19')
