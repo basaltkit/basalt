@@ -267,7 +267,7 @@ route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
 route({ method: 'GET', url: '/platform/plans', meta: { tenant: 'never', auth: true, can: 'platform:plans.read' }, handler })
 ```
 
-Any other `meta.tenant` value refuses the boot (`HTTP_INVALID_ROUTE_META`).
+Any other `meta.tenant` value falls back to the app-wide default and logs a boot warning naming the routes; the next major refuses the boot (`HTTP_INVALID_ROUTE_META`).
 
 The check runs in the tenancy enricher, and enrichers run in plugin order: list `tenancyPlugin` before `authPlugin` / `apiKeysPlugin`, whose enrichers can refuse a request themselves (an invalid bearer) — that answer would otherwise reach the caller instead of the 404.
 
