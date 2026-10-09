@@ -196,6 +196,8 @@ pnpm db:seed                  # prisma db seed — the `demo` tenant
 pnpm dev
 ```
 
+After a schema change: `pnpm db:migrate --name <change>` writes and applies the migration (without `--name` Prisma prompts for one), then `pnpm db:generate` — Prisma 7's `migrate dev` does not regenerate the client.
+
 **Migrations, never `prisma db push`.** The generated app boots with
 `assertMigrated: true`, which refuses to start unless the database it reached has
 the `_prisma_migrations` table — written by `prisma migrate dev` /

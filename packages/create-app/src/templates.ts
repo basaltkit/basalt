@@ -1161,13 +1161,13 @@ the models this app needs — the reference models of the \`@basaltkit/*-prisma\
 packages it uses, plus your own \`Project\` at the end.
 
 \`\`\`bash
-pnpm db:migrate     # prisma migrate dev  — change the schema, write a migration${
+pnpm db:migrate --name <change>  # prisma migrate dev — writes AND applies a migration (asks for a name without --name)${
         options.tenancy
           ? `
 pnpm db:seed        # prisma db seed — the 'demo' tenant the resolvers expect`
           : ''
       }
-pnpm db:generate    # prisma generate — refresh generated/prisma (also runs on install)
+pnpm db:generate    # prisma generate — refresh generated/prisma after a schema change (also runs on install; migrate dev does not)
 pnpm db:deploy      # prisma migrate deploy — apply pending migrations in production
 \`\`\`
 

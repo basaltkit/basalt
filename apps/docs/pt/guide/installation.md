@@ -208,6 +208,14 @@ pnpm db:seed             # o tenant demo
 pnpm dev
 ```
 
+Depois de alterares o `prisma/schema.prisma`, o `pnpm db:migrate --name <alteração>`
+escreve a migração **e** aplica-a na base de dados de desenvolvimento (o Prisma
+cria e apaga para isso uma base de dados shadow temporária, por isso o
+utilizador da base de dados precisa de `CREATEDB`); sem `--name` pede um nome,
+por isso num script passa-o sempre. Depois corre `pnpm db:generate`: o
+`migrate dev` do Prisma 7 já não regenera o cliente (nem corre o seed). Em
+produção, o `pnpm db:deploy` aplica as migrações versionadas.
+
 ::: warning Migrações, nunca `db push`
 O `src/app.ts` gerado arranca com `assertMigrated: true`, que recusa arrancar a
 menos que a base de dados alcançada tenha a tabela `_prisma_migrations` —
