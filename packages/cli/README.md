@@ -279,8 +279,9 @@ pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
 - The `tenant` column shows the route's tenancy declaration: `required`
   (`meta.tenant: true`), `exempt` (`meta.tenant: false`), `central-only`
   (`meta.tenant: 'never'` — a request that resolves a tenant is rejected),
-  `central` (`meta.central: true`), or blank when the route inherits the
-  app-wide default.
+  or blank when the route inherits the app-wide default. It reflects
+  `meta.tenant` only; `meta.central: true` (the teams membership bypass)
+  shows as `central` among the guards.
 
 **It checks route meta only.** An app-wide rate limit (`securityPlugin({ rateLimit })`),
 URL-based tenancy (`tenancyPlugin({ required: { except } })`), app hooks or
