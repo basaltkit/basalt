@@ -1,5 +1,19 @@
 # @basaltkit/ai
 
+## 1.4.0
+
+### Minor Changes
+
+- e462501: `basalt ai doctor` gains the `platform-route-accepts-tenant` rule (BK-043): it scans `src/**` for route `meta` literals that pair `tenant: false` with a `can: 'platform:…'` permission and warns, naming file and line, that the route still runs on tenant hosts — declare `tenant: 'never'` instead. `ProjectReader` gets an optional `list(dir)` method (implemented by `nodeReader` and `memoryReader`); readers without it skip the scan.
+
+### Patch Changes
+
+- Updated dependencies [0353877]
+- Updated dependencies [f9c5886]
+- Updated dependencies [e6a775c]
+  - @basaltkit/cli@1.4.0
+  - @basaltkit/generator@1.6.0
+
 ## 1.3.0
 
 ### Minor Changes

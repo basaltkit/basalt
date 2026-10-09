@@ -1,5 +1,30 @@
 # @basaltkit/cli
 
+## 1.4.0
+
+### Minor Changes
+
+- 0353877: Route security review (BK-025). `@basaltkit/http` adds `describeRoutes()` — a pure normaliser of the `http:routes` bucket into rows with each route's declared `auth`, `can`, `rateLimit`, `tenant` (read from `meta.tenant` only: `'required'`, `'exempt'`, `'central-only'` for `meta.tenant: 'never'`, or `null` when undeclared — new values may be added in a minor, so switch with a `default` branch), `public` and other guarded keys (`meta.central: true`, the `@basaltkit/teams` membership bypass, is listed there as `central`) — and `findUnguardedRoutes()`, which lists the routes missing required guards (explicit opt-outs such as `auth: false` pass; only `auth: true`, the value `authPlugin` enforces, counts as `auth`). Both are also exported from the zod-free subpath `@basaltkit/http/route-table`, so a test can assert on the route table after `app.boot()` without listening. `basalt routes` now prints a column per guard, `--json` prints the rows as one JSON array, and `--unguarded --require=auth,can [--allow=<glob,…>]` lists offenders and exits 1. It checks route meta only: app-wide rate limits, URL-based tenancy, app hooks and edge routes (health, metrics, openapi) are not visible to it. `@basaltkit/cli` now depends on `@basaltkit/http` (it imports only the zod-free subpath).
+
+### Patch Changes
+
+- f9c5886: A tested production path for scaffolded apps (BK-026). New apps get `tsconfig.build.json`, a `build` script (`tsc -p tsconfig.build.json`), `start` running `node --enable-source-maps dist/src/server.js` (the old tsx start stays as `start:dev`) and a multi-stage `Dockerfile` (build with the dev toolchain, prune devDependencies, run on `node:22-slim` as `USER node` with a `HEALTHCHECK`). With `--prisma` the client is generated into `./generated/prisma` (outside `src/`) and imported through a package.json `imports` alias (`#db/client.js`), `@prisma/client-runtime-utils` is a direct dependency (the generated runtime requires it by name; pnpm otherwise hides it from plain `node`), and `pnpm-workspace.yaml` approves the `prisma` / `@prisma/engines` build scripts so a pnpm 11 install no longer fails with `ERR_PNPM_IGNORED_BUILDS`. `create-basalt update` offers the missing pieces to older apps (never rewriting an existing `start` script — the change is printed), and `create-basalt doctor` statically flags a tsx `start`, a missing `build`, a stale `dist/`, a client generated under `src/` and a missing `@prisma/client-runtime-utils`.
+  
+  `@basaltkit/cli`: `basalt publish dockerfile` / `ci` now work for a scaffolded app. The Dockerfile used to install `--prod` with no build stage and run `dist/main.js`, which no Basalt app produces; it is now the same multi-stage file create-basalt ships (one source, exported as `DOCKERFILE` with `DOCKERIGNORE`, `CI_WORKFLOW`, `EDITORCONFIG` and `PRODUCTION_ENTRY`). The CI stub also typechecks and pins pnpm 11 for `pnpm/action-setup`.
+- Updated dependencies [0353877]
+- Updated dependencies [7a3fd88]
+- Updated dependencies [eeb90bb]
+- Updated dependencies [e600b0a]
+- Updated dependencies [e74b21b]
+- Updated dependencies [3ce3446]
+- Updated dependencies [f029638]
+- Updated dependencies [3740447]
+- Updated dependencies [8b76628]
+- Updated dependencies [36b800c]
+- Updated dependencies [500edef]
+  - @basaltkit/http@2.8.0
+  - @basaltkit/core@1.6.0
+
 ## 1.3.0
 
 ### Minor Changes

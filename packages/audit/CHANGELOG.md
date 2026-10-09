@@ -1,5 +1,32 @@
 # @basaltkit/audit
 
+## 3.1.0
+
+### Minor Changes
+
+- 04ef2ab: New `fieldPolicies` / `fieldPolicyKey` options (on `auditPlugin` and `new Audit(..., { ... })`): a per-event personal-data policy keyed by exact event or hook name. `omit` removes fields and `pseudonymize` replaces them with keyed HMAC pseudonyms (`pii_<hex>`, identical to `createPiiMinimizingRedactor` under the same key), by dotted path with arrays walked transparently. It runs before the redactor and before hashing, so omitted data never reaches the store or the hash chain. Policies are validated at configuration time. Events without a policy are unchanged.
+- ff29140: `audit.record(event, payload, scope?)` accepts an optional `{ tenantId?, actorId? }` scope to attribute a manual entry recorded outside a request (scripts, CLI commands). The entry joins that tenant's hash chain. The scope can only narrow: inside a context with a tenant or user, a different value throws a `TypeError`. Without `scope` the behaviour is unchanged.
+- e74b21b: BK-083: `auditPlugin` no longer records `auth:apikey_rejected` by default. The hook fires for every request that presents an API key which does not verify, before anyone is authenticated, so under the default `auth:**` pattern any anonymous client could append to the audit trail (and its serialized per-tenant hash chain) at will.
+  
+  Refusals of a key that DID verify (`tenant_mismatch`, `not_allowed`, `scope`) are still audited by default: `apiKeysPlugin` (`@basaltkit/auth`) now emits them a second time as the new `auth:apikey_refused` hook (`{ id, reason, tenantId? }`), right after `auth:apikey_rejected`, and `auth:**` records it. Only an unknown/revoked/expired key (`reason: 'invalid'`) — the anonymous, unattributable noise — leaves the default capture. Listeners of `auth:apikey_rejected` see every refusal exactly as before.
+  
+  `hooks` now also accepts `{ include, exclude }`. A hook is recorded when it matches `include` and not `exclude`; without `exclude` the new `DEFAULT_AUDIT_HOOK_EXCLUDES` (`['auth:apikey_rejected']`) apply, and a hook named exactly in `include` is always recorded. A custom `hooks` list applies the excludes too (a wildcard does not re-include them). To keep the previous behaviour, list it: `auditPlugin({ hooks: ['auth:**', 'billing:**', 'tenancy:created', 'permission:**', 'auth:apikey_rejected'] })` — a valid-key refusal is then recorded twice, under both names. For a bounded signal on invalid-key bursts instead, see the throttled listener in the persistence guide ("Which hooks are audited").
+- e6c0ac0: Erase personal data from a stored entry without breaking the hash chain (RFC 0003, BK-087 phase 2). `audit.redact(entryId, { payload, ip, userAgent, reasonRef, residual, tenantId, actorId })` sets the chosen payload paths (the `fieldPolicies` grammar, or `'all'`) to `'[erased]'` and drops `ip`/`userAgent`. The entry keeps its original `hash`, and an `audit:redacted` attestation is appended to the entry's own chain in the same store transaction. It binds the entry's id, `seq` and `hash`, the erased set and a digest of the new state (`auditRedactionState`). `verify()` checks a redacted entry through its attestation and reports the count in a new `redacted` field. Scoping mirrors `trail()`: tenant-forced inside a context, `request.tenantId` outside one, and `audit.systemRedact()` for deliberate cross-tenant tooling. Redaction is refused (`AuditRedactionRefusedError`) for an entry that does not verify as it is, for a `residual` above the accepted level (the default `'keyed'` refuses unkeyed chains), and for a store without `get()`/`redact()`. `MemoryAuditStore` implements both.
+  
+  Opt-in `integrity: { mode: 'hash-chain', erasable: true }` writes v3 hashes (`v3:sha256:` / `v3:hmac-sha256:<keyId>:`), which are v2 plus a random per-entry `nonce` that a redaction destroys, so the erased value can no longer be confirmed from the hash. With `erasable` off, entries are byte-identical to v2. Upgrade every verifier before the first redaction or before turning on `erasable`: older releases report those entries as `hash-mismatch`.
+  
+  New exports: `AUDIT_ERASED`, `AUDIT_REDACTED_EVENT`, `auditRedactionState`, `computeAuditHashV3`, `AuditRedactionConflictError`, `AuditEntryNotFoundError`, `AuditRedactionRefusedError` and the related types. The `AuditStore` contract gains the optional `get()` and `redact()`, and `AuditEntry` gains the optional `nonce` and `redaction`.
+  
+  Watch for:
+  - **Union widenings.** `AuditVerifyFailure` gains `'redaction-mismatch'` and `ParsedAuditHash` gains `version: 3` members. An exhaustive `switch` over either needs a new case.
+  - **Reserved event.** `record('audit:redacted', …)` now throws a `TypeError`. The `audit:` event prefix is reserved for framework events.
+  - **Custom stores** must round-trip `nonce` and `redaction`. A store without `get()` that holds a redacted entry fails `verify()` closed with `redaction-mismatch`.
+
+### Patch Changes
+
+- Updated dependencies [7a3fd88]
+  - @basaltkit/core@1.6.0
+
 ## 3.0.0
 
 ### Major Changes
