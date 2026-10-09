@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, ctx } from '@basaltkit/core'
 import { route } from '@basaltkit/http'
 import {
+  AUTH,
   Auth,
   MemorySessionStore,
   MemoryUserSource,
@@ -154,37 +155,97 @@ describe('sessionIdleTtl (BK-076)', () => {
 describe('session cookie prefixes (BK-076)', () => {
   const users = new MemoryUserSource()
 
+  /** Captures console.warn for the duration of one test. */
+  const spyWarn = () => vi.spyOn(console, 'warn').mockImplementation(() => {})
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('__Host- forces Secure and Path=/ when unset', () => {
+    const warn = spyWarn()
     const auth = new Auth({ users, secret, sessionCookie: { name: '__Host-sid' } })
     const header = auth.sessionCookieHeader('abc')
     expect(header.startsWith('__Host-sid=abc; Path=/;')).toBe(true)
     expect(header).toContain('; Secure')
     expect(header).not.toContain('Domain')
     expect(auth.expiredSessionCookieHeader()).toContain('; Secure')
+    // Outside production the implied Secure is new behaviour: one warning.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0])).toContain('Secure is implied by the prefix')
+    expect(String(warn.mock.calls[0]?.[0])).toContain('__Host-sid')
   })
 
-  it('__Host- with secure: false or another path fails at construction', () => {
-    expect(() => new Auth({ users, secret, sessionCookie: { name: '__Host-sid', secure: false } })).toThrow(SessionCookieConfigError)
-    expect(() => new Auth({ users, secret, sessionCookie: { name: '__Host-sid', path: '/app' } })).toThrow(SessionCookieConfigError)
-    expect(() => new Auth({ users, secret, sessionCookie: { name: '__Host-sid', path: '/', secure: true } })).not.toThrow()
+  it('an explicit secure: true on a prefixed name does not warn', () => {
+    const warn = spyWarn()
+    new Auth({ users, secret, sessionCookie: { name: '__Host-sid', path: '/', secure: true } })
+    expect(warn).not.toHaveBeenCalled()
   })
 
-  it('__Secure- forces Secure but allows any path', () => {
-    expect(() => new Auth({ users, secret, sessionCookie: { name: '__Secure-sid', secure: false } })).toThrow(SessionCookieConfigError)
-    const auth = new Auth({ users, secret, sessionCookie: { name: '__Secure-sid', path: '/app' } })
+  it('an implied Secure does not warn in production', () => {
+    const warn = spyWarn()
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      const auth = new Auth({ users, secret, sessionCookie: { name: '__Host-sid' } })
+      expect(auth.sessionCookieHeader('abc')).toContain('; Secure')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('__Host- with secure: false boots, warns and keeps the cookie non-Secure (as before)', () => {
+    const warn = spyWarn()
+    const auth = new Auth({ users, secret, sessionCookie: { name: '__Host-sid', secure: false } })
+    expect(auth.sessionCookieHeader('abc')).not.toContain('; Secure')
+    expect(warn).toHaveBeenCalledTimes(1)
+    const message = String(warn.mock.calls[0]?.[0])
+    expect(message).toContain('__Host-sid')
+    expect(message).toContain('secure: true')
+    expect(message).toContain('next major')
+  })
+
+  it('__Host- with another path boots, warns and keeps the configured path (as before)', () => {
+    const warn = spyWarn()
+    const auth = new Auth({ users, secret, sessionCookie: { name: '__Host-sid', path: '/app' } })
+    expect(auth.sessionCookieHeader('abc')).toContain('Path=/app;')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0])).toContain('path "/"')
+  })
+
+  it('__Secure- implies Secure, allows any path, and keeps an explicit secure: false with a warning', () => {
+    const warn = spyWarn()
+    const loose = new Auth({ users, secret, sessionCookie: { name: '__Secure-sid', secure: false } })
+    expect(loose.sessionCookieHeader('abc')).not.toContain('; Secure')
+    expect(warn).toHaveBeenCalledTimes(1)
+    const auth = new Auth({ users, secret, sessionCookie: { name: '__Secure-sid', path: '/app', secure: true } })
     expect(auth.sessionCookieHeader('abc')).toContain('Path=/app;')
     expect(auth.sessionCookieHeader('abc')).toContain('; Secure')
+    expect(warn).toHaveBeenCalledTimes(1)
   })
 
   it('an unprefixed name keeps the environment default', () => {
+    const warn = spyWarn()
     const auth = new Auth({ users, secret, sessionCookie: { name: 'sid', secure: false, path: '/app' } })
-    expect(auth.sessionCookieHeader('abc')).not.toContain('Secure')
+    expect(auth.sessionCookieHeader('abc')).not.toContain('; Secure')
+    expect(warn).not.toHaveBeenCalled()
   })
 
-  it('authPlugin refuses a violating cookie at boot', async () => {
-    await expect(
-      createApp({ plugins: [authPlugin({ users, secret, sessionCookie: { name: '__Host-sid', path: '/api' } })] }).boot(),
-    ).rejects.toThrow(SessionCookieConfigError)
+  it('authPlugin boots a violating cookie and warns once across registration and the AUTH singleton', async () => {
+    const warn = spyWarn()
+    const app = createApp({ plugins: [authPlugin({ users, secret, sessionCookie: { name: '__Host-sid', path: '/api' } })] })
+    await app.boot()
+    try {
+      const auth = app.container.get(AUTH)
+      expect(auth.sessionCookieHeader('abc')).toContain('Path=/api;')
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]?.[0])).toContain('__Host-sid')
+    } finally {
+      await app.shutdown()
+    }
+  })
+
+  it('keeps SessionCookieConfigError exported for the next major', () => {
+    expect(new SessionCookieConfigError('x').code).toBe('AUTH_SESSION_COOKIE_INVALID')
   })
 })
 
