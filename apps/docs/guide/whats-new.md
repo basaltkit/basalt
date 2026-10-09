@@ -213,7 +213,11 @@ one-line fix.
   browser sessions there. Drop `secure`/`path`, or use an unprefixed name
   outside production: `name: isProd ? '__Host-sid' : 'sid'`. The next major
   throws `AUTH_SESSION_COOKIE_INVALID` (`SessionCookieConfigError`, exported
-  now).
+  now). Prefixes match case-insensitively (`__host-sid` counts), and a
+  `__Host-` cookie with a sub-path and `secure` unset also gets the
+  implied-`Secure` warning outside production. Separately (warning only, never
+  refused), an unprefixed cookie with `sameSite: 'None'` and no `Secure` warns:
+  browsers drop it too.
 - **`@basaltkit/tenancy`: `meta.tenant` other than `true`, `false` or
   `'never'`.** A value such as `'none'`, `'optional'`, `'false'` or `null`
   falls back to the app-wide `required` default, as before. If you meant

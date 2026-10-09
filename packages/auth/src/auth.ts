@@ -262,8 +262,9 @@ export interface SessionCookieOptions {
    * Whether to require HTTPS. Defaults to true unless `NODE_ENV` is explicitly
    * `development` or `test` (an unset NODE_ENV counts as production).
    *
-   * A `__Host-` or `__Secure-` name implies `true` when unset (in every
-   * environment): browsers silently drop such a cookie without `Secure`. An
+   * A `__Host-` or `__Secure-` name (matched case-insensitively) implies
+   * `true` when unset (in every environment): browsers silently drop such a
+   * cookie without `Secure`. An
    * explicit `false` is kept as given but warns at boot; it is refused from
    * the next major.
    */
@@ -303,41 +304,60 @@ const warnedSessionCookies = new WeakSet<SessionCookieOptions>()
 /**
  * Resolves the session cookie options against the cookie-prefix rules
  * browsers apply (RFC 6265bis): `__Secure-` needs `Secure`; `__Host-` needs
- * `Secure` and `Path=/` (and no `Domain`, which Basalt never sets). A
- * violating cookie is not an error in the browser, it is silently dropped, so
- * every login would "succeed" without a session.
+ * `Secure` and `Path=/` (and no `Domain`, which Basalt never sets). Prefixes
+ * match case-insensitively, as in current browsers. A violating cookie is not
+ * an error in the browser, it is silently dropped, so every login would
+ * "succeed" without a session.
  *
  * An unset `secure` on a prefixed name takes `true`. Contradicting values
  * (`secure: false`, a `__Host-` path other than `/`) are emitted as given and
  * warn once at boot; they are refused from the next major.
+ *
+ * Warnings are independent, each emitted once per `sessionCookie` object:
+ * - the cookie is dropped by browsers because of its prefix (refused next major);
+ * - Secure is implied by the prefix where it was not before (outside
+ *   production, so the emission differs from earlier versions);
+ * - `SameSite=None` without `Secure`, which browsers also drop.
  */
 function resolveSessionCookie(options: SessionCookieOptions | undefined): Required<SessionCookieOptions> {
   const name = options?.name ?? 'basalt_session'
-  const host = name.startsWith('__Host-')
-  const prefixed = host || name.startsWith('__Secure-')
-  if (prefixed && options && !warnedSessionCookies.has(options)) {
-    const problems: string[] = []
-    if (options.secure === false) problems.push('secure: true')
-    if (host && options.path !== undefined && options.path !== '/') problems.push('path "/"')
-    if (problems.length > 0) {
-      warnedSessionCookies.add(options)
-      console.warn(
-        `[basalt] sessionCookie: "${name}" requires ${problems.join(' / ')} - browsers drop it; this will refuse to boot in the next major.`,
-      )
-    } else if (options.secure === undefined && !isProductionEnvironment()) {
-      warnedSessionCookies.add(options)
-      console.warn(
-        `[basalt] sessionCookie "${name}": Secure is implied by the prefix (it was not before outside production). Test clients over plain http will not send it back; use an unprefixed name outside production, or set secure explicitly (secure: true silences this).`,
-      )
-    }
-  }
-  return {
+  const lowerName = name.toLowerCase()
+  const host = lowerName.startsWith('__host-')
+  const prefixed = host || lowerName.startsWith('__secure-')
+  const production = isProductionEnvironment()
+  const resolved: Required<SessionCookieOptions> = {
     name,
     path: options?.path ?? '/',
     httpOnly: options?.httpOnly ?? true,
     sameSite: options?.sameSite ?? 'Lax',
-    secure: options?.secure ?? (prefixed ? true : isProductionEnvironment()),
+    secure: options?.secure ?? (prefixed ? true : production),
   }
+  if (options && !warnedSessionCookies.has(options)) {
+    const warnings: string[] = []
+    const problems: string[] = []
+    if (prefixed && !resolved.secure) problems.push('secure: true')
+    if (host && resolved.path !== '/') problems.push('path "/"')
+    if (problems.length > 0) {
+      warnings.push(
+        `[basalt] sessionCookie: "${name}" requires ${problems.join(' / ')} - browsers drop it; this will refuse to boot in the next major.`,
+      )
+    }
+    if (prefixed && options.secure === undefined && !production) {
+      warnings.push(
+        `[basalt] sessionCookie "${name}": Secure is implied by the prefix (it was not before outside production). Test clients over plain http will not send it back; use an unprefixed name outside production, or set secure explicitly (secure: true silences this).`,
+      )
+    }
+    if (!prefixed && resolved.sameSite === 'None' && !resolved.secure) {
+      warnings.push(
+        `[basalt] sessionCookie "${name}": SameSite=None without Secure - browsers drop it; set secure: true or use SameSite "Lax".`,
+      )
+    }
+    if (warnings.length > 0) {
+      warnedSessionCookies.add(options)
+      for (const warning of warnings) console.warn(warning)
+    }
+  }
+  return resolved
 }
 
 /** Longest gap between two `touch` writes of one session: one minute. */

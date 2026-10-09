@@ -208,8 +208,11 @@ describe('session cookie prefixes (BK-076)', () => {
     const warn = spyWarn()
     const auth = new Auth({ users, secret, sessionCookie: { name: '__Host-sid', path: '/app' } })
     expect(auth.sessionCookieHeader('abc')).toContain('Path=/app;')
-    expect(warn).toHaveBeenCalledTimes(1)
+    // Two independent warnings: the path makes browsers drop it, and (outside
+    // production) the implied Secure differs from earlier versions.
+    expect(warn).toHaveBeenCalledTimes(2)
     expect(String(warn.mock.calls[0]?.[0])).toContain('path "/"')
+    expect(String(warn.mock.calls[1]?.[0])).toContain('Secure is implied by the prefix')
   })
 
   it('__Secure- implies Secure, allows any path, and keeps an explicit secure: false with a warning', () => {
@@ -237,8 +240,10 @@ describe('session cookie prefixes (BK-076)', () => {
     try {
       const auth = app.container.get(AUTH)
       expect(auth.sessionCookieHeader('abc')).toContain('Path=/api;')
-      expect(warn).toHaveBeenCalledTimes(1)
+      // Path + implied Secure (test env): each warned once, not once per resolution.
+      expect(warn).toHaveBeenCalledTimes(2)
       expect(String(warn.mock.calls[0]?.[0])).toContain('__Host-sid')
+      expect(String(warn.mock.calls[1]?.[0])).toContain('__Host-sid')
     } finally {
       await app.shutdown()
     }
@@ -246,6 +251,95 @@ describe('session cookie prefixes (BK-076)', () => {
 
   it('keeps SessionCookieConfigError exported for the next major', () => {
     expect(new SessionCookieConfigError('x').code).toBe('AUTH_SESSION_COOKIE_INVALID')
+  })
+})
+
+/**
+ * Every combination of name prefix × `secure` × `path` × environment: the
+ * emitted Set-Cookie attributes and the boot warnings. The oracle below is
+ * written from the browser rules and from the previous release's behaviour
+ * (`secure ?? isProduction`, path as given), independently of the resolver.
+ */
+describe('session cookie matrix (BK-076)', () => {
+  const users = new MemoryUserSource()
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  type Warning = 'dropped' | 'implied' | 'samesite'
+  interface Row {
+    name: string
+    secure: boolean | undefined
+    path: string | undefined
+    production: boolean
+    sameSite?: 'Strict' | 'Lax' | 'None'
+  }
+
+  const names = ['sid', '__Secure-sid', '__Host-sid', '__secure-sid', '__HOST-sid']
+  const rows: Row[] = []
+  for (const name of names)
+    for (const secure of [undefined, true, false])
+      for (const path of [undefined, '/', '/app'])
+        for (const production of [false, true]) rows.push({ name, secure, path, production })
+  for (const secure of [undefined, true, false])
+    for (const production of [false, true]) rows.push({ name: 'sid', secure, path: undefined, production, sameSite: 'None' })
+
+  const expected = (row: Row) => {
+    const lower = row.name.toLowerCase()
+    const host = lower.startsWith('__host-')
+    const prefixed = host || lower.startsWith('__secure-')
+    const path = row.path ?? '/'
+    const secure = row.secure ?? (prefixed || row.production)
+    const previousSecure = row.secure ?? row.production
+    const sameSite = row.sameSite ?? 'Lax'
+    const browserAccepts =
+      !(prefixed && !secure) && !(host && path !== '/') && !(sameSite === 'None' && !secure)
+    const warnings: Warning[] = []
+    if ((prefixed && !secure) || (host && path !== '/')) warnings.push('dropped')
+    if (secure !== previousSecure) warnings.push('implied')
+    if (!prefixed && sameSite === 'None' && !secure) warnings.push('samesite')
+    return { path, secure, sameSite, browserAccepts, changed: secure !== previousSecure, warnings }
+  }
+
+  const classify = (message: string): Warning => {
+    if (message.includes('browsers drop it; this will refuse')) return 'dropped'
+    if (message.includes('Secure is implied by the prefix')) return 'implied'
+    if (message.includes('SameSite=None without Secure')) return 'samesite'
+    throw new Error(`unexpected warning: ${message}`)
+  }
+
+  it.each(rows)('%o', (row) => {
+    vi.stubEnv('NODE_ENV', row.production ? 'production' : 'test')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const sessionCookie = {
+      name: row.name,
+      ...(row.secure === undefined ? {} : { secure: row.secure }),
+      ...(row.path === undefined ? {} : { path: row.path }),
+      ...(row.sameSite === undefined ? {} : { sameSite: row.sameSite }),
+    }
+    const want = expected(row)
+
+    const auth = new Auth({ users, secret, sessionCookie })
+    // A second resolution of the same options object (authPlugin + AUTH) never re-warns.
+    new Auth({ users, secret, sessionCookie })
+
+    for (const header of [auth.sessionCookieHeader('abc'), auth.expiredSessionCookieHeader()]) {
+      const attributes = header.split('; ')
+      expect(attributes[0]?.startsWith(`${row.name}=`)).toBe(true)
+      expect(attributes).toContain(`Path=${want.path}`)
+      expect(attributes).toContain(`SameSite=${want.sameSite}`)
+      expect(attributes.includes('Secure')).toBe(want.secure)
+      expect(header).not.toMatch(/Domain=/i)
+    }
+
+    const got = warn.mock.calls.map((call) => classify(String(call[0])))
+    expect(got).toEqual(want.warnings)
+    for (const call of warn.mock.calls) expect(String(call[0])).toContain(row.name)
+    // The invariants the minor promises: nothing browsers drop and nothing
+    // that differs from the previous release goes out without a warning.
+    if (!want.browserAccepts) expect(got.length).toBeGreaterThan(0)
+    if (want.changed) expect(got).toContain('implied')
   })
 })
 

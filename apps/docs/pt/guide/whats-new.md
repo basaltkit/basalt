@@ -231,7 +231,12 @@ arranque, por isso corrige-as já — cada uma tem uma correcção de uma linha.
   sessões de browser a funcionar. Retira `secure`/`path`, ou usa um nome sem
   prefixo fora de produção: `name: isProd ? '__Host-sid' : 'sid'`. A próxima
   major lança `AUTH_SESSION_COOKIE_INVALID` (`SessionCookieConfigError`, já
-  exportado).
+  exportado). Os prefixos são reconhecidos sem distinguir maiúsculas
+  (`__host-sid` conta), e um cookie `__Host-` com sub-path e `secure` por
+  definir recebe também, fora de produção, o aviso do `Secure` implícito. À
+  parte (só aviso, nunca recusado), um cookie sem prefixo com
+  `sameSite: 'None'` e sem `Secure` gera um aviso: os browsers também o
+  descartam.
 - **`@basaltkit/tenancy`: `meta.tenant` diferente de `true`, `false` ou
   `'never'`.** Um valor como `'none'`, `'optional'`, `'false'` ou `null` cai no
   default `required` da app, como antes. Se querias só plano central, o valor é

@@ -557,6 +557,15 @@ arranque: o browser descarta esse cookie. A próxima major recusa-o no arranque
 com `AUTH_SESSION_COOKIE_INVALID`. `__Host-` é a escolha mais forte para um
 cookie de sessão: um subdomínio irmão não o consegue definir nem sombrear.
 
+Os prefixos são reconhecidos sem distinguir maiúsculas, como nos browsers
+actuais (`__host-sid` é um cookie `__Host-`). Os avisos são independentes e cada
+um aparece uma vez por objecto `sessionCookie`: um cookie `__Host-` com
+`path: '/app'` e `secure` por definir regista o aviso do path e, fora de
+produção, o do `Secure` implícito. Um cookie sem prefixo com `sameSite: 'None'`
+e sem `Secure` (o valor por omissão fora de produção) também gera um aviso,
+porque os browsers descartam `SameSite=None` sem `Secure`; é emitido sem
+alterações.
+
 ### Rotas de conta: `meta.account` e `meta.mfa` {#account-routes}
 
 Todas as rotas de `authRoutes()`, de `mfaRoutes()` e as duas de `oauthRoutes()`
