@@ -366,14 +366,31 @@ describe.skipIf(!existsSync(prismaCli))(
 )
 
 /**
- * The whole --prisma path against a REAL PostgreSQL server: scaffold → the
- * generated .env / prisma.config.ts → `prisma generate` → build → the
- * assertMigrated boot refusal → `db:migrate` (`migrate dev --create-only`) →
- * `db:deploy` (`migrate deploy`) → `db:seed` → `node dist/src/server.js` →
- * requests that read and write the database → graceful shutdown. Each run
- * works in its own throwaway database, created and dropped here, so the
- * server behind BASALT_SCAFFOLD_DATABASE_URL needs CREATEDB (Prisma's shadow
- * database for `migrate dev` needs it too).
+ * The whole --prisma path against a REAL PostgreSQL server, through the app's
+ * own package.json scripts (run like `pnpm run` would: the script string plus
+ * the extra arguments, the app's bins on PATH, no URL exported):
+ *
+ * - production path: scaffold → the generated .env / prisma.config.ts →
+ *   `db:generate` → build → the assertMigrated boot refusal → `db:migrate
+ *   --name init --create-only` → `db:deploy` (`migrate deploy`) → `db:seed` →
+ *   `node dist/src/server.js` → requests that read and write the database →
+ *   graceful shutdown;
+ * - development path, in a second scaffold: `db:migrate --name init` on a
+ *   database that does not exist yet (`migrate dev` creates it, creates the
+ *   first migration and applies it in one step) → `db:migrate` with nothing to
+ *   do → a schema change → `db:migrate --name add_note` → `db:generate` (Prisma
+ *   7's `migrate dev` does not generate the client) → `db:seed`.
+ *
+ * Each run works in its own throwaway databases, dropped here, so the server
+ * behind BASALT_SCAFFOLD_DATABASE_URL needs CREATEDB (Prisma's shadow database
+ * for `migrate dev` needs it too; the CI user is the container's superuser).
+ *
+ * Not verified here: `db:migrate` WITHOUT `--name` on a schema change. Prisma
+ * then prompts for the migration name and blocks even with stdin closed, so it
+ * cannot run unattended — every call below passes `--name`, and a 2-minute
+ * timeout turns an unexpected prompt into a failure instead of a hang. Nor the
+ * prompts `migrate dev` shows for a destructive change or a drifted database
+ * (reset confirmation), which need a terminal.
  *
  * Skipped without BASALT_SCAFFOLD_DATABASE_URL — unless
  * BASALT_SCAFFOLD_PG_REQUIRED=1 (the CI `scaffold-postgres` job), where a
@@ -401,16 +418,39 @@ describe.skipIf(!runPg)(
       for (const key of ['DATABASE_URL', urlKey, 'NODE_ENV', 'BASALT_SCAFFOLD_DATABASE_URL']) delete env[key]
       return env
     }
-    const prisma = (args: string[]): string => {
+    const prismaIn = (cwd: string, args: string[]): string => {
       try {
-        return execFileSync(prismaCli, args, { cwd: dir, encoding: 'utf8', stdio: 'pipe', env: devShell() })
+        return execFileSync(prismaCli, args, { cwd, encoding: 'utf8', stdio: 'pipe', env: devShell() })
       } catch (error) {
         const e = error as { stdout?: string; stderr?: string; message: string }
         throw new Error(`prisma ${args.join(' ')} failed:\n${e.stdout ?? ''}${e.stderr ?? ''}\n${e.message}`)
       }
     }
-    const query = async <T extends Record<string, unknown>>(sql: string): Promise<T[]> => {
-      const client = new pg.Client({ connectionString: appUrl })
+    const prisma = (args: string[]): string => prismaIn(dir, args)
+    /**
+     * `pnpm run <script> -- <args>` without pnpm: the app's own script string
+     * from package.json, the arguments appended, the app's bins on PATH. A
+     * prompt (stdin is closed) fails on the timeout instead of hanging.
+     */
+    const runScript = (cwd: string, script: string, args: string[] = []): string => {
+      const command = (JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')) as { scripts?: Record<string, string> }).scripts?.[script]
+      if (command === undefined) throw new Error(`package.json has no "${script}" script`)
+      try {
+        return execFileSync('/bin/sh', ['-c', `${command} "$@"`, script, ...args], {
+          cwd,
+          encoding: 'utf8',
+          stdio: 'pipe',
+          input: '',
+          timeout: 120_000,
+          env: devShell(),
+        })
+      } catch (error) {
+        const e = error as { stdout?: string; stderr?: string; message: string }
+        throw new Error(`${script} (${command} ${args.join(' ')}) failed:\n${e.stdout ?? ''}${e.stderr ?? ''}\n${e.message}`)
+      }
+    }
+    const queryAt = async <T extends Record<string, unknown>>(url: string, sql: string): Promise<T[]> => {
+      const client = new pg.Client({ connectionString: url })
       await client.connect()
       try {
         return (await client.query<T>(sql)).rows
@@ -418,6 +458,16 @@ describe.skipIf(!runPg)(
         await client.end()
       }
     }
+    const query = <T extends Record<string, unknown>>(sql: string): Promise<T[]> => queryAt<T>(appUrl, sql)
+    /** The URL of another database on the same server. */
+    const urlOf = (name: string): string => {
+      const url = new URL(databaseUrl as string)
+      url.pathname = `/${name}`
+      return url.toString()
+    }
+    const devDir = join(e2eRoot, 'prisma-pg-dev')
+    // Never created here: `migrate dev` creates it, as for a developer.
+    const devDatabase = `${database}_dev`
     /** The production process environment: no .env, NODE_ENV=production, the URL under the app's prefixed name. */
     const production = (): NodeJS.ProcessEnv => prodEnv({ [urlKey]: appUrl })
 
@@ -431,15 +481,14 @@ describe.skipIf(!runPg)(
       admin = new pg.Client({ connectionString: databaseUrl })
       await admin.connect()
       await admin.query(`CREATE DATABASE "${database}"`)
-      const url = new URL(databaseUrl)
-      url.pathname = `/${database}`
-      appUrl = url.toString()
+      appUrl = urlOf(database)
     }, 60_000)
 
     afterAll(async () => {
       if (!admin) return
       try {
         await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`)
+        await admin.query(`DROP DATABASE IF EXISTS "${devDatabase}" WITH (FORCE)`)
       } finally {
         await admin.end()
       }
@@ -466,8 +515,8 @@ describe.skipIf(!runPg)(
       await write(dir, '.env', env.replace(new RegExp(`^${urlKey}=.*$`, 'm'), `${urlKey}=${appUrl}`))
     })
 
-    it('prisma generate → tsc build', () => {
-      prisma(['generate'])
+    it('db:generate (prisma generate) → tsc build', () => {
+      runScript(dir, 'db:generate')
       expect(existsSync(join(dir, 'generated', 'prisma', 'runtime'))).toBe(true)
       expect(build(dir)).toBe('')
       expect(existsSync(join(dir, PRODUCTION_ENTRY))).toBe(true)
@@ -487,7 +536,7 @@ describe.skipIf(!runPg)(
     it('db:migrate writes the first migration, db:deploy applies it', async () => {
       // `pnpm db:migrate --name init`, minus the apply: --create-only leaves the
       // database empty, so the production command below is the one that migrates.
-      prisma(['migrate', 'dev', '--name', 'init', '--create-only'])
+      runScript(dir, 'db:migrate', ['--name', 'init', '--create-only'])
       const migrations = readdirSync(join(dir, 'prisma', 'migrations')).filter((entry) => entry.endsWith('_init'))
       expect(migrations).toHaveLength(1)
       const sql = readFileSync(join(dir, 'prisma', 'migrations', migrations[0]!, 'migration.sql'), 'utf8')
@@ -496,7 +545,7 @@ describe.skipIf(!runPg)(
       expect(sql).toContain('CREATE TABLE "subscriptions"')
       expect(await query(`SELECT to_regclass('public.tenants')::text AS t`)).toEqual([{ t: null }])
 
-      prisma(['migrate', 'deploy'])
+      runScript(dir, 'db:deploy')
       const applied = await query<{ migration_name: string; finished: boolean }>(
         'SELECT migration_name, finished_at IS NOT NULL AS finished FROM _prisma_migrations',
       )
@@ -505,9 +554,9 @@ describe.skipIf(!runPg)(
     }, 120_000)
 
     it('db:seed creates the demo tenant (prisma db seed loads .env through prisma.config.ts)', async () => {
-      prisma(['db', 'seed'])
+      runScript(dir, 'db:seed')
       // An upsert: seeding twice is safe.
-      prisma(['db', 'seed'])
+      runScript(dir, 'db:seed')
       expect(await query('SELECT id FROM tenants')).toEqual([{ id: 'demo' }])
     }, 120_000)
 
@@ -554,5 +603,55 @@ describe.skipIf(!runPg)(
         expect(await server.stop(), server.log()).toBe(0)
       }
     }, 120_000)
+
+    it('development: db:migrate creates the database, then creates AND applies each migration; db:generate and db:seed follow', async () => {
+      rmSync(devDir, { recursive: true, force: true })
+      mkdirSync(devDir, { recursive: true })
+      await createProject({ name, dir: devDir, prisma: true })
+      const devUrl = urlOf(devDatabase)
+      const env = await read(devDir, '.env')
+      await write(devDir, '.env', env.replace(new RegExp(`^${urlKey}=.*$`, 'm'), `${urlKey}=${devUrl}`))
+      const applied = () =>
+        queryAt<{ migration_name: string; finished: boolean }>(
+          devUrl,
+          'SELECT migration_name, finished_at IS NOT NULL AS finished FROM _prisma_migrations ORDER BY started_at',
+        )
+      const migrationsOnDisk = () => readdirSync(join(devDir, 'prisma', 'migrations')).filter((entry) => /^\d+_/.test(entry)).sort()
+
+      // First run, as the README says (`pnpm db:migrate`), named so nothing prompts.
+      const first = runScript(devDir, 'db:migrate', ['--name', 'init'])
+      expect(first).toContain(`PostgreSQL database ${devDatabase} created`)
+      expect(migrationsOnDisk()).toHaveLength(1)
+      expect(migrationsOnDisk()[0]).toMatch(/_init$/)
+      expect(await applied()).toEqual([{ migration_name: migrationsOnDisk()[0], finished: true }])
+      expect(await queryAt(devUrl, `SELECT to_regclass('public.tenants')::text AS t`)).toEqual([{ t: 'tenants' }])
+
+      // The everyday run with nothing to do: no name needed, nothing prompts.
+      expect(runScript(devDir, 'db:migrate')).toContain('Already in sync')
+      expect(migrationsOnDisk()).toHaveLength(1)
+
+      // A schema change: one command writes the migration and applies it.
+      const schemaPath = join(devDir, 'prisma', 'schema.prisma')
+      const schema = readFileSync(schemaPath, 'utf8')
+      await write(devDir, 'prisma/schema.prisma', `${schema}\nmodel Note {\n  id   String @id\n  body String\n\n  @@map("notes")\n}\n`)
+      runScript(devDir, 'db:migrate', ['--name', 'add_note'])
+      const onDisk = migrationsOnDisk()
+      expect(onDisk).toHaveLength(2)
+      expect(onDisk[1]).toMatch(/_add_note$/)
+      expect(readFileSync(join(devDir, 'prisma', 'migrations', onDisk[1]!, 'migration.sql'), 'utf8')).toContain('CREATE TABLE "notes"')
+      expect(await applied()).toEqual(onDisk.map((migration_name) => ({ migration_name, finished: true })))
+      expect(await queryAt(devUrl, `SELECT to_regclass('public.notes')::text AS t`)).toEqual([{ t: 'notes' }])
+      expect(prismaIn(devDir, ['migrate', 'status'])).toContain('Database schema is up to date')
+
+      // Prisma 7's `migrate dev` neither generates the client nor seeds: the
+      // scaffold's docs list db:generate (also run on install) and db:seed as
+      // their own steps. If this starts failing, Prisma changed — update them.
+      expect(existsSync(join(devDir, 'generated', 'prisma'))).toBe(false)
+      expect(await queryAt(devUrl, 'SELECT id FROM tenants')).toEqual([])
+      runScript(devDir, 'db:generate')
+      expect(readFileSync(join(devDir, 'generated', 'prisma', 'index.d.ts'), 'utf8')).toContain('export type Note =')
+      runScript(devDir, 'db:seed')
+      expect(await queryAt(devUrl, 'SELECT id FROM tenants')).toEqual([{ id: 'demo' }])
+    }, 300_000)
   },
 )

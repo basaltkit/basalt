@@ -204,6 +204,14 @@ pnpm db:seed             # the demo tenant
 pnpm dev
 ```
 
+After a change to `prisma/schema.prisma`, `pnpm db:migrate --name <change>`
+writes the migration **and** applies it to the development database (Prisma
+creates and drops a temporary shadow database for that, so the database user
+needs `CREATEDB`); without `--name` it asks for one, so in a script always pass
+it. Then run `pnpm db:generate`: Prisma 7's `migrate dev` no longer regenerates
+the client (nor seeds). Production applies the committed migrations with
+`pnpm db:deploy`.
+
 ::: warning Migrations, never `db push`
 The generated `src/app.ts` boots with `assertMigrated: true`, which refuses to
 start unless the database it reached has the `_prisma_migrations` table —
