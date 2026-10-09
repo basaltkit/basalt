@@ -151,7 +151,7 @@ const users: UserSource = {
 |---|---|---|---|
 | `findByEmail(email)` | Yes | `AuthUser \| null` | Sign-in and registration lookups. Emails are case-insensitive identities. |
 | `findById(id)` | Yes | `AuthUser \| null` | Resolving the user behind a token, session or API key. |
-| `create({ email, passwordHash, emailVerified? })` | Yes | `AuthUser` | Registration; the hash arrives already computed. `emailVerified: true` comes only from trusted flows (`register(…, { emailVerified: true })`, a provider-verified social login) and must be persisted with the row. A source that drops it is patched through `update()`; without `update()`, `register(…, { emailVerified: true })` throws `AUTH_UPDATE_UNSUPPORTED` and a social login keeps the account unverified (still linked and signed in). |
+| `create({ email, passwordHash, emailVerified? })` | Yes | `AuthUser` | Registration; the hash arrives already computed. `emailVerified: true` comes only from trusted flows (`register(…, { emailVerified: true })`, a provider-verified social login) and must be persisted with the row. A source that drops it is patched through `update()`; without `update()`, `register(…, { emailVerified: true })` throws `AUTH_UPDATE_UNSUPPORTED` before anything is written and a social login keeps the account unverified (still linked and signed in). |
 | `update(id, patch)` | No | `AuthUser \| null` | Email verification and password reset need it (`AUTH_UPDATE_UNSUPPORTED` without it). |
 | `findByIds(ids)` | No | `PublicUser[]` | **Bulk contact lookup** — see below. |
 

@@ -599,8 +599,16 @@ export class Auth {
    * verified; `auth:registered` then carries the final state, so a mail hook
    * can decide "unverified → send the verification link" on its own. Never
    * forward this option from a request body.
+   *
+   * `emailVerified: true` needs a `UserSource` with `update()` — the same
+   * requirement as email verification. Without it this throws
+   * {@link UserUpdateUnsupportedError} **before** anything is written: whether
+   * `create()` persists the flag can only be learnt by writing the row, and a
+   * row that cannot be fixed afterwards would be a half-done registration
+   * (an unverified account that a retry reports as `EmailTakenError`).
    */
   async register(rawEmail: string, password: string, opts: { emailVerified?: boolean } = {}): Promise<PublicUser> {
+    if (opts.emailVerified === true && typeof this.users.update !== 'function') throw new UserUpdateUnsupportedError()
     const email = canonicalEmail(rawEmail)
     if (await this.users.findByEmail(email)) throw new EmailTakenError()
     const user = await this.createUser(email, await this.hasher.hash(password), opts.emailVerified === true)
@@ -616,7 +624,9 @@ export class Auth {
    * When the source can do neither (no `update()` and a `create()` that drops
    * the flag), `onUnsupported` decides: `'throw'` fails loudly with
    * {@link UserUpdateUnsupportedError} (trusted `register`, whose caller asked
-   * for a verified account and must hear it did not get one); `'keep'` returns
+   * for a verified account and must hear it did not get one — `register`
+   * refuses a source without `update()` before calling this, so here it only
+   * fires for an `update()` that does not persist the flag); `'keep'` returns
    * the row as it really is, unverified (social login — the row was just
    * created by this call with an unusable password, so it is provably ours and
    * must be linked and used, never left behind as an orphan that locks the

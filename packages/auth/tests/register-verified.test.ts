@@ -82,6 +82,76 @@ describe('register(…, { emailVerified }) — trusted flows (BK-045)', () => {
   })
 })
 
+/**
+ * Regression: `register(…, { emailVerified: true })` used to create the row and
+ * only then find out the source could not mark it verified — the call failed,
+ * the account existed, and the retry got `EmailTakenError`. The refusal now
+ * happens before anything is written.
+ */
+describe('register(…, { emailVerified: true }) never leaves a half-done account', () => {
+  /** Counts every write the source receives. */
+  class CountingSource extends LegacyUserSource {
+    creates = 0
+    override create(data: { email: string; passwordHash: string }): Promise<AuthUser> {
+      this.creates++
+      return super.create(data)
+    }
+  }
+
+  /** Persists the flag in create() but has no update(): refused up front too (update() is the documented requirement). */
+  class FlagOnCreateSource extends CountingSource {
+    override create(data: { email: string; passwordHash: string; emailVerified?: boolean }): Promise<AuthUser> {
+      this.creates++
+      return this.inner.create(data)
+    }
+  }
+
+  for (const [name, make] of [
+    ['create() drops the flag, no update()', () => new CountingSource()],
+    ['create() persists the flag, no update()', () => new FlagOnCreateSource()],
+  ] as const) {
+    it(`${name}: refused before create(), nothing written, no hook, the retry gets the same error`, async () => {
+      const users = make()
+      const hooks = new HookBus()
+      const seen = recordRegistered(hooks)
+      const auth = new Auth({ users, secret: SECRET, hasher: fastHasher, hooks })
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const error = await auth.register('Owner@Acme.test', 'password123', { emailVerified: true }).catch((e: unknown) => e)
+        expect(error).toBeInstanceOf(UserUpdateUnsupportedError)
+        expect((error as UserUpdateUnsupportedError).code).toBe('AUTH_UPDATE_UNSUPPORTED')
+      }
+      expect(users.creates).toBe(0)
+      expect(await users.findByEmail('owner@acme.test')).toBeNull()
+      expect(seen).toEqual([])
+
+      // The same email registers normally (unverified) afterwards: nothing was left behind.
+      await expect(auth.register('Owner@Acme.test', 'password123')).resolves.toMatchObject({
+        email: 'owner@acme.test',
+        emailVerified: false,
+      })
+      expect(users.creates).toBe(1)
+    })
+  }
+
+  it('a duplicate email is still EmailTakenError when the source can verify', async () => {
+    const auth = new Auth({ users: new MemoryUserSource(), secret: SECRET, hasher: fastHasher })
+    await auth.register('a@b.test', 'password123', { emailVerified: true })
+    await expect(auth.register('a@b.test', 'password123', { emailVerified: true })).rejects.toMatchObject({
+      code: 'AUTH_EMAIL_TAKEN',
+    })
+  })
+
+  it('the unsupported-source check runs before the duplicate check (no account probing through the error)', async () => {
+    const users = new CountingSource()
+    await users.inner.create({ email: 'taken@b.test', passwordHash: 'x' })
+    const auth = new Auth({ users, secret: SECRET, hasher: fastHasher })
+    await expect(auth.register('taken@b.test', 'password123', { emailVerified: true })).rejects.toBeInstanceOf(
+      UserUpdateUnsupportedError,
+    )
+  })
+})
+
 describe('socialLogin creates a provider-verified account verified (BK-045)', () => {
   it('auth:registered sees emailVerified: true', async () => {
     const hooks = new HookBus()

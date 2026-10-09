@@ -397,8 +397,10 @@ The public `POST /auth/register` never creates a verified account: an
 `emailVerified` field in the body is ignored. A custom `UserSource` written
 before `create()` took the flag is patched through `update()`. A source that
 can do neither (no `update()`, a `create()` that ignores the flag) cannot record
-verification: `register(…, { emailVerified: true })` then fails with
-`UserUpdateUnsupportedError` after creating the account unverified, while a
+verification. `register(…, { emailVerified: true })` needs `update()` — the
+same requirement as email verification — and without it fails with
+`UserUpdateUnsupportedError` **before** writing anything, so a retry gets the
+same error and never `EmailTakenError`; a
 social login creates the account unverified, links it and signs the user in —
 it never fails half-way, which would leave an account every later login of that
 provider refuses. Persist `emailVerified` in `create()` (or implement
@@ -1376,7 +1378,7 @@ users in.
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` on an account whose MFA is on — disable it with a code first |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | A `meta.auth` route got a cross-site, cookie-only state-changing request |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset, and for `register(…, { emailVerified: true })` when `create()` drops `emailVerified` |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset, and for `register(…, { emailVerified: true })` (refused before anything is written) |
 | `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, or a `registerPolicy` refused the first social / SSO login of an address |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars outside an explicit `NODE_ENV=development`/`test` |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`), or a key without `*` hit an identity-gated route that declares no `meta.scopes` |

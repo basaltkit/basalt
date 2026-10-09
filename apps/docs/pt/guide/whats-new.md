@@ -296,10 +296,11 @@ Só uma, e só para formas acrescentadas nesta versão:
   a autenticar utilizadores OAuth através da ligação de identidades, não
   verificados como antes. Dois casos continuam a falhar nessa source: um
   utilizador SAML (sem identidade ligada) é recusado no segundo login, como já
-  acontecia antes desta versão; e `register(…, { emailVerified: true })` lança
-  `AUTH_UPDATE_UNSUPPORTED` *depois* de o `create()` ter escrito a linha, por
-  isso a conta fica criada, não verificada. Implementa `update()` (ou persiste
-  `emailVerified` no `create()`) para evitar ambos.
+  acontecia antes desta versão. O `register(…, { emailVerified: true })` (novo
+  nesta versão) exige `update()` e, sem ele, lança `AUTH_UPDATE_UNSUPPORTED`
+  antes de escrever o que quer que seja — nenhuma conta é criada, por isso uma
+  nova tentativa nunca recebe `EmailTakenError`. Implementa `update()` (e
+  persiste `emailVerified` no `create()`) para teres ambos.
 - **Aviso no arranque para `meta.rateLimit` sem rate limiter.** Quando
   qualquer rota declara `meta.rateLimit` — o `authRoutes()` declara, e as tuas
   próprias rotas também podem — e o `securityPlugin({ rateLimit })` não está
