@@ -401,9 +401,10 @@ O `POST /auth/register` público nunca cria uma conta verificada: um campo
 `emailVerified` no corpo é ignorado. Um `UserSource` próprio escrito antes de o
 `create()` aceitar a flag é corrigido através do `update()`. Uma fonte que não
 consegue nenhuma das duas (sem `update()`, um `create()` que ignora a flag) não
-consegue guardar a verificação: o `register(…, { emailVerified: true })` falha
-então com `UserUpdateUnsupportedError` depois de criar a conta não verificada,
-enquanto um login social cria a conta não verificada, liga-a e autentica o
+consegue guardar a verificação. O `register(…, { emailVerified: true })` exige
+`update()` — o mesmo requisito da verificação de email — e sem ele falha com
+`UserUpdateUnsupportedError` **antes** de escrever o que quer que seja, por isso
+uma nova tentativa recebe o mesmo erro e nunca `EmailTakenError`; um login social cria a conta não verificada, liga-a e autentica o
 utilizador — nunca falha a meio, o que deixaria uma conta que todos os logins
 seguintes desse fornecedor recusam. Persiste o `emailVerified` no `create()` (ou
 implementa o `update()`) para teres contas verificadas.
@@ -1386,7 +1387,7 @@ autenticar os utilizadores.
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` numa conta com MFA ativo — desativa-o primeiro com um código |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | Uma rota `meta.auth` recebeu um pedido cross-site, só com cookie, que altera estado |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | O orçamento de logins falhados por email ou por IP esgotou-se; traz `retryAfterMs` |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição, e para o `register(…, { emailVerified: true })` quando o `create()` ignora o `emailVerified` |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição, e para o `register(…, { emailVerified: true })` (recusado antes de escrever o que quer que seja) |
 | `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, ou uma `registerPolicy` recusou o primeiro login social / SSO de um endereço |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | arranque | `secret` em falta, ou com menos de 32 caracteres fora de um `NODE_ENV=development`/`test` explícito |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | Uma rota com `meta.scopes` foi chamada sem uma API key que tenha esse scope (ou `*`), ou uma chave sem `*` chamou uma rota protegida por identidade que não declara `meta.scopes` |

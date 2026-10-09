@@ -274,10 +274,11 @@ Only one, and only for forms added in this release:
   source that neither persists it nor implements `update()` still signs OAuth
   users in through identity linking, unverified as before. Two cases still
   fail on such a source: a SAML user (no linked identity) is refused on the
-  second login, as before this release; and `register(…, { emailVerified: true })`
-  throws `AUTH_UPDATE_UNSUPPORTED` *after* `create()` wrote the row, so the
-  account exists, unverified. Implement `update()` (or persist `emailVerified`
-  in `create()`) to avoid both.
+  second login, as before this release. `register(…, { emailVerified: true })`
+  (new in this release) requires `update()` and otherwise throws
+  `AUTH_UPDATE_UNSUPPORTED` before writing anything — no account is created,
+  so a retry never hits `EmailTakenError`. Implement `update()` (and persist
+  `emailVerified` in `create()`) to get both.
 - **Boot warning for `meta.rateLimit` without a rate limiter.** When any route
   declares `meta.rateLimit` — `authRoutes()` does, and so may your own routes —
   and `securityPlugin({ rateLimit })` is not registered, the app now prints one
