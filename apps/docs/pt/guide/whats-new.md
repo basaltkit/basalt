@@ -65,8 +65,9 @@ auditoria](#fechar-a-colheita-da-auditoria).
 ## Desde a 1.12 (por publicar)
 
 Entrou no `main` depois da publicação da 1.12 em minors e patches — nenhum
-pacote precisa de uma major, mas alguns defaults mudam e algumas configurações
-passam a recusar o arranque. Lê [Mudanças de comportamento e notas de
+pacote precisa de uma major. Alguns defaults mudam, algumas configurações que
+arrancavam passam a mostrar um aviso no arranque (recusadas na próxima major),
+e só usos mal formados das novas formas de rate limit recusam o arranque. Lê [Mudanças de comportamento e notas de
 upgrade](#behaviour-changes-and-upgrade-notes) antes de actualizar.
 
 
@@ -79,11 +80,11 @@ upgrade](#behaviour-changes-and-upgrade-notes) antes de actualizar.
   para que um caller revogado receba `401`/`403` em vez do sucesso em cache. As
   duas vão passar a default numa futura major — vê
   [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).
-- **Cabeçalhos por rota.** `meta.headers` aplica cabeçalhos de resposta
+- **Cabeçalhos por rota.** `meta.responseHeaders` aplica cabeçalhos de resposta
   estáticos (por exemplo `X-Robots-Tag: noindex` num link de partilha público) em
   todas as respostas que a rota produz, incluindo os erros dos guards, da
   validação e do handler — vê
-  [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-headers).
+  [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-responseheaders).
 - **Webhooks operáveis.** `secretBox` sela os secrets de assinatura dos endpoints
   em repouso, `onAttempt` e `DeliveryResult.durationMs` reportam cada tentativa
   de entrega, `headerPrefix` muda o nome dos headers `x-basalt-*`, e
@@ -115,7 +116,8 @@ upgrade](#behaviour-changes-and-upgrade-notes) antes de actualizar.
   (`@basaltkit/prisma` 3.1) passa a alugar (lease) o cliente do pool de um
   tenant para cada pedido HTTP e cada `tenancy.run()`, e devolve-o quando a
   resposta termina, através dos novos disposers de pedido (`RequestDisposer`,
-  `ctx().onDispose()`) do `@basaltkit/http` 2.8 e de todos os adapters. Antes,
+  `ctx().onDispose()`) do `@basaltkit/http` 2.8 e de todos os adapters — vê
+  [Escrever o teu próprio guard ou enricher](/pt/guide/concepts#escrever-o-teu-proprio-guard-ou-enricher). Antes,
   um cliente contava como em uso durante `idleMs` (30 s) depois de cada pedido,
   por isso, com os defaults, o 11.º tenant distinto em 30 s esperava 10 s por um
   `503` sem nada a correr. O pool que o plugin cria passa a usar `idleMs` de 1 s
@@ -185,11 +187,18 @@ Vê [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idemp
   o Fastify e o Express corriam os disposers dos enrichers com o handler ainda a
   correr, o que podia desligar o seu cliente alugado a meio de uma query. Os
   disposers correm agora exactamente uma vez, depois de o handler terminar *e*
-  de a resposta ter acabado ou sido abortada, como o Hono já fazia. Os corpos
+  de a resposta estar completa: enviada ou abandonada no Fastify/Express; no
+  Hono uma resposta em buffer fica completa quando é construída, por isso os
+  seus disposers são aguardados antes de ser entregue ao runtime. Os corpos
   `stream()` e `sse()` continuam cobertos até ao último byte ou até o cliente
   sair. Um disposer entregue ao `ctx().onDispose()` depois desse ponto (a partir
   de um timer que o handler deixou, por exemplo) corre de imediato, em todos os
-  adapters.
+  adapters. Um disposer que falha é reportado como `REQUEST_DISPOSER_FAILED` em
+  todos os caminhos (o `onError` do adapter, o `reportError` do
+  `@basaltkit/mcp`, `console.error` para um `runRoute` sem adapter). O
+  `ctx().onDispose` não existe dentro do `tenancy.run()`, em jobs nem em
+  pipelines antigos: verifica se existe em vez de chamar
+  `ctx().onDispose?.(…)`, que aí descarta a limpeza em silêncio.
 - **O `ctx().db` depois da resposta não está protegido.** O lease acaba com a
   resposta, e o cliente fica reservado só mais 1 s. Trabalho que sobrevive à
   resposta tem de fazer `await` antes de responder, ou correr em
@@ -206,31 +215,45 @@ Vê [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idemp
   "Service unavailable.". `max`, `leased`, `recentlyUsed` e o id do tenant vão
   só para o log do servidor.
 
-#### Configurações que passam a recusar o arranque
+#### Configurações que passam a mostrar um aviso no arranque (recusadas na próxima major) {#configurations-that-now-warn-at-boot-refused-in-the-next-major}
 
-Todas arrancavam e comportavam-se mal em silêncio; cada uma tem uma correcção
-de uma linha.
+Cada uma destas arrancava e continua a arrancar, com o mesmo comportamento em
+runtime de antes; cada uma mostra agora um aviso `[basalt] …` no arranque que
+diz o que está mal. A próxima major transforma cada aviso numa recusa do
+arranque, por isso corrige-as já — cada uma tem uma correcção de uma linha.
 
-- **`@basaltkit/auth`: um cookie de sessão com prefixo e `secure: false`.** Um
-  `sessionCookie.name` que começa por `__Host-` ou `__Secure-` com um
-  `secure: false` explícito (incluindo o habitual
+- **`@basaltkit/auth`: um cookie de sessão com prefixo e `secure: false` ou um
+  sub-path.** Um `sessionCookie.name` que começa por `__Host-` ou `__Secure-`
+  com um `secure: false` explícito (incluindo o habitual
   `secure: process.env.NODE_ENV === 'production'` em dev e testes), ou um cookie
-  `__Host-` com um `path` diferente de `/`, lança `AUTH_SESSION_COOKIE_INVALID`.
-  Retira `secure`/`path`, ou usa um nome sem prefixo fora de produção:
-  `name: isProd ? '__Host-sid' : 'sid'`. Os browsers já descartavam esses
-  cookies.
-- **`@basaltkit/tenancy`: `meta.tenant` tem de ser `true`, `false` ou `'never'`.**
-  Qualquer outro valor (`'none'`, `'false'`) recusa o arranque com
-  `HTTP_INVALID_ROUTE_META` em vez de cair no default da app.
-- **`@basaltkit/http`: o `meta.headers` é sempre validado.** Tem de ser um
+  `__Host-` com um `path` diferente de `/`. O cookie continua a ser emitido tal
+  como configurado; os browsers descartam-no, por isso essa app não tem aí
+  sessões de browser a funcionar. Retira `secure`/`path`, ou usa um nome sem
+  prefixo fora de produção: `name: isProd ? '__Host-sid' : 'sid'`. A próxima
+  major lança `AUTH_SESSION_COOKIE_INVALID` (`SessionCookieConfigError`, já
+  exportado).
+- **`@basaltkit/tenancy`: `meta.tenant` diferente de `true`, `false` ou
+  `'never'`.** Um valor como `'none'`, `'optional'`, `'false'` ou `null` cai no
+  default `required` da app, como antes. Se querias só plano central, o valor é
+  `'never'`. A próxima major recusa o arranque com `HTTP_INVALID_ROUTE_META`.
+- **`@basaltkit/http`: um `meta.responseHeaders` inválido.** Tem de ser um
   registo de valores string sem caracteres de controlo e não pode definir
   `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, headers
-  hop-by-hop nem `x-request-id`. Uma rota que usava `meta.headers` para algo seu
-  falha com `HTTP_INVALID_ROUTE_META`: muda o nome do campo.
-- **`@basaltkit/http`: arrays `meta.rateLimit` ou entradas `bucket` mal
-  formados**, e rotas que partilham um `bucket` mas discordam no limite, na
-  janela ou na chave, recusam o arranque com `HTTP_INVALID_ROUTE_META`. O
-  `rateLimit` de objecto único (sem `bucket`) mantém o parse tolerante.
+  hop-by-hop nem `x-request-id`. Um registo inválido é ignorado por inteiro —
+  nenhum dos seus cabeçalhos é enviado — e o pedido nunca falha por causa dele.
+  A chave é nova: uma app que guarda dados seus em `meta.headers` não é
+  afectada, porque nada lê nem envia `meta.headers`.
+
+#### Configurações que passam a recusar o arranque {#configurations-that-now-refuse-to-boot}
+
+Só uma, e só para formas acrescentadas nesta versão:
+
+- **`@basaltkit/http`: `meta.rateLimit` mal formado nas formas novas.** Um array
+  (incluindo `[]`) com uma entrada mal formada, um objecto cujo `bucket` é uma
+  string que não é um nome de bucket válido, ou rotas que partilham um `bucket`
+  mas discordam no limite, na janela ou na chave, recusam o arranque com
+  `HTTP_INVALID_ROUTE_META`. O objecto único sem `bucket` string — incluindo
+  `bucket: null` — mantém o parse tolerante e é aplicado por rota, como antes.
 
 #### Outras mudanças
 
@@ -248,6 +271,20 @@ de uma linha.
   `integrity: { mode: 'hash-chain', erasable: true }`: versões antigas reportam
   as entradas v3 e as redigidas como `hash-mismatch`. Vê
   [Apagar dados pessoais](/pt/guide/persistence#erasing-personal-data-audit-redact).
+- **Auth — um cookie de sessão com prefixo passa a implicar `Secure` em
+  qualquer ambiente.** Com `secure` por definir, um cookie `__Host-…`/
+  `__Secure-…` passa a ser `Secure` (e `Path=/` para `__Host-`) também fora de
+  produção; antes era emitido sem `Secure` e os browsers descartavam-no. Os
+  fluxos de browser passam a funcionar, incluindo `http://localhost`.
+  **Atenção aos clientes de teste:** os cookie jars que respeitam `Secure`
+  (supertest/superagent, tough-cookie) não o devolvem sobre `http` simples, por
+  isso uma suite que dependia da emissão antiga recebe 401; fora de produção
+  isto mostra um aviso único no arranque. Usa um nome sem prefixo fora de
+  produção, ou define `secure` explicitamente (`secure: true` silencia-o).
+- **Auth — o `sessionIdleTtl` é validado.** A nova opção falha fechada no
+  arranque (`AUTH_SESSION_IDLE_CONFIG_INVALID`) quando não é uma duração
+  positiva ou o store de sessões não tem `touch()`; apps que não a definem não
+  são afectadas.
 - **Auth — `UserSource` própria sem `update()`.** O `create()` passa a receber
   `emailVerified`; persiste-o para ter contas sociais e de confiança
   verificadas. Uma source que não o persiste nem implementa `update()` continua
@@ -282,10 +319,14 @@ de uma linha.
   a funcionar sem mudanças e não reporta saúde. Para a ligar, acrescenta as três
   colunas nullable, migra e só depois define `readonly persistsHealth = true` —
   vê [Saúde da ligação](/pt/guide/drives#saude-da-ligacao).
-- **Notificações — `preference()` substitui `allowed()` no `Notifier`.** O
-  `Notifier` decide cada canal através de `NotificationPreferences.preference()`
-  e, a seguir, dos `defaults` e `mandatory` da notificação. Uma subclasse ou wrapper
-  que redefine `allowed()` deixa de ser consultada: redefine `preference()`.
+- **Notificações — o `Notifier` decide através de `preference()`.** Decide cada
+  canal através de `NotificationPreferences.preference()` e, a seguir, dos
+  `defaults` e `mandatory` da notificação. Uma subclasse que redefine
+  `allowed()` continua a funcionar: o `Notifier` detecta a redefinição e
+  deixa-a decidir, como antes (os `defaults` não se lhe aplicam; os `mandatory`
+  continuam a ignorá-la). Redefinir `allowed()` está obsoleto — redefine
+  `preference()`; a próxima major deixa de consultar uma redefinição de
+  `allowed()`.
 - **MCP — os erros internos são registados.** Um erro que escapa a uma tool
   continua a responder `Internal error`, e a causa vai agora para o stderr por
   defeito. Usa `mcpPlugin({ onError })` para a enviar para outro lado, ou
@@ -302,10 +343,11 @@ de uma linha.
   por isso uma app que já tem `TenantDomain` tem de acrescentar os quatro campos
   à mão (copia-os de `@basaltkit/tenancy-prisma/prisma/schema.prisma`) e correr
   uma migração antes de publicar um cliente gerado a partir do novo modelo.
-- **Tabela de rotas — `central-only`.** O `basalt routes` e o `describeRoutes()`
-  mostram `meta.tenant: 'never'` como `central-only` em vez de uma célula vazia.
-  A união `RouteRow.tenant` ganha `'central-only'`: código com um `switch`
-  exaustivo sobre ela tem de acrescentar o caso.
+- **Tabela de rotas — `central-only`.** O `basalt routes` mostra
+  `meta.tenant: 'never'` como `central-only` (o `meta.tenant: 'never'` na rota e
+  o `central-only` na tabela são a mesma coisa). O novo `describeRoutes()` lê o
+  `RouteRow.tenant` só do `meta.tenant`; o `meta.central: true` (o bypass de
+  membership do teams) aparece nas guardas como `central`.
 
 ## Destaques
 
