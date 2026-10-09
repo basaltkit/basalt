@@ -1,5 +1,0 @@
----
-"@basaltkit/fastify": minor
----
-
-`idempotencyPlugin`, `MemoryIdempotencyStore` and `RedisIdempotencyStore` are now re-exported from `@basaltkit/http`, where idempotency runs in the shared route pipeline on every adapter (BK-084e); existing imports and defaults are unchanged and gain the opt-in `fingerprint` and `replayAfterGuards` options. Behaviour changes to note: the plugin no longer depends on `basalt:fastify`, and it covers Basalt `route()` definitions only — a handler registered directly on the Fastify instance (a raw `fastify.post(...)`, outside `fastifyPlugin({ routes })`) is no longer guarded by it: move such handlers to `route()`. The check now runs after the enrichers (a suspended tenant gets its `403`, not a replay), and a refusal raised before the handler (a guard's `401`/`403`, a `429`) is never recorded. The replay scope is the same as before — credentials, raw `x-tenant-id`/`host` headers, method, route pattern — so it does not separate tenants resolved from the path or concrete path params; see the `@basaltkit/http` notes. `RedisLike` stays exported as a deprecated alias of `RedisIdempotencyClient`.

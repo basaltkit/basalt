@@ -1,5 +1,11 @@
 # @basaltkit/webhooks-prisma
 
+## 2.1.1
+
+### Patch Changes
+
+- 1868e07: README: document the two schema-per-tenant layouts: central webhook tables (the simplest), or endpoints per tenant through `tenantClient()` with the outbox kept central and `webhookOutboxPlugin({ tenantOnly: true })`.
+
 ## 2.1.0
 
 ### Minor Changes

@@ -1,5 +1,25 @@
 # @basaltkit/drives-google
 
+## 1.1.0
+
+### Minor Changes
+
+- e2b8d16: Per-call listing mode: `DriveListOptions.recursive?: boolean` (`listItems(id, { recursive })`). `true` lists the subtree, `false` a folder's direct children; omitted, each adapter keeps its constructor default exactly as before. Google honours both (`recursive: false` on an unscoped connection lists the account root's children), Dropbox passes it to `list_folder`, and Microsoft — which has no recursive listing — refuses `recursive: true` with `DRIVE_UNSUPPORTED` (`recursiveList`) instead of silently returning one level. An explicit mode is bound into the engine's page cursor (new `bkl2` envelope; default-mode cursors keep `bkl1`): a continuation that omits `recursive` keeps the cursor's mode, one that changes it is refused.
+- 6d966c1: Provider error explanations are no longer thrown away. `DriveProviderError`, `DriveAccessDeniedError` and `DriveCredentialsInvalidError` accept an optional `{ providerMessage }`, carried only on the non-enumerable, log-only `internalDetails` channel (read by `@basaltkit/http`'s error reporter and `internalDetailsOf()`), never in `message`, `details`, hook payloads or the response body. The adapters fill it from allow-listed fields only — Google/Graph `error.message` / `error_description`, Dropbox `user_message.text`, a `missing_scope` error's `required_scope`, or a Dropbox `400 text/plain` body — through the new `providerMessageOf()` helper, which strips control/bidi characters, redacts URL/bearer/JWT/token-shaped text and truncates to 500 characters.
+
+### Patch Changes
+
+- Updated dependencies [7a3fd88]
+- Updated dependencies [5351734]
+- Updated dependencies [a32981d]
+- Updated dependencies [870075a]
+- Updated dependencies [3740447]
+- Updated dependencies [e2b8d16]
+- Updated dependencies [6d966c1]
+- Updated dependencies [16069ab]
+- Updated dependencies [6a76048]
+  - @basaltkit/drives@0.4.0
+
 ## 1.0.0
 
 ### Major Changes

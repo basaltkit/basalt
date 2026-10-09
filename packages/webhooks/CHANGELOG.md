@@ -1,5 +1,39 @@
 # @basaltkit/webhooks
 
+## 4.1.0
+
+### Minor Changes
+
+- 870075a: Export a streaming SSRF-guarded HTTP client for untrusted URLs: `createGuardedFetch({ maxBytes, timeoutMs, deadlineMs?, allowedHosts?, allowedSchemes?, maxRedirects?, allowPrivateHosts?, lookup?, transport?, defaultHeaders?, mapError? })`. Unlike `pinnedFetch`, it hands the response body back as a capped `Readable` (plus `text()`, `json()`, `arrayBuffer()`, `destroy()`). Every redirect hop is re-validated and IP-pinned (max 3 by default, credentials dropped across hosts), no `accept-encoding` is sent, and the byte cap is enforced mid-stream. Refusals throw `GuardedFetchError` (`kind`: `SSRF_BLOCKED` · `BODY_TOO_LARGE` · `TIMEOUT` · `TOO_MANY_REDIRECTS`, code `OUTBOUND_<kind>`), naming the host and never the URL. Also exported: `hostAllowed`, `capStream`, `pinnedStreamTransport`.
+- 194931a: Operable webhooks (BK-084), all opt-in:
+  
+  - **Sealed secrets at rest** — `secretBox` (on `webhooksPlugin` and `WebhookManagerOptions`): an app-supplied `{ seal, open, isSealed? }` that `register()` / `rotateSecret()` apply before the store write (the current and the previous secret) and the manager reverses before each delivery. The context `{ endpointId, tenantId }` can be bound into the ciphertext. Legacy plaintext rows keep delivering (via `isSealed()` or a `WebhookSecretNotSealedError` from `open()`) and are sealed on the next rotation. Both calls still return the plaintext secret. No crypto dependency is added.
+  - **Attempt telemetry** — `DeliveryResult.durationMs` (whole delivery) and an `onAttempt` deliverer option called after every attempt with `{ deliveryId, endpointId, tenantId?, event, attempt, ok, status?, durationMs, error?, at }`. Not awaited; a throwing hook is logged and swallowed. No delivery-log store and no response-body capture.
+  - **Header prefix** — `headerPrefix` deliverer option (default `x-basalt`, validated `[a-z][a-z0-9-]{0,31}`) and a `webhookHeaderNames(prefix)` helper for receivers.
+  
+  Docs: sealing, telemetry, header prefix and a schema-per-tenant recipe (`prismaWebhookStore(tenantClient())`). The outbox relay supports per-tenant endpoints through `runInTenant` and `webhookOutboxPlugin({ tenantOnly: true })`, which ship in this release too.
+- 1868e07: The webhook outbox now works when endpoints live per tenant (a store over `tenantClient()` under schema- or database-per-tenant). Before this change every relayed entry failed with `DB_UNAVAILABLE` and dead-lettered.
+  
+  - New `runInTenant` option on `WebhookManager` and `webhooksPlugin`. An off-request `dispatch()` scoped by an explicit `tenantId`, with no tenant in context, runs its endpoint lookup inside that tenant. Only the store read runs there: secrets are opened and deliveries sent after the run has ended, so a slow endpoint never holds the tenant's pooled database client. `webhooksPlugin` wires it automatically to `@basaltkit/tenancy`'s `'tenancy:run'` signal, resolved per dispatch so plugin order does not matter. This covers `webhookOutboxPlugin`, the `outboxPlugin({ dispatch: webhookOutboxDispatch(container.get(WEBHOOKS)) })` recipe, manual flushes and your own jobs. A tenant already in context still wins, and the runner is not called then.
+  - New `tenantOnly` option on `webhookOutboxPlugin`: capture only events emitted inside a tenant context. Set it when endpoints live per tenant.
+  - New exported type `TenantRunner`, declared structurally (no dependency on `@basaltkit/tenancy`).
+  
+  Behaviour change — on by default. With `tenancyPlugin` registered, every dispatch scoped by an explicit `tenantId` outside a tenant context now runs its endpoint lookup inside `tenancy.run`, whatever the store's layout (shared schema and central webhook tables included). Per such dispatch:
+  
+  - one `TenantSource.find` call. A transient failure of it (the tenant directory is unreachable) rejects the dispatch, and an outbox entry is retried like any failed delivery;
+  - `tenancy:switched` and `tenancy:exited` hooks fire, so every listener runs. Under schema- or database-per-tenant, `prismaPlugin` leases the tenant's pooled client for the duration of the lookup, even when the webhook store is central (a plain client) and never uses it: the lease can open or evict a pool slot, waits up to `acquireTimeoutMs` when the pool is saturated, and then fails with `PRISMA_POOL_EXHAUSTED`;
+  - a tenant that no longer exists rejects with `TENANT_NOT_FOUND`, and an id that fails the tenant-id grammar rejects with `TENANT_ID_INVALID`, both before any delivery. The outbox relay retries such an entry and dead-letters it after `maxAttempts` instead of delivering it.
+  
+  Set `webhooksPlugin({ runInTenant: false })` when the webhook tables are central (shared schema, or a plain client under schema- or database-per-tenant). The lookup does not need the tenant there, and opting out removes the per-dispatch `find`, hooks and pool lease. A deleted tenant's endpoints then keep receiving deliveries until you remove them. Keep the default when endpoints live per tenant (`tenantClient()`).
+  
+  The fix needs `@basaltkit/tenancy` with the `'tenancy:run'` signal (this release's minor). With an older tenancy, behaviour is unchanged. A `WebhookManager` you construct yourself gets no runner unless you pass `runInTenant`.
+- bbb8463: `signPayload()` and `verifySignature()` now accept the body as a `string` or as bytes (`Buffer` / `Uint8Array`), so a receiver can verify the exact bytes of a `rawBody()` route — including bodies that are not valid UTF-8, such as forwarded `message/rfc822` mail — without a lossy decode. The HMAC runs over `${t}.` followed by the body bytes (a string is UTF-8 encoded), so existing string signatures are byte-identical. A body that is neither a string nor bytes now verifies as `false` (and `signPayload` throws a `TypeError`) instead of being coerced with `String()`.
+
+### Patch Changes
+
+- Updated dependencies [7a3fd88]
+  - @basaltkit/core@1.6.0
+
 ## 4.0.0
 
 ### Major Changes

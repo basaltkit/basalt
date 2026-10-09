@@ -1,5 +1,34 @@
 # create-basalt
 
+## 1.12.0
+
+### Minor Changes
+
+- f9c5886: A tested production path for scaffolded apps (BK-026). New apps get `tsconfig.build.json`, a `build` script (`tsc -p tsconfig.build.json`), `start` running `node --enable-source-maps dist/src/server.js` (the old tsx start stays as `start:dev`) and a multi-stage `Dockerfile` (build with the dev toolchain, prune devDependencies, run on `node:22-slim` as `USER node` with a `HEALTHCHECK`). With `--prisma` the client is generated into `./generated/prisma` (outside `src/`) and imported through a package.json `imports` alias (`#db/client.js`), `@prisma/client-runtime-utils` is a direct dependency (the generated runtime requires it by name; pnpm otherwise hides it from plain `node`), and `pnpm-workspace.yaml` approves the `prisma` / `@prisma/engines` build scripts so a pnpm 11 install no longer fails with `ERR_PNPM_IGNORED_BUILDS`. `create-basalt update` offers the missing pieces to older apps (never rewriting an existing `start` script — the change is printed), and `create-basalt doctor` statically flags a tsx `start`, a missing `build`, a stale `dist/`, a client generated under `src/` and a missing `@prisma/client-runtime-utils`.
+  
+  `@basaltkit/cli`: `basalt publish dockerfile` / `ci` now work for a scaffolded app. The Dockerfile used to install `--prod` with no build stage and run `dist/main.js`, which no Basalt app produces; it is now the same multi-stage file create-basalt ships (one source, exported as `DOCKERFILE` with `DOCKERIGNORE`, `CI_WORKFLOW`, `EDITORCONFIG` and `PRODUCTION_ENTRY`). The CI stub also typechecks and pins pnpm 11 for `pnpm/action-setup`.
+
+### Patch Changes
+
+- 5855174: Scaffolded `bin/basalt.ts` explains a database that refuses the app's role (permission denied) or needs a baseline (P3005) with the fix from `@basaltkit/prisma`'s diagnosis, instead of reporting it as unreachable or unmigrated; `src/server.ts` prints that fix above the stack trace when the boot fails (BK-041).
+- 19fb4c6: BK-076: the scaffolded Prisma schema's `AuthSession` model carries the new nullable `lastSeenAt` column, matching `@basaltkit/auth-prisma`'s reference schema.
+- 20f0dea: Durable custom-domain stores, and tenant saves that no longer erase them (BK-042).
+  
+  - `@basaltkit/tenancy-prisma`: new `PrismaDomainStore` / `prismaDomainStore(client)`, and `@basaltkit/tenancy-sqlite`: new `SqliteDomainStore` / `sqliteDomainStore(db)` — durable `DomainStore`s for `CustomDomains` on the existing `tenant_domains` table. `add()` translates the driver's unique violation into `DomainTakenError` (409); `replace()` is one conditional update, so of two concurrent take-overs exactly one wins.
+  - `save()`/`create()` of both tenant sources now diff the domain set instead of deleting and re-inserting it, and never delete a row that carries a verification token. `tenancy.provision()` (re-runnable by design) and every status change used to wipe a verified custom domain and its proof.
+  - `findByDomain()` of both sources is fail-closed for claims: a claimed but unverified domain (`victim.com` registered by another tenant) never resolves a request.
+  - `@basaltkit/tenancy`: new test-only subpath `@basaltkit/tenancy/testing` with `domainStoreContract(makeStore)`, framework-neutral cases (`node:assert`) every `DomainStore` should pass.
+  - `create-basalt`: the scaffolded `TenantDomain` model carries the new columns.
+  
+  **Migration (additive).** The bundled `TenantDomain` model gains `verificationToken String?`, `verified Boolean @default(true)`, `createdAt DateTime @default(now())` and `verifiedAt DateTime?`. `basalt prisma:sync` only adds missing models — it does not add columns to a `TenantDomain` model your schema already has — so add the four fields to that model by hand (copy them from `@basaltkit/tenancy-prisma/prisma/schema.prisma`), then run `prisma migrate dev`; existing rows become mirror rows and keep resolving. A new app (or one without the model yet) gets them from `prisma:sync`. Until then, an app whose Prisma client is still generated from the old model keeps working — `PrismaTenantSource` never names the new columns in a query; once the client is regenerated from the new model, migrate before deploying it. The SQLite source adds them on open.
+  
+  `PrismaTenancyDelegates.tenantDomain` now also requires `findMany` (a generated `PrismaClient` has it; a hand-written client must add it).
+- 525f6e5: `--prisma` scaffolds: `pnpm db:seed` now runs `prisma db seed` instead of `tsx prisma/seed.ts`. The old script did not load `.env`, so on a fresh app it died in `src/env.ts` (`<PREFIX>_DATABASE_URL` / `<PREFIX>_APP_SECRET` missing); through Prisma, `prisma.config.ts` loads `.env` and runs the `migrations.seed` command it already declares. The generated README and the docs no longer claim that `pnpm db:migrate` seeds the `demo` tenant — Prisma 7's `migrate dev` does not run the seed — and list `pnpm db:seed` as its own step. The "Next steps" printed after scaffolding no longer claim `db:migrate` seeds the demo tenant either; they list `db:seed`. Found by the new real-PostgreSQL e2e of the scaffold (CI job `scaffold-postgres`).
+  
+  **Upgrade — apps scaffolded with `--prisma` by create-basalt 1.8.0–1.11.0** have `"db:seed": "tsx prisma/seed.ts"`: `pnpm db:seed` fails with `ENV_INVALID` unless the variables are exported, and `pnpm db:migrate` never created the `demo` tenant. Change the script to `"db:seed": "prisma db seed"` and run it after `db:migrate`. Nothing rewrites it automatically: `create-basalt doctor` now reports the old script (a static warning with the exact replacement line, plus the `migrations.seed` line when `prisma.config.ts` lacks it), and `create-basalt update` prints the same replacement as a manual step without touching `package.json`.
+  
+  The real-PostgreSQL e2e now drives the database through the app's own `db:*` scripts and also covers the development flow: `db:migrate --name init` on a database that does not exist yet (Prisma creates it, writes the first migration and applies it), `db:migrate` with nothing to do, a schema change applied with `db:migrate --name <change>`, then `db:generate` and `db:seed` (Prisma 7's `migrate dev` does neither). The generated README and the installation guide say so. **Not verified automatically:** `db:migrate` without `--name` on a schema change (Prisma prompts for the name and blocks even with stdin closed) and `migrate dev`'s reset prompts for destructive changes or a drifted database — both need a terminal.
+
 ## 1.11.0
 
 ### Minor Changes

@@ -1,5 +1,17 @@
 # @basaltkit/exports-xlsx
 
+## 1.1.0
+
+### Minor Changes
+
+- b2de3d9: `createXlsxFormatter({ sheetName, freezeHeader, dateFormat, widths, format })` (BK-081): Dates become real date cells (Excel serial + date number format), columns' `format` hints become per-column number formats via a new `xl/styles.xml`, widths become `<cols>`, the header row can be frozen and the sheet named (validated and XML-escaped). The default `xlsxFormatter` output is unchanged.
+
+### Patch Changes
+
+- Updated dependencies [b26c9b4]
+- Updated dependencies [b2de3d9]
+  - @basaltkit/exports@1.3.0
+
 ## 1.0.3
 
 ### Patch Changes
