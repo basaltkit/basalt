@@ -552,6 +552,14 @@ browser drops that cookie. The next major refuses it at boot with
 `AUTH_SESSION_COOKIE_INVALID`. `__Host-` is the strongest choice for a session
 cookie: a sibling subdomain cannot set or shadow it.
 
+The prefixes match case-insensitively, as in current browsers (`__host-sid` is
+a `__Host-` cookie). The warnings are independent and each is logged once per
+`sessionCookie` object: a `__Host-` cookie with `path: '/app'` and `secure`
+unset logs both the path warning and, outside production, the implied-`Secure`
+one. An unprefixed cookie with `sameSite: 'None'` and no `Secure` (the default
+outside production) also warns, because browsers drop `SameSite=None` without
+`Secure`; it is emitted unchanged.
+
 ### Account routes: `meta.account` and `meta.mfa` {#account-routes}
 
 Every `authRoutes()` route, every `mfaRoutes()` route and both `oauthRoutes()`
