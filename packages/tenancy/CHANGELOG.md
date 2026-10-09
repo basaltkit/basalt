@@ -1,5 +1,33 @@
 # @basaltkit/tenancy
 
+## 3.2.0
+
+### Minor Changes
+
+- e600b0a: `tenancy.run()` now emits `tenancy:exited` `{ tenant }` when its callback settles — resolved or thrown — still inside the tenant context, so a `tenancy:switched` listener can release what it took (BK-077). `tenancy:switched` gains an optional `via: 'run' | 'http'` telling `tenancy.run()` apart from the HTTP request enricher. A failing `tenancy:exited` listener never masks the callback's own error. Additive.
+- 20f0dea: Durable custom-domain stores, and tenant saves that no longer erase them (BK-042).
+  
+  - `@basaltkit/tenancy-prisma`: new `PrismaDomainStore` / `prismaDomainStore(client)`, and `@basaltkit/tenancy-sqlite`: new `SqliteDomainStore` / `sqliteDomainStore(db)` — durable `DomainStore`s for `CustomDomains` on the existing `tenant_domains` table. `add()` translates the driver's unique violation into `DomainTakenError` (409); `replace()` is one conditional update, so of two concurrent take-overs exactly one wins.
+  - `save()`/`create()` of both tenant sources now diff the domain set instead of deleting and re-inserting it, and never delete a row that carries a verification token. `tenancy.provision()` (re-runnable by design) and every status change used to wipe a verified custom domain and its proof.
+  - `findByDomain()` of both sources is fail-closed for claims: a claimed but unverified domain (`victim.com` registered by another tenant) never resolves a request.
+  - `@basaltkit/tenancy`: new test-only subpath `@basaltkit/tenancy/testing` with `domainStoreContract(makeStore)`, framework-neutral cases (`node:assert`) every `DomainStore` should pass.
+  - `create-basalt`: the scaffolded `TenantDomain` model carries the new columns.
+  
+  **Migration (additive).** The bundled `TenantDomain` model gains `verificationToken String?`, `verified Boolean @default(true)`, `createdAt DateTime @default(now())` and `verifiedAt DateTime?`. `basalt prisma:sync` only adds missing models — it does not add columns to a `TenantDomain` model your schema already has — so add the four fields to that model by hand (copy them from `@basaltkit/tenancy-prisma/prisma/schema.prisma`), then run `prisma migrate dev`; existing rows become mirror rows and keep resolving. A new app (or one without the model yet) gets them from `prisma:sync`. Until then, an app whose Prisma client is still generated from the old model keeps working — `PrismaTenantSource` never names the new columns in a query; once the client is regenerated from the new model, migrate before deploying it. The SQLite source adds them on open.
+  
+  `PrismaTenancyDelegates.tenantDomain` now also requires `findMany` (a generated `PrismaClient` has it; a hand-written client must add it).
+- e462501: Central-only routes: `meta: { tenant: 'never' }` (BK-043).
+  
+  `tenant: false` lifts the tenant requirement but still resolves one, so a platform route reached on `acme.example.com/platform/…` ran inside Acme, against its storage, and a tenant owner holding `'*'` satisfied `can: 'platform:*'`. A route declared `tenant: 'never'` now refuses a resolved tenant in the tenancy enricher, which runs before every guard on all three adapters: the request gets the plain "route not found" body (`404 { error: { code: 'NOT_FOUND', message: 'Route not found.' } }`, new `CentralOnlyRouteError`), the tenant is not attached to the context and `tenancy:switched` is not emitted. On the apex the route runs normally.
+  
+  `tenancyPlugin` also checks every route's `meta.tenant` at `app:booted` (from the `http:routes` table every adapter publishes): a value other than `true`, `false`, `'never'` or absent (a typo such as `'none'`, `'optional'`, `null`) logs one `[basalt] meta.tenant …` boot warning naming the routes, and keeps falling back to the app-wide `required` default, exactly as before. If you meant central-only, the value is `'never'`. The next major refuses the boot instead. Apps that only use `true`/`false` see nothing.
+- 1868e07: `tenancyPlugin` publishes a `'tenancy:run'` metadata signal next to `'tenancy:active'`, and the package exports its type, `TenantRunner` (`<T>(tenantId, fn) => Promise<T>`). The signal is exactly `tenancy.run(tenantId, fn)`, so background code in other packages can enter a tenant the official way without importing `TENANCY`: the id grammar is checked (`InvalidTenantIdError`), the `TenantSource` lookup runs (`TenantNotFoundError`), and `tenancy:switched` (`via: 'run'`) and `tenancy:exited` fire around `fn`, which makes `prismaPlugin` lease and release the tenant's client. The tenant's `status` is not checked. It runs from the caller's context, so start from `runWithContext({}, ...)` when ambient state must not leak in. `@basaltkit/webhooks` is the first consumer.
+
+### Patch Changes
+
+- Updated dependencies [7a3fd88]
+  - @basaltkit/core@1.6.0
+
 ## 3.1.0
 
 ### Minor Changes

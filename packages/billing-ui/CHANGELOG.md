@@ -1,5 +1,31 @@
 # @basaltkit/billing-ui
 
+## 1.2.0
+
+### Minor Changes
+
+- 06337df: BK-078: `fileRoutes()`, `apiKeysUiRoutes()`, `billingUiRoutes()` and
+  `teamsUiRoutes()` accept `meta`, merged into every route they mount — a guard
+  such as `{ teamRole: 'admin' }` or `{ can: 'billing:manage' }`, a rate limit,
+  OpenAPI tags. `auth: true` is always applied on top and cannot be switched off.
+  Without `meta` the routes are unchanged.
+
+### Patch Changes
+
+- Updated dependencies [0353877]
+- Updated dependencies [7a3fd88]
+- Updated dependencies [eeb90bb]
+- Updated dependencies [e600b0a]
+- Updated dependencies [e74b21b]
+- Updated dependencies [3ce3446]
+- Updated dependencies [f029638]
+- Updated dependencies [3740447]
+- Updated dependencies [8b76628]
+- Updated dependencies [36b800c]
+- Updated dependencies [500edef]
+  - @basaltkit/http@2.8.0
+  - @basaltkit/core@1.6.0
+
 ## 1.1.4
 
 ### Patch Changes

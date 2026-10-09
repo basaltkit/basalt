@@ -1,5 +1,68 @@
 # @basaltkit/auth
 
+## 4.2.0
+
+### Minor Changes
+
+- cdc20f6: Registration policy per plane (BK-044).
+  
+  - `authRoutes({ register: 'open' | 'closed' | RegisterPolicy })` controls `POST /auth/register`. `'closed'` answers a static `404 AUTH_REGISTRATION_CLOSED` to every request. A `RegisterPolicy` predicate (`({ email, tenantId? }) => boolean | Promise<boolean>`, `tenantId` read from `ctx().tenant`) that refuses answers the same `202` as a success, creates nothing and emits the new `auth:register_refused` hook, so the route cannot be used to learn who was invited.
+  - `authPlugin({ registerPolicy })` sets the default for the route and also gates the create branch of `socialLogin` (refused with the new `RegistrationClosedError`, `404 AUTH_REGISTRATION_CLOSED`). Logins into existing accounts and the trusted `auth.register()` are never gated.
+  - Default is unchanged (open). `@basaltkit/teams`' `teamsInviteGate(teams)` provides "invite-only on tenant hosts".
+- cdc20f6: Create already-verified accounts from trusted flows (BK-045).
+  
+  - `auth.register(email, password, { emailVerified: true })` creates the account verified; the flag is persisted at create time through `UserSource.create({ email, passwordHash, emailVerified? })` (new exported `NewUser` type), so `auth:registered` reports the final state.
+  - Fix: `socialLogin` emitted `auth:registered` before marking a provider-verified account verified, so mail hooks saw `emailVerified: false`. The account is now created verified and the hook fires afterwards.
+  - `socialLogin` passes the provider's verification to `create()`, and a `UserSource` that drops the flag is patched through `update()`. A custom source that can do neither (no `update()`, a `create()` that ignores `emailVerified`) cannot record verification at all: the account is created unverified, linked to the provider identity and logged in, exactly as before — never a `500` after the row exists, which would leave an unlinked account every later login refuses (`AUTH_SOCIAL_LINK_REFUSED`). `auth:registered` and the result report `emailVerified: false` truthfully; to get verified social accounts, persist `emailVerified` in `create()` or implement `update()`. A first login that fails after the row exists (e.g. `update()` throws) is recovered by the retry, which adopts the passwordless account.
+  - `register(…, { emailVerified: true })` requires a `UserSource` with `update()` (the same requirement as email verification). Without it the call throws `UserUpdateUnsupportedError` (`AUTH_UPDATE_UNSUPPORTED`, 500) **before anything is written**: whether `create()` persists the flag can only be learnt by writing the row, and a row that could not be fixed afterwards would leave an unverified account that a retry reports as `EmailTakenError`. The option is new in this release, so no existing call is affected.
+  - `SqliteUserSource` and `PrismaUserSource` persist `emailVerified` on create (no schema change).
+  - The public `POST /auth/register` never creates a verified account.
+- dcaeaca: Side-effect-free route-visibility checks for `meta.scopes` and `meta.mfa` (BK-061).
+  
+  Listing surfaces such as the MCP `tools/list` (`mcpRoutes({ listVisibleOnly })`) now hide tools the caller statically cannot pass:
+  
+  - `apiKeysPlugin`: hides a `meta.scopes` route when the caller's API key does not hold every scope (or the caller has no key). It also hides a `meta.apiKey: false` route from a caller who holds a key, and an identity-gated route without `meta.scopes` from a narrow key (no `*`, unless `allowNarrowKeysOnUnscopedRoutes`), exactly as the guard refuses them. The check reads only `ctx().apiKey` and never emits `auth:apikey_rejected`.
+  - `authPlugin`: hides a `meta.mfa: true` route, and every non-exempt authenticated route under `requireMfa: true`, from a signed-in session without `'mfa'` in `ctx().amr`. The check reads only `ctx()`. A `requireMfa` function policy is never called for a listing, so those routes stay listed.
+  
+  `tools/call` still runs every guard. `subscribed`/`feature` are still not filtered.
+- 19fb4c6: BK-076: session hardening.
+  
+  - `@basaltkit/auth`: `sessionIdleTtl` adds an idle timeout to server-side sessions — a session unused for longer is refused and deleted, on top of the absolute `sessionTtl`. Activity is recorded through the new optional `SessionStore.touch(id, at)`, throttled to once per `min(60s, sessionIdleTtl / 4)`; `SessionRecord` gains optional `lastSeenAt`. `sessionIdleTtl` is a new opt-in option and is validated fail-closed: a value that is not a positive duration, or a session store without `touch`, makes `authPlugin` fail at boot (`SessionIdleConfigError`, `AUTH_SESSION_IDLE_CONFIG_INVALID`) rather than configuring an idle timeout that would silently never expire a session. Configurations without `sessionIdleTtl` are unaffected.
+  - `@basaltkit/auth`: a session cookie named `__Host-…` or `__Secure-…` now implies `Secure` (and `Path=/` for `__Host-`) when `secure` / `path` are unset, in every environment — before, outside production such a cookie was emitted without `Secure` and browsers silently dropped it. **Test-client caveat:** cookie jars that honour `Secure` (supertest/superagent, tough-cookie) do not send a `Secure` cookie back over plain `http`, so a suite that relied on the old non-`Secure` emission now gets 401s; outside production this case logs a one-time boot warning. Use an unprefixed name outside production (e.g. `name: isProd ? '__Host-sid' : 'sid'`), or set `secure` explicitly (`secure: true` silences the warning).
+  - **Upgrade — warns at boot (refused in the next major).** A prefixed `sessionCookie.name` with an explicit `secure: false` — including the common `secure: process.env.NODE_ENV === 'production'`, which is `false` in dev and test — or a `__Host-` cookie with a `path` other than `/`, still boots and the cookie is emitted exactly as configured, as before; it logs one `[basalt] sessionCookie …` warning per configuration, because browsers drop such a cookie. The next major refuses it with `SessionCookieConfigError` (`AUTH_SESSION_COOKIE_INVALID`), which is already exported. Fix now: drop `secure` (the prefix implies it) and `path`, or use an unprefixed name outside production.
+  - `@basaltkit/auth`: cookie prefixes are matched case-insensitively, as browsers do (`__host-sid` is a `__Host-` cookie and implies `Secure`). The boot warnings are independent and each is logged once per `sessionCookie` object — a `__Host-` cookie with a sub-path and `secure` unset outside production now gets both the path warning and the implied-`Secure` one (before, only the path warning). An unprefixed cookie with `sameSite: 'None'` and no `Secure` now warns too (emitted unchanged; browsers drop it).
+  - `@basaltkit/auth-sqlite`: `SqliteSessionStore` records `last_seen_at` and implements `touch`; `migrate()` adds the column to existing databases.
+  - `@basaltkit/auth-prisma`: `trackSessionActivity: true` makes `PrismaSessionStore` write `AuthSession.lastSeenAt` and implement `touch`. Off by default, so an unmigrated database keeps working; the column is in the reference schemas — migrate before enabling.
+- e74b21b: BK-083: API keys for machine clients.
+  
+  - `apiKeysPlugin({ rejectInvalid: true })` refuses a presented key that does not verify (unknown, revoked, expired, malformed) with `401 AUTH_APIKEY_INVALID` and `WWW-Authenticate: Bearer error="invalid_token"`, before any guard, on every adapter. Default `false` keeps the request anonymous, as before. New `ApiKeyInvalidError`.
+  - `touchEveryMs` (default `60_000`) throttles `lastUsedAt` writes to one per key per window instead of one per request; `0` restores a write per verification. New `ApiKeyOptionsError` for an invalid value and `DEFAULT_API_KEY_TOUCH_EVERY_MS`.
+  - `auth:apikey_rejected` for an invalid key now carries the presented key's display `prefix` (`mk_live_` + 6 characters, never the secret; omitted for anything not shaped like a Basalt key) and the client `ip`.
+- e74b21b: BK-083: `auditPlugin` no longer records `auth:apikey_rejected` by default. The hook fires for every request that presents an API key which does not verify, before anyone is authenticated, so under the default `auth:**` pattern any anonymous client could append to the audit trail (and its serialized per-tenant hash chain) at will.
+  
+  Refusals of a key that DID verify (`tenant_mismatch`, `not_allowed`, `scope`) are still audited by default: `apiKeysPlugin` (`@basaltkit/auth`) now emits them a second time as the new `auth:apikey_refused` hook (`{ id, reason, tenantId? }`), right after `auth:apikey_rejected`, and `auth:**` records it. Only an unknown/revoked/expired key (`reason: 'invalid'`) — the anonymous, unattributable noise — leaves the default capture. Listeners of `auth:apikey_rejected` see every refusal exactly as before.
+  
+  `hooks` now also accepts `{ include, exclude }`. A hook is recorded when it matches `include` and not `exclude`; without `exclude` the new `DEFAULT_AUDIT_HOOK_EXCLUDES` (`['auth:apikey_rejected']`) apply, and a hook named exactly in `include` is always recorded. A custom `hooks` list applies the excludes too (a wildcard does not re-include them). To keep the previous behaviour, list it: `auditPlugin({ hooks: ['auth:**', 'billing:**', 'tenancy:created', 'permission:**', 'auth:apikey_rejected'] })` — a valid-key refusal is then recorded twice, under both names. For a bounded signal on invalid-key bursts instead, see the throttled listener in the persistence guide ("Which hooks are audited").
+
+### Patch Changes
+
+- 7a3fd88: BK-027: one AEAD for secrets at rest. `@basaltkit/core/secret-box` (a new subpath, not re-exported from the main entry) exports `createSecretBox({ keys, info, version, aadFields })` — AES-256-GCM with HKDF-SHA256 keys from a key ring, AAD binding to ordered context fields, no plaintext path — and `SecretBoxError`.
+  
+  `@basaltkit/auth`'s `SecretBox` (`bka2`) and `@basaltkit/drives`' `DriveSecretBox` (`bkd1`) are now thin wrappers over it. Their public APIs, error classes and codes are unchanged, and existing ciphertexts stay byte-compatible (pinned by golden vectors sealed with the previous implementations). One hardening in drives: `DriveSecretBox.reseal` now authenticates an envelope already on the active key before returning `null`, as auth's box always did, so a tampered current blob is reported instead of vouched for.
+- Updated dependencies [0353877]
+- Updated dependencies [7a3fd88]
+- Updated dependencies [eeb90bb]
+- Updated dependencies [e600b0a]
+- Updated dependencies [e74b21b]
+- Updated dependencies [3ce3446]
+- Updated dependencies [f029638]
+- Updated dependencies [3740447]
+- Updated dependencies [8b76628]
+- Updated dependencies [36b800c]
+- Updated dependencies [500edef]
+  - @basaltkit/http@2.8.0
+  - @basaltkit/core@1.6.0
+
 ## 4.1.0
 
 ### Minor Changes
