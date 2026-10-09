@@ -11,7 +11,9 @@ linha liga ao guia que traz a tabela de opções completa; nada aqui repete uma.
 
 - [ ] **Segredos são fail-closed** — assina com `secret()` para que a produção
       recuse placeholders. Ver [Segurança](/pt/guide/security#segredos-fail-closed-secret).
-- [ ] **A borda está protegida** — `securityPlugin({ rateLimit, cors, headers })`.
+- [ ] **A borda está protegida** — `securityPlugin({ rateLimit, cors, headers })`. O limite
+      global é chaveado só pelo endereço; uma API pública para clientes máquina
+      recebe `rateLimit.prefixes` e orçamentos por chave. Vê [Rate limiting](/pt/guide/security#rate-limiting).
 - [ ] **Logins são limitados** — ligado por predefinição em `@basaltkit/auth`.
 - [ ] **Mutações são idempotentes** — `idempotencyPlugin()` para `POST`.
 - [ ] **A app arranca a frio com a configuração de produção** — as guardas de boot
@@ -36,6 +38,8 @@ linha liga ao guia que traz a tabela de opções completa; nada aqui repete uma.
       comments, audit, activity, notifications) pelos seus backends duráveis
       [`*-sqlite` / `*-prisma`](/pt/guide/persistence).
 - [ ] **Migrações correm por tenant** — `migrateTenants()` / comando `basalt`.
+- [ ] **Compilada, não transpilada em runtime** — `pnpm build` + `node dist/src/server.js`
+      (ou o `Dockerfile` do scaffold); nada de tsx em produção. Ver [Build e envio](#build-e-envio).
 - [ ] **CI verde** — build, typecheck, gate de cobertura, `pnpm audit`, CodeQL.
 
 ## Um `buildApp` com forma de produção
@@ -93,6 +97,12 @@ autorização. Cobre exatamente as chaves em `GUARDED_META_KEYS`; um valor
 `false`/`undefined` numa rota é uma desativação explícita e nunca é assinalado. Ver
 [Autorização](/pt/guide/authorization) e [Adaptadores](/pt/guide/adapters).
 
+Com `prismaPlugin({ assertMigrated: true })` o boot recusa também uma base
+inacessível, por migrar, ou que o role da app não pode usar — e diz qual, com a
+correcção (um `GRANT` em falta, um baseline, `migrate deploy`). Os significados,
+um `db:status` só de leitura para a CI e uma receita pós-deploy idempotente para
+grants e extensões estão em [Operações de base de dados](/pt/guide/database-operations).
+
 ## Persistência
 
 O desenvolvimento corre sobre stores em memória, por isso não há nada a instalar.
@@ -116,7 +126,11 @@ verifica no arranque que `_prisma_migrations` existe (`{ tables: [...] }` verifi
 também essas tabelas) e recusa arrancar caso contrário, indicando a base de dados
 e o host a que chegou — nunca as credenciais (`PRISMA_NOT_MIGRATED`). Apanha uma
 shell que exportou o `DATABASE_URL` de outro projeto no arranque, em vez de um
-P2021 no primeiro pedido. Desligado por omissão.
+P2021 no primeiro pedido. `{ forbiddenTables: [...] }` faz a verificação
+oposta — tabelas que **não** podem lá estar, como tabelas de tenant recriadas na
+base central — e recusa com `PRISMA_PLANE_MIXED`
+([proteger contra o plano errado](/pt/guide/multi-tenant-pattern#proteger-contra-o-plano-errado)).
+Desligado por omissão.
 
 `@basaltkit/prisma` é para os dados de domínio **teus**. Os próprios domínios com
 estado do framework — auth, teams, subscriptions, permissions, comments, audit,
@@ -204,6 +218,49 @@ O sharding é para **scale-out**, não isolamento — para uma-base-por-tenant u
 antes `prismaPlugin({ forTenant })`. Mudar `shards.length` re-mapeia as chaves,
 por isso planeia uma migração antes de redimensionar; passa um `hash` próprio se
 precisares de consistent hashing para minimizar o reshuffle.
+
+## Build e envio
+
+Uma app create-basalt corre em **node puro** em produção — o tsx é uma
+devDependency e nunca é enviado. Três scripts tratam disso:
+
+```bash
+pnpm build       # tsc -p tsconfig.build.json → dist/ (só o src/; rootDir ".")
+pnpm start       # node --enable-source-maps dist/src/server.js
+pnpm start:dev   # tsx src/server.ts — o servidor a partir do código-fonte, sem build
+```
+
+O `tsconfig.build.json` estende o `tsconfig.json` (por isso o `pnpm typecheck` e
+o build nunca discordam), compila só o `src/` — os testes e o `bin/` (os
+geradores, a ponte de IA só de dev) ficam de fora — e mantém `rootDir: "."`, para
+que o `src/server.ts` fique em `dist/src/server.js`.
+
+O scaffold traz também um `Dockerfile` — o mesmo ficheiro que o
+`basalt publish dockerfile` escreve, a partir de uma única fonte no `@basaltkit/cli`:
+
+| Stage | O que faz |
+| --- | --- |
+| `build` | `pnpm install --frozen-lockfile` (com as devDependencies), `prisma generate` quando existe `prisma/schema.prisma`, `pnpm run build`, e depois `pnpm prune --prod --ignore-scripts` — o tsx, o TypeScript, a CLI do Prisma, os geradores e o `@basaltkit/ai-mcp` nunca chegam à imagem |
+| `run` | `node:22-slim`, `NODE_ENV=production`, copia `node_modules`, `dist/` e `generated/`, corre como `USER node`, `HEALTHCHECK` em `$HEALTHCHECK_PATH` (por omissão `/health`, a rota do scaffold — define `/readyz` com o `healthPlugin`), `CMD ["node", "--enable-source-maps", "dist/src/server.js"]` |
+
+```bash
+docker build -t my-saas .
+docker run -p 3000:3000 -e MY_SAAS_APP_SECRET=… -e MY_SAAS_DATABASE_URL=… my-saas
+```
+
+A configuração vem do ambiente: a imagem não carrega nenhum `.env`, e o
+`.dockerignore` mantém-no (e as chaves, o `node_modules`, um `dist/` local) fora
+do contexto de build. **A imagem não corre as migrações** — aplica-as antes de
+fazer o rollout (`pnpm db:deploy` no CI ou num job de release); a app recusa
+arrancar numa base de dados por migrar (`assertMigrated`). Uma app Prisma precisa
+do cliente fora do `src/` e do `@prisma/client-runtime-utils` como dependência
+direta — vê [Prisma com pnpm](/pt/guide/persistence#prisma-com-pnpm-o-cliente-gerado).
+
+Uma app gerada antes disto existir: o `pnpm basalt update` oferece o
+`tsconfig.build.json`, o script `build` e o Dockerfile, e imprime a mudança do
+`start` em vez de a fazer; o `pnpm basalt doctor` diz o que falta. A suite do
+create-basalt faz o build de scaffolds novos e arranca o
+`node dist/src/server.js` até o `/health` responder.
 
 ## Encerramento gracioso
 

@@ -29,8 +29,12 @@
     "@basaltkit/webhooks": "workspace:^"
   },
   "devDependencies": {
-    "@basaltkit/webhooks": "workspace:^",
+    "@basaltkit/core": "workspace:^",
+    "@basaltkit/events": "workspace:^",
+    "@basaltkit/prisma": "workspace:^",
+    "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
+    "@basaltkit/webhooks": "workspace:^",
     "@types/node": "^26.6.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"

@@ -78,6 +78,12 @@ response, or `null` for a notification (which by spec gets no reply). Implemente
 Resources and prompts are also only advertised in the `initialize` capabilities when
 present, so a tools-only server is byte-for-byte a classic MCP tool server.
 
+`tools/call` refuses a present-but-non-object `arguments` (array, string, number,
+`null`) with `INVALID_PARAMS` before the tool runs; `prompts/get` also requires its
+`arguments` to be an object of strings. A handler that **throws** produces
+`INTERNAL_ERROR` with the generic text `Internal error` — the original error is
+handed to `options.onError`, never to the client, unless it carries `expose: true`.
+
 `callTool(name, args, ctx?)` invokes a tool directly, bypassing JSON-RPC (handy in tests);
 it throws for an unknown name, where the RPC path returns `INVALID_PARAMS` instead.
 
@@ -164,6 +170,7 @@ always gets through.
 | `resources` | `McpResourceDef[]` | `[]` | Read-only context the agent can pull, keyed by `uri`. Registering any enables `resources/*`. |
 | `prompts` | `McpPromptDef[]` | `[]` | Reusable prompt templates, keyed by `name`. Registering any enables `prompts/*`. |
 | `serverInfo` | `McpServerInfo` (`{ name, version }`) | `{ name: 'basalt-mcp-core', version: '0.1.0' }` | Identity reported in `initialize`. Set it — clients show it to the user. |
+| `onError` | `(error, message) => void` | none | Receives the original error when a tool/resource/prompt throws. The client only gets `INTERNAL_ERROR` with the text `Internal error` (unless the error sets `expose: true`). |
 
 Definition shapes:
 
@@ -233,7 +240,7 @@ This package throws no error classes of its own. Failures travel as JSON-RPC err
 | Invalid request | `INVALID_REQUEST` (`-32600`) | 200 / 401 / 403 / 413 | `jsonrpc !== '2.0'` or a non-string `method`, an empty batch, a batched `initialize`, a reused in-flight id, an over-long stdio line. Also the code used for the HTTP transport's `401` (authorize), `403` (host/origin) and `413` (body cap). |
 | Method not found | `METHOD_NOT_FOUND` (`-32601`) | 200 / 404 | Unknown method — including `resources/*` or `prompts/*` when none are registered. Also the HTTP transport's `404` for a wrong path or non-`POST`. |
 | Invalid params | `INVALID_PARAMS` (`-32602`) | 200 | `tools/call` without a string `name`, an unknown tool/resource/prompt, or `resources/read`/`prompts/get` without a string `uri`/`name`. |
-| Internal error | `INTERNAL_ERROR` (`-32603`) | 200 | A handler threw. The thrown `Error.message` is passed through — do not put secrets in it. |
+| Internal error | `INTERNAL_ERROR` (`-32603`) | 200 | A handler threw. The client gets the generic text `Internal error` — the thrown message is passed through only when the error carries `expose: true`. The original error goes to `options.onError` (not set by default: nothing is logged unless you pass it). |
 
 Notifications never produce an error response: a failure while handling one returns `null`.
 

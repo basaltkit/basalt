@@ -109,3 +109,13 @@ describe('escaping + route-scoped CSP (S-5)', () => {
     await app.shutdown()
   })
 })
+
+describe('apiKeysUiRoutes meta (BK-078)', () => {
+  it('merges extra meta and keeps auth on', () => {
+    expect(apiKeysUiRoutes({ meta: { can: 'apikeys:manage', auth: false } })[0]!.meta).toEqual({
+      can: 'apikeys:manage',
+      auth: true,
+    })
+    expect(apiKeysUiRoutes()[0]!.meta).toEqual({ auth: true })
+  })
+})

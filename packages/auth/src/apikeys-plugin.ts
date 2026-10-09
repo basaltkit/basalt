@@ -1,6 +1,6 @@
 import { BasaltError, createToken, definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
-import type { RequestEnricher, RouteGuard } from '@basaltkit/http'
-import { ApiKeys, ScopeRequiredError, scopesSatisfy, type ApiKeyContext, type ApiKeysOptions } from './apikeys.js'
+import type { RequestEnricher, RouteGuard, RouteVisibilityCheck } from '@basaltkit/http'
+import { ApiKeys, ScopeRequiredError, apiKeyDisplayPrefix, resolveTouchEveryMs, scopesSatisfy, type ApiKeyContext, type ApiKeysOptions } from './apikeys.js'
 import { publicUser } from './auth.js'
 import type { UserSource } from './stores.js'
 
@@ -17,8 +17,35 @@ declare module '@basaltkit/core' {
      * outside the tenant it is bound to (`tenant_mismatch`), used on a
      * session-only route (`not_allowed`) or beyond its scopes (`scope`). Never
      * carries the key itself.
+     *
+     * For an `invalid` key, `prefix` is the presented key's display prefix
+     * (`mk_live_` plus six characters, what listings show; never the secret)
+     * and `ip` the client address, so an app can throttle or alert per caller.
+     * This event is excluded from `auditPlugin`'s default hook capture: any
+     * unauthenticated client can trigger it on every request. Refusals of a
+     * key that DID verify are also emitted as `auth:apikey_refused`, which is
+     * audited by default.
      */
-    'auth:apikey_rejected': { id?: string; reason: 'invalid' | 'tenant_mismatch' | 'not_allowed' | 'scope'; tenantId?: string }
+    'auth:apikey_rejected': {
+      id?: string
+      reason: 'invalid' | 'tenant_mismatch' | 'not_allowed' | 'scope'
+      tenantId?: string
+      prefix?: string
+      ip?: string
+    }
+    /**
+     * A key that verified was refused: used outside its tenant
+     * (`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond
+     * its scopes (`scope`). Emitted right after the matching
+     * `auth:apikey_rejected`. Unlike an unknown key, it is attributable (`id`)
+     * and only a key holder can cause it, so `auditPlugin` records it by
+     * default (`auth:**`): a cross-tenant probe with a real key leaves a trail.
+     */
+    'auth:apikey_refused': {
+      id: string
+      reason: 'tenant_mismatch' | 'not_allowed' | 'scope'
+      tenantId?: string
+    }
   }
 }
 
@@ -52,6 +79,21 @@ export class ApiKeyAmbiguousError extends BasaltError {
     super('AUTH_APIKEY_AMBIGUOUS', 'Two different API keys were presented; send exactly one.')
   }
 }
+
+/**
+ * A presented API key is unknown, revoked, expired or malformed. Thrown only
+ * with `apiKeysPlugin({ rejectInvalid: true })`; by default such a request
+ * continues as anonymous.
+ */
+export class ApiKeyInvalidError extends BasaltError {
+  readonly status = 401
+  constructor() {
+    super('AUTH_APIKEY_INVALID', 'The API key is invalid, revoked or expired.')
+  }
+}
+
+/** RFC 6750 challenge sent with {@link ApiKeyInvalidError}. */
+const INVALID_TOKEN_CHALLENGE = 'Bearer error="invalid_token"'
 
 /** The route only accepts an interactive session, not an API key. */
 export class ApiKeyNotAllowedError extends BasaltError {
@@ -97,6 +139,16 @@ export interface ApiKeysPluginOptions extends ApiKeysOptions {
    * old behaviour where any key with a `userId` acts as its owner. Default false.
    */
   allowNarrowKeysOnUnscopedRoutes?: boolean
+  /**
+   * `true` refuses a request that presents an API key which does not verify
+   * (unknown, revoked, expired, malformed) with 401 `AUTH_APIKEY_INVALID` and
+   * `WWW-Authenticate: Bearer error="invalid_token"`, before any guard runs. A
+   * machine client can then tell "my key is dead" from "this route needs a
+   * scope". Default false: the request continues as anonymous and the route's
+   * own guards answer (401 `AUTH_REQUIRED`, 403 `AUTH_SCOPE_REQUIRED`, or the
+   * public response).
+   */
+  rejectInvalid?: boolean
 }
 
 const tenantOf = (context: RequestContext): string | undefined =>
@@ -112,6 +164,9 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
   return definePlugin({
     name: 'basalt:apikeys',
     register({ container, hooks }) {
+      // The ApiKeys singleton is built lazily; fail at boot, not on the first
+      // request, on an invalid option.
+      resolveTouchEveryMs(options.touchEveryMs)
       container.singleton(API_KEYS, () => new ApiKeys({ ...options, hooks }))
       // A verified social login that adopts a never-verified account distrusts
       // whoever registered it: the keys they may have minted die with the rest
@@ -121,7 +176,8 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
       })
       const metadata = ensureMetadata(container)
 
-      const enricher: RequestEnricher = async ({ request, context, container: c }) => {
+      const enricher: RequestEnricher = async ({ request, reply, context, container: c }) => {
+        const ip = typeof request.ip === 'string' && request.ip.length > 0 ? request.ip : undefined
         const authHeader = request.headers.authorization
         const bearer =
           typeof authHeader === 'string' && authHeader.startsWith('Bearer mk_')
@@ -134,7 +190,7 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
         // replaces the key the client meant (and vice versa). Identical values
         // are harmless and accepted.
         if (bearer !== undefined && custom !== undefined && bearer !== custom) {
-          await hooks.emit('auth:apikey_rejected', { reason: 'invalid' })
+          await hooks.emit('auth:apikey_rejected', { reason: 'invalid', ...(ip !== undefined ? { ip } : {}) })
           throw new ApiKeyAmbiguousError()
         }
         const presented = bearer ?? custom
@@ -142,7 +198,16 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
 
         const record = await c.get(API_KEYS).verify(presented)
         if (!record) {
-          await hooks.emit('auth:apikey_rejected', { reason: 'invalid' })
+          const prefix = apiKeyDisplayPrefix(presented)
+          await hooks.emit('auth:apikey_rejected', {
+            reason: 'invalid',
+            ...(prefix !== undefined ? { prefix } : {}),
+            ...(ip !== undefined ? { ip } : {}),
+          })
+          if (options.rejectInvalid === true) {
+            reply?.header('WWW-Authenticate', INVALID_TOKEN_CHALLENGE)
+            throw new ApiKeyInvalidError()
+          }
           return
         }
 
@@ -165,10 +230,17 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
       const guard: RouteGuard = async ({ route, context }) => {
         const key = context.apiKey
         const meta = route.meta as Record<string, unknown> | undefined
+        // A verified key refused: the catch-all event, then the attributable
+        // one the audit records by default.
+        const refuse = async (id: string, reason: 'tenant_mismatch' | 'not_allowed' | 'scope'): Promise<void> => {
+          const tenantId = tenantOf(context)
+          const payload = { id, reason, ...(tenantId !== undefined ? { tenantId } : {}) }
+          await hooks.emit('auth:apikey_rejected', payload)
+          await hooks.emit('auth:apikey_refused', payload)
+        }
         if (key) {
           const reject = async (reason: 'tenant_mismatch' | 'not_allowed' | 'scope', error: Error) => {
-            const tenantId = tenantOf(context)
-            await hooks.emit('auth:apikey_rejected', { id: key.id, reason, ...(tenantId !== undefined ? { tenantId } : {}) })
+            await refuse(key.id, reason)
             throw error
           }
           const tenantId = tenantOf(context)
@@ -199,12 +271,38 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
         const granted = key?.scopes ?? []
         for (const scope of required as string[]) {
           if (!scopesSatisfy(granted, [scope])) {
-            if (key) await hooks.emit('auth:apikey_rejected', { id: key.id, reason: 'scope' })
+            if (key) await refuse(key.id, 'scope')
             throw new ScopeRequiredError(scope)
           }
         }
       }
       metadata.add('http:guards', guard)
+
+      // Visibility (e.g. MCP `tools/list`): hide a route whose `meta.scopes`
+      // the caller's key does not cover, or that refuses keys (`meta.apiKey:
+      // false`) when the caller holds one. Pure — it reads ctx().apiKey, the
+      // value the guard reads, and never emits `auth:apikey_rejected`.
+      const visibility: RouteVisibilityCheck = ({ route, context }) => {
+        const meta = route.meta as Record<string, unknown> | undefined
+        const key = context['apiKey'] as ApiKeyContext | undefined
+        if (key && meta?.['apiKey'] === false) return false
+        const required = meta?.['scopes']
+        if (!Array.isArray(required) || required.length === 0) {
+          // Same rule as the guard: a narrow key (no `*`) never reaches an
+          // identity-gated route that declares no scopes. Tenant binding is
+          // NOT mirrored — the tenant may only resolve from the tool route's
+          // own params, which a listing does not have.
+          return !(
+            key &&
+            options.allowNarrowKeysOnUnscopedRoutes !== true &&
+            !key.scopes.includes('*') &&
+            IDENTITY_GATED_META.some((k) => meta?.[k] !== undefined && meta?.[k] !== false)
+          )
+        }
+        const granted = key?.scopes ?? []
+        return (required as string[]).every((scope) => scopesSatisfy(granted, [scope]))
+      }
+      metadata.add('http:route-visibility', visibility)
       // Claim `meta.scopes` for the adapters' boot-time guarded-meta check —
       // a scope-gated route without this plugin would serve unchecked.
       metadata.add('http:guarded-meta', 'scopes')

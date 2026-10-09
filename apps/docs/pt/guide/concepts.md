@@ -176,10 +176,11 @@ oficiais:
 | `http:enrichers` | `RequestEnricher` | tenancy, auth, qualquer construtor de contexto | os adapters HTTP (cada pedido, antes dos guards) |
 | `http:guards` | `RouteGuard` | auth, permissions, teams, os teus plugins | os adapters HTTP (cada pedido, depois dos enrichers) |
 | `http:guarded-meta` | `string` (uma chave de meta) | cada plugin cujo guard **aplica** uma chave de meta de segurança | o check de boot dos adapters (abaixo) |
-| `http:routes` | descritores de rota | os adapters no boot | OpenAPI, a CLI (`basalt routes`), o SDK |
+| `http:routes` | descritores de rota | os adapters no boot | OpenAPI, a CLI (`basalt routes`), `describeRoutes()`, o SDK |
 | `commands` | `CommandDefinition` (estrutural) | qualquer package com comandos CLI | `@basaltkit/cli` |
 | `schedule:entries` | descritores de agendamento | o scheduler | tooling CLI `schedule:list` |
 | `tenancy:active` | `true` | `tenancyPlugin` | packages que adotam defaults tenant-safe (primeiro consumidor: cache) |
+| `tenancy:run` | `TenantRunner` (`tenancy.run`) | `tenancyPlugin` | código em segundo plano que entra num tenant sem importar `TENANCY` (primeiro consumidor: webhooks) |
 
 Contribui no `register`, consome no `boot` — a ordem das fases garante a
 visibilidade.
@@ -195,7 +196,8 @@ pedido, por ordem:
    **container scoped** novo (`createScope()`).
 2. **Enrichers** correm (`http:enrichers`) — constroem o contexto: a tenancy
    define `ctx().tenant`, a auth define `ctx().user`. Um enricher recebe
-   `{ request, context, container }`.
+   `{ request, context, container }` e pode devolver um disposer, executado uma
+   vez quando a resposta terminou ([abaixo](#escrever-o-teu-proprio-guard-ou-enricher)).
 3. **Guards** correm (`http:guards`) — autorizam: um guard recebe
    `{ route, request, context, container }`, lê o `meta` da rota e rejeita
    **lançando**. A auth lê `meta.auth`, as permissions leem `meta.can`, os
@@ -319,6 +321,56 @@ export const approvalPlugin = definePlugin({
   },
 })
 ```
+
+Um enricher que **toma** algo para o pedido — um cliente de base de dados em
+lease, um lock, um span — devolve um disposer em vez de esperar que alguém
+limpe. Devolver uma função de um enricher é um atalho para
+`ctx().onDispose(fn)` (abaixo): os dois alimentam a mesma lista por pedido.
+
+```ts
+const enricher: RequestEnricher = async ({ context }) => {
+  const lease = await pool.acquire(context.tenant!.id)
+  ;(context as { db?: unknown }).db = lease.client
+  return () => lease.release() // RequestDisposer — corre uma vez, em todos os adapters
+}
+```
+
+O `ctx().onDispose(disposer)` entrega limpeza ao pedido HTTP actual. O
+disposer corre exactamente uma vez, depois de o pipeline da rota ter assentado E
+de a resposta estar completa — no Fastify/Express quando foi enviada ou
+abandonada pelo cliente; no Hono uma resposta em buffer fica completa quando é
+construída, por isso os seus disposers são aguardados antes de ser entregue ao
+runtime; um corpo `stream()`/`sse()` faz dispose no último byte, erro, cancel
+ou abort, em todos os adapters. Nunca corre com o handler ainda em execução. Os
+disposers correm do último registado para o primeiro, um de cada vez, cada um
+aguardado; um registado depois de o pedido terminar corre de imediato. Um
+disposer que lance ou rejeite é reportado como `REQUEST_DISPOSER_FAILED` (o
+`onError` do adapter, o `reportError` do `@basaltkit/mcp`, ou `console.error`
+para um `runRoute` sem adapter) e nunca altera a resposta; os restantes
+disposers continuam a correr. Mantém os disposers curtos e limitados: um que
+nunca assente atrasa todos os disposers registados antes dele — incluindo a
+libertação do lease do `prismaPlugin`. Ao contrário do `server.after()` (hooks
+de métricas/tracing de toda a app, corridos pela ordem de registo quando a
+resposta é produzida), o `onDispose` é por pedido, liberta algo que o pedido
+detém, e espera pelo handler. O `onDispose` só existe num contexto de pedido
+criado pelo `runRoute` (`@basaltkit/http` >= 2.8): é undefined dentro do
+`tenancy.run()` (usa `'tenancy:exited'`), em contextos de queue/scheduler e em
+pipelines mais antigos — verifica se existe em vez de o chamar com `?.`, senão
+a limpeza é descartada em silêncio:
+
+```ts
+const lock = await locks.take(key)
+const dispose = ctx().onDispose
+if (dispose) dispose(() => lock.release())
+else lock.release() // sem âmbito de pedido aqui: liberta-o tu (try/finally)
+```
+
+A sua ausência também diz a um plugin que nada vai correr o seu disposer, por
+isso não deve tomar o que não consegue devolver. O `prismaPlugin` apoia-se nos
+dois em database-per-tenant: faz lease no `tenancy:switched` e entrega a
+libertação ao `ctx().onDispose`, por isso a ordem em que os plugins são
+registados nunca importa
+([dimensionar o pool](/pt/guide/database-per-tenant#o-pool-de-clientes-por-tenant)).
 
 Regras do jogo: os enrichers **constroem** contexto, os guards **decidem** —
 mantém os dois separados; os guards têm de ser baratos (correm em cada pedido

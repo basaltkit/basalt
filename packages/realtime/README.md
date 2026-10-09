@@ -65,20 +65,25 @@ send `subscribe` commands, parse them defensively (`try`/`catch` around `JSON.pa
 which terminates Node by default. The [`@basaltkit/realtime-client` README](../realtime-client/README.md#server-side-websocket)
 has a complete handler.
 
-It's the same with **SSE**, but you provide how to write to the response (framework-neutral):
+With **SSE**, return `@basaltkit/http`'s `sse()` with `realtimeSse()` as the producer — the same
+code on Fastify, Express and Hono. It registers the connection, joins the channels (a refusal closes
+the stream) and unregisters it when the client disconnects:
 
 ```ts
-import { sseConnection } from '@basaltkit/realtime'
+import { route, sse } from '@basaltkit/http'
+import { realtimeSse } from '@basaltkit/realtime'
 
-reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' })
-const conn = sseConnection(
-  { tenantId: tenant.id, userId: user.id },
-  { write: (chunk) => reply.raw.write(chunk), end: () => reply.raw.end() },
-)
-hub.register(conn)
-if (!(await hub.subscribe(conn.id, 'notes'))) reply.raw.end()
-reply.raw.on('close', () => hub.unregister(conn.id))
+route({
+  method: 'GET', url: '/live', meta: { auth: true },
+  handler: () =>
+    sse(realtimeSse(hub, { meta: { tenantId: tenant.id, userId: user.id }, channels: ['notes'] }), { heartbeatMs: 15_000 }),
+})
 ```
+
+`sseStreamConnection(meta, stream, { maxBackpressure })` is the `Connection` it builds: a closed
+stream throws (so the hub prunes it), a full buffer does not — after `maxBackpressure` (default 50)
+consecutive pressured sends the stream is closed. The low-level `sseConnection(meta, { write, end })`
+remains for a response you write yourself.
 
 ### 3. Emit from the server
 
@@ -286,7 +291,9 @@ unit-testable with fakes. `userId` is what makes a connection visible in `presen
 ### Transports
 
 - `websocketConnection(meta, socket)` — from any `ws`-like socket (`send`/`close`).
-- `sseConnection(meta, { write, end })` — SSE; you provide how to write/end.
+- `realtimeSse(hub, { meta, channels, onOpen?, maxBackpressure? })` — the producer for `@basaltkit/http`'s `sse()`; adapter-agnostic.
+- `sseStreamConnection(meta, stream, { maxBackpressure? })` — a `Connection` over an `sse()` stream.
+- `sseConnection(meta, { write, end })` — low-level SSE; you provide how to write/end.
 - `sseFrame(message)` — formats a message as an SSE frame. CR, LF and NUL are stripped from the event name, so an event name can't inject extra fields or frames.
 
 ### Backplanes

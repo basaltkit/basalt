@@ -5,7 +5,7 @@ import {
   BasaltError,
   tryCtx,
 } from '@basaltkit/core'
-import { TenantClientPool } from './pool.js'
+import { TenantClientPool, type TenantClientLease } from './pool.js'
 import type { ShardRouter } from './sharding.js'
 import { schemaUrl, tenantSchema, assertSchemaPerTenantSupported } from './schema.js'
 import { assertMigrated, type AssertMigratedOptions } from './assert-migrated.js'
@@ -35,6 +35,7 @@ export {
   assertMigrated,
   redactCredentials,
   DatabaseNotMigratedError,
+  DatabasePlaneMixedError,
   type AssertMigratedOptions,
 } from './assert-migrated.js'
 export { readReplica, type ReadReplicaOptions } from './replicas.js'
@@ -110,11 +111,29 @@ export {
   type CommandIo,
 } from './command.js'
 export {
+  describeDbError,
+  type DbErrorDiagnosis,
+  type DescribeDbErrorOptions,
+} from './describe-db-error.js'
+export {
+  dbStatusCommand,
+  parseMigrateStatus,
+  prismaStatusArgs,
+  npxPrismaRunner,
+  type DbStatusCommandConfig,
+  type MigrationState,
+  type MigrationStatus,
+  type PrismaCliRunner,
+  type PrismaStatusTarget,
+} from './status-command.js'
+export {
   tenantMigrateCommand,
   type TenantMigrateCommandConfig,
 } from './migrate-command.js'
 export {
   prismaSyncCommand,
+  planeConfigTs,
+  generateOnlyRootConfigTs,
   type PrismaSyncTarget,
   type PrismaSyncCommandOptions,
   extractSchemaBlocks,
@@ -189,6 +208,15 @@ export function tenantClient<T extends object = Record<string, unknown>>(): T {
   })
 }
 
+/** `idleMs` of the pool prismaPlugin builds — see PrismaPluginOptions.idleMs. */
+const PLUGIN_POOL_IDLE_MS = 1_000
+
+/**
+ * How long prismaPlugin holds a client for a caller that never says when it is
+ * done (see `heldClient`): the 30s the time-based `get()` used to give.
+ */
+const LEGACY_HOLD_MS = 30_000
+
 export const DB = createToken<unknown>('db')
 export const DB_POOL = createToken<TenantClientPool<unknown>>('db:pool')
 
@@ -230,9 +258,13 @@ export interface PrismaPluginOptions<TClient = unknown> {
   /** Max simultaneously open per-tenant clients. Default: 10 */
   max?: number
   /**
-   * Per-tenant pool: how long (ms) a client handed to a request stays "in use"
-   * and cannot be evicted. Keep it above your longest request. Default: 30_000.
-   * See `TenantClientPoolOptions.idleMs`.
+   * Per-tenant pool: how long (ms) a client stays reserved for its tenant
+   * after its last use, before it may be evicted for another tenant — a grace
+   * period, not a request budget. HTTP requests and `tenancy.run()` hold their
+   * client with a lease for exactly their duration, however long that is, so
+   * this only decides how quickly an idle tenant's slot is reused. Default:
+   * 1_000 (the standalone `TenantClientPool` keeps 30_000 for its time-based
+   * `get()` callers). See `TenantClientPoolOptions.idleMs`.
    */
   idleMs?: number
   /**
@@ -281,7 +313,12 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
             create: createTenantClient,
             ...(options.destroy ? { destroy: options.destroy } : {}),
             ...(options.max !== undefined ? { max: options.max } : {}),
-            ...(options.idleMs !== undefined ? { idleMs: options.idleMs } : {}),
+            // Requests and tenancy.run() lease their client for exactly their
+            // duration, so the idle window is only a grace period. With the
+            // pool's 30s default, every tenant served in the last 30s kept its
+            // slot: the (max+1)th distinct tenant in that window waited, then
+            // got a 503 PRISMA_POOL_EXHAUSTED, while nothing was in use.
+            idleMs: options.idleMs ?? PLUGIN_POOL_IDLE_MS,
             ...(options.acquireTimeoutMs !== undefined
               ? { acquireTimeoutMs: options.acquireTimeoutMs }
               : {}),
@@ -299,32 +336,156 @@ export function prismaPlugin<TClient = unknown>(options: PrismaPluginOptions<TCl
         options.resolveClient ??
         (options.shards ? (tenantId: string) => options.shards!.for(tenantId) : undefined)
 
+      // A hand-out for callers that never say when they are done: a pipeline
+      // without disposers (`@basaltkit/http` < 2.8), a `tenancy:switched`
+      // without `via` (`@basaltkit/tenancy` < 3.2, a hand-rolled emit). The
+      // client is held for LEGACY_HOLD_MS — the 30s the pool's `get()` gave
+      // before leasing existed — then returned on its own, whatever the
+      // plugin's (1s) `idleMs`: those callers were sized for 30s.
+      const holdForLegacyWindow = (lease: TenantClientLease<TClient>): TClient => {
+        const timer = setTimeout(() => lease.release(), LEGACY_HOLD_MS)
+        ;(timer as { unref?: () => void }).unref?.()
+        return lease.client
+      }
+      const heldClient = async (tenantId: string): Promise<TClient> =>
+        holdForLegacyWindow(await pool!.acquire(tenantId))
+
       const clientFor = async (tenantId: string | undefined): Promise<unknown> => {
         if (resolveClient && tenantId !== undefined) return resolveClient(tenantId)
-        if (pool) return tenantId === undefined ? options.client : pool.get(tenantId)
+        if (pool) return tenantId === undefined ? options.client : heldClient(tenantId)
         return options.client
+      }
+
+      // The pooled path LEASES: a client in use by a request or a
+      // tenancy.run() can never be evicted, and is returned the moment that
+      // work ends — so the pool's capacity is the number of tenants active at
+      // the same time, not the number seen within `idleMs`. Leases are kept
+      // per context object: tenancy.run() spreads the surrounding context into
+      // a NEW one, so a nested run gets its own and the outer context — and
+      // its `db` — are left untouched.
+      const leased = pool !== undefined && resolveClient === undefined
+      const leases = new WeakMap<object, Map<string, TenantClientLease<TClient>>>()
+      // Slots whose owner already ended (the request's disposer ran, or
+      // 'tenancy:exited' fired). Nothing will release them again, so a lease
+      // must never be parked in one — see leaseInto().
+      const closedSlots = new WeakSet<Map<string, TenantClientLease<TClient>>>()
+      const leaseInto = async (
+        slot: Map<string, TenantClientLease<TClient>>,
+        tenantId: string,
+      ): Promise<TClient> => {
+        const held = slot.get(tenantId)
+        if (held) return held.client
+        const lease = await pool!.acquire(tenantId)
+        // The owner ended before or while we acquired — a switch emitted on a
+        // request context after its response finished runs the slot's
+        // disposer synchronously, before this point. Parking the lease in the
+        // closed slot would leak it: fall back to the time-based hand-out.
+        if (closedSlots.has(slot)) return holdForLegacyWindow(lease)
+        slot.set(tenantId, lease)
+        return lease.client
+      }
+      const releaseAll = (slot: Map<string, TenantClientLease<TClient>>): void => {
+        closedSlots.add(slot)
+        for (const lease of slot.values()) lease.release()
+        slot.clear()
+      }
+      /**
+       * The request's lease slot, created on first use — by whichever of our
+       * enricher and the tenancy enricher's 'tenancy:switched' comes first, so
+       * registration order never matters and a request holds exactly one
+       * lease per tenant. Released by the request's own disposer sink
+       * (`ctx().onDispose`, `@basaltkit/http` >= 2.8) once the response ended,
+       * even when a later enricher or guard rejects the request.
+       */
+      const requestSlot = (
+        context: object,
+        onDispose: (disposer: () => void) => void,
+      ): Map<string, TenantClientLease<TClient>> => {
+        let slot = leases.get(context)
+        if (!slot) {
+          const own = new Map<string, TenantClientLease<TClient>>()
+          leases.set(context, own)
+          // Forgotten on release: a lease taken after the response ended
+          // (background work) opens a new slot, which a finished sink closes
+          // at once — leaseInto() then holds the client for the legacy
+          // window instead of parking it in the closed slot.
+          onDispose(() => {
+            releaseAll(own)
+            if (leases.get(context) === own) leases.delete(context)
+          })
+          slot = own
+        }
+        return slot
+      }
+      /** The sink of a pipeline that honours disposers, if this context has one. */
+      const disposerSink = (context: object) => {
+        const sink = (context as { onDispose?: unknown }).onDispose
+        return typeof sink === 'function' ? (sink as (disposer: () => void) => void) : undefined
       }
 
       // HTTP requests: attach the client to the request context.
       ensureMetadata(container).add(
         'http:enrichers',
-        async ({ context }: { context: { tenant?: { id: string }; db?: unknown } }) => {
-          const client = await clientFor(context.tenant?.id)
-          if (client !== undefined) context.db = client
+        async ({ context }: { context: { tenant?: { id: string }; db?: unknown; onDispose?: unknown } }) => {
+          const tenantId = context.tenant?.id
+          const sink = leased ? disposerSink(context) : undefined
+          if (!sink) {
+            // Not leased (shared client, sharding, resolveClient), or a
+            // pipeline that would drop our disposer: lease nothing we cannot
+            // give back.
+            const client = await clientFor(tenantId)
+            if (client !== undefined) context.db = client
+            return undefined
+          }
+          const slot = requestSlot(context, sink)
+          if (tenantId === undefined) {
+            if (options.client !== undefined) context.db = options.client
+          } else {
+            context.db = await leaseInto(slot, tenantId)
+          }
+          return undefined
         },
       )
 
-      // tenancy.run() / workers: attach when execution enters a tenant.
+      // tenancy.run() / workers / the tenancy request enricher: attach when
+      // execution enters a tenant.
       hooks.on('tenancy:switched', async (payload) => {
-        const { tenant } = payload as { tenant: { id: string } }
+        const { tenant, via } = payload as { tenant: { id: string }; via?: 'run' | 'http' }
         const context = tryCtx()
         if (!context) return
+        if (leased) {
+          let slot = leases.get(context)
+          if (!slot && via === 'run') {
+            // Released on 'tenancy:exited', which run() always emits.
+            slot = new Map()
+            leases.set(context, slot)
+          }
+          // An HTTP request (the tenancy enricher, or a switch from a handler):
+          // lease now, so an enricher between tenancy and us already sees
+          // ctx().db, and hand the release to the request.
+          const sink = slot ? undefined : disposerSink(context)
+          if (sink) slot = requestSlot(context, sink)
+          if (slot) {
+            context.db = await leaseInto(slot, tenant.id)
+            return
+          }
+          // Nobody will say when this context ends (older tenancy, older
+          // http, a hand-rolled emit): the time-based hand-out below.
+        }
         const client = await clientFor(tenant.id)
         // tenancy.run() copies the surrounding context, so `db` may still be
         // the OUTER tenant's client. With no client for this tenant, drop it:
         // db() then fails closed instead of writing into the other database.
         if (client !== undefined) context.db = client
         else delete context.db
+      })
+
+      hooks.on('tenancy:exited', () => {
+        const context = tryCtx()
+        const slot = context ? leases.get(context) : undefined
+        if (!slot) return
+        releaseAll(slot)
+        leases.delete(context!)
       })
     },
     async boot() {

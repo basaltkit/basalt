@@ -62,6 +62,311 @@ auditoria que nomeiam a sua chave, webhooks que respeitam uma política de porta
 e um tecto de fan-out, e mais. Ver [Fechar a colheita da
 auditoria](#fechar-a-colheita-da-auditoria).
 
+## Desde a 1.12 (por publicar)
+
+Entrou no `main` depois da publicação da 1.12 em minors e patches — nenhum
+pacote precisa de uma major. Alguns defaults mudam, algumas configurações que
+arrancavam passam a mostrar um aviso no arranque (recusadas na próxima major),
+e só usos mal formados das novas formas de rate limit recusam o arranque. Lê [Mudanças de comportamento e notas de
+upgrade](#behaviour-changes-and-upgrade-notes) antes de actualizar.
+
+
+- **Idempotência em todos os adapters.** O `idempotencyPlugin` passou de
+  `@basaltkit/fastify` para o pipeline de rotas partilhado em `@basaltkit/http`,
+  por isso o Express e o Hono também o têm (o import do Fastify continua a
+  funcionar). Duas opções novas: `fingerprint: 'body'` recusa uma chave
+  reutilizada com um corpo diferente com `422 IDEMPOTENCY_KEY_REUSED`, e
+  `replayAfterGuards: true` passa a verificação para depois dos guards da rota,
+  para que um caller revogado receba `401`/`403` em vez do sucesso em cache. As
+  duas vão passar a default numa futura major — vê
+  [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).
+- **Cabeçalhos por rota.** `meta.responseHeaders` aplica cabeçalhos de resposta
+  estáticos (por exemplo `X-Robots-Tag: noindex` num link de partilha público) em
+  todas as respostas que a rota produz, incluindo os erros dos guards, da
+  validação e do handler — vê
+  [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-responseheaders).
+- **Webhooks operáveis.** `secretBox` sela os secrets de assinatura dos endpoints
+  em repouso, `onAttempt` e `DeliveryResult.durationMs` reportam cada tentativa
+  de entrega, `headerPrefix` muda o nome dos headers `x-basalt-*`, e
+  `signPayload()` / `verifySignature()` aceitam bytes em bruto — vê
+  [Webhooks](/pt/guide/webhooks#selar-secrets-em-repouso).
+- **O outbox de webhooks funciona com endpoints por tenant.** Com schema por
+  tenant (ou base de dados por tenant) e o store de webhooks sobre
+  `tenantClient()`, cada entrada do relay falhava com `DB_UNAVAILABLE` e acabava
+  morta. O `tenancyPlugin` passa a publicar um sinal `'tenancy:run'`
+  (`TenantRunner`, minor do `@basaltkit/tenancy`), e o `webhooksPlugin` usa-o
+  para correr a pesquisa de endpoints de um `dispatch()` fora do pedido
+  delimitado por `tenantId` dentro de `tenancy.run` — só a pesquisa, nunca a
+  entrega, por isso um endpoint lento não consegue prender um cliente do pool.
+  `webhookOutboxPlugin({ tenantOnly: true })` ignora eventos emitidos sem tenant.
+  **Ativo por defeito** sempre que o `tenancyPlugin` está registado, o que as
+  apps em schema partilhado também notam: um `TenantSource.find` e um par
+  `tenancy:switched`/`tenancy:exited` por cada dispatch destes, e as entradas de
+  um tenant que já não existe acabam mortas (`TENANT_NOT_FOUND`) em vez de serem
+  entregues. Desativa com `webhooksPlugin({ runInTenant: false })` — vê
+  [Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant).
+- **Mail de entrada.** Um pacote novo, `@basaltkit/inbound-mail` 0.1, recebe
+  email de um relay como bytes em bruto assinados (um destinatário por pedido,
+  envelope dentro da assinatura), encaminha-o pelo destinatário assinado para
+  handlers conscientes do tenant e faz o parse dentro de limites, confiando em
+  `Authentication-Results` e ARC só de servidores que indicares. Traz um Worker
+  de referência para o Cloudflare Email Routing — vê
+  [Mail de entrada](/pt/guide/inbound-mail).
+- **Clientes de tenant alugados por pedido.** O `prismaPlugin`
+  (`@basaltkit/prisma` 3.1) passa a alugar (lease) o cliente do pool de um
+  tenant para cada pedido HTTP e cada `tenancy.run()`, e devolve-o quando a
+  resposta termina, através dos novos disposers de pedido (`RequestDisposer`,
+  `ctx().onDispose()`) do `@basaltkit/http` 2.8 e de todos os adapters — vê
+  [Escrever o teu próprio guard ou enricher](/pt/guide/concepts#escrever-o-teu-proprio-guard-ou-enricher). Antes,
+  um cliente contava como em uso durante `idleMs` (30 s) depois de cada pedido,
+  por isso, com os defaults, o 11.º tenant distinto em 30 s esperava 10 s por um
+  `503` sem nada a correr. O pool que o plugin cria passa a usar `idleMs` de 1 s
+  por defeito, um período de tolerância e não um orçamento por pedido — vê
+  [O pool de clientes por tenant](/pt/guide/database-per-tenant#o-pool-de-clientes-por-tenant).
+
+### Mudanças de comportamento e notas de upgrade {#behaviour-changes-and-upgrade-notes}
+
+Nenhum pacote precisa de uma major, mas estas minors mudam o que algumas
+aplicações vêem. Lê esta lista antes de actualizar.
+
+#### Idempotência
+
+- **Os handlers Fastify crus perdem a idempotência.** O `idempotencyPlugin`
+  cobre agora só definições `route()` do Basalt. Um handler registado
+  directamente na instância Fastify (`fastify.post(...)`, fora de
+  `fastifyPlugin({ routes })`) que dependia do antigo hook só-Fastify deixa de
+  estar protegido. Move-o para `route()`. Nenhum aviso no arranque os assinala,
+  por isso verifica os teus handlers POST crus.
+- **Só se regista o que o handler fez.** Uma recusa levantada antes de o handler
+  correr (o `401`/`403` de um guard, o `429` do rate limiter, um `400` de
+  validação) liberta a `Idempotency-Key` em vez de ser replicada durante todo o
+  TTL, por isso um cliente que volta a autenticar-se ou respeita o `Retry-After`
+  vê a operação executada no retry. O mesmo vale para um corpo `upload()`
+  recusado enquanto o handler o lê em stream (`413` acima de um limite, `400`
+  malformado, `415` um tipo de ficheiro recusado): repete com um ficheiro mais
+  pequeno e a mesma chave e o handler corre. `408`, `425` e `429` nunca são registados,
+  mesmo vindos do handler. Os outros `4xx` do handler continuam a ser
+  replicados byte a byte. Idêntico em Fastify, Express e Hono.
+- **A verificação corre depois dos enrichers** (e antes dos guards, salvo
+  `replayAfterGuards: true`). O replay é decidido depois de resolvido o tenant,
+  por isso um tenant suspenso recebe o seu `403` em vez da resposta em cache.
+- **O que o escopo cobre.** O escopo do replay é: as credenciais do caller, os
+  headers em bruto `x-tenant-id`/`host`, o método, o *padrão* da rota e a chave.
+  **Não** inclui um tenant resolvido a partir do path ou de um claim do token,
+  nem os params concretos do path: a mesma credencial a reutilizar uma chave em
+  `/t/acme/...` e `/t/globex/...`, ou em `/orders/1/pay` e `/orders/2/pay`,
+  recebe a primeira resposta. Gera uma chave nova por operação e por tenant, e
+  associa-a ao URL com
+  `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
+  `fingerprint: 'body'` cobre só o corpo, não a query string nem os params.
+- **Rolling deploys com `fingerprint`.** O `RedisIdempotencyStore` grava as
+  reservas em curso como `pending:<fingerprint>`, que instâncias antigas lêem
+  mal. Faz primeiro o deploy da nova versão em todo o lado e só depois liga o
+  `fingerprint`. Respostas vazias (`204`) passam a ser registadas e replicadas.
+- **Um enricher que envia a resposta termina o pedido.** Depois de um
+  `reply.send()` num enricher, os restantes enrichers, os guards e o handler já
+  não correm.
+
+Vê [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).
+
+#### Disposers de pedido e leases do Prisma
+
+- **Os leases precisam do `@basaltkit/http` 2.8.** O `prismaPlugin` só aluga
+  quando o pipeline liberta o lease no fim da resposta: `@basaltkit/http` 2.8
+  com um adapter da mesma versão, e `@basaltkit/tenancy` 3.2 para o
+  `tenancy.run()`. Com versões antigas nada fica preso: o plugin segura o
+  cliente durante 30 s e depois devolve-o, como fazia o `pool.get()`. O
+  `@basaltkit/http` passa a ser um peer opcional do `@basaltkit/prisma`.
+  Actualiza o http, o teu adapter e o tenancy junto com o prisma.
+- **A ordem de registo deixa de importar para o `ctx().db`.** O lease é tirado
+  assim que o tenant é conhecido, por isso um enricher registado entre o
+  `tenancyPlugin` e o `prismaPlugin` (o auth, por exemplo) vê o `ctx().db`. Cada
+  pedido tem exactamente um lease, libertado mesmo quando um enricher ou guard
+  posterior recusa o pedido.
+- **Os disposers esperam pelo handler.** Num abort do cliente a meio do pedido,
+  o Fastify e o Express corriam os disposers dos enrichers com o handler ainda a
+  correr, o que podia desligar o seu cliente alugado a meio de uma query. Os
+  disposers correm agora exactamente uma vez, depois de o handler terminar *e*
+  de a resposta estar completa: enviada ou abandonada no Fastify/Express; no
+  Hono uma resposta em buffer fica completa quando é construída, por isso os
+  seus disposers são aguardados antes de ser entregue ao runtime. Os corpos
+  `stream()` e `sse()` continuam cobertos até ao último byte ou até o cliente
+  sair. Um disposer entregue ao `ctx().onDispose()` depois desse ponto (a partir
+  de um timer que o handler deixou, por exemplo) corre de imediato, em todos os
+  adapters. Um disposer que falha é reportado como `REQUEST_DISPOSER_FAILED` em
+  todos os caminhos (o `onError` do adapter, o `reportError` do
+  `@basaltkit/mcp`, `console.error` para um `runRoute` sem adapter). O
+  `ctx().onDispose` não existe dentro do `tenancy.run()`, em jobs nem em
+  pipelines antigos: verifica se existe em vez de chamar
+  `ctx().onDispose?.(…)`, que aí descarta a limpeza em silêncio.
+- **O `ctx().db` depois da resposta não está protegido.** O lease acaba com a
+  resposta, e o cliente fica reservado só mais 1 s. Trabalho que sobrevive à
+  resposta tem de fazer `await` antes de responder, ou correr em
+  `tenancy.run()` / `DB_POOL.use()`. Se usavas `DB_POOL.get()` no pool do plugin
+  para trabalho com mais de 1 s, passa para `DB_POOL.use()` ou indica `idleMs`
+  explicitamente. Um `tenancy:switched` emitido no contexto de um pedido depois
+  de a resposta acabar recebe a cedência legada de 30 s, nunca um lease que
+  ninguém devolve.
+- **Dimensiona o `max` pelos tenants distintos activos em poucos segundos.**
+  Exceder o pool já não responde `503`; gera rotação: um cliente inactivo é
+  fechado e um novo aberto em cada pedido. Monitoriza quantas vezes corre a tua
+  factory `forTenant`.
+- **Os corpos `PRISMA_POOL_EXHAUSTED` são neutros.** O `503` leva só o código e
+  "Service unavailable.". `max`, `leased`, `recentlyUsed` e o id do tenant vão
+  só para o log do servidor.
+
+#### Configurações que passam a mostrar um aviso no arranque (recusadas na próxima major) {#configurations-that-now-warn-at-boot-refused-in-the-next-major}
+
+Cada uma destas arrancava e continua a arrancar, com o mesmo comportamento em
+runtime de antes; cada uma mostra agora um aviso `[basalt] …` no arranque que
+diz o que está mal. A próxima major transforma cada aviso numa recusa do
+arranque, por isso corrige-as já — cada uma tem uma correcção de uma linha.
+
+- **`@basaltkit/auth`: um cookie de sessão com prefixo e `secure: false` ou um
+  sub-path.** Um `sessionCookie.name` que começa por `__Host-` ou `__Secure-`
+  com um `secure: false` explícito (incluindo o habitual
+  `secure: process.env.NODE_ENV === 'production'` em dev e testes), ou um cookie
+  `__Host-` com um `path` diferente de `/`. O cookie continua a ser emitido tal
+  como configurado; os browsers descartam-no, por isso essa app não tem aí
+  sessões de browser a funcionar. Retira `secure`/`path`, ou usa um nome sem
+  prefixo fora de produção: `name: isProd ? '__Host-sid' : 'sid'`. A próxima
+  major lança `AUTH_SESSION_COOKIE_INVALID` (`SessionCookieConfigError`, já
+  exportado). Os prefixos são reconhecidos sem distinguir maiúsculas
+  (`__host-sid` conta), e um cookie `__Host-` com sub-path e `secure` por
+  definir recebe também, fora de produção, o aviso do `Secure` implícito. À
+  parte (só aviso, nunca recusado), um cookie sem prefixo com
+  `sameSite: 'None'` e sem `Secure` gera um aviso: os browsers também o
+  descartam.
+- **`@basaltkit/tenancy`: `meta.tenant` diferente de `true`, `false` ou
+  `'never'`.** Um valor como `'none'`, `'optional'`, `'false'` ou `null` cai no
+  default `required` da app, como antes. Se querias só plano central, o valor é
+  `'never'`. A próxima major recusa o arranque com `HTTP_INVALID_ROUTE_META`.
+- **`@basaltkit/http`: um `meta.responseHeaders` inválido.** Tem de ser um
+  registo de valores string sem caracteres de controlo e não pode definir
+  `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, headers
+  hop-by-hop nem `x-request-id`. Um registo inválido é ignorado por inteiro —
+  nenhum dos seus cabeçalhos é enviado — e o pedido nunca falha por causa dele.
+  A chave é nova: uma app que guarda dados seus em `meta.headers` não é
+  afectada, porque nada lê nem envia `meta.headers`.
+
+#### Configurações que passam a recusar o arranque {#configurations-that-now-refuse-to-boot}
+
+Só uma, e só para formas acrescentadas nesta versão:
+
+- **`@basaltkit/http`: `meta.rateLimit` mal formado nas formas novas.** Um array
+  (incluindo `[]`) com uma entrada mal formada, um objecto cujo `bucket` é uma
+  string que não é um nome de bucket válido, ou rotas que partilham um `bucket`
+  mas discordam no limite, na janela ou na chave, recusam o arranque com
+  `HTTP_INVALID_ROUTE_META`. O objecto único sem `bucket` string — incluindo
+  `bucket: null` — mantém o parse tolerante e é aplicado por rota, como antes.
+
+#### Outras mudanças
+
+- **Audit — recusas de API keys.** O `auth:apikey_rejected` deixa de ser
+  registado por defeito, porque qualquer cliente anónimo podia inundar o trail
+  com chaves desconhecidas. As recusas de uma chave que *foi* verificada
+  (`tenant_mismatch`, `not_allowed`, `scope`) continuam registadas, com o novo
+  hook `auth:apikey_refused`. Uma lista `hooks` própria também aplica as
+  exclusões por defeito. Para voltar a registar todas as rejeições, nomeia-a:
+  `hooks: ['auth:**', 'auth:apikey_rejected']` (uma recusa de chave válida fica
+  então registada duas vezes) — ou usa o listener com throttle em
+  [Que hooks são auditados](/pt/guide/persistence#which-hooks-are-audited).
+- **Audit — cadeias apagáveis.** Actualiza todos os serviços que correm
+  `audit.verify()` antes do primeiro `audit.redact()` ou antes de ligar
+  `integrity: { mode: 'hash-chain', erasable: true }`: versões antigas reportam
+  as entradas v3 e as redigidas como `hash-mismatch`. Vê
+  [Apagar dados pessoais](/pt/guide/persistence#erasing-personal-data-audit-redact).
+- **Auth — um cookie de sessão com prefixo passa a implicar `Secure` em
+  qualquer ambiente.** Com `secure` por definir, um cookie `__Host-…`/
+  `__Secure-…` passa a ser `Secure` (e `Path=/` para `__Host-`) também fora de
+  produção; antes era emitido sem `Secure` e os browsers descartavam-no. Os
+  fluxos de browser passam a funcionar, incluindo `http://localhost`.
+  **Atenção aos clientes de teste:** os cookie jars que respeitam `Secure`
+  (supertest/superagent, tough-cookie) não o devolvem sobre `http` simples, por
+  isso uma suite que dependia da emissão antiga recebe 401; fora de produção
+  isto mostra um aviso único no arranque. Usa um nome sem prefixo fora de
+  produção, ou define `secure` explicitamente (`secure: true` silencia-o).
+- **Auth — o `sessionIdleTtl` é validado.** A nova opção falha fechada no
+  arranque (`AUTH_SESSION_IDLE_CONFIG_INVALID`) quando não é uma duração
+  positiva ou o store de sessões não tem `touch()`; apps que não a definem não
+  são afectadas.
+- **Auth — `UserSource` própria sem `update()`.** O `create()` passa a receber
+  `emailVerified`; persiste-o para ter contas sociais e de confiança
+  verificadas. Uma source que não o persiste nem implementa `update()` continua
+  a autenticar utilizadores OAuth através da ligação de identidades, não
+  verificados como antes. Dois casos continuam a falhar nessa source: um
+  utilizador SAML (sem identidade ligada) é recusado no segundo login, como já
+  acontecia antes desta versão. O `register(…, { emailVerified: true })` (novo
+  nesta versão) exige `update()` e, sem ele, lança `AUTH_UPDATE_UNSUPPORTED`
+  antes de escrever o que quer que seja — nenhuma conta é criada, por isso uma
+  nova tentativa nunca recebe `EmailTakenError`. Implementa `update()` (e
+  persiste `emailVerified` no `create()`) para teres ambos.
+- **Aviso no arranque para `meta.rateLimit` sem rate limiter.** Quando
+  qualquer rota declara `meta.rateLimit` — o `authRoutes()` declara, e as tuas
+  próprias rotas também podem — e o `securityPlugin({ rateLimit })` não está
+  registado, a app imprime agora um `console.warn` no arranque com essas rotas,
+  porque nada aplica o limite. Regista o limiter, passa
+  `authRoutes({ rateLimit: false })` para as rotas de auth, ou silencia-o com
+  `allowUnguardedMeta: ['rateLimit']` (ou `true`) no plugin do adapter se um
+  edge à frente já limita.
+- **Webhooks — `runInTenant` ligado por defeito.** Com o `tenancyPlugin`
+  registado, cada `dispatch()` fora do pedido delimitado por `tenantId` faz uma
+  chamada a `TenantSource.find` e dispara `tenancy:switched`/`tenancy:exited`;
+  com schema ou base de dados por tenant, o `prismaPlugin` aluga também o
+  cliente desse tenant, o que pode falhar com `PRISMA_POOL_EXHAUSTED` com o pool
+  saturado. Um tenant apagado ou um id inválido rejeita com `TENANT_NOT_FOUND` /
+  `TENANT_ID_INVALID`, e as entradas do outbox acabam mortas depois de
+  `maxAttempts`. Se as tabelas de webhooks são centrais, passa
+  `webhooksPlugin({ runInTenant: false })` — vê
+  [o que custa](/pt/guide/webhooks#run-in-tenant-costs).
+- **Drives — a saúde da ligação é opt-in por store.** `lastSucceededAt`,
+  `lastFailedAt` e `lastErrorCode` só são escritos num store que declara
+  `persistsHealth: true` (o store em memória declara). Um store durável continua
+  a funcionar sem mudanças e não reporta saúde. Para a ligar, acrescenta as três
+  colunas nullable, migra e só depois define `readonly persistsHealth = true` —
+  vê [Saúde da ligação](/pt/guide/drives#saude-da-ligacao).
+- **Notificações — o `Notifier` decide através de `preference()`.** Decide cada
+  canal através de `NotificationPreferences.preference()` e, a seguir, dos
+  `defaults` e `mandatory` da notificação. Uma subclasse que redefine
+  `allowed()` continua a funcionar: o `Notifier` detecta a redefinição e
+  deixa-a decidir, como antes (os `defaults` não se lhe aplicam; os `mandatory`
+  continuam a ignorá-la). Redefinir `allowed()` está obsoleto — redefine
+  `preference()`; a próxima major deixa de consultar uma redefinição de
+  `allowed()`.
+- **MCP — os erros internos são registados.** Um erro que escapa a uma tool
+  continua a responder `Internal error`, e a causa vai agora para o stderr por
+  defeito. Usa `mcpPlugin({ onError })` para a enviar para outro lado, ou
+  `onError: false` para a silenciar.
+- **MCP — sem chave de idempotência nas chamadas de tools.** Uma chamada de
+  tool nunca encaminha a `Idempotency-Key` (nem o header definido por
+  `idempotencyPlugin({ header })`) para a rota, mesmo listada em
+  `forwardHeaders`: um replay entregaria ao modelo o corpo de erro gravado sem
+  a redação do resultado da tool. Cada chamada corre o handler; deduplica dentro
+  do handler se precisares.
+- **Tenancy — o `basalt prisma:sync` não acrescenta as novas colunas de
+  `TenantDomain`.** O modelo incluído ganha `verificationToken`, `verified`,
+  `createdAt` e `verifiedAt`. O `prisma:sync` só acrescenta modelos em falta,
+  por isso uma app que já tem `TenantDomain` tem de acrescentar os quatro campos
+  à mão (copia-os de `@basaltkit/tenancy-prisma/prisma/schema.prisma`) e correr
+  uma migração antes de publicar um cliente gerado a partir do novo modelo.
+- **Tabela de rotas — `central-only`.** O `basalt routes` mostra
+  `meta.tenant: 'never'` como `central-only` (o `meta.tenant: 'never'` na rota e
+  o `central-only` na tabela são a mesma coisa). O novo `describeRoutes()` lê o
+  `RouteRow.tenant` só do `meta.tenant`; o `meta.central: true` (o bypass de
+  membership do teams) aparece nas guardas como `central`.
+- **Apps criadas com `--prisma` pelo create-basalt 1.8–1.11 — muda um
+  script.** O seu `db:seed` é `tsx prisma/seed.ts`, que não carrega o `.env`,
+  por isso o `pnpm db:seed` falha com `ENV_INVALID` (URL da base de dados e
+  segredo da app em falta) salvo se exportares as variáveis; e o `migrate dev`
+  do Prisma 7 nunca corre o seed, por isso o tenant `demo` que os resolvers
+  esperam nunca foi criado (o passo seguinte «creates the tables and seeds the
+  demo tenant» estava errado). No `package.json`, define
+  `"db:seed": "prisma db seed"` — o `prisma.config.ts` passa a carregar o
+  `.env` e corre o comando `migrations.seed` que já declara — e corre
+  `pnpm db:seed` depois do `pnpm db:migrate`. Nada reescreve o script por ti:
+  o `create-basalt doctor` assinala-o e o `create-basalt update` mostra a
+  linha.
+
 ## Destaques
 
 ### Promessas que o código passa a cumprir
@@ -334,7 +639,7 @@ maior probabilidade de chegar a uma aplicação.
 | `queue` 3 | dois jobs diferentes com o mesmo nome; `attempts: 0`; contexto de job com um tenant fora da gramática | renomear, ou `queuedOn(…, { name })`; `attempts` ≥ 1; passar o mesmo `validateTenantId` ao plugin de queue |
 | `subscriptions` 5 | `swap()` para um plano pago sem subscrição no gateway (`402`); `subscribe()` a um plano pago no Paddle ou Lemon Squeezy (`501`); uso que não seja inteiro positivo | `swap(id, plan, { allowUnpaid: true })`; `checkout()` |
 | `search` 2 | um `reindex()` simples fora de um tenant com tenancy registada; `limit` acima de 1000, `offset` acima de 10000; filtros em campos não declarados ou com valores `null` | `reindex(name, { all: true })`; `searchPlugin({ maxLimit, maxOffset })`; declarar o campo `filterable` |
-| `prisma` 3 | um tenant novo quando todos os clientes do pool estão em uso — `503` depois do `acquireTimeoutMs` | dimensionar `max` para os tenants activos em simultâneo; manter `idleMs` acima do pedido mais longo, ou `pool.use(tenantId, fn)` |
+| `prisma` 3 | um tenant novo quando todos os clientes do pool estão em uso — `503` depois do `acquireTimeoutMs` | dimensionar `max` para os tenants activos em simultâneo; no `prisma` 3.0 manter `idleMs` acima do pedido mais longo, ou `pool.use(tenantId, fn)` — a partir da 3.1 cada pedido tem um lease (vê as [notas de upgrade](#behaviour-changes-and-upgrade-notes)) |
 | `audit` 2 | `verify()` / `verifyAll()` falham para linhas fora da cadeia escritas depois de ela começar | `legacyUntil` para uma origem conhecida e benigna, como um deploy gradual |
 
 ### Passos de dados

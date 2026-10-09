@@ -75,24 +75,83 @@ prismaPlugin({
   forTenant: (tenantId) => new PrismaClient({ datasourceUrl: urlFor(tenantId) }),
   destroy: (client) => client.$disconnect(),
   max: 20, // at most 20 tenant clients open at once — never exceeded
-  idleMs: 30_000, // a client handed to a request counts as in use this long
+  idleMs: 1_000, // grace period: an idle tenant keeps its slot this long (default)
   acquireTimeoutMs: 10_000, // how long a new tenant waits for a free slot
 })
 ```
 
-The pool only ever closes an **idle** client (least-recently-used first). A
-client handed to a request counts as in use for `idleMs` — keep it above your
-longest request — so it is never disconnected under a running query. When all
-`max` clients are in use, a request for a new tenant waits up to
-`acquireTimeoutMs` and then fails with `TenantPoolExhaustedError` (503): size
-`max` for the tenants active *at the same time*. Work that can outlive
-`idleMs` holds the client with a lease instead:
+Every HTTP request and every `tenancy.run()` **leases** its tenant's client for
+exactly its own duration — a streamed download or an event stream included —
+and returns it when the response has ended (finished, failed, or abandoned by
+the client) or the run's callback settles. The pool only ever closes an
+**idle** client (least-recently-used first), so a client is never disconnected
+under a running query, however long the request takes. The order you register
+`tenancyPlugin`, `prismaPlugin` and your own enrichers in does not matter: the
+lease is taken as soon as the tenant is known, so an enricher between tenancy
+and prisma (auth, say) already sees `ctx().db`, and a request holds exactly one
+lease, returned even when a later enricher or guard rejects it.
+
+Request leases need `@basaltkit/http` ≥ 2.8 (any adapter of that release) —
+the pipeline that tells the plugin when a response has ended. On an older
+pipeline, and for a `tenancy:switched` without `via` (`@basaltkit/tenancy` <
+3.2, or your own emit), the plugin does not lease what it could never give
+back: it holds the client for 30 s, as before BK-077, and then returns it on
+its own.
+
+Sizing the pool:
+
+- **`max`** is the number of distinct tenants **active within a few seconds**
+  — requests or jobs in flight, plus the ones served inside the grace window
+  — not the number of tenants you have. Each open client holds its own
+  connections, so `max` × the client's connection limit must fit your
+  database.
+- **Over-subscribing churns.** When more distinct tenants than `max` keep
+  arriving in turn, a request no longer waits for a 503: the pool closes the
+  least-recently-used idle client and opens one for the new tenant — on every
+  request, if the traffic cycles through more tenants than `max`. Responses
+  stay 200, but each pays a connect (hundreds of ms with Prisma 7) and the
+  database sees a stream of new connections. The cap on open clients still
+  holds. Monitor client creations (count calls to your `forTenant` factory):
+  a steady rate means `max` is too small.
+- **`idleMs`** is only a grace period: how long a tenant keeps its client after
+  its last request, so a burst of requests for the same tenant does not
+  reconnect each time. The plugin's default is 1 s. Raising it trades slots for
+  fewer reconnects; it never protects a request (the lease does).
+- **`acquireTimeoutMs`**: when all `max` clients are leased, a request for a new
+  tenant waits this long for one to be released, then fails with
+  `TenantPoolExhaustedError` (503 `PRISMA_POOL_EXHAUSTED`). Its `details` say
+  what held the slots — `leased` (genuinely busy: raise `max`) versus
+  `recentlyUsed` (inside the grace window: lower `idleMs`) — and the message
+  gives the matching advice.
+
+::: info Before BK-077
+The plugin used to hand clients out with `pool.get()`, which counts a client as
+in use for `idleMs` after the call (30 s by default) instead of leasing it. The
+11th distinct tenant within 30 s then waited 10 s and got a 503 although nothing
+was running. A standalone `TenantClientPool` (and `DB_POOL.get()`) keeps that
+time-based behaviour and its 30 s default; only the pool `prismaPlugin` builds
+leases and defaults to 1 s.
+:::
+
+Your own work outside a request or `tenancy.run()` holds the client with a
+lease too:
 
 ```ts
 await app.container.get(DB_POOL).use(tenantId, async (client) => {
   // never evicted until this callback settles
 })
 ```
+
+::: warning Work that outlives the response
+A request's lease ends with its response, and the client then stays reserved
+only for the `idleMs` grace period (1 s). Anything still using `ctx().db` after
+the reply was sent — a fire-and-forget promise, a `setTimeout`, a handler that
+answers before awaiting its writes — runs on a client the pool may close for
+another tenant: the query fails, or a client that reconnects on its own opens
+connections outside `max`. Either `await` the work before replying, or move it
+into a lease of its own: `tenancy.run(tenantId, …)` (it leases on entry) or
+`DB_POOL.use(tenantId, …)`. Better still, hand it to a queue job.
+:::
 
 Schema-per-tenant is one database with a schema per tenant — pass the base URL
 and a client factory, and Basalt sets `?schema=tenant_<id>` per tenant so Prisma
@@ -265,6 +324,31 @@ the isolation has to be physical — or when staff and customers must be
 different populations, see [the multi-tenant pattern](/guide/multi-tenant-pattern).
 :::
 
+## Generating tenant resources
+
+`basalt make:resource` defaults to a shared database: a tenant-owned resource
+gets an indexed `tenantId` column and a filter on every query. Under
+schema- or database-per-tenant that column is dead weight — the isolation is the
+schema or the database itself — so say which model you use:
+
+```bash
+pnpm basalt make:resource PurchaseOrder --prisma --tenant=schema    # or --tenant=database
+```
+
+The model comes out **without** `tenantId` (add it to the tenant
+`schema.prisma`, then [migrate every tenant](#migrating-every-tenant)), and the
+repository queries without a tenant filter on `db()` — the tenant's own client,
+resolved by `prismaPlugin`. It stays fail-closed: every access starts with
+`requireTenantId()`, so with no tenant resolved the call is `TENANT_REQUIRED`
+(400) instead of a query on whatever client is in context. The generated test
+still runs as a tenant and checks that another tenant sees nothing.
+
+The generator never guesses the isolation model from your dependencies — a wrong
+guess would silently drop tenant scoping. Set it once for the project instead of
+on every call with `generatorCommands({ tenant: 'schema', prisma: true,
+prismaClient: { import: '../../tenant-db.js', type: 'TenantDb' } })`; a bare
+`--tenant` then keeps that mode, and `--tenant=column` / `--no-tenant` still win.
+
 ## Serving central and tenant routes from one app
 
 Most apps are not purely multi-tenant. There is a landing page, a sign-up form,
@@ -369,7 +453,7 @@ const centralAccess = prismaAccessStore(prisma).store
 await centralAccess.grantToRole(PLATFORM_ADMIN, ['tenant:approve', 'platform:read'], GLOBAL_SCOPE)
 
 route({ method: 'POST', url: '/central/admin/tenants/:id/approve',
-        meta: { tenant: false, auth: true, can: 'tenant:approve' }, handler })
+        meta: { tenant: 'never', auth: true, can: 'tenant:approve' }, handler })
 ```
 
 The scope is `GLOBAL_SCOPE`, not a string of your own. A request with no
@@ -379,8 +463,10 @@ consulted, so the route above would deny the very administrator you just
 created, and nothing tells you why. See
 [the global scope can't be a tenant](/guide/authorization#the-global-scope-can-t-be-a-tenant).
 
-`meta: { tenant: false, auth: true, can: '…' }` — the same three keys every
-tenant route uses. Name the first administrator from the CLI, not from a route:
+`meta: { tenant: 'never', auth: true, can: '…' }` — the same three keys every
+tenant route uses. `'never'`, not `false`: a platform route reached on a tenant
+host answers 404 before any guard runs, instead of running inside that tenant
+(see [central-only routes](/guide/tenancy#central-only-routes-tenant-never)). Name the first administrator from the CLI, not from a route:
 the first one has nobody to appoint them, and an unprotected "create the first
 admin" endpoint is the door that stays open because nobody remembers to close
 it. Whoever can run a command on the server can already reach the database.
@@ -542,6 +628,12 @@ commandsPlugin([
 ])
 ```
 
+To check where every tenant stands without changing anything — pending,
+failed or drifted migrations, with the fix for each — register
+`dbStatusCommand(...)` next to it and run `basalt db:status` (it exits 1 when a
+plane is behind, so it can gate a deploy). See
+[Database operations](./database-operations).
+
 ## Seeding & background work
 
 Outside an HTTP request there's no tenant in context, so `db()` would throw.
@@ -562,6 +654,10 @@ await tenancy.forEach(async (tenant) => {
 
 The same store instances (`auth`, `access`, …) work in every context — the proxy
 routes each call to the tenant that `run`/`forEach` put in scope.
+
+Webhook dispatches scoped by `tenantId` off the request path — the
+`webhookOutboxPlugin` relay included — enter the tenant for you, for the endpoint
+lookup only (see [Webhooks → Schema-per-tenant](/guide/webhooks#schema-per-tenant)).
 
 ## Putting it together
 

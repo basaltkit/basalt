@@ -165,6 +165,8 @@ The other operations have ready-made routes via `fileRoutes()`:
 
 **Owner-only by default:** a user reaches only files whose `uploadedBy` is their own id; anything else answers 404. Choose another policy explicitly with `fileRoutes({ shared: true })` (tenant-wide drive) or `fileRoutes({ authorize: (action, record, user) => boolean })` (`action` is `'read' | 'download' | 'url' | 'delete'`; `'read'` is the record, `'download'` the bytes). `expiresIn` must be positive and at most `maxUrlTtl` (default `'1h'`), otherwise 400; when omitted it defaults to 15 minutes, lowered to `maxUrlTtl` if that is shorter.
 
+**Route meta.** Every route requires a logged-in user. `fileRoutes({ meta: { can: 'files:read' } })` merges extra route metadata — a guard, a rate limit, OpenAPI tags — into every route; `auth: true` is applied on top and cannot be switched off.
+
 **Public projection.** The routes never answer with the raw `FileRecord`. By
 default every record goes through `toPublicFile(record)`:
 `{ id, name, contentType, size, createdAt, scannedAt?, scan?: { clean }, metadata? }`.

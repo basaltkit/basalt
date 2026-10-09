@@ -7,10 +7,20 @@ import {
 } from './column-limits.js'
 
 export { ColumnLengthError, type ColumnLimit, type ColumnLimits } from './column-limits.js'
+export {
+  PrismaDomainStore,
+  prismaDomainStore,
+  type PrismaDomainStoreClient,
+  type PTenantDomainRow,
+} from './domain-store.js'
+import type { PTenantDomainRow } from './domain-store.js'
 
 const PKG = '@basaltkit/tenancy-prisma'
 
-export type TenancyColumnLimits = ColumnLimits<{ Tenant: 'id'; TenantDomain: 'domain' | 'tenantId' }>
+export type TenancyColumnLimits = ColumnLimits<{
+  Tenant: 'id'
+  TenantDomain: 'domain' | 'tenantId' | 'verificationToken'
+}>
 
 /**
  * The capacities of the bundled `schema.mysql.prisma` — what `columnLimits:
@@ -18,7 +28,7 @@ export type TenancyColumnLimits = ColumnLimits<{ Tenant: 'id'; TenantDomain: 'do
  */
 export const tenancyMysqlColumnLimits: TenancyColumnLimits = {
   Tenant: { id: V },
-  TenantDomain: { domain: 255, tenantId: V },
+  TenantDomain: { domain: 255, tenantId: V, verificationToken: V },
 }
 
 export interface PrismaTenantSourceOptions {
@@ -50,10 +60,6 @@ interface PTenant {
   id: string
   data: unknown
 }
-interface PTenantDomain {
-  domain: string
-  tenantId: string
-}
 
 /**
  * The minimal Prisma delegate surface the source calls — a real `PrismaClient`
@@ -81,7 +87,8 @@ export interface PrismaTenancyDelegates {
     deleteMany(a: any): Promise<{ count: number }>
   }
   tenantDomain: {
-    findUnique(a: any): Promise<PTenantDomain | null>
+    findUnique(a: any): Promise<PTenantDomainRow | null>
+    findMany(a: any): Promise<PTenantDomainRow[]>
     deleteMany(a: any): Promise<{ count: number }>
     createMany(a: any): Promise<{ count: number }>
   }
@@ -96,6 +103,14 @@ const domainsOf = (tenant: Tenant): string[] => {
 
 const isUniqueViolation = (error: unknown): boolean =>
   (error as { code?: unknown } | null)?.code === 'P2002'
+
+/**
+ * A row `PrismaTenantSource` owns: it mirrors `tenant.domains`. A row with a
+ * verification token is a `PrismaDomainStore` claim. Rows from a database not
+ * yet migrated to the verification columns have no token, so they are mirrors.
+ */
+const isMirror = (row: PTenantDomainRow): boolean =>
+  row.verificationToken === null || row.verificationToken === undefined
 
 /** A domain in the set was claimed by another tenant after the pre-flight read. */
 const domainTakenError = (tenantId: string, domains: string[], cause: unknown): Error =>
@@ -122,9 +137,14 @@ export class PrismaTenantSource implements TenantSource {
   }
 
   /**
-   * Insert or update a tenant and replace its custom-domain set. Domains are
-   * globally unique — a domain already owned by a *different* tenant is
-   * rejected, and nothing is written.
+   * Insert or update a tenant and bring its domain set in line with
+   * `tenant.domains`. Domains are globally unique — a domain already owned by a
+   * *different* tenant is rejected, and nothing is written.
+   *
+   * Only the rows this source owns are touched: a domain claimed through
+   * `CustomDomains` + {@link PrismaDomainStore} (a row with a verification
+   * token) survives every save, so `tenancy.provision()` or a status change
+   * never erases a verified custom domain or its proof.
    *
    * The record and its domain set are written in ONE transaction: a failure
    * part-way (a domain another tenant claimed in the meantime, a lost
@@ -179,11 +199,19 @@ export class PrismaTenantSource implements TenantSource {
   }
 
   /**
-   * Refuses any domain owned by a different tenant, then replaces the tenant's
-   * domain set — inside the caller's transaction, so a refusal rolls back the
-   * tenant write too.
+   * Refuses any domain owned by a different tenant, then diffs the tenant's
+   * mirror rows against `domains`: drops the ones no longer listed, inserts the
+   * missing ones. Claim rows (`PrismaDomainStore`) are never deleted, and a
+   * listed domain the tenant already holds as a claim is left as it is — it
+   * resolves once verified. Runs inside the caller's transaction, so a refusal
+   * rolls back the tenant write too.
+   *
+   * The diff is computed from what the rows say rather than with a
+   * `verificationToken` filter in the query, so it also runs on a database not
+   * yet migrated to the verification columns.
    */
   private async writeDomains(tx: PrismaTenancyDelegates, tenantId: string, domains: string[]): Promise<void> {
+    const missing: string[] = []
     for (const domain of domains) {
       const owner = await tx.tenantDomain.findUnique({ where: { domain } })
       if (owner && owner.tenantId !== tenantId) {
@@ -191,11 +219,15 @@ export class PrismaTenantSource implements TenantSource {
           `@basaltkit/tenancy-prisma: domain "${domain}" is already owned by tenant "${owner.tenantId}".`,
         )
       }
+      if (!owner) missing.push(domain)
     }
-    await tx.tenantDomain.deleteMany({ where: { tenantId } })
-    if (domains.length === 0) return
+    const wanted = new Set(domains)
+    const current = await tx.tenantDomain.findMany({ where: { tenantId } })
+    const dropped = current.filter((row) => isMirror(row) && !wanted.has(row.domain)).map((row) => row.domain)
+    if (dropped.length > 0) await tx.tenantDomain.deleteMany({ where: { tenantId, domain: { in: dropped } } })
+    if (missing.length === 0) return
     try {
-      await tx.tenantDomain.createMany({ data: domains.map((domain) => ({ domain, tenantId })) })
+      await tx.tenantDomain.createMany({ data: missing.map((domain) => ({ domain, tenantId })) })
     } catch (error) {
       // The pre-flight saw the domains free; another tenant took one since.
       if (isUniqueViolation(error)) throw domainTakenError(tenantId, domains, error)
@@ -208,9 +240,17 @@ export class PrismaTenantSource implements TenantSource {
     return r ? (r.data as Tenant) : null
   }
 
+  /**
+   * The tenant a domain belongs to. Fail-closed for custom domains: a claim
+   * row (`PrismaDomainStore`) resolves only once verified, so a domain
+   * somebody merely *claimed* — `victim.com`, registered by another tenant —
+   * never routes a request.
+   */
   async findByDomain(domain: string): Promise<Tenant | null> {
     const d = await this.client.tenantDomain.findUnique({ where: { domain } })
-    return d ? this.find(d.tenantId) : null
+    if (!d) return null
+    if (!isMirror(d) && d.verified !== true) return null
+    return this.find(d.tenantId)
   }
 
   async list(): Promise<Tenant[]> {

@@ -130,14 +130,15 @@ const myRoute = route({
 The module doesn't impose any database. You provide an object that fulfills the `UserSource` interface:
 
 ```ts
-import type { UserSource, AuthUser, UserPatch } from '@basaltkit/auth'
+import type { UserSource, AuthUser, UserPatch, NewUser } from '@basaltkit/auth'
 
 const users: UserSource = {
   async findByEmail(email) { /* SELECT ... WHERE email = ? */ return null },
   async findById(id) { /* SELECT ... WHERE id = ? */ return null },
-  async create(data) {
-    // data = { email, passwordHash } — the hash is already computed
-    return { id: 'new-id', ...data } as AuthUser
+  async create(data: NewUser) {
+    // data = { email, passwordHash, emailVerified? } — the hash is already computed;
+    // persist emailVerified (omitted = false) with the row
+    return { id: 'new-id', email: data.email, passwordHash: data.passwordHash, emailVerified: data.emailVerified === true }
   },
   // Optional, but required for email verification and password reset:
   async update(id, patch: UserPatch) { /* UPDATE ... */ return null },
@@ -150,7 +151,7 @@ const users: UserSource = {
 |---|---|---|---|
 | `findByEmail(email)` | Yes | `AuthUser \| null` | Sign-in and registration lookups. Emails are case-insensitive identities. |
 | `findById(id)` | Yes | `AuthUser \| null` | Resolving the user behind a token, session or API key. |
-| `create({ email, passwordHash })` | Yes | `AuthUser` | Registration; the hash arrives already computed. |
+| `create({ email, passwordHash, emailVerified? })` | Yes | `AuthUser` | Registration; the hash arrives already computed. `emailVerified: true` comes only from trusted flows (`register(…, { emailVerified: true })`, a provider-verified social login) and must be persisted with the row. A source that drops it is patched through `update()`; without `update()`, `register(…, { emailVerified: true })` throws `AUTH_UPDATE_UNSUPPORTED` before anything is written and a social login keeps the account unverified (still linked and signed in). |
 | `update(id, patch)` | No | `AuthUser \| null` | Email verification and password reset need it (`AUTH_UPDATE_UNSUPPORTED` without it). |
 | `findByIds(ids)` | No | `PublicUser[]` | **Bulk contact lookup** — see below. |
 
@@ -255,6 +256,10 @@ enroll/activate/status. `meta: { mfa: true }` requires MFA on one route
 `['pwd', 'mfa']`, `['fed', …]` for social login), refreshes keep it, the
 session cookie carries it HMAC-signed, and the request exposes it as
 `ctx().amr`. API-key requests are not subject to the policy. Off by default.
+Listing surfaces (MCP `tools/list`) hide `meta.mfa: true` routes — and, under
+`requireMfa: true`, every authenticated route — from a session without `'mfa'` in
+`ctx().amr`, through a side-effect-free `http:route-visibility` check. A
+`requireMfa` function is never called for a listing.
 
 **Encrypting secrets at rest.** `authPlugin({ mfaEncryption: { keys: [{ id, key }] } })`
 (or the shorthand `mfaEncryptionKey`) stores TOTP secrets as `bka2.<keyId>.…`
@@ -524,6 +529,27 @@ without `*` is refused on `meta.auth`/`can`/`teamRole`/`audience` routes that do
 declare `meta.scopes`; opt out with `allowNarrowKeysOnUnscopedRoutes: true`) and
 **session-only routes** (`meta.apiKey: false` refuses every key with
 `403 AUTH_APIKEY_NOT_ALLOWED` — `apiKeyRoutes()` and `mfaRoutes()` declare it).
+The plugin also registers a side-effect-free `http:route-visibility` check, so
+listing surfaces (MCP `tools/list`) hide `meta.scopes` routes from callers whose key
+does not hold every scope, `meta.apiKey: false` routes from key holders, and identity-gated routes without
+`meta.scopes` from narrow keys (no `*`). A listing emits no `auth:apikey_rejected`.
+
+**Rate limits and OpenAPI.** With `securityPlugin({ rateLimit })` from `@basaltkit/http`,
+`meta.rateLimit: { …, key: 'apiKey' }` budgets each verified key separately (an invalid
+key never gets a bucket of its own), and `rateLimit.prefixes` lifts the per-IP ceiling for
+an API's paths. `openapiPlugin` advertises `meta.scopes` routes with an `apiKeyAuth`
+scheme and `x-required-scopes`; if you change `header` here, pass the same one as
+`openapiPlugin({ apiKey: { header } })`.
+
+For machine clients: `rejectInvalid: true` answers a presented key that does not
+verify with `401 AUTH_APIKEY_INVALID` and `WWW-Authenticate: Bearer
+error="invalid_token"` (default: the request continues as anonymous), and
+`touchEveryMs` (default 60 s; `0` = every request) throttles `lastUsedAt` writes.
+`auth:apikey_rejected` carries the display `prefix` and `ip` of an invalid key,
+never the secret; `@basaltkit/audit` does not record it by default. A refusal of
+a key that verified (`tenant_mismatch`, `not_allowed`, `scope`) is also emitted
+as `auth:apikey_refused` (`{ id, reason, tenantId? }`), which the audit records
+by default.
 
 ### Brute-force lockout (LoginThrottle)
 
@@ -556,7 +582,7 @@ lock go (the memory bound is absolute).
 
 ### Hooks (events)
 
-The application can react to authentication events: `auth:registered`, `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
+The application can react to authentication events: `auth:registered`, `auth:register_existing_email`, `auth:register_refused` (a registration policy refused a new account: `{ email, tenantId?, source: 'register' | 'social' }`), `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
 
 ## API reference
 
@@ -573,8 +599,9 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `refreshTokens` | `RefreshTokenStore` | No | `MemoryRefreshTokenStore` | Refresh token storage. `markUsed` must be a **compare-and-swap** — see below. |
 | `accessTtl` | `DurationInput` | No | `'15m'` | Access token validity. |
 | `refreshTtl` | `DurationInput` | No | `'30d'` | Refresh token validity. |
-| `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity. |
-| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. |
+| `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity (absolute). |
+| `sessionIdleTtl` | `DurationInput` | No | — | Idle timeout: a session unused for longer is refused and deleted. Needs a session store with `touch` (memory, auth-sqlite, auth-prisma with `trackSessionActivity`); fails at boot otherwise. |
+| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value is emitted as configured with a boot warning, and is refused from the next major (`AUTH_SESSION_COOKIE_INVALID`). |
 | `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
 | `throttleStore` | `ThrottleStore` | No | in-memory, per process | Counters of the default login / per-IP / email-request throttles — `RedisThrottleStore` for one budget across replicas. |
 | `requireMfa` | `boolean \| (user, context) => boolean \| Promise<boolean>` | No | off | Plugin only. Require a sign-in with MFA on every authenticated route except `meta.mfa: false` ones. |
@@ -586,13 +613,15 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy? }` | No | — (plaintext) | Encrypts TOTP secrets at rest with a key ring; see *Encrypting secrets at rest*. |
 | `mfaEncryptionKey` | `string \| Buffer` | No | — | Shorthand for a one-key ring (`id: 'default'`, ≥ 32 bytes). |
 | `mfaIssuer` | `string` | No | `'Basalt'` | Name shown in the authenticator app. |
+| `registerPolicy` | `RegisterPolicy` (`({ email, tenantId? }) => boolean \| Promise<boolean>`) | No | — (open) | Who may create a NEW account through `POST /auth/register` (refusal = same `202`, `auth:register_refused`) and the create branch of `socialLogin` (refusal = `RegistrationClosedError`). Logins into existing accounts and `register()` are never gated. `@basaltkit/teams`' `teamsInviteGate(teams)` = invite-only on tenant hosts. |
 | `hooks` | `HookBus` | No | — | Only on the `Auth` class; the plugin injects it. |
 
 `Auth` class methods:
 
 | Method | Description |
 |---|---|
-| `register(email, password)` | Creates the account; throws `EmailTakenError` if the email already exists. |
+| `register(email, password, { emailVerified? })` | Trusted, server-side creation; throws `EmailTakenError` if the email already exists; never gated by `registerPolicy`. `emailVerified: true` creates the account already verified (only for a flow that proved the address — never from a request body). |
+| `registerSafely(email, password, { policy?, tenantId? })` | What `POST /auth/register` calls: enumeration-safe, asks the registration policy first (`policy: null` = open); never creates a verified account. |
 | `login(email, password, mfaCode?)` | Returns `{ user, tokens, amr }`; applies throttle and MFA. |
 | `attempt(email, password)` | Checks credentials without side effects; `null` on failure. |
 | `refresh(refreshToken)` | New token pair; detects reuse and revokes the family. |
@@ -603,12 +632,12 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `requestPasswordReset(email)` / `resetPassword(token, newPassword)` | Password recovery. |
 | `enrollMfa(userId)` / `activateMfa(userId, code)` / `disableMfa(userId, code)` | MFA lifecycle. |
 | `isMfaEnabled(userId)` / `mfaStatus(userId)` / `verifyMfaCode(userId, code)` | MFA state and verification. |
-| `socialLogin(email, { emailVerified?, mfaCode?, mfa?, identity?, subjectConflict? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; with `identity: { provider, subject }` the account link decides, otherwise it links to an existing account only with a provider-verified email; honours MFA; returns `{ user, tokens }`. |
+| `socialLogin(email, { emailVerified?, mfaCode?, mfa?, identity?, subjectConflict?, tenantId? })` | Find-or-create a passwordless account for an OAuth/OIDC identity; with `identity: { provider, subject }` the account link decides, otherwise it links to an existing account only with a provider-verified email; honours MFA; creating a new account asks `registerPolicy` (for `tenantId`, default `ctx().tenant?.id`) and is refused with `RegistrationClosedError`; returns `{ user, tokens }`. |
 | `reencryptMfaSecret(userId)` | Re-seals a stored TOTP secret under the active `mfaEncryption` key (rotation / legacy migration): `'resealed'`, `'current'` or `'none'`. |
 
 ### Ready-made routes
 
-- `authRoutes()`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them. `POST /auth/logout` takes an optional `{ refreshToken }`: with none (or no body) it ends the cookie / `x-session-id` session and expires the cookie — a cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`).
+- `authRoutes({ register?, password?, rateLimit? })`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them. `POST /auth/logout` takes an optional `{ refreshToken }`: with none (or no body) it ends the cookie / `x-session-id` session and expires the cookie — a cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`). `register: 'open' | 'closed' | RegisterPolicy` sets who may sign up (default: the plugin's `registerPolicy`, open without one): `'closed'` answers a static `404 AUTH_REGISTRATION_CLOSED`; a refusing policy answers the same `202` as a success and creates nothing.
 - Every `authRoutes()`, `mfaRoutes()` and `oauthRoutes()` route declares `meta.account: true` (about the caller, not a tenant's data — `@basaltkit/teams`' membership guard lets non-members through) and, except MFA disable, `meta.mfa: false` (reachable under `requireMfa`). `ACCOUNT_META` exports the pair for your own profile routes.
 - `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
@@ -658,6 +687,7 @@ If you implement your own store, do the same. Returning `void` keeps the older r
 |---|---|---|
 | `InvalidCredentialsError` | `AUTH_INVALID_CREDENTIALS` | 401 |
 | `EmailTakenError` | `AUTH_EMAIL_TAKEN` | 409 |
+| `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 (`authRoutes({ register: 'closed' })`, or a `registerPolicy` refused a first social / SSO login) |
 | `RefreshInvalidError` / `RefreshReusedError` | `AUTH_REFRESH_INVALID` / `AUTH_REFRESH_REUSED` | 401 |
 | `AuthRequiredError` | `AUTH_REQUIRED` | 401 |
 | `TokenInvalidError` / `TokenExpiredError` | `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` | 401 |

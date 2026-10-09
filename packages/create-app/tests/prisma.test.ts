@@ -78,7 +78,8 @@ describe('--prisma generates a PostgreSQL-backed app', () => {
     const schema = await read(result.dir, 'prisma/schema.prisma')
     // Prisma 7: the URL lives in prisma.config.ts, and the client needs an output.
     expect(schema).toContain('provider = "postgresql"')
-    expect(schema).toContain('output   = "../src/generated/prisma"')
+    // Outside src/ (BK-026): tsc never copies the generated .js files to dist/.
+    expect(schema).toContain('output   = "../generated/prisma"')
     expect(schema).not.toContain('env("DATABASE_URL")')
     // The domain models the enabled features need.
     for (const model of ['model Tenant ', 'model AuthUser ', 'model TeamMembership ']) {
@@ -98,7 +99,8 @@ describe('--prisma generates a PostgreSQL-backed app', () => {
   it('creates the client with the tenancy extension in src/db.ts', async () => {
     const dbTs = await read((await scaffold('dbts')).dir, 'src/db.ts')
     expect(dbTs).toContain("import { PrismaPg } from '@prisma/adapter-pg'")
-    expect(dbTs).toContain("from './generated/prisma/client.js'")
+    // Through the package.json "imports" alias, so src/ (tsx) and dist/src/ (node) agree.
+    expect(dbTs).toContain("from '#db/client.js'")
     expect(dbTs).toContain('new PrismaPg({ connectionString: env.DATABASE_URL })')
     expect(dbTs).toContain("import { tenancyExtension } from '@basaltkit/prisma'")
     expect(dbTs).toContain('export const db = prisma.$extends(tenancyExtension())')
@@ -155,7 +157,7 @@ describe('--prisma generates a PostgreSQL-backed app', () => {
     expect(pkg.scripts['db:migrate']).toBe('prisma migrate dev')
     expect(pkg.scripts['db:deploy']).toBe('prisma migrate deploy')
     expect(pkg.scripts['db:generate']).toBe('prisma generate')
-    expect(pkg.scripts['db:seed']).toBe('tsx prisma/seed.ts')
+    expect(pkg.scripts['db:seed']).toBe('prisma db seed')
     // `db push` leaves no _prisma_migrations, which assertMigrated requires.
     expect(pkg.scripts).not.toHaveProperty('db:push')
 
@@ -205,7 +207,7 @@ describe('--prisma generates a PostgreSQL-backed app', () => {
 
   it('keeps the generated client out of git', async () => {
     const ignore = await read((await scaffold('ignored')).dir, '.gitignore')
-    expect(ignore.split('\n')).toContain('src/generated/')
+    expect(ignore.split('\n')).toContain('generated/')
   })
 })
 

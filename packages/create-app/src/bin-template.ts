@@ -94,7 +94,11 @@ if (existsSync(envFile)) process.loadEnvFile(envFile)
  * migrated. Anything else is rethrown untouched.
  */
 async function explainBootFailure(error: unknown): Promise<never> {
-  const failure = (error ?? {}) as { code?: unknown; report?: unknown; message?: unknown; cause?: unknown; errors?: unknown }
+  const failure = (error ?? {}) as {
+    code?: unknown; report?: unknown; message?: unknown; cause?: unknown; errors?: unknown; details?: unknown
+  }
+  // @basaltkit/prisma's describeDbError diagnosis (assertMigrated attaches it): the cause and its one-line fix.
+  const diagnosis = (failure.details as { diagnosis?: { code?: unknown; cause?: unknown; fix?: unknown } } | undefined)?.diagnosis
   const message = String(failure.message ?? '')
   const codes = [failure, failure.cause, ...(Array.isArray(failure.errors) ? failure.errors : [])].map((item) =>
     String((item as { code?: unknown } | null | undefined)?.code ?? ''),
@@ -117,6 +121,16 @@ async function explainBootFailure(error: unknown): Promise<never> {
       'Fix: ' + (hasEnvFile ? 'set them in .env' : 'cp .env.example .env, then fill them in') + ' (or export them)' +
         (existsSync(join(root, 'prisma')) ? ' — for DATABASE_URL, start PostgreSQL and point the URL at it' : '') +
         '. \`pnpm basalt doctor\` checks the environment; ' + debugHint,
+    ].join('\\n')
+  } else if (diagnosis && (diagnosis.code === 'DB_PERMISSION_DENIED' || diagnosis.code === 'DB_NOT_EMPTY_BASELINE')) {
+    const database = await databaseInUse()
+    explanation = [
+      diagnosis.code === 'DB_PERMISSION_DENIED'
+        ? 'The app cannot start — the database refused the app database role (permission denied):'
+        : 'The app cannot start — the database has tables but no migration history:',
+      '  ' + String(diagnosis.cause),
+      'Database: ' + database.target + ' (from ' + database.name + '; credentials never shown).',
+      'Fix: ' + String(diagnosis.fix) + ' ' + debugHint,
     ].join('\\n')
   } else if (unreachable || failure.code === 'PRISMA_NOT_MIGRATED') {
     const database = await databaseInUse()

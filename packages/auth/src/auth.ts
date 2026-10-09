@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { BasaltError, isProductionEnvironment, parseDuration, type DurationInput, type HookBus } from '@basaltkit/core'
+import { BasaltError, isProductionEnvironment, parseDuration, tryCtx, type DurationInput, type HookBus } from '@basaltkit/core'
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle, type ThrottleStore } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
@@ -198,6 +198,35 @@ const isLinkPart = (value: unknown): value is string =>
  */
 export const canonicalEmail = (email: string): string => email.trim().toLowerCase()
 
+/**
+ * Account creation is not open here: the register route is configured
+ * `register: 'closed'`, or a {@link RegisterPolicy} refused a social / SSO
+ * login that would have created a new account. (A policy refusing the public
+ * register route never surfaces this — that route answers the same 202 as a
+ * success, so it cannot reveal who was invited.)
+ */
+export class RegistrationClosedError extends BasaltError {
+  readonly status = 404
+  constructor() {
+    super('AUTH_REGISTRATION_CLOSED', 'Registration is not available here.')
+  }
+}
+
+/**
+ * Decides whether a NEW account may be created for this address. `tenantId`
+ * is the tenant resolved for the request (`ctx().tenant?.id`), `undefined` on
+ * the apex / central plane. Return `false` to refuse. Throwing fails the
+ * request (fail closed). `@basaltkit/teams`' `teamsInviteGate(teams)` is the
+ * ready-made "invite-only on tenant hosts" policy.
+ */
+export type RegisterPolicy = (input: { email: string; tenantId?: string }) => boolean | Promise<boolean>
+
+/** The tenant id of the current request, read structurally (auth never imports tenancy). */
+const currentTenantId = (): string | undefined => {
+  const id = (tryCtx() as { tenant?: { id?: unknown } } | undefined)?.tenant?.id
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
+
 /** An MFA action needed an enrollment that doesn't exist. */
 export class MfaNotEnrolledError extends BasaltError {
   readonly status = 400
@@ -232,8 +261,135 @@ export interface SessionCookieOptions {
   /**
    * Whether to require HTTPS. Defaults to true unless `NODE_ENV` is explicitly
    * `development` or `test` (an unset NODE_ENV counts as production).
+   *
+   * A `__Host-` or `__Secure-` name (matched case-insensitively) implies
+   * `true` when unset (in every environment): browsers silently drop such a
+   * cookie without `Secure`. An
+   * explicit `false` is kept as given but warns at boot; it is refused from
+   * the next major.
    */
   secure?: boolean
+}
+
+/**
+ * The session cookie options violate the rules of the cookie name's prefix.
+ *
+ * Exported ahead of time: today such a configuration only warns at boot (the
+ * cookie is emitted as configured, as before); from the next major it is
+ * thrown with code `AUTH_SESSION_COOKIE_INVALID`.
+ */
+export class SessionCookieConfigError extends BasaltError {
+  readonly status = 500
+  constructor(message: string) {
+    super('AUTH_SESSION_COOKIE_INVALID', message)
+  }
+}
+
+/** `sessionIdleTtl` cannot be honoured as configured. */
+export class SessionIdleConfigError extends BasaltError {
+  readonly status = 500
+  constructor(message: string) {
+    super('AUTH_SESSION_IDLE_CONFIG_INVALID', message)
+  }
+}
+
+/**
+ * Session cookie options already warned about. Keyed on the `sessionCookie`
+ * object, not on the `Auth` instance: `authPlugin` validates the options at
+ * registration and the `AUTH` singleton resolves them again with the same
+ * `sessionCookie` reference, so one configuration warns once.
+ */
+const warnedSessionCookies = new WeakSet<SessionCookieOptions>()
+
+/**
+ * Resolves the session cookie options against the cookie-prefix rules
+ * browsers apply (RFC 6265bis): `__Secure-` needs `Secure`; `__Host-` needs
+ * `Secure` and `Path=/` (and no `Domain`, which Basalt never sets). Prefixes
+ * match case-insensitively, as in current browsers. A violating cookie is not
+ * an error in the browser, it is silently dropped, so every login would
+ * "succeed" without a session.
+ *
+ * An unset `secure` on a prefixed name takes `true`. Contradicting values
+ * (`secure: false`, a `__Host-` path other than `/`) are emitted as given and
+ * warn once at boot; they are refused from the next major.
+ *
+ * Warnings are independent, each emitted once per `sessionCookie` object:
+ * - the cookie is dropped by browsers because of its prefix (refused next major);
+ * - Secure is implied by the prefix where it was not before (outside
+ *   production, so the emission differs from earlier versions);
+ * - `SameSite=None` without `Secure`, which browsers also drop.
+ */
+function resolveSessionCookie(options: SessionCookieOptions | undefined): Required<SessionCookieOptions> {
+  const name = options?.name ?? 'basalt_session'
+  const lowerName = name.toLowerCase()
+  const host = lowerName.startsWith('__host-')
+  const prefixed = host || lowerName.startsWith('__secure-')
+  const production = isProductionEnvironment()
+  const resolved: Required<SessionCookieOptions> = {
+    name,
+    path: options?.path ?? '/',
+    httpOnly: options?.httpOnly ?? true,
+    sameSite: options?.sameSite ?? 'Lax',
+    secure: options?.secure ?? (prefixed ? true : production),
+  }
+  if (options && !warnedSessionCookies.has(options)) {
+    const warnings: string[] = []
+    const problems: string[] = []
+    if (prefixed && !resolved.secure) problems.push('secure: true')
+    if (host && resolved.path !== '/') problems.push('path "/"')
+    if (problems.length > 0) {
+      warnings.push(
+        `[basalt] sessionCookie: "${name}" requires ${problems.join(' / ')} - browsers drop it; this will refuse to boot in the next major.`,
+      )
+    }
+    if (prefixed && options.secure === undefined && !production) {
+      warnings.push(
+        `[basalt] sessionCookie "${name}": Secure is implied by the prefix (it was not before outside production). Test clients over plain http will not send it back; use an unprefixed name outside production, or set secure explicitly (secure: true silences this).`,
+      )
+    }
+    if (!prefixed && resolved.sameSite === 'None' && !resolved.secure) {
+      warnings.push(
+        `[basalt] sessionCookie "${name}": SameSite=None without Secure - browsers drop it; set secure: true or use SameSite "Lax".`,
+      )
+    }
+    if (warnings.length > 0) {
+      warnedSessionCookies.add(options)
+      for (const warning of warnings) console.warn(warning)
+    }
+  }
+  return resolved
+}
+
+/** Longest gap between two `touch` writes of one session: one minute. */
+const MAX_SESSION_TOUCH_INTERVAL_MS = 60_000
+
+/**
+ * Resolves `sessionIdleTtl` to milliseconds, or undefined when unset. Fails
+ * when it is not a positive duration or the session store cannot record
+ * activity (`touch`). `sessions` undefined means the built-in memory store.
+ */
+function resolveSessionIdle(idle: DurationInput | undefined, sessions: SessionStore | undefined): number | undefined {
+  if (idle === undefined) return undefined
+  const idleMs = parseDuration(idle)
+  if (!Number.isFinite(idleMs) || idleMs <= 0) {
+    throw new SessionIdleConfigError('sessionIdleTtl must be a positive duration.')
+  }
+  if (sessions !== undefined && typeof sessions.touch !== 'function') {
+    throw new SessionIdleConfigError(
+      'sessionIdleTtl needs a session store that implements touch(id, at) — the built-in memory, auth-sqlite and auth-prisma (trackSessionActivity: true) stores do.',
+    )
+  }
+  return idleMs
+}
+
+/**
+ * Validates the session options the way `new Auth()` does, without building
+ * it — so `authPlugin` refuses a bad configuration at registration rather
+ * than on the first request. Pure: no I/O.
+ */
+export function assertSessionOptions(options: Pick<AuthOptions, 'sessionCookie' | 'sessionIdleTtl' | 'sessions'>): void {
+  resolveSessionCookie(options.sessionCookie)
+  resolveSessionIdle(options.sessionIdleTtl, options.sessions)
 }
 
 export interface AuthOptions {
@@ -244,7 +400,21 @@ export interface AuthOptions {
   refreshTokens?: RefreshTokenStore
   accessTtl?: DurationInput
   refreshTtl?: DurationInput
+  /** Absolute lifetime of a server-side session. Default `30d`. */
   sessionTtl?: DurationInput
+  /**
+   * Idle timeout: a session unused for longer than this is refused and
+   * deleted, whatever its absolute `sessionTtl`. Activity is recorded with the
+   * store's `touch` at most once per `min(60s, sessionIdleTtl / 4)`, so the
+   * effective idle limit can be that much longer. Requires a session store
+   * that implements `touch` (memory, auth-sqlite, auth-prisma with
+   * `trackSessionActivity`); construction fails otherwise. A session with no
+   * `lastSeenAt` (a legacy row) starts its idle clock on its next use; one
+   * that has it is measured from it, and nothing touches it while this option
+   * is off, so enabling it signs out sessions created longer ago than the
+   * window once. Default: no idle timeout.
+   */
+  sessionIdleTtl?: DurationInput
   sessionCookie?: SessionCookieOptions
   hooks?: HookBus
   /** Brute-force lockout (per email). Enabled by default; pass `false` to disable. */
@@ -281,6 +451,14 @@ export interface AuthOptions {
    * lower-level {@link Auth.register} always throws on a duplicate. Default true.
    */
   enumerationSafeRegister?: boolean
+  /**
+   * Who may create a NEW account through the self-service paths: the public
+   * register route ({@link Auth.registerSafely}, unless `authRoutes({ register })`
+   * overrides it) and the create branch of {@link Auth.socialLogin}. Logins into
+   * existing accounts and the trusted {@link Auth.register} are never gated.
+   * Default: open.
+   */
+  registerPolicy?: RegisterPolicy
   /** Store for verification/reset tokens. Default: in-memory. */
   tokens?: AuthTokenStore
   /** Email-verification link lifetime. Default 24h. */
@@ -341,6 +519,8 @@ export class Auth {
   private readonly accessTtl: DurationInput
   private readonly refreshTtl: DurationInput
   private readonly sessionTtl: DurationInput
+  private readonly sessionIdleMs: number | undefined
+  private readonly sessionTouchEveryMs: number
   private readonly sessionCookie: Required<SessionCookieOptions>
   private readonly hooks: HookBus | undefined
   private readonly throttle: LoginThrottle | undefined
@@ -355,6 +535,7 @@ export class Auth {
   private readonly mfaBox: SecretBox | undefined
   private readonly tokenVersions: TokenVersionStore | undefined
   private readonly enumerationSafeRegister: boolean
+  private readonly registerPolicy: RegisterPolicy | undefined
 
   constructor(options: AuthOptions) {
     this.users = options.users
@@ -372,13 +553,9 @@ export class Auth {
     this.accessTtl = options.accessTtl ?? '15m'
     this.refreshTtl = options.refreshTtl ?? '30d'
     this.sessionTtl = options.sessionTtl ?? '30d'
-    this.sessionCookie = {
-      name: options.sessionCookie?.name ?? 'basalt_session',
-      path: options.sessionCookie?.path ?? '/',
-      httpOnly: options.sessionCookie?.httpOnly ?? true,
-      sameSite: options.sessionCookie?.sameSite ?? 'Lax',
-      secure: options.sessionCookie?.secure ?? isProductionEnvironment(),
-    }
+    this.sessionIdleMs = resolveSessionIdle(options.sessionIdleTtl, this.sessions)
+    this.sessionTouchEveryMs = Math.min(MAX_SESSION_TOUCH_INTERVAL_MS, (this.sessionIdleMs ?? 0) / 4)
+    this.sessionCookie = resolveSessionCookie(options.sessionCookie)
     this.hooks = options.hooks
     const shared = options.throttleStore ? { store: options.throttleStore } : {}
     this.throttle =
@@ -411,17 +588,65 @@ export class Auth {
         : undefined
     this.tokenVersions = options.tokenVersions
     this.enumerationSafeRegister = options.enumerationSafeRegister ?? true
+    this.registerPolicy = options.registerPolicy
   }
 
-  async register(rawEmail: string, password: string): Promise<PublicUser> {
+  /**
+   * Trusted, server-side account creation (seeding, a back-office, a flow that
+   * proved the address before creating the account). Throws
+   * {@link EmailTakenError} on a duplicate and is never gated by a
+   * {@link RegisterPolicy}. `emailVerified: true` creates the account already
+   * verified; `auth:registered` then carries the final state, so a mail hook
+   * can decide "unverified → send the verification link" on its own. Never
+   * forward this option from a request body.
+   *
+   * `emailVerified: true` needs a `UserSource` with `update()` — the same
+   * requirement as email verification. Without it this throws
+   * {@link UserUpdateUnsupportedError} **before** anything is written: whether
+   * `create()` persists the flag can only be learnt by writing the row, and a
+   * row that cannot be fixed afterwards would be a half-done registration
+   * (an unverified account that a retry reports as `EmailTakenError`).
+   */
+  async register(rawEmail: string, password: string, opts: { emailVerified?: boolean } = {}): Promise<PublicUser> {
+    if (opts.emailVerified === true && typeof this.users.update !== 'function') throw new UserUpdateUnsupportedError()
     const email = canonicalEmail(rawEmail)
     if (await this.users.findByEmail(email)) throw new EmailTakenError()
-    const user = await this.users.create({
-      email,
-      passwordHash: await this.hasher.hash(password),
-    })
+    const user = await this.createUser(email, await this.hasher.hash(password), opts.emailVerified === true)
     await this.hooks?.emit('auth:registered', { user: publicUser(user) })
     return publicUser(user)
+  }
+
+  /**
+   * Creates the row with the requested verification state. A custom
+   * `UserSource` written before `create()` took `emailVerified` may drop the
+   * flag: it is then set through `update()`.
+   *
+   * When the source can do neither (no `update()` and a `create()` that drops
+   * the flag), `onUnsupported` decides: `'throw'` fails loudly with
+   * {@link UserUpdateUnsupportedError} (trusted `register`, whose caller asked
+   * for a verified account and must hear it did not get one — `register`
+   * refuses a source without `update()` before calling this, so here it only
+   * fires for an `update()` that does not persist the flag); `'keep'` returns
+   * the row as it really is, unverified (social login — the row was just
+   * created by this call with an unusable password, so it is provably ours and
+   * must be linked and used, never left behind as an orphan that locks the
+   * provider account out on every later login).
+   */
+  private async createUser(
+    email: string,
+    passwordHash: string,
+    emailVerified: boolean,
+    onUnsupported: 'throw' | 'keep' = 'throw',
+  ): Promise<AuthUser> {
+    // Decided before anything is written, so the outcome never depends on
+    // how far a half-done create got.
+    const canPatch = typeof this.users.update === 'function'
+    let user = await this.users.create(emailVerified ? { email, passwordHash, emailVerified: true } : { email, passwordHash })
+    if (emailVerified && user.emailVerified !== true) {
+      if (canPatch) user = (await this.users.update!(user.id, { emailVerified: true })) ?? user
+      if (user.emailVerified !== true && onUnsupported === 'throw') throw new UserUpdateUnsupportedError()
+    }
+    return user
   }
 
   /**
@@ -463,6 +688,11 @@ export class Auth {
        * that legitimately re-issues subjects (a directory migration).
        */
       subjectConflict?: 'refuse' | 'link'
+      /**
+       * The tenant this login happens on, for the {@link RegisterPolicy}.
+       * Default: the current request's `ctx().tenant?.id`.
+       */
+      tenantId?: string
     } = {},
   ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean; amr: string[] }> {
     const email = canonicalEmail(rawEmail)
@@ -490,15 +720,27 @@ export class Auth {
     let user = await this.users.findByEmail(email)
     let created = false
     if (!user) {
-      user = await this.users.create({
+      // A social login is already an authenticated flow, so a refusal is said
+      // out loud (the provider vouched for the caller's address).
+      const tenantId = options.tenantId ?? currentTenantId()
+      if (this.registerPolicy && !(await this.registerPolicy(tenantId === undefined ? { email } : { email, tenantId }))) {
+        await this.hooks?.emit('auth:register_refused', { email, ...(tenantId !== undefined ? { tenantId } : {}), source: 'social' })
+        throw new RegistrationClosedError()
+      }
+      // Created with its final verification state, so `auth:registered`
+      // reports what the account really is. A source that cannot record the
+      // verification (no `update()`, a `create()` that drops the flag) keeps
+      // the account unverified rather than fail after the row exists: a
+      // half-done first login would leave an unlinked, unverified row that
+      // every later login refuses to adopt (`AUTH_SOCIAL_LINK_REFUSED`).
+      user = await this.createUser(
         email,
-        passwordHash: await this.hasher.hash(randomBytes(32).toString('hex')),
-      })
+        await this.hasher.hash(randomBytes(32).toString('hex')),
+        options.emailVerified === true,
+        'keep',
+      )
       created = true
       await this.hooks?.emit('auth:registered', { user: publicUser(user) })
-      if (options.emailVerified === true && this.users.update) {
-        user = (await this.users.update(user.id, { emailVerified: true })) ?? user
-      }
     } else {
       if (options.emailVerified !== true) throw new SocialLinkRefusedError()
       if (identity && options.subjectConflict !== 'link' && user.emailVerified) {
@@ -583,9 +825,28 @@ export class Auth {
    *
    * With `enumerationSafeRegister: false` it throws {@link EmailTakenError} on a
    * duplicate instead (the classic, enumerable behavior).
+   *
+   * A {@link RegisterPolicy} (`opts.policy`, else `registerPolicy` of the
+   * options; `null` = open) is asked first. A refusal creates nothing, does the
+   * same hashing work and emits `auth:register_refused` — the caller sees the
+   * same outcome as a success, so the response never tells who was invited.
+   * Never creates a verified account.
    */
-  async registerSafely(rawEmail: string, password: string): Promise<void> {
+  async registerSafely(
+    rawEmail: string,
+    password: string,
+    opts: { policy?: RegisterPolicy | null; tenantId?: string } = {},
+  ): Promise<void> {
     const email = canonicalEmail(rawEmail)
+    const policy = opts.policy === undefined ? this.registerPolicy : (opts.policy ?? undefined)
+    if (policy) {
+      const tenantId = opts.tenantId ?? currentTenantId()
+      if (!(await policy(tenantId === undefined ? { email } : { email, tenantId }))) {
+        await this.hasher.hash(password)
+        await this.hooks?.emit('auth:register_refused', { email, ...(tenantId !== undefined ? { tenantId } : {}), source: 'register' })
+        return
+      }
+    }
     const existing = await this.users.findByEmail(email)
     if (existing) {
       if (!this.enumerationSafeRegister) throw new EmailTakenError()
@@ -852,9 +1113,30 @@ export class Auth {
   async sessionAuth(sessionId: string): Promise<{ user: AuthUser; amr?: string[] } | null> {
     const { rawId, amr } = this.parseSessionId(sessionId)
     const session = await this.sessions.find(rawId)
+    if (session && !(await this.sessionStillActive(rawId, session))) return null
     const user = session ? await this.users.findById(session.userId) : null
     if (!user) return null
     return amr ? { user, amr } : { user }
+  }
+
+  /**
+   * Applies the idle timeout: refuses (and deletes) a session idle for longer
+   * than `sessionIdleTtl`, otherwise records the activity, throttled. A no-op
+   * without `sessionIdleTtl`.
+   */
+  private async sessionStillActive(rawId: string, session: SessionRecord): Promise<boolean> {
+    const idleMs = this.sessionIdleMs
+    if (idleMs === undefined) return true
+    const now = Date.now()
+    const lastSeenAt = session.lastSeenAt
+    if (lastSeenAt !== undefined && now - lastSeenAt > idleMs) {
+      await this.sessions.delete(rawId)
+      return false
+    }
+    if (lastSeenAt === undefined || now - lastSeenAt >= this.sessionTouchEveryMs) {
+      await this.sessions.touch?.(rawId, now)
+    }
+    return true
   }
 
   async logout(sessionId: string): Promise<void> {

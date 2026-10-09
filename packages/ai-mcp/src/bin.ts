@@ -19,6 +19,12 @@ const cwd = flag('cwd') ?? process.cwd()
 const allowUnconfirmedApply = has('allow-unconfirmed-apply')
 // Dev-only: the server refuses NODE_ENV=production unless this is passed.
 const allowProduction = has('allow-production')
+// The client only gets a generic `Internal error`; the real cause goes to stderr
+// (never stdout, which carries the stdio protocol).
+const onError = (error: unknown, message: { method: string }): void => {
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+  process.stderr.write(`basalt-ai-mcp: internal error in ${message.method} — ${detail}\n`)
+}
 
 // Transport: stdio is the default (the local-dev path). `--http[=port]` opts into
 // the minimal HTTP transport for remote/CI. Provider keys come from the launching
@@ -35,6 +41,7 @@ if (has('http')) {
     port,
     allowUnconfirmedApply,
     allowProduction,
+    onError,
     ...(hostFlag ? { host: hostFlag } : {}),
     // Hostnames clients use to reach a remote bind (the Host header they send).
     ...(allowedHosts ? { allowedHosts } : {}),
@@ -52,7 +59,7 @@ if (has('http')) {
 } else {
   // The stdio server holds the stdin listener open until the client closes it.
   try {
-    createAiMcpServer({ cwd, allowUnconfirmedApply, allowProduction })
+    createAiMcpServer({ cwd, allowUnconfirmedApply, allowProduction, onError })
   } catch (error) {
     process.stderr.write(`basalt-ai-mcp: failed to start — ${(error as Error).message}\n`)
     process.exitCode = 1

@@ -86,4 +86,27 @@ describe.each(['fastify', 'express', 'hono'] as const)('MCP over HTTP on the %s 
       await live.close()
     }
   })
+
+  it('rejects non-object tool arguments with INVALID_PARAMS and leaks no internal text — identically', async () => {
+    const live = await start(adapter)
+    const post = (message: unknown, session?: string) =>
+      fetch(live.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(session ? { 'mcp-session-id': session } : {}) },
+        body: JSON.stringify(message),
+      })
+    try {
+      const init = await post({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
+      const session = init.headers.get('mcp-session-id') ?? undefined
+      for (const bad of ['abc', [1, 2], 5, null]) {
+        const res = await post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_project', arguments: bad } }, session)
+        const text = await res.text()
+        const json = JSON.parse(text) as { error?: { code: number } }
+        expect(json.error?.code, JSON.stringify(bad)).toBe(-32602)
+        expect(text).not.toMatch(/TypeError|Cannot use 'in' operator/)
+      }
+    } finally {
+      await live.close()
+    }
+  })
 })

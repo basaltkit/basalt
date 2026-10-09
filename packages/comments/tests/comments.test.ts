@@ -168,3 +168,11 @@ describe('Comment HTTP flow', () => {
     await app.shutdown()
   })
 })
+
+describe('commentRoutes meta (BK-078)', () => {
+  it('merges extra meta into every route and keeps auth on', () => {
+    const routes = commentRoutes({ meta: { can: 'comments:write', auth: false } })
+    for (const r of routes) expect(r.meta).toEqual({ can: 'comments:write', auth: true })
+    for (const r of commentRoutes()) expect(r.meta).toEqual({ auth: true })
+  })
+})

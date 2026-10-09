@@ -53,11 +53,25 @@ securityPlugin({
   rateLimit: {
     limit: 20,
     windowMs: 10_000,
-    key: (req) => req.headers['x-api-key'] as string ?? req.ip,
+    // A predefinição. Atrás de um proxy, faz o adaptador resolver request.ip a
+    // partir do proxy em que confias, em vez de ler aqui um header de reencaminhamento.
+    key: (req) => req.ip ?? 'unknown',
     skip: (req) => req.url.startsWith('/livez'),
   },
 })
 ```
+
+::: warning Nunca chaveies o limite global por um header de credencial
+A `key` global corre **antes da autenticação**, por isso só vê o que o cliente
+enviou. Uma chave como `req.headers['x-api-key'] ?? req.ip` é um bypass: um
+cliente que envia um valor inventado novo em cada pedido recebe um balde novo
+de cada vez e nunca é limitado, e a avalanche de baldes empurra clientes
+legítimos para fora do store. Chaveia o limite global só pelo endereço
+(`req.ip`, ou um header que o teu próprio proxy define e remove dos pedidos dos
+clientes). Para um orçamento por API key, usa `meta.rateLimit` com
+`key: 'apiKey'` (abaixo): lê a chave que o enricher **verificou**, por isso uma
+chave inventada nunca recebe um balde próprio.
+:::
 
 O store por omissão é em memória (`MemoryRateLimitStore`). A sua memória é
 limitada: os baldes expirados são varridos à medida que chega tráfego, e são
@@ -96,7 +110,8 @@ partilha. `meta.rateLimit.key` escolhe a quem pertence o balde:
 | `'user'` | `ctx().user.id` | ações caras por utilizador: exportações, chamadas de IA, uploads |
 | `'tenant'` | `ctx().tenant.id` (partilhado pelos utilizadores do tenant) | uma quota por organização |
 | `'user+tenant'` | um balde por utilizador por tenant | um utilizador que pertence a vários tenants |
-| `(ctx) => string` | o id que devolveres (ex.: o id de uma API key) | qualquer outro caso |
+| `'apiKey'` | `ctx().apiKey.id` (uma chave que o `apiKeysPlugin` verificou) | rajadas por cliente máquina |
+| `(ctx) => string` | o id que devolveres | qualquer outro caso |
 
 ```ts
 route({
@@ -113,11 +128,120 @@ id falta (um chamador anónimo, nenhum tenant resolvido, ou a função não devo
 nada), o balde **recua para o IP do cliente**, e os baldes anónimos nunca se
 misturam com os de utilizadores autenticados. Quando o adaptador também não
 conseguiu resolver um IP (`request.ip` undefined — Hono num runtime sem
-`getClientIp`), todos esses pedidos partilham um só balde: falha fechada, em vez
-de um balde por header falsificável. Os baldes com chave usam o mesmo store (`MemoryRateLimitStore`, ou
+`getClientIp`, um `runRoute` feito à mão, uma tool MCP chamada por stdio ou
+através do `McpServer.callTool`), um chamador autenticado fica com a chave da sua
+identidade (`user:<id>|tenant:<id>`, como faria o `'user+tenant'`), e **todos os
+pedidos anónimos sem IP partilham um só balde `unknown`**: falha fechada, em vez
+de um balde por header falsificável. Configura o adaptador para resolver o IP do
+cliente e voltar a ter baldes por cliente. Os baldes com chave usam o mesmo store (`MemoryRateLimitStore`, ou
 Redis entre instâncias). Uma rota com chave continua a contar para o limite
 global por IP em todos os adaptadores, porque o hook anterior ao routing ainda
-não conhece o utilizador.
+não conhece o utilizador. Para dar a uma família de caminhos outro teto por IP,
+usa [orçamentos por prefixo de caminho](#path-prefix-budgets).
+
+`'apiKey'` chaveia o balde por `ctx().apiKey.id` — um orçamento por API key,
+para que vários clientes máquina atrás de um mesmo endereço deixem de partilhar
+um só. Só uma chave que o `apiKeysPlugin` **verificou** se torna id de balde; sem
+chave verificada (um chamador com sessão, um anónimo, ou uma chave inválida que o
+`rejectInvalid: false` deixou passar) o balde recua como qualquer outro id em
+falta. Um orçamento por chave multiplica-se pelo número de chaves que um cliente
+cria, por isso usa-o para rajadas e põe as quotas em `'tenant'`.
+
+#### Vários orçamentos numa rota
+
+`meta.rateLimit` aceita também um array. Todos os orçamentos são impostos, pela
+ordem declarada; o primeiro que recusa responde `429` e **os seguintes não são
+cobrados** — por isso põe primeiro o orçamento curto de rajada, e um pedido
+recusado por rajada não gasta a quota diária:
+
+```ts
+import type { RouteRateLimits } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/v1/orders',
+  meta: {
+    scopes: ['orders:read'],
+    rateLimit: [
+      { limit: 10, windowMs: 1_000, key: 'apiKey' },        // rajada, por chave
+      { limit: 50_000, windowMs: 86_400_000, key: 'tenant' }, // diário, por cliente
+    ] satisfies RouteRateLimits,
+  },
+  // …
+})
+```
+
+- Os `X-RateLimit-*` reportam o orçamento com menos pedidos restantes (em
+  empate, o que reinicia mais tarde); numa recusa, eles e o `Retry-After` vêm do
+  orçamento que recusou.
+- Os orçamentos são cobrados um após o outro (um hit no store cada), sem
+  atomicidade entre eles.
+- Cada entrada do array tem o seu contador, chaveado por método, rota e
+  **posição**: reordenar as entradas remapeia os contadores. Mudar um `limit` ou
+  `windowMs` mantém a janela em curso — editar uma quota não dá a todos uma nova.
+- A forma de array (e `bucket`, abaixo) é sempre cobrada no guard de rota, em
+  todos os adaptadores, **além do** balde de borda (global ou de prefixo). Em
+  Fastify isto difere do objeto único, que é cobrado *em vez do* balde global:
+  embrulhar `{ limit, windowMs }` num array repõe o limite global por IP nessa
+  rota. Se dependias dessa substituição em Fastify para levantar o teto, passa a
+  um [prefixo de caminho](#path-prefix-budgets), que o faz em todos os adaptadores.
+
+#### Baldes partilhados
+
+`bucket` dá nome a um orçamento partilhado por todas as rotas que o declaram —
+uma quota diária para toda uma API pública:
+
+```ts
+const daily = { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'public-api-daily' } as const
+
+route({ method: 'GET', url: '/v1/orders', meta: { rateLimit: [{ limit: 10, windowMs: 1_000, key: 'apiKey' }, daily] }, /* … */ })
+route({ method: 'POST', url: '/v1/orders', meta: { rateLimit: daily }, /* … */ })
+```
+
+Todas as declarações de um nome têm de levar o mesmo `limit`, `windowMs` e
+string de chave; a app **recusa arrancar** (`InvalidRouteMetaError`, em todos os
+adaptadores) quando divergem. Chaves-função não são comparadas — duas lambdas
+inline são objetos diferentes mesmo quando significam o mesmo. Os nomes seguem
+`/^[A-Za-z0-9._:-]{1,64}$/`. Um array ou entrada com `bucket` malformado (array
+vazio, um limite não positivo, uma string de chave desconhecida) também recusa o
+arranque; o objeto único mantém a sua leitura tolerante de sempre.
+
+#### Orçamentos por prefixo de caminho {#path-prefix-budgets}
+
+`rateLimit.prefixes` dá a uma família de caminhos o seu próprio orçamento de
+borda, cobrado antes do routing **em vez do** balde global — é assim que uma API
+pública sob `/v1` recebe um teto por IP mais alto do que o resto da app,
+continuando a pagar um orçamento por IP antes de qualquer chave ser procurada:
+
+```ts
+securityPlugin({
+  rateLimit: {
+    limit: 300,
+    windowMs: 60_000,
+    prefixes: [{ prefix: '/v1', limit: 3_000, windowMs: 60_000 }],
+  },
+})
+```
+
+Ganha o prefixo correspondente mais longo. A correspondência é em fronteiras de
+segmento (`/v1` corresponde a `/v1` e `/v1/orders`, nunca a `/v10`) depois de
+uma normalização mínima: a query string é cortada, sequências de `/` colapsam,
+maiúsculas/minúsculas são ignoradas e um `/` final é removido — não há
+percent-decoding nem resolução de segmentos de ponto. 404s, preflights e pedidos
+que um enricher rejeita também contam. Cada prefixo pode ter a sua própria
+`key(request)` (por omissão: a `key` global, senão o IP); tal como a chave
+global corre antes da autenticação, por isso nunca leias nela um header de
+credencial. `skip` também salta os orçamentos de prefixo. Um prefixo inválido
+(sem `/` inicial, com `?` ou `#`, um limite não positivo, um duplicado) lança um
+`TypeError` quando o plugin é criado.
+
+Os prefixos **definem ou levantam** o orçamento de borda de uma família de
+caminhos; não servem para tornar um endpoint mais restrito, porque um pedido que
+chega à rota por uma forma de caminho que a normalização não dobra recua para o
+balde global. Um orçamento que tem de valer para um endpoint específico pertence
+ao seu `meta.rateLimit`, que está ligado à rota correspondente. Em Fastify, um
+`meta.rateLimit` de objeto único chaveado por IP continua a substituir o balde de
+borda (prefixo ou global), como antes.
 
 ### CORS
 
@@ -150,6 +274,50 @@ segredo MFA. Passa um objeto para personalizar (p. ex. a tua própria
 desativar tudo. Uma rota que pode ser guardada em cache define o seu próprio
 `Cache-Control`, que substitui o valor por omissão — fá-lo nas rotas `meta.etag`
 (p. ex. `private, no-cache`), já que `no-store` impede o browser de revalidar.
+
+### Cabeçalhos por rota — `meta.responseHeaders`
+
+Algumas rotas precisam de cabeçalhos que o resto da API não precisa: um link de
+partilha público que os motores de busca não devem indexar, um download que
+nunca deve ir para cache. Declara-os na rota:
+
+```ts
+route({
+  method: 'POST',
+  url: '/s/:token',
+  meta: { responseHeaders: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  handler: /* … */,
+})
+```
+
+O pipeline aplica-os logo que a rota é encontrada, antes dos enrichers e dos
+guards, por isso estão em **todas** as respostas que a rota produz — o `200`, o
+`401`/`403` de um guard, um `400` de validação, um `500` lançado — nos três
+adapters. Um cabeçalho posto com `reply.header()` só chegaria ao caminho de
+sucesso. Substituem um cabeçalho global com o mesmo nome (aqui o
+`Cache-Control` do `securityPlugin`), e um handler continua a poder sobrepor-se
+a um deles com `reply.header()`.
+
+Os valores são verificados no arranque em todos os adapters: strings sem CR, LF
+nem outros caracteres de controlo, e nunca `Set-Cookie`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, cabeçalhos hop-by-hop nem `X-Request-Id`,
+que pertencem à resposta ou ao adapter. Uma rota cujo registo viola uma regra
+recebe um aviso no arranque que a nomeia, e o seu registo `responseHeaders` é
+ignorado **por inteiro** — nenhum dos seus cabeçalhos é enviado, nem os
+válidos, e o pedido nunca falha por causa disso. A próxima major recusa esse
+arranque.
+
+A chave é `responseHeaders`, não `headers`: a meta da rota também é tua, e nada
+lê nem envia `meta.headers`. Um pedido que nunca chega à rota — um `404`, um
+`429` do rate limit ou um corpo malformado rejeitado pelo parser da framework —
+leva só os cabeçalhos globais.
+
+Os valores são verificados no arranque (`InvalidRouteMetaError`): strings sem
+CR, LF ou outros caracteres de controlo, e nunca `Set-Cookie`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, cabeçalhos hop-by-hop ou `X-Request-Id`,
+que pertencem à resposta ou ao adapter. Um pedido que nunca chega à rota — um
+`404`, um `429` de rate limit ou um corpo malformado rejeitado pelo parser da
+framework — leva apenas os cabeçalhos globais.
 
 ## Limites de recursos & resistência a DoS
 
@@ -211,6 +379,14 @@ schedule.call('reverify-domains', async () => {
 
 O novo dono de um domínio expirado também pode tomar um claim verificado obsoleto
 publicando o seu registo de `challenge()` — vê [Tenancy](/pt/guide/tenancy#dominios-custom-verificados).
+
+### Endpoint de mail de entrada
+
+O `inboundMailRoutes()` não está autenticado até a assinatura sobre os bytes
+ser verificada, por isso limita os pedidos a 10 MiB (e não ao default de 1 MiB
+do `rawBody()`), responde a endereços sem rota exatamente como aos encaminhados
+e só acredita em `Authentication-Results` de servidores que indicares. Acrescenta
+um `meta.rateLimit` — vê [Mail de entrada](/pt/guide/inbound-mail#limites).
 
 ## Segredos fail-closed — `secret()`
 
@@ -279,35 +455,93 @@ isso nenhum endpoint de auth revela que emails estão registados.
 
 Retries seguros para `POST`: um cliente que envia uma `Idempotency-Key` recebe a
 **mesma** resposta replicada num retry, por isso uma ligação caída nunca cobra um
-cartão duas vezes.
+cartão duas vezes. Corre dentro do pipeline de rotas partilhado, por isso
+comporta-se da mesma forma em **Fastify, Express e Hono**:
 
 ```ts
-import { idempotencyPlugin } from '@basaltkit/fastify'
+import { idempotencyPlugin } from '@basaltkit/http' // também reexportado por @basaltkit/fastify
 
-idempotencyPlugin() // protege POST por omissão
+idempotencyPlugin({
+  fingerprint: 'body',     // um corpo diferente sob a mesma chave → 422
+  replayAfterGuards: true, // um caller revogado recebe 401/403, não o sucesso em cache
+}) // protege POST por omissão
 ```
 
 - Repetir com a mesma chave → a resposta em cache, com `Idempotent-Replayed: true`.
   Vale para qualquer forma de handler — um que devolve o payload é repetido
   exactamente como um que chama `reply.send()`.
 - Uma repetição enquanto a primeira ainda está em curso → `409 IDEMPOTENCY_CONFLICT`.
-- Respostas `5xx` **não** são colocadas em cache, por isso falhas genuínas
-  continuam repetíveis.
-- As chaves têm escopo por **credenciais do caller + tenant + método + rota**,
-  com hash SHA-256 antes de chegarem ao store. As credenciais são todos os
-  headers em `credentialHeaders` (por omissão `authorization`, `x-session-id`,
-  `cookie`, `x-api-key`) e o tenant é `x-tenant-id` + `host`, por isso a resposta
-  em cache de um utilizador nunca pode ser replicada a outro (sem fuga entre
-  utilizadores/tenants), e a mesma chave em dois endpoints não pode colidir. O
-  replay corre antes dos guards da rota: se autenticas com outro header,
+- Só é registado o resultado **do próprio handler**. Uma recusa levantada antes
+  de o handler correr — o `401`/`403` de um guard, o `429` do rate limiter, um
+  `400` de validação — liberta a chave, por isso um cliente que respeita o
+  `Retry-After` (ou volta a autenticar-se) vê a operação executada no retry.
+- Respostas `5xx`, os status de "tenta mais tarde" `408`, `425` e `429` (mesmo
+  vindos do handler), downloads `stream()` e streams `sse()` **não** são
+  colocados em cache, por isso falhas genuínas continuam repetíveis. Qualquer
+  outro erro de cliente que o handler lança (`4xx`) é registado e replicado byte
+  a byte.
+- As chaves têm escopo por **credenciais do caller + headers de tenant + método +
+  padrão da rota**, com hash SHA-256 antes de chegarem ao store. As credenciais
+  são todos os headers em `credentialHeaders` (por omissão `authorization`,
+  `x-session-id`, `cookie`, `x-api-key`), por isso a resposta em cache de uma
+  credencial nunca é replicada a outra. Se autenticas com outro header,
   adiciona-o a `credentialHeaders`.
+- **O que o escopo não cobre.** A parte do tenant é só os headers em bruto
+  `x-tenant-id` e `host` — não um tenant resolvido a partir de um segmento do
+  path (`/t/:tenant/...`) ou de um claim do token — e a rota é o seu *padrão*,
+  não os params concretos do path. A mesma credencial a reutilizar uma chave em
+  `/t/acme/orders` e `/t/globex/orders`, ou em `/orders/1/pay` e
+  `/orders/2/pay`, recebe a **primeira** resposta. Faz os clientes gerarem uma
+  chave nova por operação (e por tenant), e associa a chave ao URL para que essa
+  reutilização seja recusada com `422`:
+  `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
 - Pedidos **sem** nenhum header de credencial não são colocados em cache nem
   replicados por omissão (senão um estranho que adivinhasse a chave receberia a
   resposta). Ativa com `allowAnonymous: true` apenas em endpoints públicos sem
   nada privado.
 - Chaves com mais de 255 caracteres → `400 IDEMPOTENCY_KEY_INVALID`; o
   `MemoryIdempotencyStore` remove entradas expiradas e tem um limite
-  `maxEntries` (por omissão 10 000).
+  `maxEntries` (por omissão 10 000). O `RedisIdempotencyStore` partilha os
+  replays entre instâncias.
+- Cobre as rotas que o Basalt serve (definições `route()`). Um handler que
+  registes à mão na framework por baixo — um `fastify.post(...)` cru — não fica
+  coberto: declara-o com `route()`.
+
+**Associa a chave ao pedido — `fingerprint`.** Sem ele, um cliente que reutiliza
+uma chave para um pedido *diferente* (um bug, ou um retry depois de o utilizador
+editar o formulário) recebe em silêncio o resultado do primeiro pedido.
+`fingerprint: 'body'` guarda um SHA-256 do corpo com o registo — JSON canónico
+com chaves ordenadas para um corpo com parse, os bytes exatos para uma rota
+[`rawBody()`](/pt/guide/adapters#corpos-de-pedido-em-bruto-assinaturas-de-webhook) — e
+responde a uma diferença com `422 IDEMPOTENCY_KEY_REUSED`, também enquanto o
+primeiro pedido ainda está a correr. `'body'` cobre só o corpo, não a query
+string nem os params do path. As rotas `upload()` não levam fingerprint
+com `'body'`; passa uma função (`({ route, request }) => string | undefined`)
+para as cobrir, ou para qualquer outro critério teu (o URL, um header).
+
+Durante um rolling deploy com `fingerprint` ligado, o `RedisIdempotencyStore`
+grava as reservas em curso como `pending:<fingerprint>`, que uma instância ainda
+numa versão anterior lê mal: faz primeiro o deploy da nova versão e só depois
+liga o `fingerprint`.
+
+**Onde corre a verificação — `replayAfterGuards`.** Por omissão a verificação
+corre depois dos enrichers e **antes** dos guards da rota. Correr depois dos
+enrichers significa que o tenant é resolvido primeiro: um tenant suspenso recebe
+o seu `403`, não um replay. Correr antes dos guards significa que um caller cujo
+token foi revogado desde o primeiro pedido continua a receber o sucesso em cache,
+desde que apresente o mesmo header de credencial. Com `replayAfterGuards: true`
+corre depois dos guards e da validação do pedido, mesmo antes do handler — o
+caller revogado recebe o `401`/`403` do guard, e um pedido que falha a validação
+nunca reserva a chave. Uma rota `rawBody()` com fingerprint `'body'` é sempre
+verificada depois dos guards, porque os seus bytes nunca são lidos antes de
+eles passarem.
+
+As duas opções estão desligadas por omissão para que as apps existentes mantenham
+o comportamento; uma futura major vai ligá-las. Um `IdempotencyStore` próprio
+continua a funcionar sem mudanças — para responder `422` em vez de `409` a uma
+repetição concorrente pode também guardar o `fingerprint` passado a
+`setPending(key, { fingerprint })` e devolver `{ pending: true, fingerprint }` no
+`get()`, como fazem os dois stores incluídos.
 
 ## Revogar access tokens
 
@@ -347,6 +581,82 @@ conhece. A rotação de chaves e a migração de linhas em texto simples ou `v1:
 adesão `legacy` explícita mais `auth.reencryptMfaSecret(userId)`) estão em
 [Cifrar os segredos TOTP em repouso](/pt/guide/auth#mfa-encryption).
 
+## Segredos em repouso {#secrets-at-rest}
+
+Todos os segredos que o Basalt guarda cifrados — segredos TOTP (o `SecretBox`
+do `@basaltkit/auth`, envelope `bka2`) e tokens OAuth de drives na nuvem (o
+`DriveSecretBox` do `@basaltkit/drives`, envelope `bkd1`) — passam por uma única
+primitiva auditada, `createSecretBox` de `@basaltkit/core/secret-box`:
+
+- **AES-256-GCM**, IV aleatório de 96 bits, tag completa de 128 bits (uma tag
+  mais curta é recusada);
+- derivação de chave **HKDF-SHA256** com uma etiqueta por caixa, por isso o mesmo
+  material de chave usado por duas caixas dá chaves sem relação;
+- um **anel de chaves com ids**: a primeira chave sela, todas abrem, e o
+  `reseal()` passa uma linha para a chave ativa — a rotação é gradual;
+- **ligação AAD** ao registo dono (utilizador, ou tenant + ligação + fornecedor):
+  um blob copiado para outra linha falha a verificação da tag;
+- **sem caminho em texto simples**: tudo o que não seja um envelope dessa caixa
+  é recusado.
+
+Usa-a para um segredo teu (segredos de assinatura de webhooks, tokens de APIs de
+terceiros) em vez de escreveres AES à mão:
+
+```ts
+import { createSecretBox } from '@basaltkit/core/secret-box'
+
+const box = createSecretBox({
+  keys: [{ id: '2026-10', key: env.INTEGRATIONS_KEY }], // ≥ 32 bytes; chaves novas primeiro
+  info: 'my-app:integration-tokens:v1',                 // única por caixa
+  version: 'mya1',                                      // etiqueta do envelope, [a-z0-9]{1,16}
+  aadFields: 2,                                         // a que cada segredo fica ligado
+})
+const sealed = box.seal(token, [tenantId, integrationId])
+const token2 = box.open(sealed, [tenantId, integrationId]) // caso contrário lança SecretBoxError
+```
+
+As falhas lançam `SecretBoxError` com um `failure` de `config`, `malformed`,
+`unknown-key`, `context` ou `auth-failed` (nunca o segredo nem a chave). O
+subpath não é reexportado pela entrada principal de `@basaltkit/core`.
+
+## HTTP de saída & SSRF
+
+Sempre que a tua app vai buscar um URL que não escreveu — o "importar de URL" de
+um tenant, o link de um avatar, um ficheiro para o qual um fornecedor aponta —
+esse URL é input hostil: pode apontar para `169.254.169.254`, para uma base de
+dados na tua rede privada, ou para um host público que redireciona para uma.
+Não uses o `fetch` simples para isso. O `@basaltkit/webhooks` exporta o cliente
+em streaming que o `@basaltkit/drives` usa em todas as chamadas a fornecedores:
+
+```ts
+import { createGuardedFetch, GuardedFetchError } from '@basaltkit/webhooks'
+
+const fetchUntrusted = createGuardedFetch({
+  maxBytes: 20 * 1024 * 1024, // obrigatório: abandonado a meio do stream acima disto
+  timeoutMs: 15_000, // inactividade do socket + espera pelos headers em cada salto
+  deadlineMs: 120_000, // opcional: a troca inteira, corpo incluído
+  allowedHosts: ['.example-cdn.com'], // opcional: `.sufixo` = só subdomínios
+})
+
+const response = await fetchUntrusted(url)
+await files.upload(response.body, { name: 'import.pdf' }) // em streaming, com limite
+```
+
+O que impõe, em **cada** salto de redirect: só `https:` (alarga com
+`allowedSchemes`), a allowlist de hosts opcional, DNS resolvido uma vez com
+cada resposta verificada contra gamas privadas/loopback/link-local/CGNAT/ULA/
+reservadas e IPv6 com IPv4 embebido, o socket **fixado** no IP validado (sem DNS
+rebinding), no máximo `maxRedirects` (3) saltos com `authorization`/`cookie`
+removidos num salto para outro host, nenhum `accept-encoding` (para que uma
+bomba de descompressão não se esconda atrás do limite), e o limite de bytes
+contado no fio.
+
+As recusas lançam `GuardedFetchError` com `kind` `SSRF_BLOCKED`,
+`BODY_TOO_LARGE`, `TIMEOUT` ou `TOO_MANY_REDIRECTS` (código `OUTBOUND_<kind>`).
+A mensagem nomeia o host, nunca o URL — um URL pré-assinado é uma credencial —
+e `expose` é `false`, por isso um cliente só vê o código. O `allowPrivateHosts`
+é a única saída de emergência, para um alvo alojado na tua própria rede.
+
 ## Responsabilidade partilhada — reforçar a tua integração
 
 O Basalt fecha as vulnerabilidades que *consegue* fechar sozinho. Três coisas,
@@ -379,7 +689,12 @@ O conjunto guardado completo é `auth`, `can`, `teamRole`, `scopes`, `subscribed
 e `feature` (`GUARDED_META_KEYS`). As chaves que *relaxam* em vez de proteger
 ficam deliberadamente de fora — `meta.central` (salta a verificação de
 pertença ao tenant), `meta.mcp` (opta por expor a rota via MCP) e
-`meta.rateLimit` (travagem de abuso, não uma fronteira de autorização).
+`meta.rateLimit` (travagem de abuso, não uma fronteira de autorização). Um
+`meta.rateLimit` sem nenhum limitador registado (sem
+`securityPlugin({ rateLimit })`) não recusa o boot, mas o adaptador **avisa uma
+vez**, nomeando as rotas, que esses orçamentos não são aplicados. Silencia-o com
+`allowUnguardedMeta: ['rateLimit']` (ou `true`) quando uma edge exterior faz a
+travagem.
 
 Se a proteção acontecer genuinamente numa edge/gateway exterior, opta por sair
 explicitamente com a opção do adapter `allowUnguardedMeta: true` (ou
@@ -707,6 +1022,46 @@ fetch('/api/pay', { method: 'POST', headers: { authorization: `Bearer ${jwt}` } 
 // ⚠️ se tiveres mesmo de usar sessão em cookie, junta SameSite + verificação de token CSRF
 setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 ```
+
+## Revisão de segurança das rotas — `basalt routes`
+
+`basalt routes` lista cada rota com as guardas que **declara**: `auth`, `can`,
+`rateLimit`, `tenant` e as outras chaves guardadas (`mfa`, `teamRole`, `scopes`,
+`subscribed`, `feature`). A coluna `tenant` mostra `required` (`meta.tenant: true`),
+`exempt` (`meta.tenant: false`), `central-only` (`meta.tenant: 'never'` — a rota
+rejeita qualquer pedido que resolva um tenant), ou fica vazia quando a rota herda o
+default da app. A coluna reflete só o `meta.tenant`: o `meta.central: true` (o bypass
+de membership do `@basaltkit/teams`) aparece na coluna de guardas como `central`; verifica `row.tenant ===
+'central-only'` para fixar uma rota de consola ao plano central. Duas formas de
+transformar isso num controlo:
+
+```bash
+# CI: termina com 1 quando uma rota não declara auth e can (opt-outs explícitos passam)
+pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
+pnpm basalt routes --json > routes.json   # a tabela inteira, para rever ou comparar
+```
+
+```ts
+// Um teste vitest que arranca a app (sem listen) e verifica as mesmas linhas
+import { ensureMetadata } from '@basaltkit/core'
+import { describeRoutes, findUnguardedRoutes } from '@basaltkit/http'
+
+it('todas as rotas declaram auth + can', async () => {
+  const app = await buildApp().boot()
+  const rows = describeRoutes(ensureMetadata(app.container).get('http:routes'))
+  expect(findUnguardedRoutes(rows, { require: ['auth', 'can'] })).toEqual([])
+  await app.shutdown()
+})
+```
+
+`auth: false` (ou `public: true`) é um opt-out intencional e satisfaz os dois
+requisitos; `can: false` satisfaz `can`. Só `auth: true` conta como `auth` — é o
+único valor que o `authPlugin` aplica. **Só verifica o meta das rotas**: um
+rate limit global, tenancy por URL (`tenancyPlugin({ required: { except } })`),
+hooks ou middleware da app, e as rotas de borda que os plugins montam sozinhos
+(`healthPlugin`, `metricsPlugin`, `openapiPlugin`) não aparecem — um resultado
+limpo significa "todas as rotas pedem protecção"; é a verificação no arranque
+descrita acima que garante que há um guard a aplicá-la.
 
 ## Apanha regressões automaticamente — `ai:doctor`
 

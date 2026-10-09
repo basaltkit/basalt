@@ -1,6 +1,6 @@
 import { BasaltError, type HookBus } from '@basaltkit/core'
 import type { NotificationChannel } from './channels.js'
-import type { NotificationPreferences } from './preferences.js'
+import { NotificationPreferences } from './preferences.js'
 import {
   validateNotificationData,
   type Notifiable,
@@ -86,11 +86,7 @@ export class Notifier {
 
     const report: DeliveryReport = { sent: [], failed: [], skipped: [] }
     for (const channelName of requested) {
-      if (recipient.channelPreferences?.[channelName] === false) {
-        report.skipped.push(channelName)
-        continue
-      }
-      if (this.preferences && !(await this.preferences.allowed(recipient.id, definition.name, channelName))) {
+      if (!(await this.wanted(recipient, definition, channelName))) {
         report.skipped.push(channelName)
         continue
       }
@@ -121,6 +117,35 @@ export class Notifier {
       }
     }
     return report
+  }
+
+  /**
+   * Whether the recipient gets `channel` for this notification. A mandatory
+   * channel always does. Otherwise an inline `channelPreferences: false` mutes
+   * it, then the most specific stored preference decides, then an inline
+   * `true`, and only when the recipient stated nothing does the definition's
+   * `defaults[channel]` (default `true`) apply.
+   *
+   * When the preferences object overrides `allowed()`, that override decides
+   * instead of `preference()` + `defaults` (the pre-`preference()` contract).
+   */
+  private async wanted<T>(recipient: Notifiable, definition: NotificationDefinition<T>, channel: string): Promise<boolean> {
+    if (definition.mandatory?.includes(channel)) return true
+    const inline = recipient.channelPreferences?.[channel]
+    if (inline === false) return false
+    const prefs = this.preferences
+    // A subclass that overrides `allowed()` (quiet hours, compliance blocks,
+    // plan gating) keeps deciding, as before `preference()` existed: its
+    // answer is final and the definition's `defaults` do not apply. Deprecated
+    // — override `preference()` instead; dropped in the next major.
+    const stored = !prefs
+      ? undefined
+      : prefs.allowed !== NotificationPreferences.prototype.allowed
+        ? await prefs.allowed(recipient.id, definition.name, channel)
+        : await prefs.preference(recipient.id, definition.name, channel)
+    if (stored !== undefined) return stored
+    if (inline === true) return true
+    return definition.defaults?.[channel] ?? true
   }
 
   async notifyMany<T>(

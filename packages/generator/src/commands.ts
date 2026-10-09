@@ -15,6 +15,7 @@ import {
   type GeneratorOptions,
   type WriteOptions,
 } from './generate.js'
+import { TENANT_MODES, tenantMode, type TenantMode } from './templates.js'
 
 interface MakeSpec {
   command: string
@@ -79,6 +80,20 @@ function specs(): MakeSpec[] {
   ]
 }
 
+/** The security note's tenancy line: what isolates this resource's data, stated plainly. */
+function tenantNote(mode: TenantMode | undefined, prisma: boolean): string {
+  switch (mode) {
+    case undefined:
+      return '  Data is NOT tenant-scoped — shared by every tenant. Use --tenant if this resource belongs to a tenant.'
+    case 'column':
+      return `  Data is tenant-scoped (isolation: tenantId column) via requireTenantId() (no tenant → 400)${prisma ? '; the model has an indexed tenantId column — migrate it.' : '.'}`
+    default:
+      return `  Data is tenant-scoped (isolation: ${mode}-per-tenant): no tenantId column; every query requires a resolved tenant (requireTenantId(), no tenant → 400)${
+        prisma ? ` and runs on that tenant's client from db() — add the model to the tenant schema.prisma and migrate every tenant.` : '.'
+      }`
+  }
+}
+
 /** Packages whose presence marks the project as multi-tenant. */
 const TENANCY_PACKAGES = /^@basaltkit\/tenancy(?:-[a-z0-9-]+)?$/
 
@@ -110,7 +125,9 @@ async function projectUsesTenancy(baseDir: string): Promise<boolean> {
  * --public / --no-auth (deliberately PUBLIC routes; by default every route
  * requires an authenticated user), --tenant / --no-tenant (force tenant
  * scoping on/off; by default it is on when the project depends on
- * `@basaltkit/tenancy`).
+ * `@basaltkit/tenancy`), --tenant=column|schema|database (how tenants are
+ * isolated: a `tenantId` column — the default — or a schema/database per
+ * tenant, with no `tenantId` column; never guessed from the project).
  *
  * After generating, a security note states whether the routes are
  * authenticated and whether the data is tenant-scoped.
@@ -139,7 +156,7 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
         const name = args[0]
         if (!name) {
           io.error(
-            `Usage: basalt ${spec.command} <Name> [--dir=<path>] [--force] [--prisma] [--soft-delete] [--public] [--tenant|--no-tenant]${spec.usage ?? ''}`,
+            `Usage: basalt ${spec.command} <Name> [--dir=<path>] [--force] [--prisma] [--soft-delete] [--public] [--tenant[=column|schema|database]|--no-tenant]${spec.usage ?? ''}`,
           )
           return 1
         }
@@ -154,6 +171,19 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
         // Secure by default: auth is on unless explicitly turned off; tenant
         // scoping follows the project's dependencies unless explicitly set.
         const tenantDefault = defaults.tenant ?? (await projectUsesTenancy(resolve(options.baseDir ?? process.cwd())))
+        // `--tenant=<mode>` picks the isolation explicitly; a bare `--tenant`
+        // keeps a project-level mode default (`generatorCommands({ tenant: 'schema' })`).
+        let tenant: boolean | TenantMode
+        const tenantFlag = flags['tenant']
+        if (flags['no-tenant'] === true || tenantFlag === false) tenant = false
+        else if (typeof tenantFlag === 'string') {
+          if (!(TENANT_MODES as readonly string[]).includes(tenantFlag)) {
+            io.error(`Unknown --tenant mode "${tenantFlag}". Use --tenant=column, --tenant=schema or --tenant=database.`)
+            return 1
+          }
+          tenant = tenantFlag as TenantMode
+        } else if (tenantFlag === true) tenant = typeof tenantDefault === 'string' ? tenantDefault : true
+        else tenant = tenantDefault
         // `crud` stays undefined when nothing decided it, so `spec.resolve`
         // can look at the target directory instead of guessing.
         const crud =
@@ -172,7 +202,7 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
           // callers may pass.
           auth:
             flags['public'] === true || flags['no-auth'] === true ? false : flagOr('auth', defaults.auth ?? true),
-          tenant: flags['no-tenant'] === true ? false : flagOr('tenant', tenantDefault),
+          tenant,
         }
         try {
           const resolved = spec.resolve ? await spec.resolve(name, genOptions, options) : genOptions
@@ -195,11 +225,7 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
                 ? '  Routes require an authenticated user (meta.auth) — register authPlugin; the app refuses to boot otherwise.'
                 : '  PUBLIC: routes were generated with --public and accept anonymous callers.',
             )
-            io.log(
-              resolved.tenant
-                ? `  Data is tenant-scoped via requireTenantId() (no tenant → 400)${resolved.prisma ? '; the model has an indexed tenantId column — migrate it.' : '.'}`
-                : '  Data is NOT tenant-scoped — shared by every tenant. Use --tenant if this resource belongs to a tenant.',
-            )
+            io.log(tenantNote(tenantMode(resolved), resolved.prisma === true))
             io.log('  Add authorization (who may read/write which rows) before shipping.')
           }
 

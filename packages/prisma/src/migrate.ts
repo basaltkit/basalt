@@ -127,7 +127,8 @@ export async function migrateTenants(
   return results
 }
 
-function resolveTarget(
+/** A tenant's migration URL (and schema, in schema mode). Internal — shared with db:status. */
+export function resolveTarget(
   target: MigrateTarget,
   tenantId: string,
 ): { url: string; schema?: string } {

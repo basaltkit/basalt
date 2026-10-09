@@ -7,6 +7,12 @@ export {
   CommentParentNotFoundError,
   CommentTooLongError,
   CommentMentionLimitError,
+  CommentEditWindowClosedError,
+  CommentAnchorInvalidError,
+  CommentRevisionsUnsupportedError,
+  DEFAULT_MENTION_PATTERN,
+  DELIMITED_MENTION_PATTERN,
+  MAX_ANCHOR_BYTES,
   DEFAULT_MAX_COMMENT_LENGTH,
   DEFAULT_MAX_MENTIONS,
   SINGLE_TENANT_SCOPE,
@@ -14,8 +20,16 @@ export {
   type AddCommentInput,
   type ResourceComments,
   type CommentNode,
+  type CommentActorOptions,
+  type RemoveCommentOptions,
 } from './comments.js'
-export { MemoryCommentStore, type Comment, type CommentStore, type CommentPatch } from './store.js'
+export {
+  MemoryCommentStore,
+  type Comment,
+  type CommentStore,
+  type CommentPatch,
+  type CommentRevision,
+} from './store.js'
 export {
   commentsPlugin,
   commentRoutes,

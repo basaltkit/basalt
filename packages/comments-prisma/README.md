@@ -38,13 +38,33 @@ model Comment {
   resolvedBy   String?
   editedAt     DateTime?
   createdAt    DateTime
+  anchor       String?   // optional features: anchor, deletion: 'soft'
+  deletedAt    DateTime?
+  deletedBy    String?
+  deleteReason String?
   @@id([tenantId, id])
   @@index([tenantId, resourceType, resourceId])
   @@map("comments")
 }
+
+// optional: only with commentsPlugin({ revisions: true })
+model CommentRevision {
+  tenantId  String
+  id        String
+  commentId String
+  body      String
+  at        DateTime
+  by        String?
+  @@id([tenantId, id])
+  @@index([tenantId, commentId, at])
+  @@map("comment_revisions")
+}
 ```
 
-Then `prisma migrate dev` and `prisma generate`.
+Then `prisma migrate dev` and `prisma generate`. The optional columns are
+written only when the feature that needs them is used, so an existing schema
+keeps working until you pass an `anchor`, turn on `deletion: 'soft'` or
+`revisions: true`.
 
 ## 2. Wire the store
 

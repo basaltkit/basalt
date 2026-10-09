@@ -261,6 +261,16 @@ A route can override `required` for itself with `meta.tenant` — `false` marks 
 route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
 ```
 
+`false` only lifts the requirement: on a tenant host the tenant still resolves and the route runs inside it. A route of the central plane only (the SaaS owner's console) declares `'never'` instead — when a tenant resolves, the request gets the plain "route not found" 404 (`CentralOnlyRouteError`, code `NOT_FOUND`) before any guard runs, without entering the tenant's context:
+
+```ts
+route({ method: 'GET', url: '/platform/plans', meta: { tenant: 'never', auth: true, can: 'platform:plans.read' }, handler })
+```
+
+Any other `meta.tenant` value falls back to the app-wide default and logs a boot warning naming the routes; the next major refuses the boot (`HTTP_INVALID_ROUTE_META`).
+
+The check runs in the tenancy enricher, and enrichers run in plugin order: list `tenancyPlugin` before `authPlugin` / `apiKeysPlugin`, whose enrichers can refuse a request themselves (an invalid bearer) — that answer would otherwise reach the caller instead of the 404.
+
 Without `canonicalDomain` a tenant is created with no `domains` entry, and
 nothing says so: `subdomainResolver` answers from the `Host` without consulting
 the table. The tenant works; what is missing is the record that the address is
@@ -279,6 +289,25 @@ The plugin also adds the `tenancy:active` marker to the container metadata.
 Other packages read it — string-keyed, so no package coupling — to adopt
 tenant-safe defaults; `@basaltkit/cache`, for example, fails closed on a missing
 tenant scope once the app is known to be multi-tenant.
+
+It also publishes a `'tenancy:run'` signal: a `TenantRunner` (exported type,
+`<T>(tenantId, fn) => Promise<T>`) that is exactly `tenancy.run(tenantId, fn)`.
+Background code in other packages reads it from the metadata — again no import
+of `TENANCY` — to enter a tenant the official way:
+
+```ts
+const run = ensureMetadata(container).get<TenantRunner>('tenancy:run')[0]
+const rows = run ? await runWithContext({}, () => run('acme', () => db().order.findMany())) : undefined
+```
+
+The contract: the id must pass the tenant-id grammar (`InvalidTenantIdError`) and
+the `TenantSource` must know the tenant (`TenantNotFoundError`), both checked
+before `fn` runs; `tenancy:switched` (`via: 'run'`) and `tenancy:exited` fire
+around `fn`, so per-tenant resources such as `prismaPlugin`'s pooled client are
+leased and released; the tenant's `status` is **not** checked. It runs from the
+caller's current context — start from `runWithContext({}, ...)` when the caller's
+ambient state must not leak in. `@basaltkit/webhooks` uses it for the endpoint
+lookup of off-request dispatches.
 
 The plugin registers the facade in the container under the `TENANCY` token, and an HTTP enricher that resolves the tenant for each request, places it in `ctx().tenant`, and emits `tenancy:switched`.
 
@@ -325,7 +354,7 @@ misalign — prefer the object.
 | `provision(tenantOrId)` | `Promise<Tenant>` | Runs `onProvision` for a tenant left `provisioning` by `provision: 'deferred'`, then flips it to `ready`. |
 | `destroy(id, { force? })` | `Promise<void>` | Marks the tenant `deleting`, runs `onDeprovision` in its context and removes the record. `force` removes it even if the teardown threw. |
 | `resolve(request)` | `Promise<Tenant \| null>` | Runs the resolvers over `{ headers?, params?, url? }` — authoritative first, fallbacks only if none named a tenant. Throws `TenantResolutionConflictError` under `onConflict: 'error'`. |
-| `run(tenantOrId, fn)` | `Promise<T>` | Runs `fn` with `ctx().tenant` set; emits `tenancy:switched`. Throws `InvalidTenantIdError` for an id outside the grammar. |
+| `run(tenantOrId, fn)` | `Promise<T>` | Runs `fn` with `ctx().tenant` set; emits `tenancy:switched` (`via: 'run'`) on entry and `tenancy:exited` when `fn` settles (also on throw). Throws `InvalidTenantIdError` for an id outside the grammar. |
 | `forEach(fn, { concurrency? })` | `Promise<void>` | Runs `fn` for each tenant (requires `source.list`); default concurrency 5. |
 
 ### Resolvers
@@ -436,7 +465,8 @@ conditional update, so handing an expired claim over (and un-verifying one in
 
 | Hook | Payload | When |
 |---|---|---|
-| `tenancy:switched` | `{ tenant: Tenant }` | Whenever execution enters a tenant context — a resolved HTTP request, or `tenancy.run()` (including each iteration of `forEach()`). |
+| `tenancy:switched` | `{ tenant: Tenant; via?: 'run' \| 'http' }` | Whenever execution enters a tenant context — a resolved HTTP request (`via: 'http'`), or `tenancy.run()` (`via: 'run'`, including each iteration of `forEach()`). |
+| `tenancy:exited` | `{ tenant: Tenant }` | When a `tenancy.run()` callback settles (resolved or thrown), inside its tenant context — release what a `tenancy:switched` listener took. Not emitted for HTTP requests (use an enricher disposer). |
 
 The plugin also declares `ctx().tenant?: Tenant` on `RequestContext`, so the
 context is typed everywhere once this package is installed.

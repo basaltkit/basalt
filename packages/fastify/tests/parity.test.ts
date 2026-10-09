@@ -8,11 +8,20 @@ import {
   httpFetcher,
   sendWith,
   errorDetailsParitySuite,
+  disposerParitySuite,
+  routeHeadersParitySuite,
+  idempotencyParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
+  routeTableParitySuite,
+  enricherReplyParitySuite,
   rateLimitKeyParitySuite,
+  rateLimitBucketsParitySuite,
+  openApiParitySuite,
+  rateLimitWarningParitySuite,
   rawBodyParitySuite,
+  crossCopyParitySuite,
   streamParitySuite,
   uploadParitySuite,
   type ParityDriver,
@@ -43,12 +52,20 @@ const driver: ParityDriver = {
 
 uploadParitySuite('fastify', driver)
 rawBodyParitySuite('fastify', driver)
+crossCopyParitySuite('fastify', driver)
 rateLimitKeyParitySuite('fastify', driver)
+rateLimitBucketsParitySuite('fastify', driver)
+openApiParitySuite('fastify', driver)
+rateLimitWarningParitySuite('fastify', driver)
 errorDetailsParitySuite('fastify', driver)
+routeHeadersParitySuite('fastify', driver)
+idempotencyParitySuite('fastify', driver)
 streamParitySuite('fastify', driver)
 corsPreflightParitySuite('fastify', driver)
 wireParitySuite('fastify', driver)
 metaValidatorParitySuite('fastify', driver)
+routeTableParitySuite('fastify', driver)
+enricherReplyParitySuite('fastify', driver)
 
 describe('fastify: multipart on routes that are not upload() routes', () => {
   it('still answers 415 (the pass-through parser only serves upload() routes)', async () => {
@@ -109,3 +126,4 @@ describe('fastify: a rawBody() route never touches the app\'s own content-type p
     }
   })
 })
+disposerParitySuite('fastify', driver)

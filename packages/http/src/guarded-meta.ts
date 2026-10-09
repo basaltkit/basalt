@@ -1,5 +1,6 @@
 import { ensureMetadata, type Container } from '@basaltkit/core'
 import type { BasaltRoute } from './route.js'
+import { warnInvalidRouteHeaders } from './route-headers.js'
 
 /**
  * The security-relevant route-meta keys the framework knows about. Each is
@@ -22,6 +23,15 @@ import type { BasaltRoute } from './route.js'
  * to declare with `securityPlugin`'s optional rate limiter switched off).
  */
 export const GUARDED_META_KEYS = ['auth', 'mfa', 'can', 'teamRole', 'scopes', 'subscribed', 'feature'] as const
+
+/**
+ * The rate-limit meta key. Not a guarded key (see above): declaring it with no
+ * limiter does not refuse the boot. `securityPlugin({ rateLimit })` claims it in
+ * {@link GUARDED_META_BUCKET}; when no plugin does, the adapters' boot check
+ * WARNS (once per app) that those budgets are not enforced. Silence it with
+ * `allowUnguardedMeta: ['rateLimit']` (or `true`) when an outer edge throttles.
+ */
+export const RATE_LIMIT_META_KEY = 'rateLimit'
 
 /** Which plugin enforces each guarded key — used to make the boot error actionable. */
 const ENFORCED_BY: Record<string, string> = {
@@ -96,7 +106,46 @@ export function assertRoutesGuarded(
   const container = isContainer(claimed) ? claimed : undefined
   if (container) claimed = new Set(ensureMetadata(container).get<string>(GUARDED_META_BUCKET))
   if (allow !== true) assertClaimed(routes, claimed as ReadonlySet<string>, allow)
-  if (container) assertRouteMetaValid(routes, container)
+  if (container) {
+    warnUnenforcedRateLimits(routes, container, claimed as ReadonlySet<string>, allow)
+    // Built in: `meta.responseHeaders` is read by the shared pipeline itself.
+    // An invalid record warns and is ignored whole (refused in the next major).
+    warnInvalidRouteHeaders(routes, container)
+    assertRouteMetaValid(routes, container)
+  }
+}
+
+/** Containers already warned about, so one app boot warns once. */
+const rateLimitWarned = new WeakSet<object>()
+
+/**
+ * Warns (never throws) when routes declare `meta.rateLimit` and no plugin
+ * claimed it — typically `securityPlugin` without its `rateLimit` option, so a
+ * stricter login/export budget is silently not enforced. One warning per app;
+ * waived by `allow === true` or an `allow` list that names `'rateLimit'`.
+ */
+function warnUnenforcedRateLimits(
+  routes: readonly BasaltRoute[],
+  container: Container,
+  claimed: ReadonlySet<string>,
+  allow: boolean | readonly string[] | undefined,
+): void {
+  if (allow === true || (Array.isArray(allow) && allow.includes(RATE_LIMIT_META_KEY))) return
+  if (claimed.has(RATE_LIMIT_META_KEY) || rateLimitWarned.has(container)) return
+  const offenders = routes
+    .filter((route) => {
+      const value = route.meta?.[RATE_LIMIT_META_KEY]
+      return value !== undefined && value !== false && value !== null
+    })
+    .map((route) => `${route.method} ${route.url}`)
+  if (offenders.length === 0) return
+  rateLimitWarned.add(container)
+  const shown = offenders.slice(0, 10).join(', ') + (offenders.length > 10 ? `, … (+${offenders.length - 10})` : '')
+  console.warn(
+    `[basalt] ${offenders.length} route(s) declare meta.rateLimit but no rate limiter is registered — ` +
+      `those budgets are NOT enforced: ${shown}. Register securityPlugin({ rateLimit: { … } }), ` +
+      `or pass the adapter option allowUnguardedMeta: ['rateLimit'] if an outer edge throttles.`,
+  )
 }
 
 function assertClaimed(

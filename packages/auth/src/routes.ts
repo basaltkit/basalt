@@ -2,6 +2,7 @@ import { ctx, BasaltError, type Container } from '@basaltkit/core'
 import { route, type BasaltRoute } from '@basaltkit/http'
 import { z } from 'zod'
 import { AUTH, CsrfRejectedError, isCsrfRejected } from './plugin.js'
+import { RegistrationClosedError, type RegisterPolicy } from './auth.js'
 import { API_KEYS } from './apikeys-plugin.js'
 
 /**
@@ -21,7 +22,25 @@ export interface PasswordPolicy {
   minLength?: number
 }
 
+/**
+ * Who may sign up through `POST /auth/register`:
+ *  - `'open'`: anyone (ignores `registerPolicy` of the auth options);
+ *  - `'closed'`: the route answers 404 `AUTH_REGISTRATION_CLOSED` to every
+ *    request — a static answer that says nothing about any address;
+ *  - a {@link RegisterPolicy}: asked per request with the canonical email and
+ *    the request's tenant. A refusal answers the SAME 202 as a success, creates
+ *    nothing and emits `auth:register_refused`, so the response cannot be used
+ *    to learn who was invited.
+ */
+export type RegisterOption = 'open' | 'closed' | RegisterPolicy
+
 export interface AuthRoutesOptions {
+  /**
+   * Registration policy for `POST /auth/register`. Default: the
+   * `registerPolicy` given to `authPlugin()` (open when there is none). Use
+   * `@basaltkit/teams`' `teamsInviteGate(teams)` for invite-only tenant hosts.
+   */
+  register?: RegisterOption
   /**
    * A minimum length, or the schema itself. Default: `min(8)`. Whatever the
    * policy, passwords are capped at {@link MAX_PASSWORD_LENGTH} characters
@@ -83,17 +102,34 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
   // Every route here is about the caller's own account: exempt from the
   // tenant-membership guard (`account`) and reachable before MFA (`mfa: false`).
   const account = ACCOUNT_META
+  const register = options.register
 
   return [
-    route({
+    register === 'closed'
+      ? // No body schema: every request gets the same 404, whatever it sends.
+        route({
+          method: 'POST',
+          url: '/auth/register',
+          meta: { ...account, ...limit },
+          handler() {
+            throw new RegistrationClosedError()
+          },
+        })
+      : route({
       method: 'POST',
       url: '/auth/register',
       meta: { ...account, ...limit },
       body: credentials,
       // Enumeration-safe: the same 202 whether the email is new or already taken
-      // (a collision is signalled out-of-band via auth:register_existing_email).
+      // (a collision is signalled out-of-band via auth:register_existing_email),
+      // and whether a registration policy admitted it or not
+      // (auth:register_refused).
       async handler({ body, reply }) {
-        await auth().registerSafely(body.email, body.password)
+        await auth().registerSafely(
+          body.email,
+          body.password,
+          register === undefined ? {} : { policy: register === 'open' ? null : register },
+        )
         return reply.code(202).send({ ok: true })
       },
     }),

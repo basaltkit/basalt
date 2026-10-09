@@ -53,7 +53,13 @@ export interface WebhookOutboxDispatchOptions {
  * Each entry is dispatched in a fresh, tenant-less context scoped by the
  * entry's OWN tenant: a relay flushed from inside a tenant's request must not
  * let that request's ambient tenant (which `dispatch` gives precedence to)
- * re-route other tenants' entries to the caller's endpoints.
+ * re-route other tenants' entries to the caller's endpoints. From there the
+ * manager enters the entry's tenant for the endpoint lookup only, through its
+ * `runInTenant` (wired by `webhooksPlugin` to tenancyPlugin's `'tenancy:run'`
+ * signal), so a per-tenant webhook store (`tenantClient()`) resolves that
+ * tenant's database; deliveries run after the lookup settles. A runner failure
+ * — e.g. the entry's tenant was deleted — rejects the dispatch, so the entry
+ * goes through the outbox's normal retry and dead-letter path.
  */
 export function webhookOutboxDispatch(webhooks: WebhookManager, options: WebhookOutboxDispatchOptions = {}): OutboxDispatch {
   const maxTracked = options.maxTrackedEntries ?? 10_000
@@ -136,6 +142,13 @@ export interface WebhookOutboxOptions {
   onFlushError?: (error: unknown) => void
   /** See {@link WebhookOutboxDispatchOptions.onPermanentFailure}. Default: console.warn. */
   onPermanentFailure?: WebhookOutboxDispatchOptions['onPermanentFailure']
+  /**
+   * Capture only events emitted inside a tenant context (default false). Set it
+   * when endpoints live per tenant (a store over `tenantClient()`): a tenant-less
+   * entry has no tenant-agnostic endpoints to reach there and would only
+   * dead-letter.
+   */
+  tenantOnly?: boolean
 }
 
 /**
@@ -176,6 +189,7 @@ export function webhookOutboxPlugin(options: WebhookOutboxOptions = {}) {
       for (const pattern of patterns) {
         bus.on(pattern, (payload, meta) => {
           const tenantId = (tryCtx() as { tenant?: { id?: string } } | undefined)?.tenant?.id
+          if (options.tenantOnly && tenantId === undefined) return
           void outbox.enqueue(meta.name, payload, tenantId)
         })
       }

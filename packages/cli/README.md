@@ -91,11 +91,11 @@ Without registering anything, `runCli` always provides:
 | Command | What it does |
 | --- | --- |
 | `basalt list` (or `basalt` with no arguments) | Lists all available commands, with their descriptions |
-| `basalt routes` | Lists the HTTP routes registered by the application (read from the `http:routes` metadata bucket, populated by HTTP adapters such as `@basaltkit/fastify`) |
+| `basalt routes [--json] [--unguarded --require=auth,can [--allow=<glob,…>]]` | Lists the HTTP routes registered by the application with the guards each declares in `meta` — columns `auth`, `can`, `rateLimit`, `tenant` and `guards` (`mfa`, `teamRole`, `scopes`, `subscribed`, `feature`). `--json` prints one JSON array of route rows. `--unguarded` lists the routes that do not declare the `--require`d guards and exits `1` when there is any (see [Route security review](#route-security-review)). Read from the `http:routes` metadata bucket, populated by every HTTP adapter |
 | `basalt schedule:list` | Lists scheduled tasks and their cron expressions (read from the `schedule:entries` bucket, populated by `@basaltkit/scheduler`) |
 | `basalt dev [--entry] [--worker] [--queue] [--no-routes]` | Runs the app with watch + restart, **prints the route table on boot**, and with `--worker` also starts a watched `queue:work` alongside it (server + worker in one command). Delegates watching to `tsx watch` / `node --watch`. |
 | `basalt upgrade [--dry] [--only=<id>] [--dir=<path>]` | Applies framework upgrade codemods (ships the `@machize/*` → `@basaltkit/*` scope rename; `--dry` previews). `create-basalt update` runs them for you after an install. `nodeUpgradeFs(baseDir)` resolves relative paths against the directory being upgraded, so `--dir=` reads the tree it lists |
-| `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile` (plus a `.dockerignore` keeping `.env` and keys out of the image), `ci`, `editorconfig` (run with no id to list) |
+| `basalt publish [<id>] [--force]` | Copies a bundled stub group into the app — `dockerfile` (a multi-stage build that runs `pnpm build` and ships `dist/src/server.js` on plain node as `USER node`, plus a `.dockerignore` keeping `.env` and keys out of the image — the same files create-basalt scaffolds), `ci` (install, typecheck, build, test), `editorconfig` (run with no id to list). The stub contents are exported too: `DOCKERFILE`, `DOCKERIGNORE`, `CI_WORKFLOW`, `EDITORCONFIG`, `PRODUCTION_ENTRY` |
 
 Not served by `runCli`: the **project commands** `update`, `add`, `doctor` and
 `info` belong to `create-basalt` — the scaffolded `bin/basalt.ts` forwards them
@@ -237,14 +237,69 @@ Returns `[routesCommand, scheduleListCommand, devCommand, upgradeCommand, publis
 
 The definitions of the built-in `routes` and `schedule:list` commands. *(Advanced — useful only if you want to run them directly or compose your own list.)*
 
+`routeAllowPattern(glob)` compiles an `--allow` pattern into a `(row) => boolean`; `UNGUARDED_SCOPE_NOTE` is the "route meta only" caveat `--unguarded` prints.
+
 ### Exported types
 
 | Type | Description |
 | --- | --- |
 | `CommandDefinition`, `CommandContext`, `CommandIo` | Described above |
 | `RunCliOptions`, `ParsedArgv` | Described above |
-| `RouteMetadata` | `{ method: string; url: string; [key: string]: unknown }` — entries from the `http:routes` bucket |
+| `RouteMetadata` | `{ method: string; url: string; meta?: Record<string, unknown>; [key: string]: unknown }` — entries from the `http:routes` bucket |
 | `ScheduleMetadata` | `{ name: string; cron: string; timezone: string }` — entries from the `schedule:entries` bucket |
+
+## Route security review
+
+`basalt routes` answers "which route is unprotected?", not just "which routes exist":
+
+```text
+method  url                auth   can              rateLimit       tenant    guards
+------  -----------------  -----  ---------------  --------------  --------  ------
+GET     /health            false
+GET     /projects          true   projects:read
+POST    /projects          true   projects:create  10/1m per user  required
+POST    /webhooks/stripe
+```
+
+Gate it in CI — the command exits `1` and names each offender and what it misses:
+
+```bash
+pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
+```
+
+- `--require` is mandatory (`auth`, `can`, or both). An explicit opt-out is
+  intentional and never reported: `auth: false` (or `public: true`) satisfies
+  both, and `can: false` satisfies `can`. Only `auth: true` counts as `auth` —
+  the one value `authPlugin` enforces.
+- `--allow` takes comma-separated globs: `*` matches within one path segment,
+  `**` across segments; a leading method (`'POST /webhooks/*'`) restricts it to
+  that method.
+- `--json` combines with `--unguarded` to print the offenders with a `missing`
+  array.
+- The `tenant` column shows the route's tenancy declaration: `required`
+  (`meta.tenant: true`), `exempt` (`meta.tenant: false`), `central-only`
+  (`meta.tenant: 'never'` — a request that resolves a tenant is rejected),
+  or blank when the route inherits the app-wide default. It reflects
+  `meta.tenant` only; `meta.central: true` (the teams membership bypass)
+  shows as `central` among the guards.
+
+**It checks route meta only.** An app-wide rate limit (`securityPlugin({ rateLimit })`),
+URL-based tenancy (`tenancyPlugin({ required: { except } })`), app hooks or
+middleware, and the edge routes plugins add through `HTTP_SERVER.addRoute()`
+(`healthPlugin`, `metricsPlugin`, `openapiPlugin`) are invisible to it. Routes
+from `authRoutes()`, `mcpRoutes()` and any other `BasaltRoute[]` you pass to the
+adapter are listed. The same rows are available to a test, without listening —
+`describeRoutes()` and `findUnguardedRoutes()` from `@basaltkit/http`:
+
+```ts
+import { ensureMetadata } from '@basaltkit/core'
+import { describeRoutes, findUnguardedRoutes } from '@basaltkit/http'
+
+const app = await buildApp().boot()
+const rows = describeRoutes(ensureMetadata(app.container).get('http:routes'))
+expect(findUnguardedRoutes(rows, { require: ['auth', 'can'] })).toEqual([])
+await app.shutdown()
+```
 
 ## Common errors and solutions (FAQ)
 

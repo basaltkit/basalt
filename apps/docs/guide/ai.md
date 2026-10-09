@@ -152,6 +152,7 @@ The complete rule set:
 | `fastify-logger-off` | warning | observability | `fastifyPlugin` is registered with no `logger` config |
 | `missing-security-plugin` | warning | security | No `securityPlugin` — responses ship without secure headers |
 | `tenant-scoping-missing` | warning | tenancy | A tenant-scoped app has Prisma models without a `tenantId` |
+| `platform-route-accepts-tenant` | warning | tenancy | A route pairs `tenant: false` with `can: 'platform:…'`, so it still runs on tenant hosts — declare `tenant: 'never'` |
 | `in-memory-security-store` | warning | security | Security state is kept in an in-memory store |
 | `memory-sources-in-use` | info | durability | Non-durable `Memory*` sources are wired |
 | `redis-localhost-default` | info | config | `REDIS_URL` defaults to localhost |

@@ -48,9 +48,9 @@ A tenant is an **open record** — `{ id, ...anything }` — so it's stored as a
 | Method | Description |
 | --- | --- |
 | `create(tenant)` | Insert a **new** tenant and its domain set, in one transaction. An existing id throws `TenantAlreadyExistsError` (409) and leaves that tenant untouched — the primary key refuses it, so of two concurrent creates exactly one wins. What `tenancy.create()` calls. |
-| `save(tenant)` | Insert or update a tenant (upsert, replacing the whole record) and replace its domain set, in one transaction. For intentional updates and status transitions. |
+| `save(tenant)` | Insert or update a tenant (upsert, replacing the whole record) and bring its mirror domain rows in line with `tenant.domains`, in one transaction. `SqliteDomainStore` claims are never deleted. For intentional updates and status transitions. |
 | `find(id)` | The tenant record, or `null`. |
-| `findByDomain(domain)` | The tenant owning that custom domain, or `null`. |
+| `findByDomain(domain)` | The tenant owning that custom domain, or `null`. A `SqliteDomainStore` claim resolves only once verified (fail-closed). |
 | `list()` | Every tenant, ordered by `id`. |
 | `remove(id)` | Delete a tenant and its domains; returns whether one existed. |
 
@@ -63,14 +63,16 @@ Other exports:
 | `sqliteTenantSource(dbOrLocation?)` | function | Opens (or reuses) a database, applies the schema, returns a `SqliteTenantSource`. Defaults to `':memory:'`. |
 | `SqliteTenantSource` | class | The implementation. `new SqliteTenantSource(db)` to share a handle with the other `*-sqlite` stores. |
 | `openTenancyDatabase(location?)` | function | Opens a `DatabaseSync` and migrates it. |
-| `migrate(db)` | function | Applies the idempotent schema to an existing handle. |
+| `migrate(db)` | function | Applies the idempotent schema to an existing handle (adds the verification columns to a database created by an older version). |
+| `sqliteDomainStore(dbOrLocation?)` | function | The durable `DomainStore` for `CustomDomains`, on the same `tenant_domains` table — pass `source.db`. |
+| `SqliteDomainStore` | class | The implementation; `add()` maps the key violation to `DomainTakenError` (409), `replace()` is one conditional `UPDATE`. |
 
 `sqliteTenantSource` accepts a single argument — a path or an existing
 `DatabaseSync` — and has no options object. `migrate()` sets
 `journal_mode = WAL` and `busy_timeout = 5000`, so a competing writer waits up
 to 5 s for the lock instead of throwing "database is locked" immediately.
 
-**Domains are globally unique.** Claiming a domain already owned by a *different* tenant throws, and the whole `save`/`create` rolls back — routing must be unambiguous, and the tenant record and its domains never drift apart. Re-saving the *same* tenant with a new `domains` array adds the new ones and drops the missing ones.
+**Domains are globally unique.** Claiming a domain already owned by a *different* tenant throws, and the whole `save`/`create` rolls back — routing must be unambiguous, and the tenant record and its domains never drift apart. Re-saving the *same* tenant with a new `domains` array adds the new ones and drops the missing ones — but never a domain claimed through `CustomDomains` + `sqliteDomainStore(source.db)`, so re-provisioning keeps a verified custom domain and its proof.
 
 ## Errors
 

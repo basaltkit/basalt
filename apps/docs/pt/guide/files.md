@@ -631,8 +631,9 @@ com `new Files({ disk, ... })` quando quiseres o pipeline sem o contentor de DI.
 | `download` | `boolean` | `true` | Monta `GET /files/:id/content`, o download em stream |
 | `upload` | `{ maxBytes, maxFiles?, allowedTypes? }` | — (desligado) | Monta `POST /files`, o upload em stream. `maxFiles` é `1` por predefinição; `allowedTypes` compara com o tipo **declarado** (`image/png`, `image/*`) |
 | `present` | `(record, user) => unknown` | `toPublicFile` | Dá forma a cada registo com que as rotas respondem. A predefinição guarda `path`, `checksum`, `tenantId`, `uploadedBy` e o `detail` da análise no servidor |
+| `meta` | `Record<string, unknown>` | — | Metadados de rota extra fundidos em todas as rotas — um guard (`{ can: 'files:read' }`), um rate limit, tags OpenAPI. `auth: true` é sempre aplicado por cima |
 
-Todas as rotas declaram `meta: { auth: true }` — não há
+Todas as rotas declaram `meta: { auth: true }` (mais o `meta` que passares) — não há
 escape `auth: false`, ao contrário de `billingRoutes`. Se a autenticação
 acontecer mesmo numa borda exterior, dispensa a verificação de arranque com o
 `allowUnguardedMeta` do adaptador em vez de remover o meta.

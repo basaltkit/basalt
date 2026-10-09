@@ -5,11 +5,20 @@ import { z } from 'zod'
 import { contentType, multipart } from '../../http/tests/multipart-fixtures.js'
 import {
   errorDetailsParitySuite,
+  disposerParitySuite,
+  routeHeadersParitySuite,
+  idempotencyParitySuite,
   corsPreflightParitySuite,
   wireParitySuite,
   metaValidatorParitySuite,
+  routeTableParitySuite,
+  enricherReplyParitySuite,
   rateLimitKeyParitySuite,
+  rateLimitBucketsParitySuite,
+  openApiParitySuite,
+  rateLimitWarningParitySuite,
   rawBodyParitySuite,
+  crossCopyParitySuite,
   sendWith,
   streamParitySuite,
   uploadParitySuite,
@@ -17,6 +26,10 @@ import {
   type ParityRequest,
 } from '../../http/tests/adapter-parity.js'
 import { fileRoutesParitySuite } from '../../files/tests/route-parity.js'
+import { commentRoutesParitySuite } from '../../comments/tests/route-parity.js'
+import { realtimeSseParitySuite } from '../../realtime/tests/sse-parity.js'
+import { centralOnlyParitySuite } from '../../tenancy/tests/central-only-parity.js'
+import { prismaLeaseParitySuite } from '../../prisma/tests/lease-parity.js'
 import { HONO, honoPlugin } from '../src/index.js'
 
 let app: BasaltApp | undefined
@@ -63,13 +76,23 @@ const driver: ParityDriver = {
 
 uploadParitySuite('hono', driver)
 rawBodyParitySuite('hono', driver)
+crossCopyParitySuite('hono', driver)
 rateLimitKeyParitySuite('hono', driver)
+rateLimitBucketsParitySuite('hono', driver)
+openApiParitySuite('hono', driver)
+rateLimitWarningParitySuite('hono', driver)
 errorDetailsParitySuite('hono', driver)
+routeHeadersParitySuite('hono', driver)
+idempotencyParitySuite('hono', driver)
 streamParitySuite('hono', driver)
 corsPreflightParitySuite('hono', driver)
 wireParitySuite('hono', driver)
 metaValidatorParitySuite('hono', driver)
+routeTableParitySuite('hono', driver)
+enricherReplyParitySuite('hono', driver)
 fileRoutesParitySuite('hono', driver)
+commentRoutesParitySuite('hono', driver)
+realtimeSseParitySuite('hono', driver)
 
 describe('hono: multipart on routes that are not upload() routes', () => {
   const echo = route({
@@ -93,3 +116,6 @@ describe('hono: multipart on routes that are not upload() routes', () => {
     await driver.close()
   })
 })
+disposerParitySuite('hono', driver)
+centralOnlyParitySuite('hono', driver)
+prismaLeaseParitySuite('hono', driver)

@@ -1,4 +1,4 @@
-import { createToken, definePlugin, ensureMetadata } from '@basaltkit/core'
+import { createToken, definePlugin, ensureMetadata, tryCtx, type Container, type HookBus } from '@basaltkit/core'
 import type { RouteGuard, RouteMetaValidator, RouteVisibilityCheck } from '@basaltkit/http'
 import {
   InsufficientTeamRoleError,
@@ -16,21 +16,75 @@ declare module '@basaltkit/core' {
     'team:joined': { membership: Membership }
     'team:role_changed': { membership: Membership }
     'team:member_removed': { tenantId: string; userId: string }
+    /**
+     * `acceptOnVerifiedEmail` could not enroll a verified user into the
+     * current tenant (a store error, …). The login / verification that
+     * triggered it went through regardless; the invitation stays pending.
+     */
+    'team:auto_accept_failed': { tenantId: string; userId: string; error: unknown }
   }
 }
 
 export const TEAMS = createToken<Teams>('teams')
 
-export type TeamsPluginOptions = Omit<TeamsOptions, 'hooks'>
+export interface TeamsPluginOptions extends Omit<TeamsOptions, 'hooks'> {
+  /**
+   * Accept a pending invitation without the link once the invited address is
+   * proven: on `auth:email_verified` and on `auth:login` (which
+   * `@basaltkit/auth` emits only after MFA), the signed-in user's pending
+   * invitation to the CURRENT tenant (`ctx().tenant`) is accepted through
+   * {@link Teams.acceptByEmail} when their email is verified. Covers both
+   * orders: invited then verified, and verified then invited (next sign-in).
+   *
+   * Tenant-scoped: on the apex (no tenant) nothing happens, and other tenants'
+   * invitations are never touched. It never fails the login: an error is
+   * reported through the `team:auto_accept_failed` hook and swallowed.
+   * Default `false`.
+   */
+  acceptOnVerifiedEmail?: boolean
+}
+
+/** The `{ user }` payload of `auth:email_verified` / `auth:login`, read structurally. */
+const verifiedUserOf = (payload: unknown): { id: string; email: string; emailVerified: boolean } | null => {
+  const user = (payload as { user?: { id?: unknown; email?: unknown; emailVerified?: unknown } } | null)?.user
+  if (!user || typeof user.id !== 'string' || typeof user.email !== 'string') return null
+  return { id: user.id, email: user.email, emailVerified: user.emailVerified === true }
+}
+
+/** Wires {@link TeamsPluginOptions.acceptOnVerifiedEmail}. Never throws into the emitter. */
+const subscribeAutoAccept = (container: Container, hooks: HookBus): void => {
+  const handler = async (payload: unknown): Promise<void> => {
+    const user = verifiedUserOf(payload)
+    if (!user || !user.emailVerified) return
+    const tenantId = (tryCtx() as { tenant?: { id?: unknown } } | undefined)?.tenant?.id
+    if (typeof tenantId !== 'string' || tenantId === '') return
+    try {
+      await container.get(TEAMS).acceptByEmail({ tenantId, userId: user.id, email: user.email, emailVerified: true })
+    } catch (error) {
+      try {
+        await hooks.emit('team:auto_accept_failed', { tenantId, userId: user.id, error })
+      } catch {
+        // A failing observer must not fail the login either.
+      }
+    }
+  }
+  // Structural subscription: teams never imports @basaltkit/auth.
+  hooks.on('auth:email_verified', handler)
+  hooks.on('auth:login', handler)
+}
 
 /**
  * Team membership + invitations. Registers the {@link Teams} service and a
  * guard enforcing `meta.teamRole` on routes: the current user (`ctx().user`)
  * must hold that role or higher in the current tenant (`ctx().tenant`).
  */
-export function teamsPlugin(options: TeamsPluginOptions = {}) {
+export function teamsPlugin(pluginOptions: TeamsPluginOptions = {}) {
+  const { acceptOnVerifiedEmail, ...options } = pluginOptions
   return definePlugin({
     name: 'basalt:teams',
+    boot({ container, hooks }) {
+      if (acceptOnVerifiedEmail === true) subscribeAutoAccept(container, hooks)
+    },
     register({ container, hooks }) {
       container.singleton(TEAMS, () => new Teams({ ...options, hooks }))
       const metadata = ensureMetadata(container)

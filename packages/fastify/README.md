@@ -6,7 +6,7 @@
 
 # @basaltkit/fastify
 
-Official Basalt adapter for [Fastify](https://fastify.dev): takes Basalt's typed routes and serves them on a Fastify server, with per-request context, standardized errors and an idempotency plugin. You need this when you want to build an HTTP API in Node.js with Basalt using Fastify as the engine.
+Official Basalt adapter for [Fastify](https://fastify.dev): takes Basalt's typed routes and serves them on a Fastify server, with per-request context and standardized errors. You need this when you want to build an HTTP API in Node.js with Basalt using Fastify as the engine.
 
 ## What this module solves
 
@@ -16,7 +16,7 @@ This module connects Fastify to Basalt. You define each **route** (an address + 
 
 Since route definitions are neutral (they come from `@basaltkit/http`), the same route code also runs on the Express and Hono adapters — **the three adapters are equals**. Routes, enrichers, guards, the request context, standardized errors, the neutral 404, ETags, SSE and the boot-time guarded-meta check all behave identically on Fastify, Express and Hono; picking an adapter is picking a runtime, not a feature set. The edge plugins (security, health, metrics, tracing, OpenAPI) are neutral too, and re-exported here for convenience.
 
-One piece genuinely *is* specific to this adapter: `idempotencyPlugin`. It has to capture the outgoing response body to replay it, which it does through Fastify's `onSend` hook — there is no neutral equivalent, so it lives here rather than in `@basaltkit/http`.
+`idempotencyPlugin` used to be the one Fastify-only piece. It now runs inside the shared route pipeline in `@basaltkit/http` and works on every adapter; it is still re-exported here, so `import { idempotencyPlugin } from '@basaltkit/fastify'` keeps working.
 
 ## Installation
 
@@ -229,71 +229,23 @@ once, so a cross-origin `EventSource` opens even before the first event. Edge af
 `sse()` replies and abandoned responses, which Fastify's `onResponse` skips. Same handler
 code as on Express and Hono.
 
-### Idempotency — `idempotencyPlugin()` (Fastify-only)
+### Idempotency — `idempotencyPlugin()`
 
-Idempotency means: repeating the same request doesn't repeat its effect. When the client sends the `Idempotency-Key` header, the first response is stored; any repeat with the same key receives **the same response**, without running the handler again — a network retry never charges a card twice.
-
-```ts
-import { createApp } from '@basaltkit/core'
-import { FASTIFY, fastifyPlugin, idempotencyPlugin, route } from '@basaltkit/fastify'
-import { z } from 'zod'
-
-const charge = route({
-  method: 'POST',
-  url: '/charge',
-  body: z.object({ amount: z.number() }),
-  async handler({ body, reply }) {
-    return reply.code(201).send({ charged: body.amount })
-  },
-})
-
-const app = await createApp({
-  plugins: [fastifyPlugin({ routes: [charge] }), idempotencyPlugin()],
-}).boot()
-await app.container.get(FASTIFY).listen({ port: 3000 })
-```
-
-```bash
-curl -X POST http://localhost:3000/charge \
-  -H 'content-type: application/json' \
-  -H 'idempotency-key: abc-123' \
-  -d '{"amount":10}'
-# Repeat the same command: same response, with the Idempotent-Replayed: true header
-```
-
-Rules:
-- It covers every handler shape: one that returns its payload (`return { charged }`) is
-  replayed exactly like one that sends it (`return reply.code(201).send(...)`).
-- A repeat while the first request is still in flight → `409 IDEMPOTENCY_CONFLICT`.
-- Responses `>= 500` are **not** stored — genuine failures can still be retried.
-- Keys are scoped by **caller credentials + tenant + method + route + key**, and the store
-  only ever sees a SHA-256 hash of that scope. The credentials are every header in
-  `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`, `x-api-key`)
-  and the tenant is `x-tenant-id` + `host`, so one user's cached response can never be
-  replayed to another. The replay runs before route guards — if your app authenticates
-  with a different header, add it to `credentialHeaders`.
-- Requests carrying **none** of the credential headers are not cached or replayed:
-  anonymous callers have no identity to scope a replay by. Opt in explicitly with
-  `allowAnonymous: true` only for public endpoints whose responses hold nothing private.
-- An `Idempotency-Key` longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`.
-- `MemoryIdempotencyStore` sweeps expired entries lazily and is capped
-  (`new MemoryIdempotencyStore(ttlMs, clock, { maxEntries })`, default 10 000; the oldest
-  entries are evicted first).
-- The reservation is taken with an **atomic** `setPending()` before the handler runs. A
-  plain get-then-set has a TOCTOU window where two concurrent first-time requests both
-  execute — the double-charge this plugin exists to prevent.
-- Requests without the header are unaffected.
-- A replay carries `Idempotent-Replayed: true`.
-
-`MemoryIdempotencyStore` is per process. For a cluster (or to survive a restart) use
-`RedisIdempotencyStore`:
+Re-exported from `@basaltkit/http`, where it is documented: it replays the first response
+for a repeated `Idempotency-Key`, and behaves the same on Fastify, Express and Hono.
 
 ```ts
-import { idempotencyPlugin, RedisIdempotencyStore } from '@basaltkit/fastify'
-import { Redis } from 'ioredis'
+import { fastifyPlugin, idempotencyPlugin, RedisIdempotencyStore } from '@basaltkit/fastify'
 
-idempotencyPlugin({ store: new RedisIdempotencyStore(new Redis(process.env.REDIS_URL!)) })
+createApp({ plugins: [fastifyPlugin({ routes }), idempotencyPlugin({ fingerprint: 'body' })] })
 ```
+
+It covers Basalt `route()` definitions. Unlike the earlier Fastify-only hook, it does not
+cover handlers registered directly on the Fastify instance: a raw `fastify.post(...)` that
+relied on it is no longer protected — declare it with `route()` and pass it to
+`fastifyPlugin({ routes })`. The check now also runs after the enrichers (a suspended tenant
+gets its `403`, not a replay), and a refusal raised before the handler (a guard's
+`401`/`403`, a `429`) is never stored.
 
 ### Edge plugins (security, health, metrics, tracing, OpenAPI)
 
@@ -381,19 +333,12 @@ Dependency injection token (`Token<FastifyInstance>`): `app.container.get(FASTIF
 | `enrichers` | `RequestEnricher[]` | No | `[]` | Functions that enrich the context before the guards. |
 | `guards` | `RouteGuard[]` | No | `[]` | Functions that can reject the request (by throwing an error). |
 
-### `idempotencyPlugin(options?)` → Basalt plugin (`basalt:idempotency`, depends on `basalt:fastify`)
+### `idempotencyPlugin(options?)`, `MemoryIdempotencyStore`, `RedisIdempotencyStore`
 
-| Option | Type | Required? | Default | Description |
-|---|---|---|---|---|
-| `store` | `IdempotencyStore` | No | `new MemoryIdempotencyStore(ttlMs)` | Where to store responses. |
-| `header` | `string` | No | `'idempotency-key'` | Header carrying the key. |
-| `methods` | `string[]` | No | `['POST']` | Protected methods. |
-| `ttlMs` | `number` | No | `86_400_000` (24 h) | Retention time for each record. Only used to build the default store. |
-
-`IdempotencyStore` (interface): `get(key)` → `IdempotencyRecord | 'pending' | undefined`; `setPending(key)` → `boolean` (**must be an atomic check-and-set** — Redis `SET NX`, or a single synchronous step in-process); `complete(key, record)`; `release(key)`. `IdempotencyRecord` = `{ status: number; body: string; contentType?: string }`.
-
-`MemoryIdempotencyStore(ttlMs?, clock?)` is the in-process implementation.
-`RedisIdempotencyStore(redis, options?)` is the shared one — `RedisIdempotencyStoreOptions`: `prefix` (default `'basalt:idem'`), `ttlMs` (default 24 h). Both accept any ioredis-compatible `RedisLike` client.
+Re-exported from `@basaltkit/http` — see its README for the options (`store`, `header`,
+`methods`, `ttlMs`, `credentialHeaders`, `allowAnonymous`, `fingerprint`,
+`replayAfterGuards`) and the `IdempotencyStore` contract. `RedisLike` is kept as a
+deprecated alias of `RedisIdempotencyClient`.
 
 ### Errors
 
@@ -405,6 +350,7 @@ Dependency injection token (`Token<FastifyInstance>`): `app.container.get(FASTIF
 | `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | — (boot) | A plugin's route-meta validator (`http:meta-validators`) refused a value — e.g. `teamsPlugin` and an unknown `meta.teamRole`. Not waivable. |
 | — | `NOT_FOUND` | 404 | No route matched (unless `notFound: false`). |
 | — | `IDEMPOTENCY_CONFLICT` | 409 | A request with the same `Idempotency-Key` is still in flight. |
+| — | `IDEMPOTENCY_KEY_REUSED` | 422 | `fingerprint` is on and the key was used with a different request. |
 | — | `RATE_LIMITED` | 429 | `securityPlugin`'s limiter rejected the request. |
 | — | `INTERNAL_ERROR` | 500 | Any other thrown error. Logged with its stack via `request.log.error`; the message never reaches the client. |
 
@@ -421,8 +367,6 @@ Not re-exported (import from `@basaltkit/http`): `sse` and the SSE types, `compu
 **"I get a 400 `HTTP_VALIDATION` on a GET with query."** In the query string everything arrives as text (`"true"`, `"42"`). Use `z.coerce.boolean()` / `z.coerce.number()` in the schema.
 
 **"The body arrives as `undefined`."** The client must send `Content-Type: application/json`; without that header Fastify doesn't parse the JSON.
-
-**"idempotencyPlugin throws an error on boot."** It declares `dependsOn: ['basalt:fastify']` — it needs `fastifyPlugin` registered in the same app.
 
 **"The edge plugins (metrics, health, …) don't respond."** Their hooks/routes are mounted on the `app:booted` event — make sure you call `boot()` and that `fastifyPlugin` is present (it's the one that registers `HTTP_SERVER`).
 

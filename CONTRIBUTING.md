@@ -15,12 +15,22 @@ pnpm test        # every package
 pnpm typecheck
 ```
 
-To work on a single package:
+To work on a single package, let turbo build its workspace dependencies first:
 
 ```bash
-pnpm --filter @basaltkit/core test
-pnpm --filter @basaltkit/core build
+pnpm turbo run test --filter @basaltkit/core      # builds its @basaltkit/* deps, then tests
+pnpm turbo run build --filter @basaltkit/core...  # the package and everything it depends on
 ```
+
+Packages import each other through their published entry points, i.e. the
+sibling's `dist/`. A bare `pnpm --filter <pkg> test` skips that build, so it
+runs against whatever `dist/` is on disk: after you change `@basaltkit/http`,
+`pnpm --filter @basaltkit/auth test` still exercises the OLD http until http is
+rebuilt — green or red for the wrong reason. Use it only when the sibling
+`dist/` folders are fresh (e.g. right after `pnpm build`). CI always builds
+first (`turbo.json`: `test` depends on `^build`), so this only bites locally.
+The three HTTP adapters resolve `@basaltkit/http` to its source in their vitest
+config, so the adapter parity suites always see the current http.
 
 ### Integration tests
 
@@ -42,6 +52,11 @@ Two levels of database integration:
   pnpm --filter pg-integration db:push
   pnpm --filter pg-integration test:integration
   ```
+
+- **Scaffold boot (`create-basalt`)** — `tests/production.test.ts` builds fresh
+  scaffolds and starts `node dist/src/server.js`; the `--prisma` variant also
+  migrates and boots against PostgreSQL when `BASALT_SCAFFOLD_DATABASE_URL`
+  points at a **disposable** database (it applies the scaffold's schema there).
 
 `docker compose up -d` also brings up Redis and MinIO for running a real app.
 

@@ -142,8 +142,10 @@ const app = createApp({
       providers: [/* an adapter — see "Writing an adapter" */],
       keys: [{ id: '2026-09', key: env.DRIVES_ENCRYPTION_KEY }],
       secret: env.APP_SECRET,
-      store: prismaDriveConnectionStore(db),
-      ledger: prismaDriveImportLedger(db),
+      // Your durable implementations — see "Writing a durable store".
+      // Omitted, both default to in-memory stores (tests and demos only).
+      store: yourDriveConnectionStore,
+      ledger: yourDriveImportLedger,
     }),
   ],
 })
@@ -160,6 +162,40 @@ export const env = defineEnv({
   DRIVES_ENCRYPTION_KEY: secret({ minLength: 32 }),
 })
 ```
+
+### Keys and rotation
+
+::: warning The tenant id is part of every sealed secret
+Each credential is sealed with its `(tenantId, connectionId, provider)` as AES-GCM
+associated data. **Renaming a tenant id makes every secret sealed under the old
+one undecryptable** — those connections need re-consent. Key drive connections
+by an immutable tenant id (a UUID), never by a slug or a subdomain that a
+customer can change.
+:::
+
+An active connection re-seals under the first key the next time it refreshes.
+A dormant one never refreshes, so a rotation that must finish runs
+`rotateSecrets()` over every tenant:
+
+1. Prepend the new key: `keys: [{ id: '2026-12', key: NEW }, { id: '2026-09', key: OLD }]`, and deploy.
+2. Re-seal everything still on an old key. The tenant ids come from your own
+   tenant table — the store contract has no cross-tenant listing, on purpose:
+
+   ```ts
+   const tenantIds = (await db.tenant.findMany({ select: { id: true } })).map((t) => t.id)
+   const { resealed, skippedConflicts, remainingOnOldKeys } = await drives.rotateSecrets({ tenantIds })
+   ```
+
+   Each write is a compare-and-set; a row a concurrent refresh rewrote is
+   counted in `skippedConflicts`, not overwritten (the refresh already sealed it
+   with the new key). Run it from a job or the CLI, not a request: with a tenant
+   in context, every id must equal it. In a single-tenant app, call it with no
+   arguments.
+3. When `remainingOnOldKeys === 0`, drop the old key and deploy. If it is not
+   zero, run step 2 again.
+
+`DriveSecretBox#keyIdOf(secret)` tells you which key sealed a stored value
+without decrypting it, for your own reporting.
 
 ## Routes
 
@@ -233,6 +269,17 @@ terminates the request somewhere the neutral layer cannot see, supply them
 yourself with `notifications.rawBody: (request) => Buffer` — never by
 re-serialising a parsed object.
 
+::: warning Two copies of `@basaltkit/http`
+`@basaltkit/drives` depends on `@basaltkit/http`, and a package manager can
+install a second, nested copy next to the one your adapter uses. Before
+`@basaltkit/http` 2.7.1 the `rawBody()` marker was private to the copy that
+created it, so the adapter parsed the delivery as JSON and the notification
+route failed closed. Keep the adapter's `@basaltkit/http` at **2.7.1 or later**
+(`pnpm why @basaltkit/http` shows the copies). A deployment that does not use
+push notifications can mount `driveRoutes()` without `notifications`: that is a
+connect-only setup with no `rawBody()` route at all.
+:::
+
 ## Connecting an account
 
 `driveRoutes()` above does this for you. The facade underneath is public too,
@@ -299,6 +346,111 @@ rather than leaving you to infer it from a boolean:
 `revoked: boolean` is still there and still means `revocation === 'revoked'`,
 but it cannot separate the last two, and those are the two that need different
 actions from an operator.
+
+### Disconnect order, and the veto
+
+`disconnect()` runs its steps in a fixed order:
+
+| Step | Row present? | Notes |
+| --- | --- | --- |
+| 1. `drive:disconnecting` | yes | a throwing handler **vetoes**: nothing is revoked, the row is kept, the error propagates |
+| 2. revoke at the provider | yes | best effort, unless `{ revoke: false }` |
+| 3. unwatch the push subscription | yes | best effort |
+| 4. delete the row and its credentials | — | |
+| 5. `drive:disconnected` | **no** | the row is already gone; the payload carries everything you need |
+
+Cascade your own data from `drive:disconnecting`, where the connection can
+still be looked up, and refuse when it is not safe yet:
+
+```ts
+hooks.on('drive:disconnecting', async ({ tenantId, connectionId }) => {
+  if (await db.importJob.count({ where: { tenantId, connectionId, status: 'running' } })) {
+    throw new Error('Imports are still running for this drive; try again shortly.')
+  }
+  await db.driveFolderMapping.deleteMany({ where: { tenantId, connectionId } })
+})
+```
+
+A veto is also how a buggy handler could stop a user from ever withdrawing a
+third-party grant. For an operator's "revoke this now" path, pass
+`{ force: true }`: the handler's error goes to `onHookError` (a
+`drivesPlugin`/`Drives` option; `process.emitWarning` when unset) and the
+disconnect carries on.
+
+```ts
+await drives.disconnect(connection.id, { force: true })
+```
+
+## Listing: browse vs crawl
+
+`listItems()` answers two different questions, and the adapters do not agree on
+which one they answer by default. Say which one you mean with `recursive`:
+
+```ts
+// A file browser: one folder's direct children.
+await drives.listItems(connection.id, { folderId, recursive: false })
+// An import or an audit: the whole subtree.
+await drives.listItems(connection.id, { recursive: true })
+```
+
+| Provider | Default when `recursive` is omitted | `recursive: false` | `recursive: true` |
+| --- | --- | --- | --- |
+| Google Drive | subtree (`listMode: 'recursive'`); an unscoped connection lists the whole account flat | direct children (of the account root when unscoped) | subtree, walked folder by folder |
+| Dropbox | subtree (`recursive: true` option) | direct children | subtree |
+| OneDrive / SharePoint | direct children | direct children | **`DRIVE_UNSUPPORTED`** (`recursiveList`) — Graph has no recursive listing; use the change feed (`syncConnection`) to enumerate a tree |
+
+Omitting `recursive` keeps each adapter's constructor default exactly as before.
+The mode is bound into the returned cursor: a continuation that omits
+`recursive` keeps the cursor's mode, and one that names a different mode is
+refused with `DRIVE_ACCESS_DENIED`, the same refusal as a forged cursor.
+Microsoft refuses `recursive: true` rather than quietly returning one level,
+because a caller that asked for a crawl would otherwise believe it had seen the
+whole tree.
+
+## Connection health
+
+Every connection view carries three health fields, all epoch milliseconds like
+`lastSyncedAt`:
+
+| Field | Stamped by |
+| --- | --- |
+| `lastSucceededAt` | a sync that persisted a page, and a successful `drives.check()` |
+| `lastFailedAt` | a failed sync (best effort: skipped for an abort, or when another write changed the row meanwhile), a failed `drives.check()`, and the refresh that found the grant dead |
+| `lastErrorCode` | the error **code** of that failure (`DRIVE_CREDENTIALS_INVALID`, `DRIVE_RATE_LIMITED`, …) — never a message |
+
+The fields are stamped only when the connection store declares
+`persistsHealth: true` (the in-memory store does). A durable store written
+before these fields existed never receives them in a patch — it keeps working,
+its connections simply report no health, and `drives.check()` still returns
+`{ ok, code? }` without writing. Add the three nullable columns, then set the
+flag ([Writing a durable store](#writing-a-durable-store) below).
+
+They are deliberately **not** stamped on an ordinary successful
+`listItems()`/`download()`: health tracking adds no write, and no revision bump
+that could race a token refresh, to the hot path. When you need a fresh answer,
+probe:
+
+```ts
+const { ok, code } = await drives.check(connection.id)
+// lists one item at the root; never throws for a provider failure
+```
+
+A settings page can derive a status from the view without any extra call:
+
+```ts
+function health(c: DriveConnectionView, now = Date.now()): 'ok' | 'stale' | 'reconnect' {
+  if (c.status === 'invalid') return 'reconnect'
+  const success = c.lastSucceededAt ?? 0
+  if ((c.lastFailedAt ?? 0) > success) return c.lastErrorCode === 'DRIVE_CREDENTIALS_INVALID' ? 'reconnect' : 'stale'
+  return now - success > 24 * 60 * 60_000 ? 'stale' : 'ok'
+}
+```
+
+There is **no credential-expiry countdown**, on purpose. Access tokens are
+refreshed for you and their expiry says nothing about the connection; refresh
+tokens mostly have no published lifetime (Google revokes on password change or
+inactivity, Microsoft's slide on use, Dropbox's do not expire). A date we
+cannot know would only teach users to distrust the one they can.
 
 ## Connecting Dropbox
 
@@ -606,6 +758,40 @@ and `/`, `?`, `#`, `%`, `.`, `..` and whitespace are refused with
 `DRIVE_ACCESS_DENIED`. A `folderId` may narrow a call to a folder but never name
 another drive.
 
+### SharePoint columns
+
+A document library's files are list items with columns (matter, client,
+status…). The adapter can bring the ones you name along with every listing,
+`getItem` and change-feed page, without a request per file:
+
+```ts
+import { microsoftDrive, sharePointFieldsOf } from '@basaltkit/drives-microsoft'
+
+microsoftDrive({ clientId, clientSecret, listItemFields: ['Matter', 'ClientName', 'DocStatus'] })
+
+const page = await drives.listItems(connection.id)
+for (const item of page.items) {
+  const columns = sharePointFieldsOf(item) // { Matter: 'ACME v. Globex', DocStatus: 'Signed' } | undefined
+}
+```
+
+- Names are **internal** column names, validated at startup. There is no
+  "all": a list item carries author ids, workflow state and whatever the site
+  added, and `raw` is persisted by sinks.
+- Values are flattened to primitives under `item.raw.listItemFields`: a lookup
+  or managed-metadata value becomes its label, a person their email, and a
+  multi-value column the labels joined with `"; "`. Other shapes are dropped.
+  At most 64 columns, 1 KB per value.
+- A personal OneDrive has no list item, so the key is simply absent. With the
+  option unset, `raw` stays exactly `{ driveId }`.
+- This is Microsoft-only, so it lives in the adapter, not the drive contract.
+
+::: warning Unverified data
+Column values are whatever the tenant's users typed into SharePoint. Validate
+them like any other user input before they decide anything — which matter a
+document is filed under, who may see it.
+:::
+
 ### Four things Microsoft does differently
 
 **The refresh token rotates, every time.** The old one dies the instant a new one
@@ -865,6 +1051,106 @@ const documentSink: DriveSink = async ({ item, content, connection, version }) =
 }
 ```
 
+## Writing a durable store
+
+`@basaltkit/drives` ships only `MemoryDriveConnectionStore` and
+`MemoryDriveImportLedger`. Production needs your own `DriveConnectionStore` and
+`DriveImportLedger`: apps model these rows too differently (one table or two, a
+`tenantId` column or a schema per tenant) for one bundled implementation to fit.
+What every store must share is the behaviour the engine relies on:
+
+- **Compare-and-set.** `update(tenantId, id, patch, expectedRevision)` applies
+  only when the stored `revision` still equals `expectedRevision`, and returns
+  `null` (changing nothing) otherwise. Every write bumps `revision`. The
+  refresh-race protection depends on it: a store that ignores the argument is
+  not safe to run more than one worker against, because two workers refreshing
+  a Microsoft connection at once will store a refresh token the provider has
+  already retired.
+- **`undefined` clears, absent keeps.** A patch key present with `undefined`
+  clears the column (`{ cursor: undefined }` drops the sync cursor); a key that
+  is absent leaves it alone.
+- **Tenant scoping on every query.** `tenantId` is part of every lookup, update
+  and delete — never look a row up by `id` alone.
+- **An idempotent ledger.** `record()` upserts on
+  `(tenantId, connectionId, externalId)`.
+
+A Prisma reference implementation of the connection store:
+
+```ts
+import type { DriveConnection, DriveConnectionPatch, DriveConnectionStore } from '@basaltkit/drives'
+
+export class PrismaDriveConnectionStore implements DriveConnectionStore {
+  // Only once the lastSucceededAt / lastFailedAt / lastErrorCode columns exist:
+  // without it the engine never sends those keys to update().
+  readonly persistsHealth = true
+
+  constructor(private readonly db: PrismaClient) {}
+
+  async create(record: DriveConnection) {
+    await this.db.driveConnection.create({ data: toRow(record) })
+  }
+
+  async find(tenantId: string, id: string) {
+    const row = await this.db.driveConnection.findFirst({ where: { id, tenantId } })
+    return row ? fromRow(row) : null
+  }
+
+  async list(tenantId: string, filter: { provider?: string; status?: string } = {}) {
+    const rows = await this.db.driveConnection.findMany({
+      where: { tenantId, ...(filter.provider ? { provider: filter.provider } : {}), ...(filter.status ? { status: filter.status } : {}) },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    })
+    return rows.map(fromRow)
+  }
+
+  async update(tenantId: string, id: string, patch: DriveConnectionPatch, expectedRevision?: number) {
+    // `toPatch` maps a key present with `undefined` to `null` (clear the
+    // column) and skips absent keys.
+    const data = { ...toPatch(patch), revision: { increment: 1 }, updatedAt: Date.now() }
+    const r = await this.db.driveConnection.updateMany({
+      where: { id, tenantId, ...(expectedRevision !== undefined ? { revision: expectedRevision } : {}) },
+      data,
+    })
+    if (r.count === 0) return null // missing, another tenant's, or a lost compare-and-set
+    return this.find(tenantId, id)
+  }
+
+  async delete(tenantId: string, id: string) {
+    await this.db.driveConnection.deleteMany({ where: { id, tenantId } })
+  }
+}
+```
+
+`updateMany` with the revision in the `where` clause is what makes the write a
+single atomic compare-and-set; a read-then-`update` pair is not. Store
+`scopes`, `account` and `watch` as JSON columns and the `secret` as text — it is
+already sealed. The health fields (`lastSucceededAt`, `lastFailedAt`,
+`lastErrorCode`) are nullable columns, sent only to a store that declares
+`persistsHealth: true`. Add the columns (and migrate) **before** setting the
+flag: `toPatch` above spreads every key, and Prisma rejects a key with no column
+(`Unknown argument`). With the flag set, the contract suite checks that they
+round-trip.
+
+Then check the implementation against the same conformance suite the in-memory
+stores pass. It ships on the test-only `@basaltkit/drives/testing` subpath and
+works with any runner that has `describe` and `it`:
+
+```ts
+import { describe, it } from 'vitest'
+import { runDriveStoreContract } from '@basaltkit/drives/testing'
+
+runDriveStoreContract(async () => {
+  await db.driveImport.deleteMany()
+  await db.driveConnection.deleteMany()
+  return { store: new PrismaDriveConnectionStore(db), ledger: new PrismaDriveImportLedger(db) }
+}, { describe, it })
+```
+
+It covers compare-and-set on a stale revision, the revision bump, the
+`undefined`-clears rule, tenant isolation for `find`/`list`/`update`/`delete`,
+and ledger idempotency. The factory runs before every case and must hand back
+empty stores.
+
 ## Writing an adapter
 
 Only `name`, `allowedHosts`, `authorization`, `list` and `download` are
@@ -1062,6 +1348,45 @@ tenants by the framework, so an unauthenticated caller cannot address another
 tenant's connection at all. For Dropbox that lookup is necessarily by account id
 across tenants — safe because the id came from a payload the app secret signed,
 and still your query rather than a framework table scan.
+:::
+
+## Diagnosing provider errors
+
+A `DRIVE_PROVIDER_ERROR`, `DRIVE_ACCESS_DENIED` or `DRIVE_CREDENTIALS_INVALID`
+carries the vendor's fixed-vocabulary code in `details` (`summary`/`reason`,
+e.g. `insufficientPermissions`, or `http_400` when the vendor sent none). The
+vendor's **human explanation** — usually the fix — travels separately, on the
+log-only `internalDetails.providerMessage` channel:
+
+```ts
+import { internalDetailsOf } from '@basaltkit/http'
+
+fastifyPlugin({
+  routes,
+  onError: ({ error, status }) => {
+    // e.g. "…does not have the required scope 'files.metadata.read'…"
+    logger.warn({ status, provider: internalDetailsOf(error)?.providerMessage }, 'drive call failed')
+  },
+})
+```
+
+The default reporter on all three adapters already logs `internalDetails`; in
+a job, read `(error as DriveProviderError).internalDetails?.providerMessage`.
+It is **never** in the HTTP response, in `details`, in hook payloads or in the
+audit trail: it is free text the vendor wrote, and Graph's messages can quote
+the request URL. Adapters read only structured message fields (Google and
+Graph `error.message`/`error_description`, Dropbox `user_message.text`, a
+`missing_scope` error's `required_scope`, or a Dropbox `400 text/plain` body),
+and `providerMessageOf()` then strips control/bidi characters, replaces
+anything URL-, bearer-, JWT- or token-shaped, and truncates to 500 characters.
+
+::: tip Dropbox scopes live in two places
+`dropboxDrive()` requests `account_info.read files.metadata.read files.content.read`
+by default, but Dropbox only grants a scope that is **also enabled on the app's
+Permissions tab** in the App Console. If it is not, consent succeeds, the
+account shows up, and the first listing fails with a `400` whose
+`providerMessage` names the missing scope. If you pass your own `scopes`, keep
+all three.
 :::
 
 ## Security

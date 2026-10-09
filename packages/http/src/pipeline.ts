@@ -9,6 +9,11 @@ import {
 } from './error-details.js'
 import { HttpError, RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
+// Cycle with error-report.ts (it imports clientErrorOf from here): runtime-safe,
+// both sides use the other only inside function bodies.
+import { reportHttpError } from './error-report.js'
+import { idempotencyStageOf, RecordingReply, type IdempotencyTicket } from './idempotency.js'
+import { applyRouteHeaders } from './route-headers.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
 import { isSseResponse } from './sse.js'
 import { isStreamResponse } from './stream.js'
@@ -19,6 +24,20 @@ declare module '@basaltkit/core' {
   interface RequestContext {
     /** Per-request DI scope — `scoped` instances live here. */
     container?: Container
+    /**
+     * Hands a {@link RequestDisposer} to the request: it runs once the
+     * pipeline has settled and the response is complete, exactly like one an
+     * enricher returns. For cleanup that is taken outside an enricher's return
+     * value — e.g. a `tenancy:switched` listener leasing a database client.
+     * Set by `runRoute` on the request context only (non-enumerable and
+     * read-only, so a context copied with a spread — `tenancy.run()` — does
+     * not inherit it); its presence tells a plugin that the running pipeline
+     * honours disposers. Absent outside an HTTP request, inside
+     * `tenancy.run()`, in queue/scheduler contexts and on pipelines older
+     * than `@basaltkit/http` 2.8 — check for it rather than calling it with
+     * `?.`, or the cleanup is silently dropped.
+     */
+    readonly onDispose?: (disposer: RequestDisposer) => void
   }
 }
 
@@ -37,7 +56,87 @@ export type RequestEnricher = (info: {
    * because enrichers written before this existed do not read it.
    */
   route?: BasaltRoute
-}) => void | Promise<void>
+  /**
+   * The reply, so an enricher that rejects the request can set a response
+   * header first (e.g. `WWW-Authenticate` on a refused credential). Optional:
+   * a pipeline may run enrichers without one. An enricher that answers the
+   * request itself (`reply.send()`) ends it: the remaining enrichers, the
+   * guards and the handler do not run.
+   */
+  reply?: HttpReply
+}) => void | RequestDisposer | Promise<void | RequestDisposer>
+
+/**
+ * Cleanup an enricher hands back (or `ctx().onDispose()` receives) for the end
+ * of its request — e.g. returning a leased database client to its pool.
+ *
+ * Runs exactly once, after the pipeline (`runRoute`) has settled AND the
+ * response is complete — never while the handler is still running:
+ * - Fastify/Express: once the response was sent or abandoned by the client
+ *   (Node `finish`/`close`), so a client abort mid-handler waits for the
+ *   handler to return or throw;
+ * - Hono: a buffered response is complete when it is built, so its disposers
+ *   are awaited before the Response is handed to the runtime;
+ * - a `stream()`/`sse()` body disposes at its last byte, an error, a cancel or
+ *   an abort, on every adapter;
+ * - with no adapter sink, `runRoute` runs them itself when it settles.
+ *
+ * Disposers run last-registered first, one at a time, each awaited (no
+ * timeout: keep them short and bounded). A failure is reported as
+ * `REQUEST_DISPOSER_FAILED` and never changes the response.
+ */
+export type RequestDisposer = () => void | Promise<void>
+
+/**
+ * The per-request list of {@link RequestDisposer}s an adapter keeps. Public
+ * API for adapter authors and other `runRoute` callers (e.g. `@basaltkit/mcp`),
+ * with frozen semantics:
+ * - `run()` is once-guarded, so it can be wired to every way a response can
+ *   end ('finish', 'close', an aborted stream); it never throws;
+ * - disposers run last-registered first, serially, each awaited; one that
+ *   fails never stops the others;
+ * - a disposer added AFTER `run()` (the client went away while an enricher was
+ *   still awaiting, a timer the handler left behind) runs immediately rather
+ *   than leaking; it is not awaited by anyone;
+ * - `onError` receives every failure and is never rethrown; an `onError` that
+ *   throws is swallowed.
+ */
+export class RequestDisposers {
+  private readonly pending: RequestDisposer[] = []
+  private done = false
+
+  /** `onError` receives a disposer's failure; it is never rethrown. */
+  constructor(private readonly onError?: (error: unknown) => void) {}
+
+  add(disposer: RequestDisposer): void {
+    if (this.done) void this.invoke(disposer)
+    else this.pending.push(disposer)
+  }
+
+  /** True once `run()` was called. */
+  get ran(): boolean {
+    return this.done
+  }
+
+  /** Runs every disposer once, last-registered first. Never throws. */
+  async run(): Promise<void> {
+    if (this.done) return
+    this.done = true
+    while (this.pending.length > 0) await this.invoke(this.pending.pop()!)
+  }
+
+  private async invoke(disposer: RequestDisposer): Promise<void> {
+    try {
+      await disposer()
+    } catch (error) {
+      try {
+        this.onError?.(error)
+      } catch {
+        /* a broken reporter must not break the response */
+      }
+    }
+  }
+}
 
 /**
  * Runs after enrichers, with access to the route definition (and its `meta`).
@@ -60,6 +159,13 @@ export interface RoutePipeline {
   container?: Container
   enrichers?: RequestEnricher[]
   guards?: RouteGuard[]
+  /**
+   * Where the disposers enrichers return are handed. Adapters pass one and run
+   * the disposers when the response has really ended (a streamed body outlives
+   * `runRoute`). Without it, `runRoute` runs them itself when it returns or
+   * throws — right for callers whose result is complete at that point.
+   */
+  onDispose?: (disposer: RequestDisposer) => void
 }
 
 const headerValue = (request: HttpRequest, name: string): string | undefined => {
@@ -154,8 +260,34 @@ export async function runRoute(
   const rawOptions = rawBodyOptionsOf(definition.body)
   const rawSession = rawOptions ? new RawBodySession(request, rawOptions) : undefined
 
+  // No sink from the caller: the disposers are run here, when the route is
+  // done, and a failure is reported on the console (an adapter or MCP passes
+  // its own sink, wired to its own error reporter).
+  const local = pipeline.onDispose
+    ? undefined
+    : new RequestDisposers((error) =>
+        reportHttpError({ error, status: 500, code: 'REQUEST_DISPOSER_FAILED', method: request.method, url: request.url }),
+      )
+  const onDispose = pipeline.onDispose ?? ((disposer: RequestDisposer) => local!.add(disposer))
+  // Also reachable from the request context, for cleanup taken outside an
+  // enricher's return value. Non-enumerable: a context copied with a spread
+  // (tenancy.run()) is a different scope and must not hand work to this one.
+  Object.defineProperty(context, 'onDispose', { value: onDispose, enumerable: false })
+  // `idempotencyPlugin` (any adapter): where its check runs for this request,
+  // if the request is subject to it at all.
+  const idempotency = idempotencyStageOf(pipeline.container)
+  const placement = idempotency?.placement(definition, request)
+
   return runWithContext(context, async () => {
+    let ticket: IdempotencyTicket | undefined
+    // Whether the handler was entered: only its own outcome is recorded for
+    // replay. A refusal raised before it (a guard's 401/403, the rate limiter's
+    // 429, a validation 400) releases the key, so the retry runs the operation.
+    let handlerStarted = false
     try {
+      // The route's static headers go on first, so every response it produces
+      // carries them — a guard's 401, a validation 400 and a thrown 500 too.
+      applyRouteHeaders(definition, reply)
       const scoped = context.container
       // Fail closed: guards that cannot run must never be silently skipped.
       if (!scoped && (pipeline.guards?.length ?? 0) > 0) {
@@ -165,25 +297,65 @@ export async function runRoute(
         )
       }
       if (scoped) {
-        for (const enrich of pipeline.enrichers ?? [])
-          await enrich({ route: definition, request, context, container: scoped })
+        for (const enrich of pipeline.enrichers ?? []) {
+          const disposer = await enrich({ route: definition, request, context, container: scoped, reply })
+          if (typeof disposer === 'function') onDispose(disposer)
+          // An enricher that answered the request itself (`reply.send()`, e.g.
+          // a redirect) ends it here: the guards and the handler must not run
+          // behind a response that has already been decided.
+          if (reply.sent) return undefined
+        }
+        if (placement === 'beforeGuards') {
+          const begun = await idempotency!.begin(definition, request, reply)
+          if (begun === 'replayed') return undefined
+          ticket = begun
+        }
         for (const guard of pipeline.guards ?? [])
           await guard({ route: definition, request, context, container: scoped, reply })
       }
       const parsedBody = session || rawSession ? undefined : parsePart('body', definition.body, request.body)
       const query = parsePart('query', definition.query, request.query)
       const params = parsePart('params', definition.params, request.params)
+      const body = session ? session.open() : rawSession ? await rawSession.read() : parsedBody
+      if (placement === 'beforeHandler') {
+        const rawBytes = rawSession ? (body as { bytes: Uint8Array }).bytes : undefined
+        const begun = await idempotency!.begin(definition, request, reply, rawBytes)
+        if (begun === 'replayed') return undefined
+        ticket = begun
+      }
+      // The reservation owner records what the handler sends, to replay it.
+      const recorder = ticket ? new RecordingReply(reply) : undefined
+      handlerStarted = true
       const result = await definition.handler({
-        body: session ? session.open() : rawSession ? await rawSession.read() : parsedBody,
+        body,
         query,
         params,
         request,
-        reply,
+        reply: recorder ?? reply,
       } as Parameters<BasaltRoute['handler']>[0])
-      return applyEtag(definition, request, reply, result)
+      const final = applyEtag(definition, request, reply, result)
+      if (ticket) {
+        const owned = ticket
+        ticket = undefined // settled here; a failure below must not settle it twice
+        await idempotency!.complete(owned, recorder!, final)
+      }
+      return final
+    } catch (error) {
+      // A thrown route: record the client error the handler raised, or release
+      // the key so a server failure, or a refusal before the handler ran, stays
+      // retryable.
+      // An upload() body refused while the handler streamed it (too large,
+      // malformed, a refused file type) is a refusal of the request, not the
+      // handler's outcome: released like the same refusal raised up front.
+      if (ticket) {
+        if (handlerStarted && !session?.refused(error)) await idempotency!.fail(ticket, toErrorResponse(error))
+        else await idempotency!.abandon(ticket)
+      }
+      throw error
     } finally {
       session?.release(reply)
       rawSession?.release(reply)
+      await local?.run()
     }
   })
 }

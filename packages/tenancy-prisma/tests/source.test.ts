@@ -1,92 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { TenantAlreadyExistsError } from '@basaltkit/tenancy'
 import { PrismaTenantSource, type PrismaTenancyClient, prismaTenantSource } from '../src/index.js'
+import { makeFakeClient } from './fake-client.js'
 
 // In-memory fake of the Prisma delegate surface — the injectable-client pattern.
-function makeFakeClient(): PrismaTenancyClient {
-  const tenants = new Map<string, { id: string; data: unknown }>()
-  const domains = new Map<string, { domain: string; tenantId: string }>()
-
-  const client: PrismaTenancyClient = {
-    // Interactive transaction: all-or-nothing, like Prisma's — the callback's
-    // writes are rolled back when it throws.
-    async $transaction(fn) {
-      const savedTenants = new Map([...tenants].map(([k, v]) => [k, { ...v }]))
-      const savedDomains = new Map([...domains].map(([k, v]) => [k, { ...v }]))
-      try {
-        return await fn(client)
-      } catch (error) {
-        tenants.clear()
-        for (const [k, v] of savedTenants) tenants.set(k, v)
-        domains.clear()
-        for (const [k, v] of savedDomains) domains.set(k, v)
-        throw error
-      }
-    },
-    tenant: {
-      async findUnique({ where }) {
-        return tenants.get(where.id) ?? null
-      },
-      async findMany({ orderBy }) {
-        const rows = [...tenants.values()]
-        if (orderBy?.id === 'asc') rows.sort((a, b) => a.id.localeCompare(b.id))
-        return rows
-      },
-      // Mirrors Prisma: a duplicate primary key rejects with
-      // PrismaClientKnownRequestError, code P2002.
-      async create({ data }) {
-        if (tenants.has(data.id)) {
-          throw Object.assign(new Error('Unique constraint failed on the fields: (`id`)'), { code: 'P2002' })
-        }
-        const row = { id: data.id, data: data.data }
-        tenants.set(row.id, row)
-        return row
-      },
-      async upsert({ where, create, update }) {
-        const existing = tenants.get(where.id)
-        if (existing) {
-          existing.data = update.data
-          return existing
-        }
-        const row = { id: create.id, data: create.data }
-        tenants.set(row.id, row)
-        return row
-      },
-      async deleteMany({ where }) {
-        let count = 0
-        if (tenants.delete(where.id)) count++
-        // cascade domains
-        for (const [key, d] of domains) if (d.tenantId === where.id) domains.delete(key)
-        return { count }
-      },
-    },
-    tenantDomain: {
-      async findUnique({ where }) {
-        return domains.get(where.domain) ?? null
-      },
-      async deleteMany({ where }) {
-        let count = 0
-        for (const [key, d] of domains) {
-          if (d.tenantId === where.tenantId) {
-            domains.delete(key)
-            count++
-          }
-        }
-        return { count }
-      },
-      async createMany({ data }) {
-        for (const row of data as { domain: string; tenantId: string }[]) {
-          if (domains.has(row.domain)) {
-            throw Object.assign(new Error(`Unique constraint failed on the fields: (\`domain\`)`), { code: 'P2002' })
-          }
-          domains.set(row.domain, row)
-        }
-        return { count: (data as unknown[]).length }
-      },
-    },
-  }
-  return client
-}
+// Lives in ./fake-client.ts, shared with the PrismaDomainStore tests.
 
 describe('PrismaTenantSource', () => {
   it('saves, finds and lists open tenant records', async () => {

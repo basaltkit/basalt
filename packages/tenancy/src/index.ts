@@ -12,6 +12,7 @@ import {
   InvalidTenantIdError,
   assertValidTenantId,
   isValidTenantId,
+  CentralOnlyRouteError,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -32,6 +33,7 @@ export {
   RESERVED_TENANT_IDS,
   assertValidTenantId,
   isValidTenantId,
+  CentralOnlyRouteError,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -71,8 +73,22 @@ declare module '@basaltkit/core' {
     tenant?: Tenant
   }
   interface BasaltHooks {
-    /** Emitted whenever execution enters a tenant context. */
-    'tenancy:switched': { tenant: Tenant }
+    /**
+     * Emitted whenever execution enters a tenant context. `via` tells the two
+     * entry points apart: `'run'` is `tenancy.run()` (a job, a script, a
+     * nested switch), which always pairs with a later `'tenancy:exited'`;
+     * `'http'` is the tenancy request enricher, whose context ends with the
+     * request. Absent when emitted by something other than tenancy.
+     */
+    'tenancy:switched': { tenant: Tenant; via?: 'run' | 'http' }
+    /**
+     * Emitted when a `tenancy.run()` callback finishes — resolved or thrown —
+     * still inside the tenant context it entered, so a listener can release
+     * what it took on `'tenancy:switched'` (e.g. a leased database client).
+     * Not emitted for HTTP requests: their resources end with the request
+     * (return a disposer from an enricher instead).
+     */
+    'tenancy:exited': { tenant: Tenant }
     /**
      * A tenant was created AND provisioned — emitted by `tenancy.create()`
      * after `onProvision` has resolved, so a listener may assume the tenant's
@@ -458,7 +474,8 @@ export class Tenancy {
 
   /**
    * Runs `fn` inside the tenant's context (preserving the surrounding
-   * context) and emits 'tenancy:switched'.
+   * context), emitting 'tenancy:switched' (`via: 'run'`) on the way in and
+   * 'tenancy:exited' on the way out — also when `fn` throws.
    *
    * The id — given, or on the tenant object — must pass the tenant-id grammar
    * (`InvalidTenantIdError`, 400): it becomes a namespace segment in every
@@ -473,8 +490,21 @@ export class Tenancy {
     if (!tenant) throw new TenantNotFoundError(tenantOrId as string)
 
     return runWithContext({ ...tryCtx(), tenant }, async () => {
-      await this.hooks?.emit('tenancy:switched', { tenant })
-      return fn()
+      let failed = false
+      try {
+        await this.hooks?.emit('tenancy:switched', { tenant, via: 'run' })
+        return await fn()
+      } catch (error) {
+        failed = true
+        throw error
+      } finally {
+        try {
+          await this.hooks?.emit('tenancy:exited', { tenant })
+        } catch (error) {
+          // Never mask the callback's own failure with a cleanup one.
+          if (!failed) throw error
+        }
+      }
     })
   }
 
@@ -528,7 +558,9 @@ export function isTenantRequired(
   // sits next to the handler, so a central route stays central through a
   // rename, and a reviewer sees the decision without opening the app config.
   const declared = meta?.['tenant']
-  if (declared === false) return false
+  // 'never' is stricter than `false`: a central-only route not only runs
+  // without a tenant, it refuses one (enforced by the enricher, not here).
+  if (declared === false || declared === 'never') return false
   if (declared === true) return true
   if (!required) return false
   if (required === true) return true
@@ -602,6 +634,19 @@ export interface TenancyPluginOptions {
    * ```ts
    * route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
    * ```
+   *
+   * `meta.tenant` takes three values:
+   *
+   * - `true` — the route needs a tenant (404 `TENANCY_NOT_RESOLVED` without one).
+   * - `false` — the route works with or without one (account routes served on
+   *   the apex and on tenant hosts alike).
+   * - `'never'` — central plane only: when a tenant resolves, the request is
+   *   answered with the same 404 an unmatched route gets, before any guard runs
+   *   and without entering the tenant's context. Use it on the SaaS owner's
+   *   console (`/platform/*`): plans, tenant approval, operator roles.
+   *
+   * Any other value falls back to the app-wide default and warns at boot;
+   * it refuses the boot from the next major.
    */
   required?: boolean | { except: (string | RegExp)[] }
   /**
@@ -716,6 +761,24 @@ export interface TenancyPluginOptions {
   validateTenantId?: (id: string) => boolean
 }
 
+/**
+ * Enters a tenant for `fn` from background code: the function `tenancyPlugin`
+ * publishes under the `'tenancy:run'` metadata key (a signal other packages
+ * read, never an import of `TENANCY`). It is exactly `tenancy.run(tenantId, fn)`:
+ * - throws `InvalidTenantIdError` for an id that fails the tenant-id grammar and
+ *   `TenantNotFoundError` for a tenant the `TenantSource` does not know, before
+ *   `fn` runs;
+ * - emits `'tenancy:switched'` (`via: 'run'`) on the way in and
+ *   `'tenancy:exited'` on the way out, so per-tenant resources (prismaPlugin's
+ *   pooled client) are taken and given back;
+ * - does NOT check the tenant's `status` (a suspended tenant is entered);
+ * - runs from the caller's current context — call it from
+ *   `runWithContext({}, ...)` when the caller's ambient state must not leak in.
+ *
+ * Consumers declare this type structurally under the same name.
+ */
+export type TenantRunner = <T>(tenantId: string, fn: () => T | Promise<T>) => Promise<T>
+
 export function tenancyPlugin(options: TenancyPluginOptions) {
   return definePlugin({
     name: 'basalt:tenancy',
@@ -740,6 +803,14 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
       // @basaltkit/cache fails closed on a missing tenant scope when this app
       // is multi-tenant). String-keyed metadata — no package coupling.
       ensureMetadata(container).add('tenancy:active', true)
+      // Signal (not an import) for background code in other packages to enter a
+      // tenant the official way: id grammar, TenantSource lookup and the
+      // 'tenancy:switched' (via: 'run') / 'tenancy:exited' pairing, so
+      // prismaPlugin leases and releases the tenant's client. Runs from the
+      // CALLER's current context (tenancy.run spreads tryCtx()); enter from
+      // runWithContext({}) when the caller's ambient state must not leak in.
+      const runInTenant: TenantRunner = (tenantId, fn) => container.get(TENANCY).run(tenantId, fn)
+      ensureMetadata(container).add('tenancy:run', runInTenant)
 
       // Request enricher consumed by the HTTP adapter: resolves the tenant,
       // attaches it to the context and fires the switch hook.
@@ -761,6 +832,13 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
             params: (request.params ?? {}) as Record<string, string>,
             ...(request.url !== undefined ? { url: request.url } : {}),
           })
+          // A central-only route refuses a resolved tenant here, in the
+          // enricher, because enrichers run before guards on every adapter:
+          // the caller gets the plain "route not found" body, never a 401/403
+          // that would confirm the route exists. The tenant is neither
+          // attached nor announced (`tenancy:switched`), so nothing downstream
+          // — a tenant-scoped db client, the audit chain — ever sees it.
+          if (tenant && route?.meta?.['tenant'] === 'never') throw new CentralOnlyRouteError()
           if (!tenant) {
             if (isTenantRequired(options.required, request.url, route?.meta)) {
               throw new TenancyNotResolvedError()
@@ -774,11 +852,52 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
           // status tenancy does not know fails closed rather than serving.
           assertTenantServing(tenant)
           context.tenant = tenant
-          await hooks.emit('tenancy:switched', { tenant })
+          await hooks.emit('tenancy:switched', { tenant, via: 'http' })
         },
       )
     },
+    boot({ container, hooks }) {
+      // Boot-time check of `meta.tenant`, read from the `http:routes` bucket
+      // every adapter publishes before `app:booted` (adapter-agnostic, no
+      // @basaltkit/http import). A typo such as `tenant: 'none'` falls back
+      // to the app-wide default, as it always did; it warns today and
+      // refuses the boot from the next major.
+      hooks.on('app:booted', () => warnInvalidTenantMeta(container))
+    },
   })
+}
+
+/** Containers already warned about invalid `meta.tenant` values. */
+const tenantMetaWarned = new WeakSet<Container>()
+
+/** At most this many routes are named in the `meta.tenant` warning. */
+const TENANT_META_WARN_LIMIT = 10
+
+/**
+ * Warns once per container about routes whose `meta.tenant` is not
+ * `undefined`, `true`, `false` or `'never'`. Such a value falls back to the
+ * app-wide `required` default (see `isTenantRequired`).
+ */
+function warnInvalidTenantMeta(container: Container): void {
+  if (tenantMetaWarned.has(container)) return
+  const routes = ensureMetadata(container).get<{ method?: unknown; url?: unknown; meta?: Record<string, unknown> }>(
+    'http:routes',
+  )
+  const invalid: string[] = []
+  for (const route of routes) {
+    const declared = route.meta?.['tenant']
+    if (declared === undefined || declared === true || declared === false || declared === 'never') continue
+    const method = Array.isArray(route.method) ? route.method.join(',') : String(route.method ?? '?')
+    invalid.push(`meta.tenant ${JSON.stringify(declared) ?? String(declared)} on ${method} ${String(route.url ?? '?')}`)
+  }
+  if (invalid.length === 0) return
+  tenantMetaWarned.add(container)
+  const shown = invalid.slice(0, TENANT_META_WARN_LIMIT)
+  const more = invalid.length > shown.length ? ` (and ${invalid.length - shown.length} more)` : ''
+  console.warn(
+    `[basalt] ${shown.join('; ')}${more} is not valid (expected true, false or 'never'; if you meant central-only, ` +
+      `the value is 'never') - falling back to the app-wide default; this will refuse to boot in the next major.`,
+  )
 }
 
 type Io = {

@@ -136,6 +136,7 @@ the `saas` keyword on npm.
 | `@basaltkit/subscriptions` | Plans, trials, feature limits, gateway drivers, webhooks, hosted Checkout & Customer Portal, proration |
 | `@basaltkit/flags` | Feature flags — per-tenant/user targeting, deterministic rollouts |
 | `@basaltkit/webhooks` | Outbound webhooks — signed delivery, retries, per-tenant subscriptions |
+| `@basaltkit/inbound-mail` | Receive email — signed raw-byte deliveries from a relay, bounded MIME parsing, trusted A-R/ARC verdicts, address routing |
 | `@basaltkit/audit` · `@basaltkit/activity` · `@basaltkit/notifications` | Audit trail, activity feed, multi-channel notifications |
 | `@basaltkit/realtime` | Server→client push (WebSocket/SSE), per-tenant channels, presence, events bridge, Redis backplane |
 | `@basaltkit/realtime-client` | Browser client for `@basaltkit/realtime` — subscribe channels over WS/SSE, auto-reconnect, zero deps |

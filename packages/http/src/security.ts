@@ -1,5 +1,12 @@
 import { definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
 import { HttpError } from './errors.js'
+import {
+  GUARDED_META_BUCKET,
+  InvalidRouteMetaError,
+  META_VALIDATORS_BUCKET,
+  RATE_LIMIT_META_KEY,
+  type RouteMetaValidator,
+} from './guarded-meta.js'
 import type { RouteGuard } from './pipeline.js'
 import type { HttpReply, HttpRequest } from './route.js'
 import { HTTP_SERVER } from './server.js'
@@ -122,8 +129,50 @@ export interface RateLimitOptions {
   limit: number
   windowMs: number
   store?: RateLimitStore
+  /**
+   * The id of the global (pre-routing) bucket. Default: the client IP.
+   *
+   * It runs BEFORE authentication, so it must never read an unverified
+   * credential header (`x-api-key`, `Authorization`): a client that sends a
+   * fresh made-up value on every request gets a fresh bucket every time and
+   * is never limited. For per-key budgets use `meta.rateLimit` with
+   * `key: 'apiKey'`, which reads the key the enricher verified.
+   */
   key?: (request: HttpRequest) => string
   skip?: (request: HttpRequest) => boolean
+  /**
+   * Path-prefix budgets, charged before routing on every adapter. A request
+   * whose path falls under a prefix is charged on that prefix's bucket
+   * INSTEAD of the global one (the longest matching prefix wins), so a public
+   * API under `/v1` can get a higher per-IP ceiling than the rest of the app —
+   * while still paying a per-IP budget before any credential is looked up.
+   *
+   * Prefixes set or lift the edge budget for a path family. They are matched
+   * on the raw path with minimal normalisation, so they are not a way to make
+   * one endpoint stricter: a budget that must hold for a specific route
+   * belongs in that route's `meta.rateLimit`, which is bound to the matched
+   * route.
+   */
+  prefixes?: readonly PrefixRateLimit[]
+}
+
+/** A pre-routing budget for every path under `prefix` (see {@link RateLimitOptions.prefixes}). */
+export interface PrefixRateLimit {
+  /**
+   * Starts with `/`; matched on segment boundaries (`/v1` matches `/v1` and
+   * `/v1/orders`, never `/v10`), case-insensitively, after the query string
+   * is cut off, runs of `/` are collapsed and a trailing `/` is dropped. No
+   * percent-decoding and no dot-segment resolution.
+   */
+  prefix: string
+  limit: number
+  windowMs: number
+  /**
+   * The bucket id inside this prefix. Default: the global `key`, else the
+   * client IP. Runs before authentication, like the global `key`: never derive
+   * it from an unverified credential header.
+   */
+  key?: (request: HttpRequest) => string
 }
 
 export interface CorsOptions {
@@ -169,24 +218,34 @@ export const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'"
  * - `'user'` — `ctx().user.id`: users behind one NAT/proxy no longer share a budget.
  * - `'tenant'` — `ctx().tenant.id`: every user of a tenant shares one budget.
  * - `'user+tenant'` — one budget per user per tenant.
+ * - `'apiKey'` — `ctx().apiKey.id`: one budget per API key. Only a key the
+ *   API-keys enricher verified ever becomes a bucket id, so made-up keys can
+ *   not mint fresh buckets (they fall back like any missing id, below). A
+ *   per-key budget multiplies with the number of keys a customer mints:
+ *   use it for bursts, and put quotas on `'tenant'`.
  * - a function of `ctx()` returning the bucket id.
  *
  * Resolved after enrichers ran, so auth/tenancy have set `ctx()`. When the id
  * is missing (anonymous caller, no tenant resolved, the function returns
  * nothing) the bucket falls back to the client IP, never mixed with identified
- * callers' buckets (those are namespaced `user:`/`tenant:`/`key:`).
+ * callers' buckets (those are namespaced `user:`/`tenant:`/`apikey:`/`key:`).
  *
  * The IP itself can be missing too: when the adapter could not resolve
  * `request.ip` (Hono on a runtime without `getClientIp`, a hand-built
- * pipeline), every such request shares ONE bucket, `unknown` — deliberately
- * fail-closed, since the alternative would be a bucket per spoofable header.
- * Resolve the address in the adapter to get per-client buckets back.
+ * pipeline, an MCP tool called over stdio or through `McpServer.callTool`).
+ * The per-route guard then keys the bucket by the caller's identity
+ * (`user:<id>|tenant:<id>`, resolved from `ctx()` like `'user+tenant'`), so
+ * authenticated callers keep separate budgets. Anonymous ip-less requests all
+ * share ONE bucket, `unknown` — deliberately fail-closed, since the
+ * alternative would be a bucket per spoofable header. Resolve the address in
+ * the adapter to get per-client buckets back.
  */
 export type RateLimitKey =
   | 'ip'
   | 'user'
   | 'tenant'
   | 'user+tenant'
+  | 'apiKey'
   | ((context: RequestContext) => string | undefined | null)
 
 /**
@@ -199,9 +258,25 @@ export interface RouteRateLimit {
   windowMs: number
   /** Who the bucket belongs to. Default `'ip'`. See {@link RateLimitKey}. */
   key?: RateLimitKey
+  /**
+   * Name of a bucket shared by every route that declares it — e.g. one daily
+   * quota for a whole public API. Every declaration of a name must carry the
+   * same `limit`, `windowMs` and key string (function keys are not compared);
+   * the boot is refused otherwise. Grammar: `/^[A-Za-z0-9._:-]{1,64}$/`.
+   */
+  bucket?: string
 }
 
-const RATE_LIMIT_KEYS = new Set(['ip', 'user', 'tenant', 'user+tenant'])
+/**
+ * What `meta.rateLimit` accepts: one budget, or several that are all enforced
+ * (charged in order; the first one that refuses answers 429 and the later ones
+ * are not charged). Use it with `satisfies` to type a route's meta:
+ * `rateLimit: [...] satisfies RouteRateLimits`.
+ */
+export type RouteRateLimits = RouteRateLimit | readonly RouteRateLimit[]
+
+const RATE_LIMIT_KEYS = new Set(['ip', 'user', 'tenant', 'user+tenant', 'apiKey'])
+const BUCKET_NAME = /^[A-Za-z0-9._:-]{1,64}$/
 
 /** Coerces a route's `meta.rateLimit` into a {@link RouteRateLimit}, or `null` if absent/malformed. */
 function parseRouteRateLimit(value: unknown): RouteRateLimit | null {
@@ -226,7 +301,7 @@ const idOf = (value: unknown): string | undefined => {
 
 /**
  * The identity part of a per-route bucket, namespaced (`user:`, `tenant:`,
- * `key:`) so an id can never collide with an IP bucket; `undefined` when the
+ * `apikey:`, `key:`) so an id can never collide with an IP bucket; `undefined` when the
  * key cannot be resolved and the caller falls back to the IP.
  */
 function identityKey(key: RateLimitKey | undefined, context: RequestContext): string | undefined {
@@ -234,6 +309,10 @@ function identityKey(key: RateLimitKey | undefined, context: RequestContext): st
   if (typeof key === 'function') {
     const id = key(context)
     return typeof id === 'string' && id !== '' ? `key:${id}` : undefined
+  }
+  if (key === 'apiKey') {
+    const apiKey = idOf(context['apiKey'])
+    return apiKey !== undefined ? `apikey:${apiKey}` : undefined
   }
   const user = idOf(context['user'])
   const tenant = idOf(context['tenant'])
@@ -243,6 +322,195 @@ function identityKey(key: RateLimitKey | undefined, context: RequestContext): st
   if (user === undefined) return undefined
   return tenant !== undefined ? `user:${user}|tenant:${tenant}` : `user:${user}`
 }
+
+/**
+ * One budget the route guard charges, with the scope part of its store key.
+ * Only the new forms (an array, or an object with `bucket`) build plans; the
+ * legacy single object keeps its historical key and code path.
+ */
+interface ChargePlan {
+  limit: number
+  windowMs: number
+  key?: RateLimitKey
+  /** `bucket:<name>` or `route:<METHOD> <url>#<index>`. */
+  scope: string
+}
+
+/**
+ * True for the forms charged through {@link ChargePlan}s: an array, or an
+ * object carrying a STRING `bucket`. A legacy object with `bucket: null` (say
+ * `cond ? 'name' : null`) or another non-string bucket keeps the legacy
+ * lenient parse, enforced per route as before this release.
+ */
+const isMultiForm = (value: unknown): boolean =>
+  Array.isArray(value) || (isObject(value) && typeof (value as { bucket?: unknown }).bucket === 'string')
+
+/**
+ * The plans for a route's `meta.rateLimit` in a new form, in declared order.
+ * Malformed entries are skipped here; the boot-time validator refuses them
+ * before any traffic, so they are never served.
+ */
+function chargePlansOf(value: unknown, method: string, url: string): ChargePlan[] {
+  const entries: readonly unknown[] = Array.isArray(value) ? value : [value]
+  const plans: ChargePlan[] = []
+  entries.forEach((entry, index) => {
+    const parsed = parseRouteRateLimit(entry)
+    if (!parsed) return
+    const bucket = (entry as { bucket?: unknown }).bucket
+    const scope =
+      typeof bucket === 'string' && BUCKET_NAME.test(bucket) ? `bucket:${bucket}` : `route:${method.toUpperCase()} ${url}#${index}`
+    plans.push({ limit: parsed.limit, windowMs: parsed.windowMs, ...(parsed.key !== undefined ? { key: parsed.key } : {}), scope })
+  })
+  return plans
+}
+
+const isPositiveFinite = (value: unknown): boolean => typeof value === 'number' && Number.isFinite(value) && value > 0
+
+/** Shape problems of one entry of a new-form `meta.rateLimit` (`at` names it in messages). */
+function entryProblems(entry: unknown, at: string): string[] {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [`${at} must be an object { limit, windowMs, key?, bucket? }`]
+  const { limit, windowMs, key, bucket } = entry as Record<string, unknown>
+  const problems: string[] = []
+  if (!isPositiveFinite(limit)) problems.push(`${at}.limit must be a finite number above 0 (got ${String(limit)})`)
+  if (!isPositiveFinite(windowMs)) problems.push(`${at}.windowMs must be a finite number above 0 (got ${String(windowMs)})`)
+  if (key !== undefined && typeof key !== 'function' && !(typeof key === 'string' && RATE_LIMIT_KEYS.has(key))) {
+    problems.push(`${at}.key ${JSON.stringify(key)} is not one of ${[...RATE_LIMIT_KEYS].map((k) => `'${k}'`).join(', ')} or a function`)
+  }
+  // `bucket: null` counts as absent (`[{ …, bucket: cond ? 'x' : null }]`).
+  if (bucket != null && !(typeof bucket === 'string' && BUCKET_NAME.test(bucket))) {
+    problems.push(`${at}.bucket ${JSON.stringify(bucket)} must match ${String(BUCKET_NAME)}`)
+  }
+  return problems
+}
+
+/**
+ * Boot-time shape check of `meta.rateLimit` in its new forms (an array, or an
+ * object with a string `bucket`). Stateless and per route, as a RouteMetaValidator
+ * must be; whether the declarations of one shared bucket agree across routes
+ * is checked at `app:booted`. The legacy single object stays lenient (a
+ * malformed one gets no limit, an unknown key the IP bucket) so apps that boot
+ * today still do.
+ */
+const rateLimitMetaValidator: RouteMetaValidator = ({ route }) => {
+  const value = route.meta?.['rateLimit']
+  if (!isMultiForm(value)) return undefined
+  const problems = Array.isArray(value)
+    ? value.length === 0
+      ? ['meta.rateLimit must not be an empty array']
+      : value.flatMap((entry, index) => entryProblems(entry, `meta.rateLimit[${index}]`))
+    : entryProblems(value, 'meta.rateLimit')
+  return problems.length > 0 ? problems : undefined
+}
+
+interface PublishedRoute {
+  method?: string
+  url: string
+  meta?: Record<string, unknown>
+}
+
+interface BucketDeclaration {
+  limit: number
+  windowMs: number
+  /** The key string (`'ip'` when omitted), or `null` for a function key. */
+  key: string | null
+  route: string
+}
+
+/**
+ * Cross-route check of shared buckets: every declaration of one `bucket` name
+ * must agree on `limit`, `windowMs` and key string. Function keys are never
+ * compared — two inline lambdas are different objects but may mean the same,
+ * and their ids are namespaced (`key:`) apart from every string key's anyway.
+ */
+function sharedBucketProblems(routes: readonly PublishedRoute[]): { route: string; problem: string }[] {
+  const seen = new Map<string, BucketDeclaration>()
+  const problems: { route: string; problem: string }[] = []
+  for (const r of routes) {
+    const value = r.meta?.['rateLimit']
+    if (!isMultiForm(value)) continue
+    const name = `${String(r.method ?? '').toUpperCase()} ${r.url}`
+    for (const entry of Array.isArray(value) ? (value as readonly unknown[]) : [value]) {
+      const bucket = isObject(entry) ? (entry as { bucket?: unknown }).bucket : undefined
+      if (typeof bucket !== 'string') continue
+      const parsed = parseRouteRateLimit(entry)
+      if (!parsed) continue
+      const key = typeof parsed.key === 'function' ? null : (parsed.key ?? 'ip')
+      const first = seen.get(bucket)
+      if (!first) {
+        seen.set(bucket, { limit: parsed.limit, windowMs: parsed.windowMs, key, route: name })
+        continue
+      }
+      const differences: string[] = []
+      if (first.limit !== parsed.limit) differences.push(`limit ${parsed.limit} vs ${first.limit}`)
+      if (first.windowMs !== parsed.windowMs) differences.push(`windowMs ${parsed.windowMs} vs ${first.windowMs}`)
+      if (first.key !== null && key !== null && first.key !== key) differences.push(`key '${key}' vs '${first.key}'`)
+      if (differences.length > 0) {
+        problems.push({
+          route: name,
+          problem: `meta.rateLimit bucket '${bucket}' disagrees with its first declaration (${first.route}): ${differences.join(', ')}`,
+        })
+      }
+    }
+  }
+  return problems
+}
+
+/**
+ * Normalises a path for prefix matching: cut at `?`/`#`, collapse runs of `/`,
+ * lowercase, drop a trailing `/`. Deliberately no percent-decoding and no
+ * dot-segment resolution: prefixes set or lift a budget, they do not harden one.
+ */
+function normalisePath(url: string): string {
+  let end = url.length
+  const query = url.indexOf('?')
+  if (query !== -1) end = query
+  const hash = url.indexOf('#')
+  if (hash !== -1 && hash < end) end = hash
+  let path = url.slice(0, end).replace(/\/{2,}/g, '/').toLowerCase()
+  if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1)
+  return path
+}
+
+interface PrefixRule extends PrefixRateLimit {
+  /** The normalised prefix (also the bucket namespace). */
+  normalised: string
+}
+
+/** Validates and normalises `rateLimit.prefixes`, longest first. Throws `TypeError` on a bad rule. */
+function compilePrefixes(prefixes: readonly PrefixRateLimit[] | undefined): PrefixRule[] {
+  if (prefixes === undefined) return []
+  if (!Array.isArray(prefixes)) throw new TypeError('securityPlugin: rateLimit.prefixes must be an array')
+  const rules: PrefixRule[] = []
+  const seen = new Set<string>()
+  for (const rule of prefixes as readonly PrefixRateLimit[]) {
+    const where = `securityPlugin: rateLimit.prefixes entry ${JSON.stringify(rule?.prefix)}`
+    if (typeof rule?.prefix !== 'string' || !rule.prefix.startsWith('/')) {
+      throw new TypeError(`${where}: prefix must be a string starting with '/'`)
+    }
+    if (rule.prefix.includes('?') || rule.prefix.includes('#')) throw new TypeError(`${where}: prefix must not contain '?' or '#'`)
+    if (!isPositiveFinite(rule.limit) || !isPositiveFinite(rule.windowMs)) {
+      throw new TypeError(`${where}: limit and windowMs must be finite numbers above 0`)
+    }
+    if (rule.key !== undefined && typeof rule.key !== 'function') throw new TypeError(`${where}: key must be a function of the request`)
+    const normalised = normalisePath(rule.prefix)
+    if (seen.has(normalised)) throw new TypeError(`${where}: duplicates another prefix (both normalise to '${normalised}')`)
+    seen.add(normalised)
+    rules.push({ ...rule, normalised })
+  }
+  return rules.sort((a, b) => b.normalised.length - a.normalised.length)
+}
+
+const prefixMatches = (path: string, prefix: string): boolean =>
+  prefix === '/' || path === prefix || path.startsWith(`${prefix}/`)
+
+/**
+ * Which result's `X-RateLimit-*` headers a multi-budget route reports: the
+ * one with the fewest requests left; on a tie, the one that resets later.
+ */
+const mostConstraining = (results: readonly RateLimitResult[]): RateLimitResult =>
+  results.reduce((best, next) =>
+    next.remaining < best.remaining || (next.remaining === best.remaining && next.resetAt > best.resetAt) ? next : best,
+  )
 
 export interface SecurityPluginOptions {
   rateLimit?: RateLimitOptions | false
@@ -344,6 +612,8 @@ function answerPreflight(request: HttpRequest, reply: HttpReply, options: CorsOp
 export function securityPlugin(options: SecurityPluginOptions = {}) {
   const rateLimit = options.rateLimit
   const store = rateLimit ? (rateLimit.store ?? new MemoryRateLimitStore()) : undefined
+  // Validated now, at construction: a bad prefix is a configuration error.
+  const prefixRules = rateLimit ? compilePrefixes(rateLimit.prefixes) : []
   const cors = options.cors
   const headersOption = options.headers ?? true
   const headers: SecurityHeadersOptions | null =
@@ -373,25 +643,64 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
       // sidestepped through `/mcp` either.
       // A `key` other than the IP (user/tenant) is resolved here, from ctx(),
       // because only after the enrichers ran are the user and tenant known.
+      // No IP (and no custom global key): an identified caller still gets
+      // its own bucket; only anonymous ip-less callers share `unknown`.
+      const identityOf = (key: RateLimitKey | undefined, request: HttpRequest, context: RequestContext): string =>
+        identityKey(key, context) ?? rateLimit.key?.(request) ?? request.ip ?? identityKey('user+tenant', context) ?? 'unknown'
+
       const guard: RouteGuard = async ({ route, request, reply, context }) => {
-        const override = parseRouteRateLimit(route.meta?.['rateLimit'])
-        if (!override || rateLimit.skip?.(request)) return
+        const value = route.meta?.['rateLimit']
+        if (value === undefined || rateLimit.skip?.(request)) return
+
+        // Several budgets and shared buckets: always charged here, on every
+        // adapter, on top of the edge bucket. In declared order, stopping at
+        // the first refusal so a burst refusal does not eat a daily quota.
+        // Sequential hits: there is no atomicity across buckets.
+        if (isMultiForm(value)) {
+          const results: RateLimitResult[] = []
+          for (const plan of chargePlansOf(value, route.method, route.url)) {
+            const result = await store.hit(`rl|${plan.scope}|${identityOf(plan.key, request, context)}`, plan.limit, plan.windowMs)
+            if (!result.allowed) {
+              if (reply) applyRateLimitHeaders(reply, result)
+              throw new HttpError(429, RATE_LIMITED.code, RATE_LIMITED.message)
+            }
+            results.push(result)
+          }
+          if (reply && results.length > 0) applyRateLimitHeaders(reply, mostConstraining(results))
+          return
+        }
+
+        // The legacy single object: historical key and behaviour, unchanged.
+        const override = parseRouteRateLimit(value)
+        if (!override) return
         if (isObject(request.raw) && charged.has(request.raw)) return
-        const bucket = identityKey(override.key, context) ?? clientKey(request)
-        const result = await store.hit(`${bucket}::${route.url}`, override.limit, override.windowMs)
+        const result = await store.hit(`${identityOf(override.key, request, context)}::${route.url}`, override.limit, override.windowMs)
         if (reply) applyRateLimitHeaders(reply, result)
         if (!result.allowed) throw new HttpError(429, RATE_LIMITED.code, RATE_LIMITED.message)
       }
-      ensureMetadata(container).add('http:guards', guard)
+      const metadata = ensureMetadata(container)
+      metadata.add('http:guards', guard)
+      metadata.add(META_VALIDATORS_BUCKET, rateLimitMetaValidator)
+      // Claim `meta.rateLimit` so the adapters' boot check knows the budgets
+      // declared on routes are enforced (it warns when nobody claims them).
+      metadata.add(GUARDED_META_BUCKET, RATE_LIMIT_META_KEY)
     },
     boot({ container, hooks }) {
       if (rateLimit && store) {
         hooks.on('app:booted', () => {
-          const metadata = ensureMetadata(container)
-          for (const route of metadata.get<{ method?: string; url: string; meta?: Record<string, unknown> }>('http:routes')) {
-            const override = parseRouteRateLimit(route.meta?.['rateLimit'])
+          const routes = ensureMetadata(container).get<PublishedRoute>('http:routes')
+          for (const route of routes) {
+            const value = route.meta?.['rateLimit']
+            // Only the legacy single object feeds the Fastify fast path; the
+            // new forms are always charged in the guard.
+            if (isMultiForm(value)) continue
+            const override = parseRouteRateLimit(value)
             if (override && typeof route.method === 'string') perRoute.set(routeKey(route.method, route.url), override)
           }
+          // Shared buckets must agree across routes. Throwing here refuses
+          // the boot on every adapter (app.boot awaits app:booted).
+          const conflicts = sharedBucketProblems(routes)
+          if (conflicts.length > 0) throw new InvalidRouteMetaError(conflicts)
         })
       }
 
@@ -423,7 +732,19 @@ export function securityPlugin(options: SecurityPluginOptions = {}) {
             if (!result.allowed) reply.code(429).send({ error: { ...RATE_LIMITED } })
             return
           }
-          const result = await store.hit(clientKey(request), rateLimit.limit, rateLimit.windowMs)
+          // A path-prefix budget replaces the global bucket for its family of
+          // paths. It reads only `request.url`/`request.ip`, which every
+          // adapter sets the same way, so it is identical on all three — and
+          // it charges 404s, preflights and requests an enricher later
+          // rejects, like the global bucket does.
+          let rule: PrefixRule | undefined
+          if (prefixRules.length > 0) {
+            const path = normalisePath(request.url)
+            rule = prefixRules.find((candidate) => prefixMatches(path, candidate.normalised))
+          }
+          const result = rule
+            ? await store.hit(`prefix:${rule.normalised}::${rule.key?.(request) ?? clientKey(request)}`, rule.limit, rule.windowMs)
+            : await store.hit(clientKey(request), rateLimit.limit, rateLimit.windowMs)
           applyRateLimitHeaders(reply, result)
           if (!result.allowed) {
             reply.code(429).send({ error: { ...RATE_LIMITED } })

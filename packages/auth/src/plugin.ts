@@ -1,5 +1,5 @@
 import { BasaltError, createToken, definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
-import type { HttpRequest, RequestEnricher, RouteGuard } from '@basaltkit/http'
+import type { HttpRequest, RequestEnricher, RouteGuard, RouteVisibilityCheck } from '@basaltkit/http'
 import {
   Auth,
   AuthRequiredError,
@@ -7,8 +7,9 @@ import {
   MfaEnrollmentRequiredError,
   MfaStepUpRequiredError,
   type AuthOptions,
+  type RegisterPolicy,
 } from './auth.js'
-import { publicUser } from './auth.js'
+import { assertSessionOptions, publicUser } from './auth.js'
 import type { PublicUser } from './stores.js'
 
 declare module '@basaltkit/core' {
@@ -31,6 +32,14 @@ declare module '@basaltkit/core' {
      * revealing existence in the HTTP response. Only the email is provided.
      */
     'auth:register_existing_email': { email: string }
+    /**
+     * A {@link RegisterPolicy} refused to create an account. Nothing was created.
+     * `source: 'register'` came through the public register route, which still
+     * answered its usual 202 (so the response reveals nothing); `'social'` was
+     * a social / SSO first login, refused with `AUTH_REGISTRATION_CLOSED`.
+     * `tenantId` is the tenant the attempt happened on (absent on the apex).
+     */
+    'auth:register_refused': { email: string; tenantId?: string; source: 'register' | 'social' }
     'auth:login': { user: PublicUser }
     'auth:login_failed': { email: string }
     'auth:logout': { user: PublicUser }
@@ -158,6 +167,9 @@ export function authPlugin(pluginOptions: AuthPluginOptions) {
   return definePlugin({
     name: 'basalt:auth',
     register({ container, hooks }) {
+      // Fail at boot, not on the first request, on a cookie the browser would
+      // drop or an idle timeout the store cannot enforce.
+      assertSessionOptions(options)
       container.singleton(AUTH, () => new Auth({ ...options, hooks }))
       const metadata = ensureMetadata(container)
 
@@ -241,6 +253,23 @@ export function authPlugin(pluginOptions: AuthPluginOptions) {
         throw (await c.get(AUTH).isMfaEnabled(user.id)) ? new MfaStepUpRequiredError() : new MfaEnrollmentRequiredError()
       }
       metadata.add('http:guards', mfaGuard)
+
+      // Visibility (e.g. MCP `tools/list`): hide a route the caller statically
+      // cannot pass the MFA guard on. Pure — it reads only ctx() (`user`, `amr`,
+      // `apiKey`): no MFA-store lookup, no hooks, no writes. A `requireMfa`
+      // FUNCTION policy is never called here (it is app code with no purity
+      // contract), so those routes stay listed and the guard decides on call.
+      const mfaVisibility: RouteVisibilityCheck = ({ route, context }) => {
+        const declared = route.meta?.['mfa']
+        if (declared === false) return true
+        if (!context['user']) return true // meta.auth / the guard decide
+        let required = declared === true
+        if (!required && requireMfa === true && context['apiKey'] === undefined) required = true
+        if (!required) return true
+        const amr = context['amr']
+        return Array.isArray(amr) && amr.includes('mfa')
+      }
+      metadata.add('http:route-visibility', mfaVisibility)
     },
   })
 }

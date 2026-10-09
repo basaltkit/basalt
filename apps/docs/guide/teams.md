@@ -345,6 +345,65 @@ app.hooks.on('team:invited', ({ invitation, token }) =>
   mailer.send(InviteEmail, { url: `${APP_URL}/invite?token=${token}` }, { to: invitation.email }))
 ```
 
+### Auto-accept on verified email {#auto-accept-on-verified-email}
+
+The link is only how the token travels. What `accept` checks is that the
+invitation is live and that the caller's **verified** email is the invited
+address. When someone registers with the invited address and confirms it, both
+facts are already proven, so making them also find and click the invitation
+email adds nothing. Opt in:
+
+```ts
+teamsPlugin({ acceptOnVerifiedEmail: true })
+```
+
+On `auth:email_verified` and on `auth:login`, the signed-in user's pending
+invitation to the **current** tenant (`ctx().tenant`) is accepted when their
+email is verified. Both orders work: invited and then verified, and an
+already-verified account invited later (it joins on its next sign-in). The same
+logic is available directly as
+`teams.acceptByEmail({ tenantId, userId, email, emailVerified })`.
+
+- **Same guarantees as the link.** Only a pending, unrevoked, unexpired
+  invitation; the canonical address must match; the compare-and-set on the
+  invitation makes concurrent calls enroll once; an existing membership of equal
+  or higher rank is never demoted.
+- **Tenant-scoped.** Only the tenant the user is signing in to. On the apex
+  (no tenant) nothing happens, and invitations to other tenants stay pending:
+  an address is never enrolled into an organisation it is not visiting.
+- **Never fails the login.** An error (a store outage) is reported through
+  `team:auto_accept_failed` and the invitation stays pending.
+- **Policy applies from that moment.** `auth:login` fires only after MFA, but
+  once the membership exists, tenant policy (an MFA requirement for members,
+  role guards) applies to the account. Plan the ceremony as
+  register → confirm → already a member → enrol the second factor.
+
+### Invite-only registration {#invite-only-registration}
+
+`teamsInviteGate(teams)` is a ready-made registration policy for
+`@basaltkit/auth`: on the apex every address may register; on a tenant host only
+an address with a live invitation to **that** tenant may. It only reads; the
+invitation is consumed later (by the link, or by `acceptOnVerifiedEmail`).
+
+```ts
+import { authPlugin } from '@basaltkit/auth'
+import { TEAMS, teamsInviteGate, teamsPlugin } from '@basaltkit/teams'
+
+let app: BasaltApp
+app = createApp({
+  plugins: [
+    authPlugin({ users, secret, registerPolicy: teamsInviteGate(() => app.container.get(TEAMS)) }),
+    teamsPlugin({ acceptOnVerifiedEmail: true }),
+    // tenancy, tenantMembershipPlugin, …
+  ],
+})
+await app.boot()
+```
+
+A refused signup answers the same `202` as an admitted one and emits
+`auth:register_refused`, so the route never reveals who was invited. See
+[Authentication: registration policy](/guide/auth#registration-policy).
+
 ## Listing members and invites
 
 ```ts
@@ -473,6 +532,7 @@ catalogue into every tenant — see
 | `roleRank` | `Record<string, number>` | `{ owner: 3, admin: 2, member: 1 }` | Role hierarchy; roles outside the map have no rank (matched exactly) |
 | `grantableRoles` | `TeamRole[]` | `[]` | Unranked roles an acting user may still grant; any other role outside `roleRank` is refused (`TEAM_ROLE_NOT_GRANTABLE`) |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
+| `acceptOnVerifiedEmail` | `boolean` | `false` | Accept the user's pending invitation to the current tenant on `auth:email_verified` / `auth:login` when their email is verified. See [Auto-accept on verified email](#auto-accept-on-verified-email) |
 
 `tenantMembershipPlugin(options)`:
 
@@ -529,6 +589,7 @@ catalogue into every tenant — see
 | `team:joined` | `{ membership }` |
 | `team:role_changed` | `{ membership }` |
 | `team:member_removed` | `{ tenantId, userId }` |
+| `team:auto_accept_failed` | `{ tenantId, userId, error }` — `acceptOnVerifiedEmail` could not enroll; the login went through, the invitation stays pending |
 
 The full flow — including email plumbing — is in the
 [account lifecycle cookbook](/cookbook/account-lifecycle).

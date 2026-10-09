@@ -88,6 +88,24 @@ export class MissingPolicyError extends BasaltError {
 }
 
 /**
+ * `gate.listFilter(user, 'doc:read')` found no list filter for exactly
+ * `resource:action`. There is no RBAC fallback and `onMissingPolicy` does not
+ * apply: "RBAC allows" has no row-set meaning, and answering "unrestricted"
+ * would list every row. Fails closed.
+ */
+export class MissingPolicyFilterError extends BasaltError {
+  readonly status = 500
+  constructor(permission: string, registered: string[]) {
+    super(
+      'PERMISSION_FILTER_MISSING',
+      `No list filter for "${permission}". Add \`filters: { ${permission.split(':')[1] ?? 'action'}: (user) => … }\` ` +
+        `to the definePolicy() call for this resource (next to its check), or fix the resource:action spelling. ` +
+        `Registered filters: ${registered.length ? registered.join(', ') : '(none)'}.`,
+    )
+  }
+}
+
+/**
  * The request's tenant id equals a scope the Gate reserves for platform-wide
  * grants (`GLOBAL_SCOPE`, or the historic `'global'`). Evaluating grants there
  * would let the members of that tenant read and write the global bucket, so the

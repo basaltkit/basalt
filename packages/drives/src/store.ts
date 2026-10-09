@@ -55,6 +55,22 @@ export interface DriveConnection {
   watch?: DriveConnectionWatch | undefined
   lastSyncedAt?: number | undefined
   /**
+   * Connection health, epoch milliseconds like {@link lastSyncedAt}.
+   *
+   * Stamped only where a write already happens or was asked for — a completed
+   * sync page, `drives.check()`, and the credentials-invalid transition —
+   * never on an ordinary successful call, so health tracking adds no write to
+   * the hot path (and no extra revision bump to race a refresh).
+   */
+  lastSucceededAt?: number | undefined
+  /** When a sync, a `check()` or a refresh last failed. See {@link lastSucceededAt}. */
+  lastFailedAt?: number | undefined
+  /**
+   * The error **code** of that failure (`DRIVE_CREDENTIALS_INVALID`,
+   * `DRIVE_RATE_LIMITED`, …) — never a message, which can quote provider text.
+   */
+  lastErrorCode?: string | undefined
+  /**
    * Optimistic-concurrency marker, bumped on every write.
    *
    * It exists for one specific failure: two workers refreshing the same
@@ -117,6 +133,9 @@ export interface DriveConnectionPatch {
   cursor?: string | undefined
   watch?: DriveConnectionWatch | undefined
   lastSyncedAt?: number | undefined
+  lastSucceededAt?: number | undefined
+  lastFailedAt?: number | undefined
+  lastErrorCode?: string | undefined
   rootId?: string | undefined
 }
 
@@ -126,6 +145,15 @@ export interface DriveConnectionListFilter {
 }
 
 export interface DriveConnectionStore {
+  /**
+   * Set to `true` when the store persists the health fields
+   * (`lastSucceededAt`, `lastFailedAt`, `lastErrorCode`). Without it the
+   * engine never puts those keys in a patch: a store written before they
+   * existed (one that maps the patch straight onto its columns) keeps working,
+   * and the connection simply reports no health. `drives.check()` still
+   * returns its answer either way. {@link MemoryDriveConnectionStore} sets it.
+   */
+  readonly persistsHealth?: boolean | undefined
   create(record: DriveConnection): Promise<void>
   find(tenantId: string, id: string): Promise<DriveConnection | null>
   list(tenantId: string, filter?: DriveConnectionListFilter): Promise<DriveConnection[]>
@@ -208,6 +236,7 @@ const key = (...parts: string[]): string => JSON.stringify(parts)
 
 /** In-memory {@link DriveConnectionStore}. Production uses a durable store. */
 export class MemoryDriveConnectionStore implements DriveConnectionStore {
+  readonly persistsHealth: boolean = true
   private readonly records = new Map<string, DriveConnection>()
 
   async create(record: DriveConnection): Promise<void> {
@@ -276,4 +305,16 @@ export class MemoryDriveImportLedger implements DriveImportLedger {
     }
     return out
   }
+}
+
+/**
+ * The health keys of a patch, or none when `store` does not declare
+ * {@link DriveConnectionStore.persistsHealth}. Internal: not exported from the
+ * package entry.
+ */
+export function healthPatch(
+  store: Pick<DriveConnectionStore, 'persistsHealth'>,
+  fields: Pick<DriveConnectionPatch, 'lastSucceededAt' | 'lastFailedAt' | 'lastErrorCode'>,
+): Pick<DriveConnectionPatch, 'lastSucceededAt' | 'lastFailedAt' | 'lastErrorCode'> {
+  return store.persistsHealth === true ? fields : {}
 }
