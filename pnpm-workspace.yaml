@@ -107,6 +107,19 @@ overrides:
   # installed, each patched on its own line.
   'fast-uri@3': ^3.1.7
   'fast-uri@4': ^4.1.4
+  # Advisories published after 1.12 (2026-10), raised in place rather than ignored:
+  # - proxy-addr (critical, IP spoofing via IPv4-mapped addresses): Express
+  #   resolves `trust proxy` through it, so it decides `request.ip` — and with it
+  #   rate-limit keys and IP allowlists — for every app on @basaltkit/express.
+  # - source-map-js (high, event-loop DoS): reaches us through prisma's tooling.
+  # - shell-quote (critical, command injection in quote()): dev tooling only
+  #   (@changesets/cli > launch-editor), raised because the fix is a minor.
+  # - vue (high, @vue/server-renderer XSS): docs tooling only (vitepress); the
+  #   whole vue line is raised together so its exact-pinned subpackages agree.
+  proxy-addr: ^2.0.8
+  source-map-js: ^1.2.2
+  shell-quote: ^1.11.0
+  vue: ^3.5.42
   jsdom: ^30.0.1
   '@types/node': ^26.3.0
   tailwind-merge: ^3.6.0

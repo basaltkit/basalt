@@ -46,7 +46,7 @@ describe('describeDbError (BK-041)', () => {
 
   for (const [name, error, code, fix] of cases) {
     it(name, () => {
-      const diagnosis = describeDbError(error, { url: 'postgres://app_user:s3cret@db:5432/app' })
+      const diagnosis = describeDbError(error, { url: 'postgres://app_user:s3cret@db:5432/app' }) // trufflehog:ignore — fake test credentials
       expect(diagnosis?.code).toBe(code)
       if (fix) expect(diagnosis?.fix).toMatch(fix)
       if (diagnosis) expect(JSON.stringify(diagnosis)).not.toContain('s3cret')
@@ -57,7 +57,7 @@ describe('describeDbError (BK-041)', () => {
     const diagnosis = describeDbError(new Error('permission denied for schema public'))
     expect(diagnosis?.fix).toContain('<app_role>')
     const unreachable = describeDbError(
-      new Error("Can't reach database server at postgres://admin:hunter2@db:5432/app"),
+      new Error("Can't reach database server at postgres://admin:hunter2@db:5432/app"), // trufflehog:ignore — fake test credentials
     )
     expect(unreachable?.cause).not.toContain('hunter2')
   })
