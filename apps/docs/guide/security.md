@@ -271,7 +271,7 @@ them all. A route that is safe to cache sets its own `Cache-Control` header,
 which replaces the default — do so on `meta.etag` routes (e.g.
 `private, no-cache`), since `no-store` keeps browsers from revalidating.
 
-### Per-route headers — `meta.headers`
+### Per-route headers — `meta.responseHeaders`
 
 Some routes need headers the rest of the API does not: a public share link that
 search engines must not index, a download that must never be cached. Declare
@@ -281,7 +281,7 @@ them on the route:
 route({
   method: 'POST',
   url: '/s/:token',
-  meta: { headers: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  meta: { responseHeaders: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
   handler: /* … */,
 })
 ```
@@ -293,10 +293,16 @@ A header set by `reply.header()` would only reach the success path. They
 replace a global header of the same name (here `securityPlugin`'s
 `Cache-Control`), and a handler can still override one with `reply.header()`.
 
-The values are checked at boot (`InvalidRouteMetaError`): strings without CR,
-LF or other control characters, and never `Set-Cookie`, `Content-Type`,
+The values are checked at boot on every adapter: strings without CR, LF or
+other control characters, and never `Set-Cookie`, `Content-Type`,
 `Content-Length`, `Transfer-Encoding`, hop-by-hop headers or `X-Request-Id`,
-which belong to the response or the adapter. A request that never reaches the
+which belong to the response or the adapter. A route whose record breaks a rule
+gets one boot warning naming it, and its **whole** `responseHeaders` record is
+ignored — none of its headers is sent, valid siblings included, and the request
+never fails because of it. The next major refuses such a boot.
+
+The key is `responseHeaders`, not `headers`: route meta is also yours, and
+nothing reads or sends `meta.headers`. A request that never reaches the
 route — a `404`, a rate-limit `429` or a malformed body rejected by the
 framework's parser — carries only the global headers.
 
@@ -988,8 +994,9 @@ setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 `rateLimit`, `tenant` and the other guarded keys (`mfa`, `teamRole`, `scopes`,
 `subscribed`, `feature`). The `tenant` column reads `required` (`meta.tenant: true`),
 `exempt` (`meta.tenant: false`), `central-only` (`meta.tenant: 'never'` — the route
-rejects any request that resolves a tenant), `central` (`meta.central: true`), or is
-blank when the route inherits the app-wide default; assert on `row.tenant ===
+rejects any request that resolves a tenant), or is blank when the route inherits the
+app-wide default. The column reflects `meta.tenant` only: `meta.central: true` (the
+`@basaltkit/teams` membership bypass) shows in the guards column as `central`; assert on `row.tenant ===
 'central-only'` to pin a console route to the central plane. Two ways to turn that
 into a gate:
 

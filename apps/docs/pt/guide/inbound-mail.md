@@ -292,7 +292,7 @@ for (const attachment of parsed.attachments) {
 O `parsed.html` é HTML não confiável. O pacote nunca o renderiza, nunca vai
 buscar os seus recursos `cid:` ou remotos e nunca o sanitiza. Sanitiza-o antes
 de o mostrar, e serve qualquer página que o mostre com uma CSP estrita através
-de [cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-headers).
+de [cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-responseheaders).
 
 ## Idempotência
 
