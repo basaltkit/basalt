@@ -9,6 +9,9 @@ import {
 } from './error-details.js'
 import { HttpError, RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
+// Cycle with error-report.ts (it imports clientErrorOf from here): runtime-safe,
+// both sides use the other only inside function bodies.
+import { reportHttpError } from './error-report.js'
 import { idempotencyStageOf, RecordingReply, type IdempotencyTicket } from './idempotency.js'
 import { applyRouteHeaders } from './route-headers.js'
 import type { HttpReply, HttpRequest, BasaltRoute } from './route.js'
@@ -22,16 +25,19 @@ declare module '@basaltkit/core' {
     /** Per-request DI scope — `scoped` instances live here. */
     container?: Container
     /**
-     * Hands a {@link RequestDisposer} to the request: the adapter runs it once
-     * the response has really ended, exactly like one an enricher returns.
-     * For cleanup that is taken outside an enricher's return value — e.g. a
-     * `tenancy:switched` listener leasing a database client. Set by `runRoute`
-     * on the request context only (non-enumerable, so a context copied with a
-     * spread — `tenancy.run()` — does not inherit it); its presence tells a
-     * plugin that the running pipeline honours disposers. Absent outside an
-     * HTTP request and on pipelines older than `@basaltkit/http` 2.8.
+     * Hands a {@link RequestDisposer} to the request: it runs once the
+     * pipeline has settled and the response is complete, exactly like one an
+     * enricher returns. For cleanup that is taken outside an enricher's return
+     * value — e.g. a `tenancy:switched` listener leasing a database client.
+     * Set by `runRoute` on the request context only (non-enumerable and
+     * read-only, so a context copied with a spread — `tenancy.run()` — does
+     * not inherit it); its presence tells a plugin that the running pipeline
+     * honours disposers. Absent outside an HTTP request, inside
+     * `tenancy.run()`, in queue/scheduler contexts and on pipelines older
+     * than `@basaltkit/http` 2.8 — check for it rather than calling it with
+     * `?.`, or the cleanup is silently dropped.
      */
-    onDispose?: (disposer: RequestDisposer) => void
+    readonly onDispose?: (disposer: RequestDisposer) => void
   }
 }
 
@@ -61,22 +67,39 @@ export type RequestEnricher = (info: {
 }) => void | RequestDisposer | Promise<void | RequestDisposer>
 
 /**
- * Cleanup an enricher hands back for the end of its request — e.g. returning a
- * leased database client to its pool. The adapter runs it exactly once, after
- * the response has finished, was abandoned by the client (abort/close) or
- * failed, including a streamed (`stream()`) or event-stream (`sse()`) body
- * that outlives the handler — and never before the pipeline (`runRoute`) has
- * settled, so a client abort mid-handler leaves the handler's resource alive
- * until it returns or throws. Disposers run last-registered first.
+ * Cleanup an enricher hands back (or `ctx().onDispose()` receives) for the end
+ * of its request — e.g. returning a leased database client to its pool.
+ *
+ * Runs exactly once, after the pipeline (`runRoute`) has settled AND the
+ * response is complete — never while the handler is still running:
+ * - Fastify/Express: once the response was sent or abandoned by the client
+ *   (Node `finish`/`close`), so a client abort mid-handler waits for the
+ *   handler to return or throw;
+ * - Hono: a buffered response is complete when it is built, so its disposers
+ *   are awaited before the Response is handed to the runtime;
+ * - a `stream()`/`sse()` body disposes at its last byte, an error, a cancel or
+ *   an abort, on every adapter;
+ * - with no adapter sink, `runRoute` runs them itself when it settles.
+ *
+ * Disposers run last-registered first, one at a time, each awaited (no
+ * timeout: keep them short and bounded). A failure is reported as
+ * `REQUEST_DISPOSER_FAILED` and never changes the response.
  */
 export type RequestDisposer = () => void | Promise<void>
 
 /**
- * The per-request list of {@link RequestDisposer}s an adapter keeps. `run()`
- * is once-guarded, so it can be wired to every way a response can end
- * ('finish', 'close', an aborted stream). A disposer added AFTER the request
- * already ended (the client went away while an enricher was still awaiting)
- * runs immediately rather than leaking.
+ * The per-request list of {@link RequestDisposer}s an adapter keeps. Public
+ * API for adapter authors and other `runRoute` callers (e.g. `@basaltkit/mcp`),
+ * with frozen semantics:
+ * - `run()` is once-guarded, so it can be wired to every way a response can
+ *   end ('finish', 'close', an aborted stream); it never throws;
+ * - disposers run last-registered first, serially, each awaited; one that
+ *   fails never stops the others;
+ * - a disposer added AFTER `run()` (the client went away while an enricher was
+ *   still awaiting, a timer the handler left behind) runs immediately rather
+ *   than leaking; it is not awaited by anyone;
+ * - `onError` receives every failure and is never rethrown; an `onError` that
+ *   throws is swallowed.
  */
 export class RequestDisposers {
   private readonly pending: RequestDisposer[] = []
@@ -237,8 +260,14 @@ export async function runRoute(
   const rawOptions = rawBodyOptionsOf(definition.body)
   const rawSession = rawOptions ? new RawBodySession(request, rawOptions) : undefined
 
-  // No sink from the caller: the disposers are run here, when the route is done.
-  const local = pipeline.onDispose ? undefined : new RequestDisposers()
+  // No sink from the caller: the disposers are run here, when the route is
+  // done, and a failure is reported on the console (an adapter or MCP passes
+  // its own sink, wired to its own error reporter).
+  const local = pipeline.onDispose
+    ? undefined
+    : new RequestDisposers((error) =>
+        reportHttpError({ error, status: 500, code: 'REQUEST_DISPOSER_FAILED', method: request.method, url: request.url }),
+      )
   const onDispose = pipeline.onDispose ?? ((disposer: RequestDisposer) => local!.add(disposer))
   // Also reachable from the request context, for cleanup taken outside an
   // enricher's return value. Non-enumerable: a context copied with a spread

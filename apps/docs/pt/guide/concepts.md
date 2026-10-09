@@ -324,15 +324,8 @@ export const approvalPlugin = definePlugin({
 
 Um enricher que **toma** algo para o pedido — um cliente de base de dados em
 lease, um lock, um span — devolve um disposer em vez de esperar que alguém
-limpe. O adapter executa-o exactamente uma vez quando a resposta terminou de
-facto: depois de o corpo ser enviado (incluindo um download `stream()` ou um
-stream `sse()`), depois de uma resposta de erro, quando um enricher ou guard
-posterior rejeitou o pedido, ou quando o cliente se foi embora. Nunca corre
-com o handler ainda em execução: um cliente que aborta a meio do handler só
-marca a resposta como terminada, e o disposer espera que o handler assente,
-pelo que o handler mantém um recurso vivo até devolver ou lançar. Os disposers
-correm do último registado para o primeiro; um que falhe é reportado
-(`REQUEST_DISPOSER_FAILED`) e nunca altera a resposta.
+limpe. Devolver uma função de um enricher é um atalho para
+`ctx().onDispose(fn)` (abaixo): os dois alimentam a mesma lista por pedido.
 
 ```ts
 const enricher: RequestEnricher = async ({ context }) => {
@@ -342,15 +335,41 @@ const enricher: RequestEnricher = async ({ context }) => {
 }
 ```
 
-A limpeza tomada **fora** do valor de retorno de um enricher — num listener de
-hook, ou no handler — vai para o mesmo sítio através de
-`ctx().onDispose?.(disposer)`. O `runRoute` define-o só no contexto do pedido
-(um contexto copiado pelo `tenancy.run()` não o herda), e só a partir do
-`@basaltkit/http` 2.8: a sua ausência diz a um plugin que nada vai correr o seu
-disposer, por isso não deve tomar o que não consegue devolver. O
-`prismaPlugin` apoia-se nos dois em database-per-tenant: faz lease no
-`tenancy:switched` e entrega a libertação ao `ctx().onDispose`, por isso a
-ordem em que os plugins são registados nunca importa
+O `ctx().onDispose(disposer)` entrega limpeza ao pedido HTTP actual. O
+disposer corre exactamente uma vez, depois de o pipeline da rota ter assentado E
+de a resposta estar completa — no Fastify/Express quando foi enviada ou
+abandonada pelo cliente; no Hono uma resposta em buffer fica completa quando é
+construída, por isso os seus disposers são aguardados antes de ser entregue ao
+runtime; um corpo `stream()`/`sse()` faz dispose no último byte, erro, cancel
+ou abort, em todos os adapters. Nunca corre com o handler ainda em execução. Os
+disposers correm do último registado para o primeiro, um de cada vez, cada um
+aguardado; um registado depois de o pedido terminar corre de imediato. Um
+disposer que lance ou rejeite é reportado como `REQUEST_DISPOSER_FAILED` (o
+`onError` do adapter, o `reportError` do `@basaltkit/mcp`, ou `console.error`
+para um `runRoute` sem adapter) e nunca altera a resposta; os restantes
+disposers continuam a correr. Mantém os disposers curtos e limitados: um que
+nunca assente atrasa todos os disposers registados antes dele — incluindo a
+libertação do lease do `prismaPlugin`. Ao contrário do `server.after()` (hooks
+de métricas/tracing de toda a app, corridos pela ordem de registo quando a
+resposta é produzida), o `onDispose` é por pedido, liberta algo que o pedido
+detém, e espera pelo handler. O `onDispose` só existe num contexto de pedido
+criado pelo `runRoute` (`@basaltkit/http` >= 2.8): é undefined dentro do
+`tenancy.run()` (usa `'tenancy:exited'`), em contextos de queue/scheduler e em
+pipelines mais antigos — verifica se existe em vez de o chamar com `?.`, senão
+a limpeza é descartada em silêncio:
+
+```ts
+const lock = await locks.take(key)
+const dispose = ctx().onDispose
+if (dispose) dispose(() => lock.release())
+else lock.release() // sem âmbito de pedido aqui: liberta-o tu (try/finally)
+```
+
+A sua ausência também diz a um plugin que nada vai correr o seu disposer, por
+isso não deve tomar o que não consegue devolver. O `prismaPlugin` apoia-se nos
+dois em database-per-tenant: faz lease no `tenancy:switched` e entrega a
+libertação ao `ctx().onDispose`, por isso a ordem em que os plugins são
+registados nunca importa
 ([dimensionar o pool](/pt/guide/database-per-tenant#o-pool-de-clientes-por-tenant)).
 
 Regras do jogo: os enrichers **constroem** contexto, os guards **decidem** —

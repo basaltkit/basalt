@@ -330,7 +330,7 @@ closed, loudly.
 `describeRoutes(entries)` normalises the `http:routes` bucket every adapter fills at
 boot into sorted `RouteRow`s — `{ method, url, auth, can, rateLimit, tenant, public, guards }`
 (`auth`/`can`/`rateLimit`/`tenant` are `null` when undeclared; `can: false` becomes
-`[]`; `rateLimit` reads `'10/1m per user'`, several budgets joined by `', '` and a shared bucket as `' [name]'`; `tenant` is `'required' | 'exempt' | 'central-only' | 'central'`, where `'central-only'` is `meta.tenant: 'never'`).
+`[]`; `rateLimit` reads `'10/1m per user'`, several budgets joined by `', '` and a shared bucket as `' [name]'`; `tenant` is `'required' | 'exempt' | 'central-only' | null`, read from `meta.tenant` only — `'central-only'` is `meta.tenant: 'never'`; `meta.central: true` is listed in `guards` as `'central'`; new values may be added in a minor, so switch with a `default` branch).
 `findUnguardedRoutes(rows, { require: ['auth', 'can'], allow? })` returns the rows that
 do not declare the required guards, treating `auth: false` / `public: true` (and
 `can: false`, for `can`) as intentional; only `auth: true` — the one value `authPlugin`
@@ -973,10 +973,10 @@ readonly field — it is a boot failure, never an HTTP response.
 | `toErrorResponse(error)` → `ErrorResponse` | Converts any error into a standardized `{ status, body }`. |
 | `RequestEnricher` | `(info: { request, context, container, route?, reply? }) => void \| RequestDisposer \| Promise<void \| RequestDisposer>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. An enricher that answers the request itself (`reply.send()`) ends it: the remaining enrichers, the guards and the handler do not run. A returned disposer runs exactly once when the response has ended (sent, streamed out, failed or abandoned) and the handler has settled — never while the handler still runs after a client abort — on every adapter. |
 | `RequestDisposer` | `() => void \| Promise<void>` — cleanup an enricher returns (e.g. releasing a leased database client). |
-| `ctx().onDispose` | `(disposer: RequestDisposer) => void \| undefined` — hands a disposer to the current request from outside an enricher's return value (a hook listener, a handler). Set by `runRoute` on the request context only (non-enumerable, so a context copied by `tenancy.run()` does not inherit it); absent outside a request and before 2.8, which tells a plugin not to take what it cannot give back. |
-| `RequestDisposers` | Per-request disposer list for adapter authors: `add(disposer)`, once-guarded `run()` (last-registered first; a disposer added after `run()` runs at once). |
+| `ctx().onDispose` | `readonly ((disposer: RequestDisposer) => void) \| undefined` — hands a disposer to the current request from outside an enricher's return value (a hook listener, a handler). Runs once the pipeline has settled and the response is complete (on Hono, a buffered response is complete when built: its disposers are awaited before the Response is returned). Set by `runRoute` on the request context only (non-enumerable and read-only, so a context copied by `tenancy.run()` does not inherit it); absent outside a request, in queue/scheduler contexts and before 2.8, which tells a plugin not to take what it cannot give back. Check for its presence, not `?.`: `ctx().onDispose?.(fn)` silently drops the cleanup where it is absent. |
+| `RequestDisposers` | Per-request disposer list for adapter authors and other `runRoute` callers (frozen semantics): `new RequestDisposers(onError?)`, `add(disposer)`, once-guarded `run()` that never throws (last-registered first, serially, each awaited; one failure never stops the others; a disposer added after `run()` runs at once); `onError` is never rethrown and a throwing `onError` is swallowed. |
 | `RouteGuard` | `(info: { route, request, context, container }) => void \| Promise<void>` — rejects by throwing. Bucket `'http:guards'`. |
-| `RoutePipeline` | `{ container?, enrichers?, guards?, onDispose? }`. `onDispose` receives the disposers enrichers return; an adapter passes it and runs them once `runRoute` has settled and the response has ended. Without it, `runRoute` runs them itself when it returns or throws. |
+| `RoutePipeline` | `{ container?, enrichers?, guards?, onDispose? }`. `onDispose` receives the disposers enrichers return; an adapter passes it and runs them once `runRoute` has settled and the response has ended. Without it, `runRoute` runs them itself when it returns or throws, and reports a failing disposer to `console.error` (`REQUEST_DISPOSER_FAILED`). |
 | `assertRoutesGuarded(routes, claimed, allow?)` | The boot check every adapter runs. `claimed` is a `Set` of claimed keys or a booted `Container` (the keys are read from its `'http:guarded-meta'` bucket). |
 | `describeRoutes(entries)` → `RouteRow[]` · `findUnguardedRoutes(rows, { require, allow? })` | The route table with declared guards, and the routes missing required guards — see [The route table](#the-route-table--describeroutes--findunguardedroutes). Also at `@basaltkit/http/route-table`. |
 | `isJsonMediaType(contentType)` | `true` for `application/json` or a `+json` type, parameters and case ignored — never a substring match (`text/plain; application/json` is CORS-safelisted, not JSON). The rule every adapter parses bodies by. |
@@ -1005,6 +1005,8 @@ readonly field — it is a boot failure, never an HTTP response.
 | `allowAnonymous` | `boolean` | `false` | Also cache requests carrying none of the credential headers. |
 | `fingerprint` | `'body' \| false \| (input) => string \| undefined` | `false` | Bind a key to its request; a mismatch → `422 IDEMPOTENCY_KEY_REUSED`. |
 | `replayAfterGuards` | `boolean` | `false` | Run the check after guards and validation instead of before the guards. |
+
+`idempotencyHeaderOf(container)` → `string | undefined`: the header the registered `idempotencyPlugin` reads the key from, lower-cased (`'idempotency-key'` unless `header` renames it), or `undefined` when the plugin is not registered. Use it instead of reading http's internal metadata (`@basaltkit/mcp` does, to never forward the key into a tool call). It caches nothing.
 
 `IdempotencyStore`: `get(key)` → `IdempotencyRecord | IdempotencyPending | 'pending' | undefined`;
 `setPending(key, info?)` → `boolean` (**an atomic check-and-set** — Redis `SET NX`, or one

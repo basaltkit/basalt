@@ -319,15 +319,8 @@ export const approvalPlugin = definePlugin({
 
 An enricher that **takes** something for the request — a leased database
 client, a lock, a span — returns a disposer instead of hoping someone cleans
-up. The adapter runs it exactly once when the response has really ended:
-after the body was sent (a `stream()` download or an `sse()` stream included),
-after an error response, when a later enricher or guard rejected the request,
-or when the client went away. It never runs while the handler is still
-running: a client that aborts mid-handler only marks the response as over,
-and the disposer waits for the handler to settle, so the handler keeps a live
-resource until it returns or throws. Disposers run last-registered first; a
-failing one is reported (`REQUEST_DISPOSER_FAILED`) and never changes the
-response.
+up. Returning a function from an enricher is shorthand for
+`ctx().onDispose(fn)` (below): both feed the same per-request list.
 
 ```ts
 const enricher: RequestEnricher = async ({ context }) => {
@@ -337,12 +330,37 @@ const enricher: RequestEnricher = async ({ context }) => {
 }
 ```
 
-Cleanup taken **outside** an enricher's return value — in a hook listener, or
-in the handler — goes to the same place through `ctx().onDispose?.(disposer)`.
-`runRoute` sets it on the request context only (a context copied by
-`tenancy.run()` does not inherit it), and only from `@basaltkit/http` 2.8 on:
-its absence tells a plugin that nothing will run its disposer, so it should
-not take what it cannot give back. `prismaPlugin` relies on both for
+`ctx().onDispose(disposer)` hands cleanup to the current HTTP request. The
+disposer runs exactly once, after the route pipeline has settled AND the
+response is complete — on Fastify/Express once it has been sent or abandoned by
+the client; on Hono a buffered response is complete when it is built, so its
+disposers are awaited before it is handed to the runtime; a `stream()`/`sse()`
+body disposes at its last byte, error, cancel or abort on every adapter. It
+never runs while the handler is still running. Disposers run last-registered
+first, one at a time, each awaited; one registered after the request has ended
+runs immediately. A disposer that throws or rejects is reported as
+`REQUEST_DISPOSER_FAILED` (the adapter's `onError`, `@basaltkit/mcp`'s
+`reportError`, or `console.error` for a bare `runRoute`) and never changes the
+response; the remaining disposers still run. Keep disposers short and bounded:
+one that never settles holds back every disposer registered before it —
+including `prismaPlugin`'s lease release. Unlike `server.after()` (app-wide
+metrics/tracing hooks, run in registration order once the response is
+produced), `onDispose` is per request, releases something the request owns,
+and waits for the handler. `onDispose` exists only on a request context created
+by `runRoute` (`@basaltkit/http` >= 2.8): it is undefined inside
+`tenancy.run()` (use `'tenancy:exited'`), in queue/scheduler contexts and on
+older pipelines — check for it instead of calling it with `?.`, or the cleanup
+is silently dropped:
+
+```ts
+const lock = await locks.take(key)
+const dispose = ctx().onDispose
+if (dispose) dispose(() => lock.release())
+else lock.release() // no request scope here: release it yourself (try/finally)
+```
+
+Its absence also tells a plugin that nothing will run its disposer, so it
+should not take what it cannot give back. `prismaPlugin` relies on both for
 database-per-tenant: it leases on `tenancy:switched` and hands the release to
 `ctx().onDispose`, so the order plugins are registered in never matters
 ([sizing the pool](/guide/database-per-tenant#the-per-tenant-client-pool)).

@@ -251,6 +251,8 @@ const app = await createApp({ plugins: [myPlugin, honoPlugin({ routes: [secure] 
 
 Without `Authorization` → `401 AUTH_REQUIRED`; with `x-tenant-id: acme` the handler sees `tenant: 'acme'` through the request context.
 
+Request disposers (an enricher's returned function, or `ctx().onDispose()`) run once the response is complete. On Hono a buffered response is complete when it is built, so its disposers are awaited before the `Response` is returned to the runtime (right for Workers and Bun, which may freeze the isolate afterwards) — keep them short. A `stream()`/`sse()` body disposes at its last byte, error, cancel or abort.
+
 ### Neutral edge plugins
 
 Imported from `@basaltkit/http` and work on Hono without changes:
