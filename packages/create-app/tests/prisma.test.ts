@@ -157,7 +157,7 @@ describe('--prisma generates a PostgreSQL-backed app', () => {
     expect(pkg.scripts['db:migrate']).toBe('prisma migrate dev')
     expect(pkg.scripts['db:deploy']).toBe('prisma migrate deploy')
     expect(pkg.scripts['db:generate']).toBe('prisma generate')
-    expect(pkg.scripts['db:seed']).toBe('tsx prisma/seed.ts')
+    expect(pkg.scripts['db:seed']).toBe('prisma db seed')
     // `db push` leaves no _prisma_migrations, which assertMigrated requires.
     expect(pkg.scripts).not.toHaveProperty('db:push')
 

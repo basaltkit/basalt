@@ -177,7 +177,11 @@ export function packageJson(options: ProjectOptions): string {
               // is deliberately no `db:push` script.
               'db:migrate': 'prisma migrate dev',
               'db:deploy': 'prisma migrate deploy',
-              ...(options.tenancy ? { 'db:seed': 'tsx prisma/seed.ts' } : {}),
+              // Through Prisma, not `tsx prisma/seed.ts`: prisma.config.ts loads
+              // .env (the seed imports src/env.ts, which needs the database URL),
+              // then runs the `migrations.seed` command it declares. Prisma 7's
+              // `migrate dev` no longer seeds on its own.
+              ...(options.tenancy ? { 'db:seed': 'prisma db seed' } : {}),
             }
           : {}),
       },
@@ -974,7 +978,7 @@ export default defineConfig({
   schema: 'prisma/schema.prisma',${
     options.tenancy
       ? `
-  // Runs after \`prisma migrate dev\` / \`prisma migrate reset\`.
+  // Run by \`prisma db seed\` (\`pnpm db:seed\`), with the .env loaded above.
   migrations: { seed: 'tsx prisma/seed.ts' },`
       : ''
   }
@@ -1041,8 +1045,9 @@ export const db = prisma
 
 /**
  * `prisma/seed.ts` — creates the `demo` tenant the scaffolded resolvers expect
- * (`x-tenant-id: demo`, `demo.localhost`). Runs from `pnpm db:seed` and after
- * `prisma migrate dev` (prisma.config.ts declares it).
+ * (`x-tenant-id: demo`, `demo.localhost`). Runs from `pnpm db:seed`
+ * (`prisma db seed`, the command prisma.config.ts declares) — Prisma 7's
+ * `migrate dev` does not run it.
  */
 export function prismaSeedTs(options: ProjectOptions): string {
   return `import { prismaTenantSource } from '@basaltkit/tenancy-prisma'
@@ -1136,7 +1141,8 @@ pnpm install${
     options.prisma
       ? `
 # start PostgreSQL — .env points ${envPrefix(options.name)}_DATABASE_URL at localhost:5432 — then
-pnpm db:migrate # create the tables${options.tenancy ? ` (runs the seed too)` : ''}`
+pnpm db:migrate # create the tables${options.tenancy ? `
+pnpm db:seed    # the 'demo' tenant the resolvers expect` : ''}`
       : ''
   }
 pnpm dev        # API on http://localhost:3000
@@ -1155,7 +1161,7 @@ packages it uses, plus your own \`Project\` at the end.
 pnpm db:migrate     # prisma migrate dev  — change the schema, write a migration${
         options.tenancy
           ? `
-pnpm db:seed        # the 'demo' tenant the resolvers expect (also run by db:migrate)`
+pnpm db:seed        # prisma db seed — the 'demo' tenant the resolvers expect`
           : ''
       }
 pnpm db:generate    # prisma generate — refresh generated/prisma (also runs on install)
