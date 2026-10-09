@@ -518,6 +518,22 @@ export function idempotencyStageOf(container: Container | undefined): Idempotenc
 }
 
 /**
+ * The request header `idempotencyPlugin` reads the key from on `container`,
+ * lower-cased (`'idempotency-key'` unless `idempotencyPlugin({ header })`
+ * renamed it), or `undefined` when the plugin is not registered.
+ *
+ * The public way for other packages (e.g. `@basaltkit/mcp`, which never
+ * forwards the key into a tool call) to learn the configured header without
+ * depending on how http stores the stage. Reads the registration as it is
+ * now and caches nothing, so calling it during plugin registration cannot
+ * hide a stage registered later.
+ */
+export function idempotencyHeaderOf(container: Container): string | undefined {
+  const stage = ensureMetadata(container).get<IdempotencyStage>(IDEMPOTENCY_BUCKET)[0]
+  return stage ? stage.describe().header.toLowerCase() : undefined
+}
+
+/**
  * Safe retries for mutating requests, on every adapter: when a client sends an
  * `Idempotency-Key`, the first response is cached and replayed for any repeat
  * with the same key — so a network retry never charges a card or creates a

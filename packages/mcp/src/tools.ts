@@ -2,8 +2,10 @@ import type { Container } from '@basaltkit/core'
 import { ensureMetadata } from '@basaltkit/core'
 import {
   httpErrorReporter,
+  idempotencyHeaderOf,
   isRouteVisible,
   redactSensitiveDetails,
+  RequestDisposers,
   runRoute,
   toErrorResponse,
   zodToJsonSchema,
@@ -76,13 +78,8 @@ export function toolSignal(request: HttpRequest): AbortSignal | undefined {
  */
 function idempotencyHeaders(container: Container): ReadonlySet<string> {
   const names = new Set(['idempotency-key'])
-  try {
-    const stage = ensureMetadata(container).get<{ describe?: () => { header?: string } }>('http:idempotency')[0]
-    const header = stage?.describe?.().header
-    if (header) names.add(header.toLowerCase())
-  } catch {
-    /* no stage, or an unexpected shape: the default name is still dropped */
-  }
+  const header = idempotencyHeaderOf(container)
+  if (header) names.add(header)
   return names
 }
 
@@ -358,11 +355,23 @@ function makeInvoke(
         raw: null,
       }
       if (signal) signals.set(request, signal)
+      // The tool call's own disposer sink, wired to `reportError` like every
+      // other failure of this server. Disposers run when the pipeline settles
+      // — before the tool result is built, and on abort only once the
+      // abandoned handler has settled, never on the abort signal itself.
+      const disposers = new RequestDisposers((error) => {
+        try {
+          report?.({ error, status: 500, code: 'REQUEST_DISPOSER_FAILED', method: route.method, url })
+        } catch {
+          // A failing reporter must not break the tool call.
+        }
+      })
       const run = runRoute(route, request, reply, {
         container,
         enrichers: metadata.get<RequestEnricher>('http:enrichers'),
         guards: metadata.get<RouteGuard>('http:guards'),
-      })
+        onDispose: (disposer) => disposers.add(disposer),
+      }).finally(() => disposers.run()) // run() never throws; the route's own outcome is kept
       // The pipeline cannot be interrupted from outside, but the CALL can: on
       // abort, answer "cancelled" now; the handler sees `toolSignal(request)`.
       let onAbort: (() => void) | undefined
