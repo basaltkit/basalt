@@ -59,8 +59,9 @@ key, webhooks that respect a port policy and a fan-out cap, and more. See
 ## Since 1.12 (unreleased)
 
 Shipped to `main` after the 1.12 release as minors and patches — no package
-needs a major, but some defaults change and a few configurations now refuse to
-boot. Read [Behaviour changes & upgrade notes](#behaviour-changes-and-upgrade-notes)
+needs a major. Some defaults change, a few configurations that used to boot
+now print a boot warning (they are refused in the next major), and only
+malformed uses of the new rate-limit forms refuse to boot. Read [Behaviour changes & upgrade notes](#behaviour-changes-and-upgrade-notes)
 before upgrading.
 
 
@@ -72,10 +73,10 @@ before upgrading.
   check after the route guards, so a revoked caller gets `401`/`403` instead of
   the cached success. Both will become the default in a future major — see
   [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyplugin).
-- **Per-route headers.** `meta.headers` sets static response headers (say
+- **Per-route headers.** `meta.responseHeaders` sets static response headers (say
   `X-Robots-Tag: noindex` on a public share link) on every response the route
   produces, its guard, validation and handler errors included — see
-  [Per-route headers](/guide/security#per-route-headers-—-meta-headers).
+  [Per-route headers](/guide/security#per-route-headers-—-meta-responseheaders).
 - **Operable webhooks.** `secretBox` seals endpoint signing secrets at rest,
   `onAttempt` and `DeliveryResult.durationMs` report every delivery attempt,
   `headerPrefix` renames the `x-basalt-*` headers, and `signPayload()` /
@@ -104,7 +105,8 @@ before upgrading.
   3.1) now leases a tenant's pooled client for each HTTP request and each
   `tenancy.run()`, and gives it back when the response ends, through the new
   request disposers (`RequestDisposer`, `ctx().onDispose()`) in
-  `@basaltkit/http` 2.8 and every adapter. Before, a client counted as in use
+  `@basaltkit/http` 2.8 and every adapter — see
+  [Writing your own guard or enricher](/guide/concepts#writing-your-own-guard-or-enricher). Before, a client counted as in use
   for `idleMs` (30 s) after every request, so on defaults the 11th distinct
   tenant within 30 s waited 10 s for a `503` while nothing was running. The pool
   the plugin builds now defaults `idleMs` to 1 s, a grace period rather than a
@@ -169,11 +171,17 @@ See [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyp
 - **Disposers wait for the handler.** On a client abort mid-request, Fastify
   and Express used to run enricher disposers while the handler was still
   running, which could disconnect its leased client mid-query. Disposers now
-  run exactly once, after the handler has settled *and* the response has ended
-  or been aborted, as Hono already did. `stream()` and `sse()` bodies stay
-  covered until their last byte or until the client leaves. A disposer handed
-  to `ctx().onDispose()` after that point (from a timer the handler left behind,
-  say) runs at once, on every adapter.
+  run exactly once, after the handler has settled *and* the response is
+  complete: sent or abandoned on Fastify/Express; on Hono a buffered response
+  is complete when it is built, so its disposers are awaited before it is
+  handed to the runtime. `stream()` and `sse()` bodies stay covered until their
+  last byte or until the client leaves. A disposer handed to `ctx().onDispose()`
+  after that point (from a timer the handler left behind, say) runs at once, on
+  every adapter. A failing disposer is reported as `REQUEST_DISPOSER_FAILED` on
+  every path (the adapter's `onError`, `@basaltkit/mcp`'s `reportError`,
+  `console.error` for a bare `runRoute`). `ctx().onDispose` is absent inside
+  `tenancy.run()`, in jobs and on older pipelines: check for it rather than
+  calling `ctx().onDispose?.(…)`, which silently drops the cleanup there.
 - **`ctx().db` after the response is not protected.** The lease ends with the
   response, and the client then stays reserved for only 1 s. Work that outlives
   the reply must `await` before replying, or run in `tenancy.run()` /
@@ -189,30 +197,46 @@ See [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyp
   code and "Service unavailable.". `max`, `leased`, `recentlyUsed` and the
   tenant id go to the server log only.
 
-#### Configurations that now refuse to boot
+#### Configurations that now warn at boot (refused in the next major)
 
-Each used to boot and misbehave silently; each has a one-line fix.
+Each of these booted before and still does, with the same runtime behaviour as
+before; each now prints one `[basalt] …` boot warning naming what is wrong. The
+next major turns each warning into a boot refusal, so fix them now — each has a
+one-line fix.
 
-- **`@basaltkit/auth`: a prefixed session cookie with `secure: false`.** A
-  `sessionCookie.name` starting with `__Host-` or `__Secure-` together with an
-  explicit `secure: false` (including the common
+- **`@basaltkit/auth`: a prefixed session cookie with `secure: false` or a
+  sub-path.** A `sessionCookie.name` starting with `__Host-` or `__Secure-`
+  together with an explicit `secure: false` (including the common
   `secure: process.env.NODE_ENV === 'production'` in dev and test), or a
-  `__Host-` cookie with a `path` other than `/`, throws
-  `AUTH_SESSION_COOKIE_INVALID`. Drop `secure`/`path`, or use an unprefixed name
-  outside production: `name: isProd ? '__Host-sid' : 'sid'`. Browsers already
-  dropped those cookies.
-- **`@basaltkit/tenancy`: `meta.tenant` must be `true`, `false` or `'never'`.**
-  Any other value (`'none'`, `'false'`) refuses the boot with
-  `HTTP_INVALID_ROUTE_META` instead of falling back to the app-wide default.
-- **`@basaltkit/http`: `meta.headers` is always validated.** It must be a
+  `__Host-` cookie with a `path` other than `/`. The cookie is still emitted
+  exactly as configured; browsers drop it, so such an app has no working
+  browser sessions there. Drop `secure`/`path`, or use an unprefixed name
+  outside production: `name: isProd ? '__Host-sid' : 'sid'`. The next major
+  throws `AUTH_SESSION_COOKIE_INVALID` (`SessionCookieConfigError`, exported
+  now).
+- **`@basaltkit/tenancy`: `meta.tenant` other than `true`, `false` or
+  `'never'`.** A value such as `'none'`, `'optional'`, `'false'` or `null`
+  falls back to the app-wide `required` default, as before. If you meant
+  central-only, the value is `'never'`. The next major refuses the boot with
+  `HTTP_INVALID_ROUTE_META`.
+- **`@basaltkit/http`: an invalid `meta.responseHeaders`.** It must be a
   record of string values without control characters and must not set
   `set-cookie`, `content-type`, `content-length`, `transfer-encoding`,
-  hop-by-hop headers or `x-request-id`. A route that used `meta.headers` for
-  something of its own fails with `HTTP_INVALID_ROUTE_META`: rename the field.
-- **`@basaltkit/http`: malformed `meta.rateLimit` arrays or `bucket` entries**,
-  and routes sharing a `bucket` that disagree on limit, window or key, refuse
-  the boot with `HTTP_INVALID_ROUTE_META`. The single-object `rateLimit`
-  (no `bucket`) keeps its lenient parse.
+  hop-by-hop headers or `x-request-id`. An invalid record is ignored whole —
+  none of its headers is sent — and the request never fails because of it. The
+  key is new: an app that keeps its own data under `meta.headers` is
+  untouched, because nothing reads or sends `meta.headers`.
+
+#### Configurations that now refuse to boot
+
+Only one, and only for forms added in this release:
+
+- **`@basaltkit/http`: malformed new-form `meta.rateLimit`.** An array
+  (including `[]`) with a malformed entry, an object whose `bucket` is a string
+  that is not a valid bucket name, or routes sharing a `bucket` that disagree
+  on limit, window or key, refuse the boot with `HTTP_INVALID_ROUTE_META`. The
+  single object without a string `bucket` — including `bucket: null` — keeps
+  its lenient parse and is enforced per route, as before.
 
 #### Other changes
 
@@ -229,6 +253,18 @@ Each used to boot and misbehave silently; each has a one-line fix.
   `integrity: { mode: 'hash-chain', erasable: true }`: older releases report v3 entries and
   redacted entries as `hash-mismatch`. See
   [Erasing personal data](/guide/persistence#erasing-personal-data-audit-redact).
+- **Auth — a prefixed session cookie now implies `Secure` in every
+  environment.** With `secure` unset, a `__Host-…`/`__Secure-…` cookie is now
+  `Secure` (and `Path=/` for `__Host-`) outside production too; before, it was
+  emitted without `Secure` and browsers dropped it. Browser flows now work,
+  `http://localhost` included. **Test-client caveat:** cookie jars that honour
+  `Secure` (supertest/superagent, tough-cookie) do not send it back over plain
+  `http`, so a suite that relied on the old emission gets 401s; outside
+  production this prints a one-time boot warning. Use an unprefixed name
+  outside production, or set `secure` explicitly (`secure: true` silences it).
+- **Auth — `sessionIdleTtl` is validated.** The new option fails closed at boot
+  (`AUTH_SESSION_IDLE_CONFIG_INVALID`) when it is not a positive duration or
+  the session store has no `touch()`; apps that do not set it are unaffected.
 - **Auth — custom `UserSource` without `update()`.** `create()` now receives
   `emailVerified`; persist it to get verified social and trusted accounts. A
   source that neither persists it nor implements `update()` still signs OAuth
@@ -260,11 +296,13 @@ Each used to boot and misbehave silently; each has a one-line fix.
   working unchanged and reports no health. To turn it on, add the three
   nullable columns, migrate, then set `readonly persistsHealth = true` — see
   [Connection health](/guide/drives#connection-health).
-- **Notifications — `preference()` replaces `allowed()` in the `Notifier`.**
-  The `Notifier` decides each channel through
-  `NotificationPreferences.preference()`, then the notification's `defaults` and
-  `mandatory`. A subclass or wrapper that overrides `allowed()` is no longer
-  consulted: override `preference()` instead.
+- **Notifications — the `Notifier` decides through `preference()`.** It
+  decides each channel through `NotificationPreferences.preference()`, then the
+  notification's `defaults` and `mandatory`. A subclass that overrides
+  `allowed()` keeps working: the `Notifier` detects the override and lets it
+  decide, as before (`defaults` do not apply to it; `mandatory` still bypasses
+  it). Overriding `allowed()` is deprecated — override `preference()`; the next
+  major stops consulting an `allowed()` override.
 - **MCP — internal errors are logged.** An error that escapes a tool still
   answers `Internal error`, and its cause now goes to stderr by default. Use
   `mcpPlugin({ onError })` to send it elsewhere, or `onError: false` to silence
@@ -280,10 +318,11 @@ Each used to boot and misbehave silently; each has a one-line fix.
   app that already has `TenantDomain` must add the four fields by hand (copy
   them from `@basaltkit/tenancy-prisma/prisma/schema.prisma`) and run a
   migration before deploying a client generated from the new model.
-- **Route table — `central-only`.** `basalt routes` and `describeRoutes()` show
-  `meta.tenant: 'never'` as `central-only` instead of a blank cell. The
-  `RouteRow.tenant` union gains `'central-only'`: code with an exhaustive
-  `switch` over it must add the case.
+- **Route table — `central-only`.** `basalt routes` shows `meta.tenant:
+  'never'` as `central-only` (`meta.tenant: 'never'` on the route and
+  `central-only` in the table are the same thing). The new `describeRoutes()`
+  reads `RouteRow.tenant` from `meta.tenant` only; `meta.central: true` (the
+  teams membership bypass) is listed among the guards as `central`.
 
 ## Highlights
 
