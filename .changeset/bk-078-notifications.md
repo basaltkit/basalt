@@ -19,9 +19,12 @@ Additive:
   that ignore every opt-out. Enforced by `Notifier`; `allowed()` is unchanged and
   the new `NotificationPreferences.preference()` returns `undefined` when no
   preference matches.
-- **Behaviour change for custom preferences:** `Notifier` now decides each
-  channel through `preference()` (then the notification's `defaults` and
-  `mandatory`), not `allowed()`. A subclass or wrapper that overrides
-  `allowed()` to change delivery is no longer consulted — override
-  `preference()` instead (`undefined` means "no stated preference").
+- `Notifier` now decides each channel through `preference()` (then the
+  notification's `defaults` and `mandatory`). A `NotificationPreferences`
+  subclass that overrides `allowed()` (quiet hours, compliance blocks, plan
+  gating) keeps working: the `Notifier` detects the override and lets it
+  decide, as before — its answer is final and `defaults` do not apply to it
+  (`mandatory` channels still bypass it). Overriding `allowed()` is
+  deprecated: override `preference()` instead (`undefined` means "no stated
+  preference"); the next major stops consulting an `allowed()` override.
 - `inAppRoutes({ meta })` merges extra route metadata; `auth: true` is always kept.
