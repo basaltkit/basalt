@@ -9,7 +9,7 @@
  * from @basaltkit/http at runtime.
  */
 import { ctx, definePlugin, ensureMetadata } from '@basaltkit/core'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BasaltRoute } from '../../http/src/index.js'
 import type { ParityDriver } from '../../http/tests/adapter-parity.js'
 import { headerResolver, MemoryTenantSource, tenancyPlugin } from '../src/index.js'
@@ -119,20 +119,43 @@ export function centralOnlyParitySuite(adapter: string, driver: ParityDriver): v
       expect(switched).toEqual(['acme'])
     })
 
-    it('refuses to boot on a meta.tenant value it does not know', async () => {
+    it('boots on a meta.tenant value it does not know, warns once, and falls back to the app-wide default', async () => {
       const bad = [
         ...routes,
         { method: 'GET', url: '/typo', meta: { tenant: 'none' }, handler: () => 'x' },
         { method: 'POST', url: '/stringly', meta: { tenant: 'false' }, handler: () => 'x' },
       ] as BasaltRoute[]
-      const boot = driver.boot(bad, [tenancy(), signIn])
-      await expect(boot).rejects.toMatchObject({
-        code: 'HTTP_INVALID_ROUTE_META',
-        problems: [
-          { route: 'GET /typo', problem: `meta.tenant "none" is not valid (expected true, false or 'never')` },
-          { route: 'POST /stringly', problem: `meta.tenant "false" is not valid (expected true, false or 'never')` },
-        ],
-      })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        // required: true — the typo needs a tenant, exactly as before.
+        const send = await driver.boot(bad, [tenancy(), signIn])
+        const tenantWarnings = warn.mock.calls.map((call) => String(call[0])).filter((m) => m.includes('meta.tenant'))
+        expect(tenantWarnings).toHaveLength(1)
+        expect(tenantWarnings[0]).toContain('meta.tenant "none" on GET /typo')
+        expect(tenantWarnings[0]).toContain('meta.tenant "false" on POST /stringly')
+        expect(tenantWarnings[0]).toContain('next major')
+
+        const noTenant = await send({ method: 'GET', url: '/typo' })
+        expect(noTenant.status).toBe(404)
+        expect(noTenant.json).toMatchObject({ error: { code: 'TENANCY_NOT_RESOLVED' } })
+        const withTenant = await send({ method: 'GET', url: '/typo', headers: { 'x-tenant-id': 'acme' } })
+        expect(withTenant.status).toBe(200)
+        await driver.close()
+
+        // required: false — the typo runs without a tenant.
+        const lenient = await driver.boot(bad, [
+          tenancyPlugin({
+            source: new MemoryTenantSource().add({ id: 'acme', name: 'Acme' }),
+            resolvers: [headerResolver()],
+            required: false,
+          }),
+          signIn,
+        ])
+        const open = await lenient({ method: 'GET', url: '/typo' })
+        expect(open.status).toBe(200)
+      } finally {
+        warn.mockRestore()
+      }
     })
   })
 }
