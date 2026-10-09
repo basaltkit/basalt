@@ -74,6 +74,16 @@ Subdomain-based apps need nothing extra.
 - `billingUiRoutes({ plans, path?, apiBase?, title?, headers? })` — the routes (`plans` is the same object you gave to `subscriptionsPlugin`).
 - `billingPageHtml(options)` — the HTML as a string, for serving it your own way.
 
+## Guarding the route
+
+The route always requires a logged-in user (`auth: true`). Pass `meta` to add
+your own guard — or a rate limit, OpenAPI tags — merged into both routes (`/billing/ui` and `/billing/info`);
+`auth: true` is applied on top and cannot be switched off:
+
+```ts
+billingUiRoutes({ plans, meta: { can: 'billing:manage' } }) // guards /billing/ui and /billing/info
+```
+
 ## Content-Security-Policy
 
 The route sets a route-scoped CSP by default: everything locked down and the

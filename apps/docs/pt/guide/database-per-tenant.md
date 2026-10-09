@@ -75,24 +75,85 @@ prismaPlugin({
   forTenant: (tenantId) => new PrismaClient({ datasourceUrl: urlFor(tenantId) }),
   destroy: (client) => client.$disconnect(),
   max: 20, // no máximo 20 clientes de tenant abertos — nunca excedido
-  idleMs: 30_000, // um cliente entregue a um pedido conta como em uso durante este tempo
+  idleMs: 1_000, // período de graça: um tenant inactivo mantém a vaga este tempo (default)
   acquireTimeoutMs: 10_000, // quanto um tenant novo espera por uma vaga
 })
 ```
 
-O pool só fecha clientes **inactivos** (o menos usado recentemente primeiro). Um
-cliente entregue a um pedido conta como em uso durante `idleMs` — mantém-no acima do
-teu pedido mais longo — por isso nunca é desligado a meio de uma query. Quando todos
-os `max` clientes estão em uso, um pedido para um tenant novo espera até
-`acquireTimeoutMs` e depois falha com `TenantPoolExhaustedError` (503): dimensiona
-`max` para os tenants activos *ao mesmo tempo*. Trabalho que possa durar mais do que
-`idleMs` segura o cliente com um lease:
+Cada pedido HTTP e cada `tenancy.run()` faz **lease** do cliente do seu tenant
+durante exactamente a sua própria duração — incluindo um download em stream ou
+um event stream — e devolve-o quando a resposta termina (concluída, falhada ou
+abandonada pelo cliente) ou quando o callback do run assenta. O pool só fecha
+clientes **inactivos** (o menos usado recentemente primeiro), por isso um
+cliente nunca é desligado a meio de uma query, por mais longo que seja o pedido.
+A ordem em que registas o `tenancyPlugin`, o `prismaPlugin` e os teus próprios
+enrichers não importa: o lease é feito assim que o tenant é conhecido, por isso
+um enricher entre o tenancy e o prisma (auth, por exemplo) já vê `ctx().db`, e
+um pedido segura exactamente um lease, devolvido mesmo quando um enricher ou
+guard posterior o rejeita.
+
+Os leases por pedido precisam de `@basaltkit/http` ≥ 2.8 (qualquer adapter
+dessa release) — o pipeline que avisa o plugin de que a resposta terminou. Num
+pipeline mais antigo, e para um `tenancy:switched` sem `via` (`@basaltkit/tenancy`
+< 3.2, ou um emit teu), o plugin não faz lease do que nunca conseguiria
+devolver: segura o cliente durante 30 s, como antes do BK-077, e depois
+devolve-o sozinho.
+
+Dimensionar o pool:
+
+- **`max`** é o número de tenants distintos **activos em poucos segundos** —
+  pedidos ou jobs em curso, mais os servidos dentro da janela de graça — não o
+  número de tenants que tens. Cada cliente aberto tem as suas próprias
+  ligações, por isso `max` × o limite de ligações do cliente tem de caber na
+  base de dados.
+- **Sobre-subscrever faz churn.** Quando chegam à vez mais tenants distintos do
+  que `max`, um pedido já não espera por um 503: o pool fecha o cliente
+  inactivo menos usado recentemente e abre um para o tenant novo — em cada
+  pedido, se o tráfego percorrer mais tenants do que `max`. As respostas
+  continuam 200, mas cada uma paga uma ligação (centenas de ms com Prisma 7) e
+  a base de dados vê um fluxo de ligações novas. O limite de clientes abertos
+  mantém-se. Monitoriza as criações de clientes (conta as chamadas à tua
+  factory `forTenant`): um ritmo constante quer dizer que `max` é pequeno demais.
+- **`idleMs`** é só um período de graça: quanto tempo um tenant mantém o cliente
+  depois do último pedido, para que uma rajada de pedidos do mesmo tenant não
+  volte a ligar de cada vez. O default do plugin é 1 s. Aumentá-lo troca vagas
+  por menos religações; nunca protege um pedido (é o lease que protege).
+- **`acquireTimeoutMs`**: quando todos os `max` clientes estão em lease, um
+  pedido para um tenant novo espera este tempo que um seja libertado e depois
+  falha com `TenantPoolExhaustedError` (503 `PRISMA_POOL_EXHAUSTED`). Os
+  `details` dizem o que ocupava as vagas — `leased` (realmente ocupados: aumenta
+  `max`) versus `recentlyUsed` (dentro da janela de graça: baixa `idleMs`) — e a
+  mensagem dá o conselho correspondente.
+
+::: info Antes do BK-077
+O plugin entregava clientes com `pool.get()`, que conta um cliente como em uso
+durante `idleMs` depois da chamada (30 s por defeito) em vez de fazer lease. O
+11.º tenant distinto em 30 s esperava então 10 s e recebia um 503 sem nada a
+correr. Um `TenantClientPool` isolado (e `DB_POOL.get()`) mantém esse
+comportamento por tempo e o default de 30 s; só o pool que o `prismaPlugin`
+constrói faz lease e tem default de 1 s.
+:::
+
+O teu próprio trabalho fora de um pedido ou de um `tenancy.run()` também segura o
+cliente com um lease:
 
 ```ts
 await app.container.get(DB_POOL).use(tenantId, async (client) => {
   // nunca despejado até este callback terminar
 })
 ```
+
+::: warning Trabalho que sobrevive à resposta
+O lease de um pedido termina com a sua resposta, e o cliente fica depois
+reservado só durante o período de graça `idleMs` (1 s). Tudo o que ainda use
+`ctx().db` depois de a resposta ter sido enviada — uma promise
+fire-and-forget, um `setTimeout`, um handler que responde antes de aguardar as
+suas escritas — corre num cliente que o pool pode fechar para outro tenant: a
+query falha, ou um cliente que volta a ligar sozinho abre ligações fora de
+`max`. Ou fazes `await` do trabalho antes de responder, ou passas-o para um
+lease próprio: `tenancy.run(tenantId, …)` (faz lease à entrada) ou
+`DB_POOL.use(tenantId, …)`. Melhor ainda, entrega-o a um job de fila.
+:::
 
 Schema-per-tenant é uma base de dados com um schema por tenant — passa o URL base e
 uma factory de cliente, e a Basalt define `?schema=tenant_<id>` por tenant para que o
@@ -263,6 +324,33 @@ tiver de ser físico — ou quando staff e clientes tiverem de ser populações
 diferentes, vê [o padrão multi-tenant](/pt/guide/multi-tenant-pattern).
 :::
 
+## Gerar recursos de tenant
+
+O `basalt make:resource` assume uma base de dados partilhada: um recurso de
+tenant ganha uma coluna `tenantId` indexada e um filtro em cada query. Com um
+schema ou uma base de dados por tenant essa coluna é peso morto — o isolamento é
+o próprio schema ou a própria base de dados — por isso diz qual o modelo que usas:
+
+```bash
+pnpm basalt make:resource PurchaseOrder --prisma --tenant=schema    # ou --tenant=database
+```
+
+O modelo sai **sem** `tenantId` (acrescenta-o ao `schema.prisma` do tenant e
+depois [migra todos os tenants](#migrar-todos-os-tenants)), e o repositório faz
+as queries sem filtro de tenant sobre o `db()` — o cliente do próprio tenant,
+resolvido pelo `prismaPlugin`. Continua a falhar fechado: cada acesso começa com
+`requireTenantId()`, por isso sem tenant resolvido a chamada dá
+`TENANT_REQUIRED` (400) em vez de uma query sobre o cliente que estiver no
+contexto. O teste gerado continua a correr como tenant e verifica que outro
+tenant não vê nada.
+
+O gerador nunca adivinha o modelo de isolamento a partir das tuas dependências —
+um palpite errado tiraria o âmbito de tenant em silêncio. Define-o uma vez para o
+projeto em vez de em cada chamada, com `generatorCommands({ tenant: 'schema',
+prisma: true, prismaClient: { import: '../../tenant-db.js', type: 'TenantDb' } })`;
+um `--tenant` simples mantém então esse modo, e `--tenant=column` / `--no-tenant`
+continuam a prevalecer.
+
 ## Servir rotas centrais e de tenant na mesma app
 
 A maioria das apps não é puramente multi-tenant. Há uma landing page, um
@@ -369,7 +457,7 @@ const centralAccess = prismaAccessStore(prisma).store
 await centralAccess.grantToRole(PLATFORM_ADMIN, ['tenant:approve', 'platform:read'], GLOBAL_SCOPE)
 
 route({ method: 'POST', url: '/central/admin/tenants/:id/approve',
-        meta: { tenant: false, auth: true, can: 'tenant:approve' }, handler })
+        meta: { tenant: 'never', auth: true, can: 'tenant:approve' }, handler })
 ```
 
 O scope é `GLOBAL_SCOPE`, não uma string tua. Um pedido sem tenant é avaliado
@@ -379,8 +467,11 @@ a rota acima negaria precisamente o administrador que acabaste de criar, e nada
 te diz porquê. Vê
 [o scope global não pode ser um tenant](/pt/guide/authorization#o-scope-global-nao-pode-ser-um-tenant).
 
-`meta: { tenant: false, auth: true, can: '…' }` — as mesmas três chaves que
-qualquer rota de tenant usa. Nomeia o primeiro administrador pela CLI, não por
+`meta: { tenant: 'never', auth: true, can: '…' }` — as mesmas três chaves que
+qualquer rota de tenant usa. `'never'`, não `false`: uma rota de plataforma
+alcançada num host de tenant responde 404 antes de qualquer guard, em vez de
+correr dentro desse tenant (vê
+[rotas só do plano central](/pt/guide/tenancy#rotas-so-do-plano-central-tenant-never)). Nomeia o primeiro administrador pela CLI, não por
 uma rota: o primeiro não tem quem o nomeie, e um endpoint desprotegido para
 «criar o primeiro» é a porta que fica aberta porque ninguém se lembra de a
 fechar. Quem corre um comando no servidor já alcança a base de dados.
@@ -543,6 +634,12 @@ commandsPlugin([
 ])
 ```
 
+Para ver em que estado está cada tenant sem mudar nada — migrações pendentes,
+falhadas ou com drift, com a correção de cada uma — regista
+`dbStatusCommand(...)` ao lado e corre `basalt db:status` (sai com 1 quando um
+plano está atrasado, por isso pode travar um deploy). Vê
+[Operações de base de dados](./database-operations).
+
 ## Seeding e trabalho em segundo plano
 
 Fora de um pedido HTTP não há tenant no contexto, por isso `db()` lançaria. Entra num
@@ -563,6 +660,10 @@ await tenancy.forEach(async (tenant) => {
 
 As mesmas instâncias de store (`auth`, `access`, …) funcionam em todos os contextos —
 o proxy encaminha cada chamada para o tenant que o `run`/`forEach` colocou em scope.
+
+Os dispatches de webhooks delimitados por `tenantId` fora do pedido — incluindo o
+relay do `webhookOutboxPlugin` — entram no tenant por ti, só para a pesquisa de
+endpoints (ver [Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant)).
 
 ## Juntar tudo
 

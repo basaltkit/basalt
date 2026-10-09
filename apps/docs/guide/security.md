@@ -52,11 +52,24 @@ securityPlugin({
   rateLimit: {
     limit: 20,
     windowMs: 10_000,
-    key: (req) => req.headers['x-api-key'] as string ?? req.ip,
+    // The default. Behind a proxy, have the adapter resolve request.ip from
+    // the proxy you trust rather than reading a forwarding header here.
+    key: (req) => req.ip ?? 'unknown',
     skip: (req) => req.url.startsWith('/livez'),
   },
 })
 ```
+
+::: warning Never key the global limit by a credential header
+The global `key` runs **before authentication**, so it sees only what the
+client sent. A key such as `req.headers['x-api-key'] ?? req.ip` is a bypass: a
+client that sends a fresh made-up value on every request gets a fresh bucket
+every time and is never limited, and the flood of buckets pushes legitimate
+clients out of the store. Key the global limit by address only (`req.ip`, or a
+header your own proxy sets and strips from client requests). For a budget per
+API key, use `meta.rateLimit` with `key: 'apiKey'` (below): it reads the key the
+enricher **verified**, so a made-up key never gets a bucket of its own.
+:::
 
 The default store is in-memory (`MemoryRateLimitStore`). Its memory is bounded:
 expired buckets are swept as traffic arrives, and at most `maxEntries` (default
@@ -95,7 +108,8 @@ who the bucket belongs to:
 | `'user'` | `ctx().user.id` | expensive per-user actions: exports, AI calls, uploads |
 | `'tenant'` | `ctx().tenant.id` (shared by the tenant's users) | a per-organization quota |
 | `'user+tenant'` | one bucket per user per tenant | a user who belongs to several tenants |
-| `(ctx) => string` | whatever id you return (e.g. an API key id) | anything else |
+| `'apiKey'` | `ctx().apiKey.id` (a key `apiKeysPlugin` verified) | bursts per machine client |
+| `(ctx) => string` | whatever id you return | anything else |
 
 ```ts
 route({
@@ -111,11 +125,120 @@ tenancy have already set `ctx().user` / `ctx().tenant`. When the id is missing
 (an anonymous caller, no tenant resolved, or the function returns nothing), the
 bucket **falls back to the client IP**, and anonymous buckets never mix with
 signed-in ones. When the adapter could not resolve an IP either (`request.ip`
-undefined — Hono on a runtime without `getClientIp`), every such request shares
-one bucket: fail closed, rather than a bucket per spoofable header. Keyed buckets use the same
+undefined — Hono on a runtime without `getClientIp`, a hand-built `runRoute`, an
+MCP tool called over stdio or through `McpServer.callTool`), a signed-in caller
+is keyed by identity (`user:<id>|tenant:<id>`, as `'user+tenant'` would), and
+**every anonymous ip-less request shares one `unknown` bucket**: fail closed,
+rather than a bucket per spoofable header. Configure the adapter to resolve the
+client IP to get per-client buckets back. Keyed buckets use the same
 store (`MemoryRateLimitStore`, or Redis across instances). A keyed route still
 counts against the global per-IP limit on every adapter, because the pre-routing
-hook cannot know the user yet.
+hook cannot know the user yet. To give a family of paths a different per-IP
+ceiling, use [path-prefix budgets](#path-prefix-budgets).
+
+`'apiKey'` keys the bucket by `ctx().apiKey.id` — one budget per API key, so
+several machine clients behind one address no longer share one. Only a key that
+`apiKeysPlugin` **verified** becomes a bucket id; with no verified key (a
+session caller, an anonymous one, or an invalid key that `rejectInvalid: false`
+let through) the bucket falls back like any other missing id. A per-key budget
+multiplies with the number of keys a customer mints, so use it for bursts and
+put quotas on `'tenant'`.
+
+#### Several budgets on one route
+
+`meta.rateLimit` also takes an array. Every budget is enforced, in the order
+declared; the first one that refuses answers `429` and **the later ones are not
+charged** — so put the short burst budget first, and a request refused for
+bursting does not use up the daily quota:
+
+```ts
+import type { RouteRateLimits } from '@basaltkit/http'
+
+route({
+  method: 'GET',
+  url: '/v1/orders',
+  meta: {
+    scopes: ['orders:read'],
+    rateLimit: [
+      { limit: 10, windowMs: 1_000, key: 'apiKey' },        // burst, per key
+      { limit: 50_000, windowMs: 86_400_000, key: 'tenant' }, // daily, per customer
+    ] satisfies RouteRateLimits,
+  },
+  // …
+})
+```
+
+- `X-RateLimit-*` report the budget with the fewest requests left (on a tie, the
+  one that resets later); on a refusal they and `Retry-After` come from the
+  budget that refused.
+- The budgets are charged one after another (one store hit each), with no
+  atomicity across them.
+- Each array entry has its own counter, keyed by method, route and **position**:
+  reordering the entries remaps the counters. Changing a `limit` or `windowMs`
+  keeps the running window — editing a quota does not hand everyone a fresh one.
+- The array form (and `bucket`, below) is always charged in the route guard, on
+  every adapter, **on top of** the edge bucket (global or prefix). On Fastify
+  that differs from the single object, which is charged *instead of* the global
+  bucket: wrapping `{ limit, windowMs }` in an array puts the global per-IP limit
+  back on that route. If you relied on the Fastify replacement to lift the
+  ceiling, move to a [path prefix](#path-prefix-budgets), which does it on every
+  adapter.
+
+#### Shared buckets
+
+`bucket` names a budget shared by every route that declares it — one daily quota
+for a whole public API:
+
+```ts
+const daily = { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'public-api-daily' } as const
+
+route({ method: 'GET', url: '/v1/orders', meta: { rateLimit: [{ limit: 10, windowMs: 1_000, key: 'apiKey' }, daily] }, /* … */ })
+route({ method: 'POST', url: '/v1/orders', meta: { rateLimit: daily }, /* … */ })
+```
+
+Every declaration of one name must carry the same `limit`, `windowMs` and key
+string; the app **refuses to boot** (`InvalidRouteMetaError`, on every adapter)
+when they disagree. Function keys are not compared — two inline lambdas are
+different objects even when they mean the same. Names match
+`/^[A-Za-z0-9._:-]{1,64}$/`. A malformed array or `bucket` entry (empty array,
+a non-positive limit, an unknown key string) also refuses the boot; the single
+object keeps its historical lenient reading.
+
+#### Path-prefix budgets {#path-prefix-budgets}
+
+`rateLimit.prefixes` gives a family of paths its own edge budget, charged
+before routing **instead of** the global bucket — the way a public API under
+`/v1` gets a higher per-IP ceiling than the rest of the app while still paying a
+per-IP budget before any key is looked up:
+
+```ts
+securityPlugin({
+  rateLimit: {
+    limit: 300,
+    windowMs: 60_000,
+    prefixes: [{ prefix: '/v1', limit: 3_000, windowMs: 60_000 }],
+  },
+})
+```
+
+The longest matching prefix wins. Matching is on segment boundaries (`/v1`
+matches `/v1` and `/v1/orders`, never `/v10`) after a minimal normalisation:
+the query string is cut, runs of `/` collapse, case is ignored and a trailing
+`/` is dropped — there is no percent-decoding or dot-segment resolution. 404s,
+preflights and requests an enricher rejects are counted too. Each prefix may
+take its own `key(request)` (default: the global `key`, else the IP); like the
+global key it runs before authentication, so never read a credential header in
+it. `skip` skips prefix budgets too. A bad prefix (no leading `/`, a `?` or `#`,
+a non-positive limit, a duplicate) throws a `TypeError` when the plugin is
+created.
+
+Prefixes **set or lift** the edge budget for a path family; they are not a way
+to make one endpoint stricter, because a request that reaches the route through
+a path form the normaliser does not fold falls back to the global bucket. A
+budget that must hold for a specific endpoint belongs in its `meta.rateLimit`,
+which is bound to the matched route. On Fastify, a route's single-object
+IP-keyed `meta.rateLimit` still replaces the edge bucket (prefix or global), as
+before.
 
 ### CORS
 
@@ -147,6 +270,41 @@ to customize (e.g. your own `contentSecurityPolicy` for an HTML/docs surface, or
 them all. A route that is safe to cache sets its own `Cache-Control` header,
 which replaces the default — do so on `meta.etag` routes (e.g.
 `private, no-cache`), since `no-store` keeps browsers from revalidating.
+
+### Per-route headers — `meta.responseHeaders`
+
+Some routes need headers the rest of the API does not: a public share link that
+search engines must not index, a download that must never be cached. Declare
+them on the route:
+
+```ts
+route({
+  method: 'POST',
+  url: '/s/:token',
+  meta: { responseHeaders: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  handler: /* … */,
+})
+```
+
+The pipeline sets them as soon as the route matches, before enrichers and
+guards, so they are on **every** response the route produces — the `200`, a
+guard's `401`/`403`, a validation `400`, a thrown `500` — on all three adapters.
+A header set by `reply.header()` would only reach the success path. They
+replace a global header of the same name (here `securityPlugin`'s
+`Cache-Control`), and a handler can still override one with `reply.header()`.
+
+The values are checked at boot on every adapter: strings without CR, LF or
+other control characters, and never `Set-Cookie`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, hop-by-hop headers or `X-Request-Id`,
+which belong to the response or the adapter. A route whose record breaks a rule
+gets one boot warning naming it, and its **whole** `responseHeaders` record is
+ignored — none of its headers is sent, valid siblings included, and the request
+never fails because of it. The next major refuses such a boot.
+
+The key is `responseHeaders`, not `headers`: route meta is also yours, and
+nothing reads or sends `meta.headers`. A request that never reaches the
+route — a `404`, a rate-limit `429` or a malformed body rejected by the
+framework's parser — carries only the global headers.
 
 ## Resource limits & DoS resistance
 
@@ -207,6 +365,14 @@ schedule.call('reverify-domains', async () => {
 
 A new owner of a lapsed domain can also take a stale verified claim over by
 publishing its `challenge()` record — see [Tenancy](/guide/tenancy#custom-domains-verified).
+
+### Inbound mail endpoint
+
+`inboundMailRoutes()` is unauthenticated until the signature over the bytes is
+checked, so it caps requests at 10 MiB (not the 1 MiB `rawBody()` default),
+answers unrouted addresses exactly like routed ones, and only believes
+`Authentication-Results` from servers you list. Add a `meta.rateLimit` — see
+[Inbound mail](/guide/inbound-mail#limits).
 
 ## Fail-closed secrets — `secret()`
 
@@ -275,32 +441,87 @@ none of the auth endpoints leak which emails are registered.
 
 Safe retries for `POST`: a client that sends an `Idempotency-Key` gets the
 **same** response replayed on a retry, so a dropped connection never charges a
-card twice.
+card twice. It runs inside the shared route pipeline, so it behaves the same on
+**Fastify, Express and Hono**:
 
 ```ts
-import { idempotencyPlugin } from '@basaltkit/fastify'
+import { idempotencyPlugin } from '@basaltkit/http' // also re-exported by @basaltkit/fastify
 
-idempotencyPlugin() // guards POST by default
+idempotencyPlugin({
+  fingerprint: 'body',     // a different body under the same key → 422
+  replayAfterGuards: true, // a revoked caller gets 401/403, not the cached success
+}) // guards POST by default
 ```
 
 - Repeat with the same key → the cached response, with `Idempotent-Replayed: true`.
   This holds for every handler shape — one that returns its payload is replayed
   exactly like one that calls `reply.send()`.
 - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
-- `5xx` responses are **not** cached, so genuine failures stay retryable.
-- Keys are scoped by **caller credentials + tenant + method + route**, hashed
-  with SHA-256 before they reach the store. The credentials are every header in
-  `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`,
-  `x-api-key`) and the tenant is `x-tenant-id` + `host`, so one user's cached
-  response can never be replayed to another (no cross-user/tenant leak), and the
-  same key on two endpoints can't collide. The replay runs before route guards:
-  if you authenticate with another header, add it to `credentialHeaders`.
+- Only the **handler's own** outcome is recorded. A refusal raised before the
+  handler ran — a guard's `401`/`403`, the rate limiter's `429`, a validation
+  `400` — releases the key, so a client that honours `Retry-After` (or signs in
+  again) gets its operation run on the retry.
+- `5xx` responses, the retry-later statuses `408`, `425` and `429` (even from
+  the handler), `stream()` downloads and `sse()` streams are **not** cached, so
+  genuine failures stay retryable. Any other client error the handler throws
+  (`4xx`) is recorded and replayed byte-for-byte.
+- Keys are scoped by **caller credentials + tenant headers + method + route
+  pattern**, hashed with SHA-256 before they reach the store. The credentials
+  are every header in `credentialHeaders` (default `authorization`,
+  `x-session-id`, `cookie`, `x-api-key`), so one credential's cached response is
+  never replayed to another credential. If you authenticate with another header,
+  add it to `credentialHeaders`.
+- **What the scope does not cover.** The tenant part is only the raw
+  `x-tenant-id` and `host` headers — not a tenant resolved from a path segment
+  (`/t/:tenant/...`) or a token claim — and the route is its *pattern*, not the
+  concrete path params. The same credential reusing one key on
+  `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and
+  `/orders/2/pay`, receives the **first** response. Have clients mint a fresh
+  key per operation (and per tenant), and bind the key to the URL so such a
+  reuse is refused with `422`:
+  `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
 - Requests with **no** credential header are not cached or replayed by default
   (a stranger who guessed the key would otherwise get the response). Opt in with
   `allowAnonymous: true` only for public endpoints with nothing private in them.
 - Keys longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`;
   `MemoryIdempotencyStore` sweeps expired entries and is capped by `maxEntries`
-  (default 10 000).
+  (default 10 000). `RedisIdempotencyStore` shares replays across instances.
+- It covers the routes Basalt serves (`route()` definitions). A handler you
+  register on the underlying framework by hand — a raw `fastify.post(...)` — is
+  not covered: declare it with `route()`.
+
+**Bind the key to the request — `fingerprint`.** Without it, a client that
+reuses a key for a *different* request (a bug, or a retry after the user edited
+the form) silently receives the first request's result. `fingerprint: 'body'`
+stores a SHA-256 of the body with the record — canonical JSON with sorted keys
+for a parsed body, the exact bytes for a [`rawBody()`](/guide/adapters#raw-request-bodies-webhook-signatures)
+route — and answers a mismatch with `422 IDEMPOTENCY_KEY_REUSED`, also while
+the first request is still running. `'body'` covers the body only, not the
+query string or the path params. `upload()` routes are not fingerprinted by
+`'body'`; pass a function (`({ route, request }) => string | undefined`) to
+fingerprint them, or anything else (the URL, a header), your way.
+
+During a rolling deploy with `fingerprint` on, `RedisIdempotencyStore` writes
+in-flight reservations as `pending:<fingerprint>`, which an instance still on an
+older release misreads: roll the new release out first, then turn `fingerprint`
+on.
+
+**Where the check runs — `replayAfterGuards`.** By default the check runs after
+the enrichers and **before** the route guards. Running after the enrichers means
+the tenant is resolved first: a suspended tenant gets its `403`, not a replay.
+Running before the guards means a caller whose token was revoked since the first
+request still receives the cached success, as long as it presents the same
+credential header. With `replayAfterGuards: true` it runs
+after the guards and request validation, just before the handler — the revoked
+caller gets the guard's `401`/`403`, and a request that fails validation never
+reserves the key. A `rawBody()` route fingerprinted by `'body'` is always
+checked after the guards, since its bytes are never read before they pass.
+
+Both options are off by default so existing apps keep their behaviour; a
+future major will turn them on. A custom `IdempotencyStore` keeps working
+unchanged — to answer a concurrent repeat with `422` instead of `409` it can
+also keep the `fingerprint` passed to `setPending(key, { fingerprint })` and
+return `{ pending: true, fingerprint }` from `get()`, as both bundled stores do.
 
 ## Revoking access tokens
 
@@ -340,6 +561,78 @@ migrating plaintext or `v1:` rows (an explicit `legacy` opt-in plus
 `auth.reencryptMfaSecret(userId)`) are covered in
 [Encrypting TOTP secrets at rest](/guide/auth#mfa-encryption).
 
+## Secrets at rest {#secrets-at-rest}
+
+Every secret Basalt stores encrypted — TOTP secrets (`@basaltkit/auth`'s
+`SecretBox`, envelope `bka2`) and cloud-drive OAuth tokens
+(`@basaltkit/drives`' `DriveSecretBox`, envelope `bkd1`) — goes through one
+audited primitive, `createSecretBox` from `@basaltkit/core/secret-box`:
+
+- **AES-256-GCM**, random 96-bit IV, full 128-bit tag (a shorter tag is refused);
+- **HKDF-SHA256** key derivation under a per-box label, so the same key material
+  used by two boxes yields unrelated keys;
+- a **key ring with ids**: the first key seals, every key opens, and
+  `reseal()` moves a row to the active key — rotation is rolling;
+- **AAD binding** to the owning record (user, or tenant + connection +
+  provider): a blob copied into another row fails the tag check;
+- **no plaintext path**: anything that is not an envelope of that box is refused.
+
+Use it for a secret of your own (webhook signing secrets, third-party API
+tokens) instead of hand-rolling AES:
+
+```ts
+import { createSecretBox } from '@basaltkit/core/secret-box'
+
+const box = createSecretBox({
+  keys: [{ id: '2026-10', key: env.INTEGRATIONS_KEY }], // ≥ 32 bytes; new keys go first
+  info: 'my-app:integration-tokens:v1',                 // unique per box
+  version: 'mya1',                                      // envelope tag, [a-z0-9]{1,16}
+  aadFields: 2,                                         // what each secret is bound to
+})
+const sealed = box.seal(token, [tenantId, integrationId])
+const token2 = box.open(sealed, [tenantId, integrationId]) // throws SecretBoxError otherwise
+```
+
+Failures throw `SecretBoxError` with a `failure` of `config`, `malformed`,
+`unknown-key`, `context` or `auth-failed` (never the secret or the key). The
+subpath is not re-exported from `@basaltkit/core`'s main entry.
+
+## Outbound HTTP & SSRF
+
+Any time your app fetches a URL it did not write — a tenant's "import from
+URL", an avatar link, a file a provider points at — that URL is hostile input:
+it can name `169.254.169.254`, a database on your private network, or a public
+host that redirects to one. Don't use bare `fetch` for it. `@basaltkit/webhooks`
+exports the streaming client `@basaltkit/drives` uses for every provider call:
+
+```ts
+import { createGuardedFetch, GuardedFetchError } from '@basaltkit/webhooks'
+
+const fetchUntrusted = createGuardedFetch({
+  maxBytes: 20 * 1024 * 1024, // required: abandoned mid-stream past this
+  timeoutMs: 15_000, // socket inactivity + each hop's wait for headers
+  deadlineMs: 120_000, // optional: the whole exchange, body included
+  allowedHosts: ['.example-cdn.com'], // optional: `.suffix` = subdomains only
+})
+
+const response = await fetchUntrusted(url)
+await files.upload(response.body, { name: 'import.pdf' }) // streamed, capped
+```
+
+What it enforces, on **every** redirect hop: `https:` only (widen with
+`allowedSchemes`), the optional host allowlist, DNS resolved once with every
+answer checked against private/loopback/link-local/CGNAT/ULA/reserved and
+IPv4-embedded IPv6 ranges, the socket **pinned** to the validated IP (no DNS
+rebinding), at most `maxRedirects` (3) hops with `authorization`/`cookie`
+dropped on a hop to another host, no `accept-encoding` (so a decompression bomb
+cannot hide behind the cap), and the byte cap counted on the wire.
+
+Refusals throw `GuardedFetchError` with `kind` `SSRF_BLOCKED`,
+`BODY_TOO_LARGE`, `TIMEOUT` or `TOO_MANY_REDIRECTS` (code `OUTBOUND_<kind>`).
+The message names the host, never the URL — a pre-signed URL is a credential —
+and `expose` is `false`, so a client only sees the code. `allowPrivateHosts` is
+the one escape hatch, for a self-hosted target on your own network.
+
 ## Shared responsibility — hardening your integration
 
 Basalt closes the vulnerabilities it *can* close on its own. Three things,
@@ -372,7 +665,11 @@ The full guarded set is `auth`, `can`, `teamRole`, `scopes`, `subscribed` and
 `feature` (`GUARDED_META_KEYS`). Keys that *relax* rather than protect are
 deliberately excluded — `meta.central` (skips the tenant-membership check),
 `meta.mcp` (opts a route into MCP exposure) and `meta.rateLimit` (abuse
-throttling, not an authorization boundary).
+throttling, not an authorization boundary). A `meta.rateLimit` with no limiter
+registered (no `securityPlugin({ rateLimit })`) does not refuse the boot, but
+the adapter **warns once**, naming the routes, that those budgets are not
+enforced. Silence it with `allowUnguardedMeta: ['rateLimit']` (or `true`) when
+an outer edge throttles.
 
 If protection genuinely happens at an outer edge/gateway, opt out explicitly
 with the adapter option `allowUnguardedMeta: true` (or `['auth', …]` for
@@ -690,6 +987,46 @@ fetch('/api/pay', { method: 'POST', headers: { authorization: `Bearer ${jwt}` } 
 // ⚠️ if you must use a cookie session, add SameSite + a CSRF token check
 setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 ```
+
+## Route security review — `basalt routes`
+
+`basalt routes` lists every route with the guards it **declares**: `auth`, `can`,
+`rateLimit`, `tenant` and the other guarded keys (`mfa`, `teamRole`, `scopes`,
+`subscribed`, `feature`). The `tenant` column reads `required` (`meta.tenant: true`),
+`exempt` (`meta.tenant: false`), `central-only` (`meta.tenant: 'never'` — the route
+rejects any request that resolves a tenant), or is blank when the route inherits the
+app-wide default. The column reflects `meta.tenant` only: `meta.central: true` (the
+`@basaltkit/teams` membership bypass) shows in the guards column as `central`; assert on `row.tenant ===
+'central-only'` to pin a console route to the central plane. Two ways to turn that
+into a gate:
+
+```bash
+# CI: exit 1 when a route does not declare both auth and can (explicit opt-outs pass)
+pnpm basalt routes --unguarded --require=auth,can --allow='POST /webhooks/*'
+pnpm basalt routes --json > routes.json   # the whole table, for review or diffing
+```
+
+```ts
+// A vitest that boots the app (no listen) and asserts on the same rows
+import { ensureMetadata } from '@basaltkit/core'
+import { describeRoutes, findUnguardedRoutes } from '@basaltkit/http'
+
+it('every route declares auth + can', async () => {
+  const app = await buildApp().boot()
+  const rows = describeRoutes(ensureMetadata(app.container).get('http:routes'))
+  expect(findUnguardedRoutes(rows, { require: ['auth', 'can'] })).toEqual([])
+  await app.shutdown()
+})
+```
+
+`auth: false` (or `public: true`) is an intentional opt-out and satisfies both
+requirements; `can: false` satisfies `can`. Only `auth: true` counts as `auth` — it is the
+one value `authPlugin` enforces. **This checks route meta only**: an
+app-wide rate limit, URL-based tenancy (`tenancyPlugin({ required: { except } })`),
+app hooks or middleware, and the edge routes plugins mount themselves (`healthPlugin`,
+`metricsPlugin`, `openapiPlugin`) are invisible to it — a clean run means "every
+route asks for protection", while the boot check above guarantees a guard is there
+to enforce it.
 
 ## Catch regressions automatically — `ai:doctor`
 

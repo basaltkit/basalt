@@ -13,6 +13,65 @@ import { BasaltError } from '@basaltkit/core'
  * {@link DriveContentTooLargeError}).
  */
 
+/**
+ * Options the provider-failure errors accept.
+ *
+ * `providerMessage` is the vendor's own human-readable explanation ("missing
+ * required scope files.content.read") — the one thing an operator needs to fix
+ * a misconfigured app, and exactly the thing that must never reach a client: it
+ * is free text the vendor (or whoever sits in front of it) wrote, and Graph's
+ * routinely quotes the request URL. So it is carried **only** on the log-only
+ * `internalDetails` channel (non-enumerable; read by `@basaltkit/http`'s error
+ * reporter and `internalDetailsOf()`), never in `message` or `details`. Pass it
+ * through {@link providerMessageOf} first.
+ */
+export interface DriveProviderErrorOptions {
+  providerMessage?: string | undefined
+}
+
+/** Attaches the log-only channel, non-enumerable like `HttpError`'s. */
+function attachInternal(error: BasaltError, options: DriveProviderErrorOptions | undefined): void {
+  if (options?.providerMessage === undefined || options.providerMessage === '') return
+  Object.defineProperty(error, 'internalDetails', {
+    value: { providerMessage: options.providerMessage },
+    enumerable: false,
+    writable: false,
+    configurable: true,
+  })
+}
+
+// eslint-disable-next-line no-control-regex
+const CONTROL_OR_BIDI = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]+/g
+const URL_LIKE = /\bhttps?:\/\/\S+/gi
+const BEARER_LIKE = /\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi
+const JWT_LIKE = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g
+/** Long opaque runs — an access token, a refresh token, a signed query. */
+const TOKEN_LIKE = /[A-Za-z0-9_\-.~+/=]{40,}/g
+
+/**
+ * Makes a provider-supplied explanation safe to log.
+ *
+ * The primary control is the adapter's **allow-list of sources** — it reads a
+ * vendor's structured message field (`error.message`, `user_message.text`),
+ * never a raw body. This is defence in depth on top: control and bidi
+ * characters stripped, whitespace collapsed, anything shaped like a URL, a
+ * bearer/basic credential, a JWT or a long opaque token replaced, and the
+ * result truncated to `max` characters. Returns `undefined` for nothing usable.
+ */
+export function providerMessageOf(text: unknown, max = 500): string | undefined {
+  if (typeof text !== 'string') return undefined
+  const cleaned = text
+    .replace(CONTROL_OR_BIDI, ' ')
+    .replace(URL_LIKE, '[url]')
+    .replace(BEARER_LIKE, '$1 [redacted]')
+    .replace(JWT_LIKE, '[jwt]')
+    .replace(TOKEN_LIKE, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (cleaned === '') return undefined
+  return cleaned.length > max ? `${cleaned.slice(0, Math.max(0, max - 1))}…` : cleaned
+}
+
 /** No provider is registered under that name. */
 export class DriveProviderUnknownError extends BasaltError {
   readonly status = 400
@@ -80,13 +139,17 @@ export class DriveTenantReservedError extends BasaltError {
  */
 export class DriveCredentialsInvalidError extends BasaltError {
   readonly status = 401
-  constructor(connectionId: string, reason: string) {
+  constructor(connectionId: string, reason: string, options?: DriveProviderErrorOptions) {
     super(
       'DRIVE_CREDENTIALS_INVALID',
       `Drive connection "${connectionId}" needs to be reconnected: ${reason}`,
       { details: { connectionId, reason } },
     )
+    attachInternal(this, options)
   }
+
+  /** Log-only: the provider's own explanation, when the adapter supplied one. */
+  declare readonly internalDetails?: { providerMessage: string }
 }
 
 /** The authorization callback could not be trusted (bad/expired/replayed state, PKCE mismatch). */
@@ -163,11 +226,15 @@ export class DriveContentTooLargeError extends BasaltError {
  */
 export class DriveAccessDeniedError extends BasaltError {
   readonly status = 403
-  constructor(provider: string, reason: string) {
+  constructor(provider: string, reason: string, options?: DriveProviderErrorOptions) {
     super('DRIVE_ACCESS_DENIED', `Provider "${provider}" refused the operation: ${reason}`, {
       details: { provider, reason },
     })
+    attachInternal(this, options)
   }
+
+  /** Log-only: the provider's own explanation, when the adapter supplied one. */
+  declare readonly internalDetails?: { providerMessage: string }
 }
 
 /** The provider says the item does not exist (any more). */
@@ -199,11 +266,16 @@ export class DriveProviderError extends BasaltError {
     readonly summary: string,
     readonly providerStatus: number,
     readonly retryable: boolean = false,
+    options?: DriveProviderErrorOptions,
   ) {
     super('DRIVE_PROVIDER_ERROR', `Provider "${provider}" failed: ${summary}`, {
       details: { provider, summary, providerStatus },
     })
+    attachInternal(this, options)
   }
+
+  /** Log-only: the provider's own explanation, when the adapter supplied one. */
+  declare readonly internalDetails?: { providerMessage: string }
 }
 
 /**
@@ -266,6 +338,16 @@ export class DriveSecretKeyUnknownError extends BasaltError {
       { details: { keyId } },
     )
   }
+}
+
+/**
+ * The stable code of an error, for health stamping: a {@link BasaltError}'s
+ * `code`, or `'UNKNOWN'`. Never the message — that can quote provider text.
+ *
+ * @internal
+ */
+export function errorCodeOf(error: unknown): string {
+  return error instanceof BasaltError ? error.code : 'UNKNOWN'
 }
 
 /** The key ring passed to the secret box is unusable. Thrown at configuration time. */

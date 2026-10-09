@@ -84,7 +84,12 @@ export interface ResolvedUploadOptions {
   allowedTypes: readonly string[] | undefined
 }
 
-const UPLOADS = new WeakMap<object, ResolvedUploadOptions>()
+/**
+ * The marker an {@link upload} schema carries — a global symbol, not a
+ * module-local `WeakMap`, so a schema built by one installed copy of
+ * `@basaltkit/http` is recognised by another (see `rawBody()`, BK-038).
+ */
+const UPLOAD_MARK = Symbol.for('basalt.http.upload')
 
 const positive = (name: string, value: number | undefined, fallback?: number): number => {
   const resolved = value ?? fallback
@@ -130,13 +135,25 @@ export function upload(options: UploadOptions): ZodType<UploadBody> {
   const schema = z.custom<UploadBody>(
     (value) => typeof value === 'object' && value !== null && 'files' in value && 'fields' in value,
   )
-  UPLOADS.set(schema, resolved)
+  Object.defineProperty(schema, UPLOAD_MARK, { value: Object.freeze(resolved), enumerable: false })
   return schema
 }
 
 /** The resolved limits when `schema` came from {@link upload}; otherwise `undefined`. */
 export function uploadOptionsOf(schema: unknown): ResolvedUploadOptions | undefined {
-  return typeof schema === 'object' && schema !== null ? UPLOADS.get(schema) : undefined
+  if (typeof schema !== 'object' || schema === null) return undefined
+  const mark = (schema as { [UPLOAD_MARK]?: unknown })[UPLOAD_MARK]
+  // Shape-checked in full, since any copy (of any version) could have written
+  // it: a marker missing one limit must not reach the parser as "no limit".
+  // Unrecognised, the route is not treated as an upload and fails closed.
+  if (typeof mark !== 'object' || mark === null) return undefined
+  const m = mark as Partial<ResolvedUploadOptions>
+  const limits = [m.maxBytes, m.maxFiles, m.maxFileBytes, m.maxFields, m.maxFieldBytes, m.maxHeaderBytes]
+  if (!limits.every((n) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0)) return undefined
+  if (m.allowedTypes !== undefined && !(Array.isArray(m.allowedTypes) && m.allowedTypes.every((t) => typeof t === 'string'))) {
+    return undefined
+  }
+  return mark as ResolvedUploadOptions
 }
 
 /** True when a route's `body` is an {@link upload} declaration — adapters skip their own body parsing for it. */
@@ -347,6 +364,17 @@ export class UploadSession {
     for (const file of this.queue.splice(0)) skip(file)
     if (this.lastYielded) skip(this.lastYielded)
     this.kick()
+  }
+
+  /**
+   * Whether `error` is this upload's own refusal — a size limit, malformed
+   * framing, a refused file type, a client that closed early — raised while
+   * the handler was reading the body, rather than the handler's own outcome.
+   * The idempotency stage releases the key for it, as for the same refusal
+   * from a declared `Content-Length` before the handler ran.
+   */
+  refused(error: unknown): boolean {
+    return this.failure !== undefined && error === this.failure
   }
 
   private declaredLength(): number | undefined {

@@ -8,6 +8,8 @@ import {
   runRoute,
   toErrorResponse,
   reportHttpError,
+  RequestDisposers,
+  type RequestDisposer,
   consoleSink,
   type HttpErrorReporter,
   type HttpLogSink,
@@ -331,6 +333,56 @@ function toNeutralRequest(request: FastifyRequest): HttpRequest {
   }
 }
 
+/**
+ * The sink for the disposers enrichers return. They run exactly once, when
+ * BOTH the route pipeline (`runRoute`) has settled AND the Node response has
+ * finished or closed — so a client that aborts while the handler is still
+ * running never pulls a resource (a leased database client) out from under
+ * it, and a hijacked event stream or a streamed body that outlives the
+ * handler is still covered until its last byte or its abort. Listeners are
+ * attached only when a disposer shows up, so routes without one pay nothing.
+ */
+function disposeAfterResponse(
+  reply: FastifyReply,
+  onError: (error: unknown) => void,
+): { onDispose: (disposer: RequestDisposer) => void; settled: () => void } {
+  let disposers: RequestDisposers | undefined
+  let handlerSettled = false
+  let responseEnded = false
+  const runIfDone = (): void => {
+    if (disposers && handlerSettled && responseEnded) void disposers.run()
+  }
+  return {
+    onDispose(disposer) {
+      if (!disposers) {
+        disposers = new RequestDisposers(onError)
+        const res = reply.raw
+        // Already over (the client left while an enricher was awaiting):
+        // 'close' has fired and will not again.
+        if (res.writableFinished || res.destroyed) responseEnded = true
+        else {
+          const ended = (): void => {
+            responseEnded = true
+            runIfDone()
+          }
+          res.once('finish', ended)
+          res.once('close', ended)
+        }
+      }
+      // After run(), add() disposes a late arrival at once. A FIRST
+      // registration that arrives when both conditions already hold (a
+      // handler's timer firing after the reply, a hook on the finished
+      // request context) has no event left to wait for: run it now.
+      disposers.add(disposer)
+      runIfDone()
+    },
+    settled() {
+      handlerSettled = true
+      runIfDone()
+    },
+  }
+}
+
 function wrapHandler(
   definition: BasaltRoute,
   container: Container | undefined,
@@ -340,6 +392,13 @@ function wrapHandler(
 ) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const neutralReply = new FastifyReplyAdapter(reply)
+    const disposal = disposeAfterResponse(reply, (error) => {
+      try {
+        report(onError, error, 500, 'REQUEST_DISPOSER_FAILED', request)
+      } catch {
+        /* a broken reporter must not crash the process */
+      }
+    })
 
     try {
       const neutral = toNeutralRequest(request)
@@ -354,8 +413,9 @@ function wrapHandler(
           ...(container ? { container } : {}),
           enrichers,
           guards,
+          onDispose: disposal.onDispose,
         },
-      )
+      ).finally(disposal.settled)
 
       if (isSseResponse(result)) {
         reply.hijack()

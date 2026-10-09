@@ -257,6 +257,7 @@ Registers `WebhookManager` under the `WEBHOOKS` token. Extends `WebhookDeliverer
 | `maxEndpointsPerDispatch` | `number \| false` | No | `100` | Most endpoints of one scope (tenant, or tenant-agnostic) per event; over it, that scope is refused whole |
 | `dispatchConcurrency` | `number` | No | `16` | Deliveries one `dispatch` runs at once |
 | `onFanOutExceeded` | `(info) => void` | No | `console.warn` | Called once per refused scope, with `{ event, tenantId, endpoints, limit }` |
+| `runInTenant` | `TenantRunner \| false` | No | `@basaltkit/tenancy`'s `'tenancy:run'` signal, when present | Enters the tenant for the endpoint lookup (only) of an off-request `dispatch()` scoped by `tenantId`, so a store over `tenantClient()` resolves that tenant's database. `false` keeps the lookup in the caller's context |
 
 ### `class WebhookDeliverer`
 
@@ -316,6 +317,28 @@ Rewriting the URL host to the validated IP is not an option for plain `fetch`: i
 | `deriveDeliveryId` | function | `(idempotencyKey, endpointId) => string` — the stable delivery id used by the outbox |
 | `webhookOutboxDispatch` | function | `(webhooks, { onPermanentFailure?, maxTrackedEntries? }?) => OutboxDispatch` |
 
+### Streaming guarded fetch (for any untrusted URL)
+
+`createGuardedFetch(options)` is the SSRF guard as a **streaming** HTTP client,
+for downloading URLs you do not control (a tenant's "import from URL", a
+provider download link). `@basaltkit/drives` uses it for every provider call.
+
+```ts
+import { createGuardedFetch } from '@basaltkit/webhooks'
+
+const fetchUntrusted = createGuardedFetch({ maxBytes: 20 * 1024 * 1024, timeoutMs: 15_000 })
+const response = await fetchUntrusted(url) // response.body is a capped Readable
+```
+
+Per hop: scheme (`https:` by default) and optional host allowlist (`.suffix` =
+subdomains only), DNS resolved once and every address validated, socket pinned
+to the validated IP, redirects followed manually (max 3, credentials dropped
+across hosts), no `accept-encoding`, byte cap enforced mid-stream, inactivity
+timeout plus optional `deadlineMs`. Refusals throw `GuardedFetchError`
+(`kind`: `SSRF_BLOCKED` · `BODY_TOO_LARGE` · `TIMEOUT` · `TOO_MANY_REDIRECTS`)
+naming the host, never the URL. Also exported: `hostAllowed`, `capStream`,
+`pinnedStreamTransport`.
+
 ## Common errors and solutions (FAQ)
 
 **The recipient says the signature is invalid** — They need to verify the HMAC over the **raw body** of the request, byte for byte. If they `JSON.parse` and re-serialize, the bytes change and verification fails. Also confirm both sides use the same secret.
@@ -340,6 +363,24 @@ With a tenant in the ambient request context, `register`, `list`, `unregister`
 and `dispatch` are forced to that tenant — a caller-supplied `tenantId` can
 never widen the scope. Explicit arguments / system-wide behavior apply only
 with no ambient tenant (jobs, CLI, single-tenant apps).
+
+Off the request path, a `dispatch()` scoped by an explicit `tenantId` runs its
+endpoint lookup inside `runInTenant` — wired by `webhooksPlugin` to tenancy's
+`'tenancy:run'` signal — so endpoints stored per tenant (schema- or
+database-per-tenant) are found by the webhook outbox relay too. Only the lookup
+enters the tenant; deliveries run after it, so they never hold the tenant's
+pooled database client. With endpoints per tenant, also pass
+`webhookOutboxPlugin({ tenantOnly: true })`, which captures only events emitted
+inside a tenant context. A dispatch for a tenant that no longer exists rejects
+with `TENANT_NOT_FOUND`, an invalid id with `TENANT_ID_INVALID` (an outbox entry
+dead-letters after `maxAttempts`).
+
+This is on by default whenever `tenancyPlugin` is registered, whatever the
+store's layout: each such dispatch costs one `TenantSource.find`, fires the
+`tenancy:switched`/`tenancy:exited` hooks and, under schema- or
+database-per-tenant, leases the tenant's pooled Prisma client for the lookup
+(`PRISMA_POOL_EXHAUSTED` under saturation). With central webhook tables, pass
+`webhooksPlugin({ runInTenant: false })`.
 
 ## How it connects to other modules
 

@@ -9,6 +9,8 @@ export {
   TeamRoleNotGrantableError,
   TeamUserSourceMissingError,
   UnknownTeamRoleError,
+  teamsInviteGate,
+  type TeamsRegisterPolicy,
   type TeamsOptions,
   type RoleAssigner,
 } from './teams.js'

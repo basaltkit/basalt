@@ -162,6 +162,8 @@ export class FakeDriveProvider implements DriveProvider {
    * ever.
    */
   resetNextDelta = false
+  /** The options the last `list` call received, as the engine passed them. */
+  lastListOptions: DriveListOptions | undefined
 
   constructor(options: FakeDriveProviderOptions = {}) {
     this.options = options
@@ -326,6 +328,7 @@ export class FakeDriveProvider implements DriveProvider {
 
   async list(session: DriveSession, options: DriveListOptions): Promise<DrivePage<DriveItem>> {
     this.check(session, 'list')
+    this.lastListOptions = { ...options }
     const failure = this.failNextListWith
     if (failure !== undefined) {
       this.failNextListWith = undefined
@@ -510,3 +513,9 @@ function strip(item: DriveItem & { content?: string }): DriveItem {
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
+
+export {
+  runDriveStoreContract,
+  type DriveStoreContractHarness,
+  type DriveStoreContractSubject,
+} from './store-contract.js'

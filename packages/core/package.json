@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./secret-box": {
+      "types": "./dist/secret-box.d.ts",
+      "import": "./dist/secret-box.js"
     }
   },
   "files": [

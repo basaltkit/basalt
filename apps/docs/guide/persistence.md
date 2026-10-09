@@ -128,6 +128,53 @@ instances to share one database. Both implement the identical store contracts,
 so switching is a one-line change.
 :::
 
+### Prisma with pnpm: the generated client
+
+Prisma 7 needs an explicit generator `output`, and where it points decides
+whether the app runs on plain `node` after a build. What create-basalt scaffolds
+(and what to copy into an older app):
+
+```prisma
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"   // outside src/: tsc never copies these .js files
+}
+```
+
+```json
+{
+  "imports": { "#db/*": "./generated/prisma/*" },
+  "dependencies": {
+    "@prisma/client": "^7.10.0",
+    "@prisma/client-runtime-utils": "^7.10.0"
+  }
+}
+```
+
+```ts
+// src/db.ts — the same specifier resolves from src/ (tsx, vitest) and dist/src/ (node)
+import { PrismaClient } from '#db/client.js'
+```
+
+- **Outside `src/`.** A client generated under `src/generated` type-checks and
+  runs under tsx, but `tsc` emits only what it compiles — the generated `.js`
+  files never reach `dist/`, and `node dist/src/server.js` fails with
+  `ERR_MODULE_NOT_FOUND`. The `imports` alias avoids both a copy script and a
+  relative path that differs between `src/` and `dist/src/`.
+- **`@prisma/client-runtime-utils` as a direct dependency.** The generated
+  `runtime/client.js` requires it by name. Under pnpm it is only a transitive
+  dependency of `@prisma/client`, kept in the virtual store where a file in your
+  project cannot reach it — so declare it, with the same range as
+  `@prisma/client`. No `publicHoistPattern` or `node-linker=hoisted` needed.
+- **Approve the CLI's build scripts.** pnpm 11 fails an install while a
+  dependency's build is unapproved; the scaffold's `pnpm-workspace.yaml` lists
+  `prisma` and `@prisma/engines` under `allowBuilds`.
+
+`create-basalt doctor` flags a client generated under `src/` and a missing
+`@prisma/client-runtime-utils`; `create-basalt update` adds the dependency and
+prints the move. The image itself is covered in
+[Going to production](/guide/production#build-ship).
+
 ## Teams — `@basaltkit/teams-sqlite` / `@basaltkit/teams-prisma`
 
 `@basaltkit/teams` keeps memberships and invitations behind the same kind of store
@@ -217,6 +264,71 @@ that does not wire them needs neither. Expired rows are inert; delete them with
 `pruneExpired()` from a scheduled job. `@basaltkit/flags` needs no backend — feature flags
 are declared in code and evaluated deterministically, with nothing to persist.
 
+### Which hooks are audited {#which-hooks-are-audited}
+
+`auditPlugin` records lifecycle hooks matching `auth:**`, `billing:**`,
+`tenancy:created` and `permission:**`, **except** `auth:apikey_rejected`: it
+fires for every request that presents a dead API key, before anyone is
+authenticated, so recording it let any anonymous client append to a tenant's
+(serialized, hash-chained) trail as fast as it could send requests.
+
+Refusals of a key that **did** verify — used in another tenant
+(`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond its
+scopes (`scope`) — are still audited by default: `apiKeysPlugin` emits them a
+second time as `auth:apikey_refused` (`{ id, reason, tenantId? }`), which `auth:**`
+records. Only a key holder can cause one, and the entry names the key, so a
+cross-tenant probe with a real key always leaves a trail.
+
+`hooks` takes a list (the include set) or `{ include, exclude }`. A hook is
+recorded when it matches an `include` pattern and no `exclude` pattern; without
+`exclude`, the default excludes (`DEFAULT_AUDIT_HOOK_EXCLUDES`) apply. A hook
+named **exactly** in `include` is always recorded — that is how you opt one back
+in:
+
+```ts
+auditPlugin({ hooks: ['auth:**', 'auth:apikey_rejected'] })               // record every rejection too
+auditPlugin({ hooks: { include: ['auth:**', 'billing:**'], exclude: ['auth:login'] } })
+auditPlugin({ hooks: { include: ['auth:**'], exclude: [] } })             // no default excludes
+```
+
+Opting `auth:apikey_rejected` back in records a valid-key refusal twice (under
+both names) and every unknown key once. Rather than record that noise, watch
+it: the payload of an invalid key carries the display `prefix` and the client
+`ip`, enough for an aggregated signal like this one:
+
+```ts
+import { definePlugin } from '@basaltkit/core'
+import { AUDIT } from '@basaltkit/audit'
+
+const WINDOW_MS = 60_000
+const THRESHOLD = 20
+
+// One audit entry per caller per minute once it crosses the threshold —
+// never one per request. In-process: behind several instances, count in a
+// shared store (Redis) instead.
+export const apiKeyBurstAlert = definePlugin({
+  name: 'app:apikey-burst',
+  register({ hooks, container }) {
+    let windowStart = Date.now()
+    let counts = new Map<string, number>()
+    hooks.on('auth:apikey_rejected', async ({ reason, ip, prefix }) => {
+      if (reason !== 'invalid') return // valid-key refusals: auth:apikey_refused, already audited
+      const now = Date.now()
+      if (now - windowStart >= WINDOW_MS) {
+        windowStart = now
+        counts = new Map()
+      }
+      const caller = ip ?? prefix ?? 'unknown'
+      const count = (counts.get(caller) ?? 0) + 1
+      counts.set(caller, count)
+      if (count === THRESHOLD) {
+        await container.get(AUDIT).record('security:apikey_invalid_burst', { ip, prefix, count, windowMs: WINDOW_MS })
+      }
+    })
+  },
+})
+```
+
 ### Verifiable audit trail
 
 Both audit stores support a **tamper-evident** trail and the request context:
@@ -266,6 +378,155 @@ has the SQL). Then make the database enforce append-only too:
 REVOKE UPDATE, DELETE, TRUNCATE ON "audit_entries" FROM app_role;
 ```
 
+Keep this even if you erase personal data: erasure runs through a dedicated
+eraser role, never the app role (see [below](#erasing-personal-data-audit-redact)).
+
+#### Personal data per event (`fieldPolicies`)
+
+The trail is append-only and the hash chain covers each payload, so a value
+that reaches it can only be erased later through an attested
+[`audit.redact()`](#erasing-personal-data-audit-redact), and an old hash may
+still confirm a guess of it. Keep personal data out at write time. The redactors work on key names and value shapes
+(`password`, an email-looking string); they cannot know that the `notes` of one
+event is health data. Declare that per event:
+
+```ts
+auditPlugin({
+  integrity: 'hash-chain',
+  fieldPolicies: {
+    'customer.created': { omit: ['notes', 'address.street'], pseudonymize: ['email', 'fullName'] },
+    'order.placed': { pseudonymize: ['items[].buyer.phone'] },
+  },
+  fieldPolicyKey: process.env.AUDIT_PII_KEY!, // >= 128 bits
+})
+```
+
+- Keys are exact event or hook names (no wildcards). Paths are dotted; arrays are
+  walked transparently, and `items[].x` spells that out.
+- `omit` removes the field. `pseudonymize` replaces every scalar under it with a
+  keyed HMAC pseudonym (`pii_<hex>`), so entries stay correlatable. A path in
+  both is omitted.
+- The policy runs on `record()`, captured hooks and events, **before** the
+  redactor and before hashing, on a copy (your object is never mutated).
+- Use the same key as `createPiiMinimizingRedactor({ key })` to get the same
+  pseudonyms. Without `fieldPolicyKey`, a random per-process key is used and a
+  warning is logged once.
+- Policies are validated at configuration time: an unknown option, an empty or
+  prototype (`__proto__`, `constructor`) segment, or a path deeper than 8
+  segments throws a `TypeError`.
+
+#### Erasing personal data (`audit.redact`) {#erasing-personal-data-audit-redact}
+
+For a value that is already stored (a data-subject "right to erasure" request,
+or a field that should never have been recorded), `audit.redact()` erases
+chosen fields of one entry **in place** and keeps `verify` green:
+
+```ts
+const { changed, residual } = await audit.redact(entryId, {
+  payload: ['customer.email', 'items[].note'], // fieldPolicies paths, or 'all'
+  ip: true,                                     // and/or userAgent: true
+  reasonRef: 'DSR-2026-114',                    // opaque, non-personal reference
+})
+```
+
+- Each value a path reaches becomes `'[erased]'`; `ip`/`userAgent` are dropped.
+  Absent paths are skipped, and a request that changes nothing writes nothing
+  (`changed: false`). Erasing again merges into the entry's `redaction` marker.
+- The entry keeps its original `hash`, so the chain links hold. In the same
+  transaction an **`audit:redacted` attestation** is appended to the entry's own
+  chain. It binds the entry's `id`, `seq` and `hash`, the erased fields, a digest
+  of the new state and `reasonRef`, and never the erased data. `verify` checks the
+  redacted entry through it, and any mismatch fails as `redaction-mismatch`.
+  It also checks each attestation the other way: its entry must still be
+  redacted at that state or a later one. Restoring an erased row from a backup,
+  or rolling it back to an older redaction, fails too.
+  The result counts redacted entries in `redacted`.
+- **Scope** mirrors `trail()`. Inside a tenant context only that tenant's
+  entries are reachable, and any other id is `AuditEntryNotFoundError` (404).
+  Outside one, pass `tenantId`. A multi-tenant app that wants to reach any tenant
+  calls `audit.systemRedact()`, which is for trusted tooling only. Never forward
+  client input to it.
+- **Refused** (`AuditRedactionRefusedError`, nothing written): `'unverified'`
+  when the entry does not verify as it is now (so tampered content is never
+  blessed), `'residual'` (see below), and `'unsupported-store'` when the store
+  has no `get()`/`redact()`. Both bundled stores have them.
+- `record('audit:redacted', …)` throws. The `audit:` event prefix is reserved
+  for framework events, so do not use it for your own.
+
+**Residual.** After erasure, the entry's old hash may still confirm a guess of
+the erased value:
+
+| Entry hash | `residual` | Who can confirm a guess |
+|---|---|---|
+| none (unchained), v3 | `'none'` | nobody |
+| v2 HMAC (keyed chain) | `'keyed'` | the integrity-key holder |
+| v2 SHA-256 (unkeyed chain) | `'public'` | anyone who reads the row |
+
+`request.residual` is the most you accept, and the default is `'keyed'`. Erasing
+from an unkeyed chain must be acknowledged with `residual: 'public'`. For
+entries written from now on, set `integrity: { mode: 'hash-chain', key,
+erasable: true }`. It writes v3 hashes with a random per-entry nonce that a
+redaction destroys, so their residual is `'none'`. It needs the `nonce` column
+(SQLite migrates it; for Prisma, add it to the model), and it is off by default.
+
+**The eraser role.** The app role keeps `REVOKE UPDATE` (above). Erasure goes
+through a second database role that may update only the erasable columns, with a
+second store and a second `Audit` with the same options, given only to the
+erasure job. The [`@basaltkit/audit-prisma` README](https://github.com/basaltkit/basalt/tree/main/packages/audit-prisma#the-eraser-role)
+has the `GRANT` and an optional guard trigger. A data-subject request then
+becomes app logic, authorized by you:
+
+```ts
+import { AUDIT_REDACTED_EVENT } from '@basaltkit/audit'
+
+// eraserAudit = new Audit(eraserStore, …same options as the app's Audit)
+for (const entry of await eraserAudit.systemTrail({ actorId: subjectId, limit: 1000 })) {
+  if (entry.event === AUDIT_REDACTED_EVENT) continue
+  await eraserAudit.systemRedact(entry.id, { payload: 'all', ip: true, userAgent: true, reasonRef: dsrId })
+}
+```
+
+**What is not erased.** Opaque ids (`actorId`, `tenantId`, `requestId`), the
+event name and the time stay. Once you erase the user in your auth store,
+`actorId` no longer identifies anyone. Copies elsewhere are yours to erase: the
+events outbox, activity feeds, search indexes, logs and **backups**. Keep the
+request ledger outside the database and re-apply it after a restore. On a rolling
+deploy, upgrade every replica that runs `verify` before the first redaction or
+before turning on `erasable`. An older `@basaltkit/audit` reports those entries
+as `hash-mismatch`. There is no HTTP route, CLI command or MCP tool for
+erasure. Who may erase is the app's decision.
+
+#### Recording outside a request (jobs, scripts)
+
+An entry takes its `actorId` and `tenantId` from the active context. Outside a
+request there is none, so `audit.record()` lands in the **system chain** with no
+actor — unless you give it one:
+
+- **Queue jobs** need nothing: `@basaltkit/queue` captures the dispatcher's
+  tenant and user and restores them around the handler, so `record()` inside a
+  job is attributed like it was in the request that dispatched it.
+- **Scripts and CLI commands** wrap the work in the context they act for:
+
+  ```ts
+  import { runWithContext } from '@basaltkit/core'
+
+  await runWithContext({ tenant: { id: 'acme' }, user: { id: 'ops:backfill' } }, () =>
+    audit.record('invoice.backfilled', { count }),
+  )
+  ```
+
+- **A single entry** can pass an explicit scope as the third argument:
+
+  ```ts
+  await audit.record('report.generated', { rows }, { tenantId: 'acme', actorId: 'job:nightly' })
+  ```
+
+  The entry joins that tenant's chain (`t:acme`), so `verify({ tenantId: 'acme' })`
+  covers it. The scope can only **narrow**: inside a context with a tenant (or a
+  user), a different `scope.tenantId` (or `scope.actorId`) throws a `TypeError`
+  rather than writing into another tenant's chain. Both values must be non-empty
+  printable strings of at most 256 characters. Never forward client input into it.
+
 ## Tenancy — `@basaltkit/tenancy-sqlite` / `@basaltkit/tenancy-prisma`
 
 The tenant registry is the foundation of a multi-tenant app, yet `@basaltkit/tenancy`
@@ -286,11 +547,17 @@ tenancyPlugin({ source: tenants, resolvers: [subdomainResolver({ base: 'localhos
 A tenant is an **open record** (`{ id, ...anything }`), stored as JSON so any
 per-tenant field round-trips unchanged; custom domains are normalized into an
 indexed table so `findByDomain` (the domain resolver) is a keyed lookup. Both add
-write methods — `save` (upsert + replace the domain set), `remove` — and enforce
+write methods — `save` (upsert + sync the domain set), `remove` — and enforce
 **globally-unique domains**: claiming one already owned by another tenant is
 rejected, so routing stays unambiguous. `prismaTenantSource` ships a reference
 `schema.prisma` picked up by `basalt prisma:sync`; same "which one?" trade-off as
 auth — SQLite for a single node, Prisma when you already run a database.
+
+Each package also ships the durable `DomainStore` for verified custom domains
+(`CustomDomains`), on the same table: `prismaDomainStore(prisma)` /
+`sqliteDomainStore(tenants.db)`. Domains claimed through it survive every
+`save()`, and `findByDomain` resolves them only once verified — see
+[a durable domain store](/guide/tenancy#a-durable-domain-store).
 
 ## Events outbox — `@basaltkit/events-sqlite` / `@basaltkit/events-prisma`
 
@@ -455,7 +722,15 @@ transaction** as the state change, and the two can never disagree. `pending`,
 attempt ceilings and `markPublished`/`markFailed` keep the in-memory semantics,
 now durable.
 
-now durable.
+::: tip The outbox table is framework infrastructure
+Give the outbox store the **plain** client and no row-level-security policy,
+like the `auth_*` and `perm_*` tables. The relay reads it with no tenant in
+context — under shared-schema RLS it would see nothing (or `tenancyExtension`
+would throw `PRISMA_TENANT_MISSING`), and under schema-per-tenant it lives in
+the central schema. Each entry still records its `tenantId`, and the webhook
+relay enters that tenant for the endpoint lookup (see
+[Webhooks → Schema-per-tenant](/guide/webhooks#schema-per-tenant)).
+:::
 
 ## Outbound webhooks — `@basaltkit/webhooks-sqlite` / `@basaltkit/webhooks-prisma`
 
@@ -554,7 +829,7 @@ most from being shared across instances:
 | Usage metering | `MemoryUsageStore` | `RedisUsageStore` — atomic `consume()` via Lua |
 | Webhook idempotency | `MemoryWebhookStore` | `RedisWebhookStore` — `SET NX EX` across restarts |
 | Rate limiting | `MemoryRateLimitStore` | `RedisRateLimitStore` (`@basaltkit/http`) — one atomic counter shared across instances |
-| Request idempotency | `MemoryIdempotencyStore` | `RedisIdempotencyStore` (`@basaltkit/fastify`) — replays a cached response across instances |
+| Request idempotency | `MemoryIdempotencyStore` | `RedisIdempotencyStore` (`@basaltkit/http`, any adapter) — replays a cached response across instances |
 | Queues | in-memory driver | RabbitMQ / Kafka / SQS driver packages |
 | Search | `MemorySearchDriver` | `MeilisearchDriver` (built in), `@basaltkit/search-postgres`, `@basaltkit/search-elasticsearch` |
 | Storage | local disk | S3 / GCS / Azure driver packages |
@@ -565,12 +840,12 @@ A store is a handful of async methods. To back auth users with your existing
 database, implement `UserSource`:
 
 ```ts
-import type { UserSource, AuthUser, UserPatch } from '@basaltkit/auth'
+import type { UserSource, AuthUser, UserPatch, NewUser } from '@basaltkit/auth'
 
 class PrismaUserSource implements UserSource {
   async findByEmail(email: string): Promise<AuthUser | null> { /* … */ }
   async findById(id: string): Promise<AuthUser | null> { /* … */ }
-  async create(data: { email: string; passwordHash: string }): Promise<AuthUser> { /* … */ }
+  async create(data: NewUser): Promise<AuthUser> { /* … persist data.emailVerified ?? false */ }
   async update(id: string, patch: UserPatch): Promise<AuthUser | null> { /* … */ }
 }
 ```
@@ -608,6 +883,7 @@ un-configured factory is still safe in tests.
 | Notifications | `sqliteInAppStore()` | `prismaInAppStore(client)` | `notificationsPlugin({ inApp: store })` |
 | Permissions | `sqliteAccessStore()` | `prismaAccessStore(client)` | `permissionsPlugin({ store, temporaryGrants, delegations })` |
 | Tenancy | `sqliteTenantSource()` | `prismaTenantSource(client)` | `tenancyPlugin({ source })` — returns the source itself, not `{ store }` |
+| Custom domains | `sqliteDomainStore(db)` | `prismaDomainStore(client)` | `new CustomDomains({ store })` — returns the store itself |
 | Events outbox | `sqliteOutboxStore()` | `prismaOutboxStore(client, { claim? })` | `outboxPlugin({ store })` |
 | Webhooks | `sqliteWebhookStore()` | `prismaWebhookStore(client)` | `webhooksPlugin({ store })` |
 
@@ -635,6 +911,7 @@ configured on the plugin that consumes it — see [Auth](/guide/auth),
 | `EventValidationError` | `EVENT_INVALID` | The event's schema rejected the payload before any listener (including the outbox capture) ran |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | `OUTBOX` (or any store token) resolved without the plugin that registers it |
 | `ERR_UNKNOWN_BUILTIN_MODULE` on `import 'node:sqlite'` | — | A `*-sqlite` package on Node 22.x without `--experimental-sqlite`. Use Node 24, or add the flag; the packages declare `engines.node >= 22.5.0` |
+| `TenantPoolExhaustedError` (503, body says only "Service unavailable.") | `PRISMA_POOL_EXHAUSTED` | Database-per-tenant: every one of the pool's `max` clients stayed in use for `acquireTimeoutMs`. The `leased`/`recentlyUsed` counts are in the server log, never in the response. Raise `max` to the distinct tenants active within a few seconds — see [Database-per-tenant](/guide/database-per-tenant) |
 
 - **"It worked in dev and forgot everything after the deploy"** — a store is
   still on its in-memory default. The defaults are silent by design; grep your
@@ -654,6 +931,14 @@ configured on the plugin that consumes it — see [Auth](/guide/auth),
 - **A durable store still returns nothing for a tenant** — the store is durable,
   not tenant-routed. For database-per-tenant you must route it through the
   active tenant's client; see [Database-per-tenant](/guide/database-per-tenant).
+- **Database-per-tenant: a query fails, or connections pile up, after the
+  response was sent** — work that outlives the request still uses `ctx().db`,
+  whose lease ended with the response. `await` it before replying, or run it in
+  `tenancy.run()` / `DB_POOL.use()`.
+- **Database-per-tenant: every request is slow and the database sees a stream
+  of new connections** — more distinct tenants than `max` take turns, so the
+  pool closes and opens a client per request (it no longer answers 503). Raise
+  `max` and watch how often your `forTenant` factory runs.
 
 ## What to do before going to production
 

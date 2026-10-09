@@ -99,6 +99,8 @@ await teams.addMember('acme', 'ada-id', 'owner')
 - An invitation only ever adds access: accepting it never lowers an existing membership of equal or higher rank (an owner clicking a `member` invite stays owner).
 - An invitation carries its inviter's authority: when the inviter (`invitedBy`) is removed, or re-roled below the invited role, their pending invitations for roles they can no longer grant are revoked.
 - `pendingInvites(tenantId)` lists non-expired pending invites; `revokeInvite(id)` cancels one; `invitation(id)` looks one up.
+- **Without the link:** `acceptByEmail({ tenantId, userId, email, emailVerified })` accepts the live invitation of ONE tenant for an account whose address is proven (`[]` unless `emailVerified === true`), with the same guarantees as `accept()`. `teamsPlugin({ acceptOnVerifiedEmail: true })` runs it on `auth:email_verified` and `auth:login` for the current `ctx().tenant` (nothing on the apex, other tenants untouched); it never fails the login — errors go to `team:auto_accept_failed`.
+- **Invite-only signup:** `teamsInviteGate(teams | () => teams)` is a ready-made `@basaltkit/auth` `RegisterPolicy` (`authPlugin({ registerPolicy })`): apex open, a tenant host admits only an address with a live invitation to that tenant (`pendingInviteFor(tenantId, email)`, a read). A refused signup answers the same `202`.
 
 ### Privilege-escalation guard (`actingUserId`)
 
@@ -288,12 +290,13 @@ await teams.addMember('acme', 'u1', 'admin')
 | `team:joined` | `{ membership }` | Someone joined (accept or addMember). |
 | `team:role_changed` | `{ membership }` | Role changed. |
 | `team:member_removed` | `{ tenantId, userId }` | Member removed. |
+| `team:auto_accept_failed` | `{ tenantId, userId, error }` | `acceptOnVerifiedEmail` could not enroll the user; the login went through and the invitation stays pending. |
 
 ## API reference
 
 ### `teamsPlugin(options)` and the `Teams` class
 
-Options (`TeamsOptions`; `TeamsPluginOptions` is the same minus `hooks`) — all optional:
+Options (`TeamsOptions`; `TeamsPluginOptions` is the same minus `hooks`, plus `acceptOnVerifiedEmail`) — all optional:
 
 | Name | Type | Default | Description |
 |---|---|---|---|
@@ -306,6 +309,7 @@ Options (`TeamsOptions`; `TeamsPluginOptions` is the same minus `hooks`) — all
 | `grantableRoles` | `readonly TeamRole[]` | `[]` | Unranked roles an acting user may still grant. |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests). |
 | `hooks` | `HookBus` | — | Class only; the plugin injects it. |
+| `acceptOnVerifiedEmail` | `boolean` | `false` | Plugin only. On `auth:email_verified` / `auth:login`, accept the verified user's pending invitation to the current tenant (`acceptByEmail`). Never fails the login. |
 
 ### `tenantMembershipPlugin(options)`
 
@@ -346,6 +350,8 @@ member can also be denied for up to `ttlMs`.
 | `addMember(tenantId, userId, role, opts?)` | `Promise<Membership>` | Adds/updates directly (seed the first owner). `opts.actingUserId` enforces the escalation guard. |
 | `invite(input)` | `Promise<{ invitation, token }>` | Creates/replaces the invitation; emits `team:invited`. Only the token hash is stored. |
 | `accept(token, userId, acceptingEmail?)` | `Promise<Membership>` | Consumes the token and enrolls the user. Pass the caller's verified email to bind acceptance to the invited address. |
+| `acceptByEmail({ tenantId, userId, email, emailVerified })` | `Promise<Membership[]>` | Link-free acceptance for a verified address, scoped to one tenant; `[]` when unverified or no live invitation. |
+| `pendingInviteFor(tenantId, email)` | `Promise<PublicInvitation \| null>` | The live invitation of this tenant for this address (read-only). Behind `teamsInviteGate`. |
 | `members(tenantId)` | `Promise<Membership[]>` | Lists the members. |
 | `membersWithUsers(tenantId)` | `Promise<TeamMemberWithUser[]>` | Memberships + each member's `{ id, email, emailVerified }`, batched through `users`. Memberships with no account are skipped. Needs `users`. |
 | `roleRecipients(tenantId, role, opts?)` | `Promise<TeamMemberWithUser[]>` | Who to notify for a role — a filter over `membersWithUsers` (no extra lookup). Ranked roles include higher ranks; unranked roles (and `opts.exact`) match exactly. |
@@ -397,6 +403,7 @@ All require login (`meta.auth`); the marked ones also require a team role. The t
 | `DEFAULT_ROLE_RANK` | `{ owner: 3, admin: 2, member: 1 }`. |
 | `OWNER` | The string `'owner'`. |
 | `TEAMS` | Injection token: `container.get(TEAMS)` → `Teams`. |
+| `teamsInviteGate(teams \| () => teams)` / `TeamsRegisterPolicy` | Registration predicate for `@basaltkit/auth` (`registerPolicy`): apex open, tenant hosts invite-only. |
 
 ### Failure modes & troubleshooting
 

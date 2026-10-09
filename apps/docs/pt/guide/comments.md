@@ -30,9 +30,12 @@ await app.container.get(FASTIFY).listen({ port: 3000 })
 ```
 
 ::: tip Dica
-`add` extrai as mentions com `@([\w-]+)` por defeito. Passa `mentionPattern` (uma
-regex cujo primeiro grupo de captura é o user id) ao `commentsPlugin` para
-corresponder ao teu próprio esquema de ids.
+`add` extrai as mentions com `DEFAULT_MENTION_PATTERN` — `@id` (`[\w-]+`) não
+precedido de um carácter de palavra, `.`, `+` ou `-`, por isso `ana@example.com`
+**não** é uma mention de `example`. Passa `mentionPattern` (uma regex `g` cujo
+primeiro grupo de captura é o user id) ao `commentsPlugin` para corresponder ao
+teu próprio esquema de ids; `DELIMITED_MENTION_PATTERN` lê `@{qualquer-id}` para
+ids com pontos ou `@`.
 :::
 
 ## Adicionar e ler
@@ -49,7 +52,8 @@ const tree = await comments.on('note', 'note-1').tree() // nested replies
 
 `add` extrai as @mentions do corpo (padrão configurável), armazena-as no
 comentário, e emite `comment:created` mais um `comment:mentioned` por cada
-utilizador mencionado. Também: `edit`, `remove`, `resolve(id, by)`, `reopen(id)`.
+utilizador mencionado. Também: `edit`, `remove`, `resolve(id, by)`, `reopen(id)` —
+e, opt-in, [âncoras, soft delete, janela de edição e revisões](#ancoras-soft-delete-janela-de-edicao-e-revisoes).
 
 ::: warning Corpos e mentions limitados
 Um corpo maior que `maxBodyLength` (predefinição **10 000** caracteres) lança
@@ -93,8 +97,11 @@ base de dados.
 
 Cada mutação emite um hook (`comment:created`, `comment:mentioned`,
 `comment:updated`, `comment:deleted`, `comment:resolved`, `comment:reopened`),
-por isso atualizações ao vivo e notificações ligam-se sem acoplamento. Subscreve
-em `app.hooks`:
+por isso atualizações ao vivo e notificações ligam-se sem acoplamento. Cada
+payload leva `actorId` — quem o fez: o autor em `created`/`mentioned`, quem
+resolveu em `resolved`, senão o ator explícito (`edit(id, body, { actorId })`,
+`remove(id, { by })`) ou `ctx().user.id`; só falta quando uma chamada corre fora
+de um pedido sem ator indicado. Subscreve em `app.hooks`:
 
 ```ts
 import { REALTIME } from '@basaltkit/realtime'
@@ -124,6 +131,66 @@ app.hooks.on('comment:mentioned', ({ comment, userId }) =>
   notifier.notify({ id: userId }, CommentMention, { by: comment.authorId }))
 ```
 
+Os hooks são em processo. Para pôr a atividade dos comentários no bus durável
+[`@basaltkit/events`](/pt/guide/queues) (outbox, listeners em fila), faz a ponte
+dos que precisares:
+
+```ts
+import { EVENTS, defineEvent } from '@basaltkit/events'
+
+const CommentCreated = defineEvent<{ commentId: string; actorId?: string }>('comment.created')
+app.hooks.on('comment:created', ({ comment, actorId }) =>
+  app.container.get(EVENTS).emit(CommentCreated, { commentId: comment.id, ...(actorId ? { actorId } : {}) }))
+```
+
+## Âncoras, soft delete, janela de edição e revisões
+
+Tudo opt-in; sem estas opções os comentários comportam-se exatamente como antes.
+
+```ts
+commentsPlugin({
+  deletion: 'soft',          // remove() guarda uma lápide em vez de apagar a linha
+  editWindowMs: 15 * 60_000, // edit() recusado com 409 passados 15 minutos
+  revisions: true,           // edit() guarda cada corpo anterior
+})
+
+// anchor: onde no recurso o comentário aponta (objeto JSON, ≤ 4 KB)
+await comments.on('contract', 'c-12').add({ authorId: 'u1', body: 'Vê esta cláusula', anchor: { page: 3, rect: [72, 540, 300, 560] } })
+
+await comments.remove(id, { by: 'moderator-1', reason: 'fora do tema' })
+await comments.revisions(id) // [{ body, at, by }, …] do mais antigo para o mais recente
+```
+
+| Opção | Predefinição | Comportamento |
+| --- | --- | --- |
+| `deletion` | `'hard'` | `'soft'` define `deletedAt`/`deletedBy`/`deleteReason`; `list()`/`tree()` devolvem o comentário como **lápide** (`body` vazio, sem `mentions`) para as respostas manterem o seu lugar. `get()` continua a devolver o registo guardado (moderação). Um comentário soft-deleted responde 404 a edit/resolve/reopen; removê-lo de novo não faz nada. `comment:deleted` leva `soft: true` |
+| `editWindowMs` | nenhuma | `edit()` fora da janela lança `CommentEditWindowClosedError` (`409 COMMENT_EDIT_WINDOW_CLOSED`) |
+| `revisions` | `false` | `edit()` regista o corpo anterior (`CommentRevision`) antes de o substituir. Requer uma store com `addRevision`/`revisions` (memória, SQLite, Prisma); caso contrário a app **falha no arranque** com `CommentRevisionsUnsupportedError` |
+
+`anchor` tem de ser um objeto JSON simples de no máximo 4 KB (`400
+COMMENT_ANCHOR_INVALID`); `POST /comments` aceita-o no corpo. O schema Prisma
+ganhou as colunas opcionais `anchor`, `deletedAt`, `deletedBy`, `deleteReason` e
+um modelo `CommentRevision` — só são escritas quando usas a funcionalidade, por
+isso adiciona-as antes de a ligar. O SQLite migra-se sozinho.
+
+### Recusar mentions desconhecidas
+
+`resolveMentions` filtra em silêncio. Para **recusar** um comentário que menciona
+alguém que não pode ser mencionado, lança a partir dele — o erro propaga-se para
+fora de `add`/`edit` (e pelas rotas, com o seu próprio status) antes de qualquer
+coisa ser guardada:
+
+```ts
+commentsPlugin({
+  resolveMentions: async (ids, tenantId) => {
+    const known = new Set((await members.of(tenantId, ids)).map((m) => m.userId))
+    const unknown = ids.filter((id) => !known.has(id))
+    if (unknown.length) throw new HttpError(422, 'UNKNOWN_MENTION', `Utilizadores desconhecidos: ${unknown.join(', ')}`)
+    return ids
+  },
+})
+```
+
 ## Rotas
 
 `commentRoutes()` (exigem um utilizador autenticado; o autor é tirado de
@@ -147,6 +214,22 @@ commentRoutes({
   authorize: async (action, target, user) =>
     (await canSeeMatter(user.id, target.resourceId)) &&
     (defaultCommentPolicy(action, target, user) || (action === 'resolve' && user.role === 'admin')),
+})
+```
+
+Para responder **404** em vez de 403 a um recurso cuja existência quem chama nem
+deve conhecer, lança `CommentNotFoundError` a partir do `authorize` — o status do
+erro chega ao cliente em todos os adaptadores:
+
+```ts
+import { CommentNotFoundError, commentRoutes } from '@basaltkit/comments'
+
+commentRoutes({
+  authorize: async (action, target, user) => {
+    if (!(await canSeeMatter(user.id, target.resourceId))) throw new CommentNotFoundError() // 404 COMMENT_NOT_FOUND
+    return defaultCommentPolicy(action, target, user)
+  },
+  meta: { can: 'comments:write' }, // meta de rota extra, fundido em todas as rotas (auth: true mantém-se sempre)
 })
 ```
 

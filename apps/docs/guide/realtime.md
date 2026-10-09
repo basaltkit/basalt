@@ -19,7 +19,7 @@ Six pieces, and only two of them are framework-specific:
 | --- | --- | --- |
 | `Realtime` (token `REALTIME`) | The fluent facade you call: `to(tenant).channel(name).emit()` | your code |
 | `RealtimeHub` (token `REALTIME_HUB`) | Registry of connections, subscriptions and presence; delivers to local sockets | one per process |
-| `Connection` | `{ id, tenantId, userId?, send(), close() }` — built from your socket/response by `websocketConnection()` / `sseConnection()` | per client |
+| `Connection` | `{ id, tenantId, userId?, send(), close() }` — built from your socket/stream by `websocketConnection()` / `realtimeSse()` (`sseStreamConnection()`) / `sseConnection()` | per client |
 | `RealtimeBackplane` | Fan-out across processes: `MemoryBackplane` (default) or `RedisBackplane` | process / Redis |
 | Bridge rules | Map a core hook to an emit, fire-and-forget | on `app.hooks` |
 | `@basaltkit/realtime-client` | Browser client: auto-subscribe, auto-reconnect | browser |
@@ -102,25 +102,49 @@ channels that can never see each other's traffic.
 ## Connecting a client (transport)
 
 The core speaks to **connections**, not sockets. Build a `Connection` from your
-adapter's socket or response and register it — that is the entire
-framework-specific surface. `websocketConnection(meta, socket)` takes any
-`ws`-style socket (`send(string)` + `close()`); `sseConnection(meta, io)` takes
-whatever can write to and end the response:
+transport and register it — that is the entire framework-specific surface.
+
+For **SSE**, return `@basaltkit/http`'s `sse()` with `realtimeSse(hub, …)` as the
+producer. It runs unchanged on Fastify, Express and Hono: it registers the
+connection, joins the channels (each through `authorize`), and unregisters it
+when the client goes away.
 
 ```ts
-import { sseConnection, REALTIME_HUB } from '@basaltkit/realtime'
+import { ctx } from '@basaltkit/core'
+import { route, sse } from '@basaltkit/http'
+import { realtimeSse, REALTIME_HUB } from '@basaltkit/realtime'
 
 const hub = app.container.get(REALTIME_HUB)
 
-reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' })
-const conn = sseConnection(
-  { tenantId: tenant.id, userId: user.id },
-  { write: (chunk) => reply.raw.write(chunk), end: () => reply.raw.end() },
-)
-hub.register(conn)
-await hub.subscribe(conn.id, 'notes')
-reply.raw.on('close', () => hub.unregister(conn.id))
+route({
+  method: 'GET',
+  url: '/live',
+  meta: { auth: true },
+  handler: () => {
+    const { tenant, user } = ctx() as { tenant: { id: string }; user: { id: string } }
+    return sse(
+      realtimeSse(hub, {
+        meta: { tenantId: tenant.id, userId: user.id }, // from the session, never from the client
+        channels: ['notes', `user:${user.id}`],
+        onOpen: () => { /* optional: send a snapshot */ },
+      }),
+      { heartbeatMs: 15_000 },
+    )
+  },
+})
 ```
+
+A channel the hub refuses closes the stream — `EventSource` would reconnect and
+be refused again, so check access in the handler first when the client should
+get a `403` instead. Backpressure never prunes a slow client: a send that hits a
+full buffer is counted, and the stream is closed after `maxBackpressure`
+(default 50) consecutive ones.
+
+For **WebSockets**, `websocketConnection(meta, socket)` takes any `ws`-style
+socket (`send(string)` + `close()`). The low-level `sseConnection(meta, io)` is
+still there as an escape hatch for a response you write yourself
+(`{ write(chunk), end() }`, pre-framed with `sseFrame`) — then registering,
+subscribing and unregistering on close are yours.
 
 `ConnectionMeta` is `{ tenantId, userId?, id? }` — `id` defaults to a
 `randomUUID()`. **`userId` is what feeds presence**: a connection registered
@@ -138,6 +162,7 @@ then also calls its `close()`, so the client sees the drop and reconnects. A
 socket that closes cleanly is still registered until you call
 `hub.unregister(conn.id)` — always wire it to your transport's close event, or
 subscriptions and presence leak for the lifetime of the process.
+(`realtimeSse()` does this for you.)
 :::
 
 ## Authorizing subscriptions
@@ -506,6 +531,15 @@ note created ─▶ note:created hook ─▶ bridge rule ─▶ realtime.emit
 | --- | --- | --- | --- |
 | `heartbeatMs` | `number` | off | Comment ping interval — keeps proxies from closing an idle stream and surfaces dead sockets |
 | `maxDurationMs` | `number` | off | Hard cap on one stream's lifetime; a backstop against connections that never disconnect |
+
+`realtimeSse(hub, options)` — the producer you pass to `sse()`:
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `meta` | `ConnectionMeta` | — | `{ tenantId, userId?, id? }` of the connection — take it from the request context, never from the client |
+| `channels` | `readonly string[]` | — | Channels to join; each goes through the hub's `authorize`, and one refusal closes the stream |
+| `onOpen` | `(connection) => void \| Promise<void>` | — | Runs once every channel is joined (e.g. send a snapshot) |
+| `maxBackpressure` | `number` | `50` | Consecutive sends that hit a full buffer before the stream is closed; a send that goes through resets the count |
 
 `createRealtimeClient(options)`:
 

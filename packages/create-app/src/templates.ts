@@ -18,6 +18,7 @@ export interface ProjectOptions {
 }
 
 import { THIRD_PARTY_VERSIONS } from './latest-versions.js'
+import { DOCKERFILE, DOCKERIGNORE, PRODUCTION_ENTRY } from './stubs.js'
 import { SCAFFOLD_VERSIONS } from './versions.js'
 
 export { basaltBin } from './bin-template.js'
@@ -52,6 +53,27 @@ export const thirdPartyVersionOf = (pkg: string): string => {
   }
   return range
 }
+
+/**
+ * The production path (BK-026): `build` compiles src/ with tsconfig.build.json
+ * (rootDir `.`, outDir `dist`) and `start` runs the result on plain node — the
+ * same entry the Dockerfile's CMD runs. `start:dev` keeps the old tsx start.
+ */
+export const BUILD_SCRIPT = 'tsc -p tsconfig.build.json'
+
+/** The `db:seed` script of a `--prisma` scaffold with tenancy (prisma.config.ts loads .env, then runs `migrations.seed`). */
+export const DB_SEED_SCRIPT = 'prisma db seed'
+export const START_SCRIPT = `node --enable-source-maps ${PRODUCTION_ENTRY}`
+export const START_DEV_SCRIPT = 'tsx src/server.ts'
+/** The `start` script every create-basalt release before the production path wrote. */
+export const LEGACY_START_SCRIPT = 'tsx src/server.ts'
+
+/**
+ * package.json `imports` alias for the generated Prisma client. It lives in
+ * ./generated/prisma — outside src/, so tsc never has to copy its .js files —
+ * and `#db/*` resolves to it from src/ (tsx, vitest) and dist/src/ (node) alike.
+ */
+export const PRISMA_IMPORTS: Readonly<Record<string, string>> = { '#db/*': './generated/prisma/*' }
 
 /** The root `basalt` script of an app without `--cli`: create-basalt's project commands. */
 export const BASALT_PROJECT_SCRIPT = 'create-basalt --project'
@@ -91,7 +113,11 @@ export function packageJson(options: ProjectOptions): string {
   if (options.prisma) {
     // Prisma 7 talks to PostgreSQL through a driver adapter, so `pg` is a real
     // runtime dependency (see src/db.ts); the `prisma` CLI is dev-only.
-    for (const pkg of ['@prisma/adapter-pg', '@prisma/client', 'pg']) {
+    // @prisma/client-runtime-utils is required BY NAME from the generated
+    // client's runtime/ (./generated/prisma/runtime/client.js). Under pnpm it is
+    // only a transitive dependency of @prisma/client, out of reach of plain
+    // `node` — so the app declares it directly (BK-026).
+    for (const pkg of ['@prisma/adapter-pg', '@prisma/client', '@prisma/client-runtime-utils', 'pg']) {
       dependencies[pkg] = thirdPartyVersionOf(pkg)
     }
   }
@@ -126,11 +152,15 @@ export function packageJson(options: ProjectOptions): string {
       version: '0.1.0',
       private: true,
       type: 'module',
+      ...(options.prisma ? { imports: PRISMA_IMPORTS } : {}),
       scripts: {
         // dev opts into NODE_ENV=development (src/dev.ts); start does not, so an
         // unset NODE_ENV counts as production and secrets are required.
         dev: 'tsx watch src/dev.ts',
-        start: 'tsx src/server.ts',
+        // Production: compile once, run on plain node (no tsx at runtime).
+        build: BUILD_SCRIPT,
+        start: START_SCRIPT,
+        'start:dev': START_DEV_SCRIPT,
         test: 'vitest run',
         typecheck: 'tsc --noEmit',
         // With --cli, bin/basalt.ts serves the generators AND hands the project
@@ -150,7 +180,11 @@ export function packageJson(options: ProjectOptions): string {
               // is deliberately no `db:push` script.
               'db:migrate': 'prisma migrate dev',
               'db:deploy': 'prisma migrate deploy',
-              ...(options.tenancy ? { 'db:seed': 'tsx prisma/seed.ts' } : {}),
+              // Through Prisma, not `tsx prisma/seed.ts`: prisma.config.ts loads
+              // .env (the seed imports src/env.ts, which needs the database URL),
+              // then runs the `migrations.seed` command it declares. Prisma 7's
+              // `migrate dev` no longer seeds on its own.
+              ...(options.tenancy ? { 'db:seed': DB_SEED_SCRIPT } : {}),
             }
           : {}),
       },
@@ -176,14 +210,42 @@ export function tsconfigJson(options: ProjectOptions): string {
         noEmit: true,
         types: ['node'],
       },
-      // The generated Prisma client lives under src/generated (git-ignored, and
-      // re-created by `prisma generate`); the seed script under prisma/ is
-      // type-checked too.
+      // The generated Prisma client lives in ./generated (git-ignored,
+      // re-created by `prisma generate`, reached through the `#db/*` import
+      // alias); the seed script under prisma/ is type-checked too.
       include: ['src', 'tests', ...(options.prisma && options.tenancy ? ['prisma/seed.ts'] : [])],
     },
     null,
     2,
   )}\n`
+}
+
+/**
+ * `tsconfig.build.json` — what `pnpm build` compiles: src/ only (tests and
+ * bin/ stay dev-only), emitted to dist/ with rootDir `.`, so src/server.ts
+ * becomes dist/src/server.js. Extends tsconfig.json, so the compiler options
+ * (and `pnpm typecheck`) never diverge.
+ */
+export function tsconfigBuildJson(): string {
+  return `${JSON.stringify(
+    {
+      extends: './tsconfig.json',
+      compilerOptions: {
+        noEmit: false,
+        rootDir: '.',
+        outDir: 'dist',
+        sourceMap: true,
+      },
+      include: ['src'],
+    },
+    null,
+    2,
+  )}\n`
+}
+
+/** The production Dockerfile — the same file `basalt publish dockerfile` writes. */
+export function dockerfile(): string {
+  return DOCKERFILE
 }
 
 export function envTs(options: ProjectOptions): string {
@@ -587,7 +649,15 @@ import { env } from './env.js'
 const app = await buildApp({
   logLevel: env.LOG_LEVEL,
   pretty: env.NODE_ENV === 'development',
-}).boot()
+})
+  .boot()
+  .catch((error: unknown) => {
+    // A database failure diagnosed by @basaltkit/prisma (permission denied, not
+    // migrated, unreachable…) carries its one-line fix: print it above the stack.
+    const diagnosis = (error as { details?: { diagnosis?: { cause?: string; fix?: string } } } | null)?.details?.diagnosis
+    if (diagnosis) console.error('Cannot start: ' + diagnosis.cause + '\\nFix: ' + diagnosis.fix)
+    throw error
+  })
 
 const server = app.container.get(FASTIFY)
 await server.listen({ port: env.PORT, host: env.HOST })
@@ -651,9 +721,17 @@ const PRISMA_MODELS: Readonly<Record<'tenancy' | 'auth' | 'teams' | 'subscriptio
 }
 
 model TenantDomain {
-  domain   String @id
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  domain            String    @id
+  tenantId          String
+  // Custom-domain verification (PrismaDomainStore). A row with a NULL token
+  // mirrors \`tenant.domains\` and is written by PrismaTenantSource; a row with a
+  // token is a CustomDomains claim, which the source never deletes, and which
+  // only resolves a request once \`verified\` is true.
+  verificationToken String?
+  verified          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  verifiedAt        DateTime?
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@map("tenant_domains")
@@ -668,9 +746,11 @@ model TenantDomain {
 }
 
 model AuthSession {
-  id        String   @id
-  userId    String
-  expiresAt DateTime
+  id         String    @id
+  userId     String
+  expiresAt  DateTime
+  /// Last use, for the idle timeout (trackSessionActivity: true).
+  lastSeenAt DateTime?
 
   @@index([userId])
   @@map("auth_sessions")
@@ -847,7 +927,9 @@ export function prismaSchema(options: ProjectOptions): string {
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
+  // Outside src/ on purpose: src/db.ts imports it as \`#db/client.js\` (the
+  // package.json "imports" alias), which resolves from src/ and dist/src/ alike.
+  output   = "../generated/prisma"
 }
 
 datasource db {
@@ -899,7 +981,7 @@ export default defineConfig({
   schema: 'prisma/schema.prisma',${
     options.tenancy
       ? `
-  // Runs after \`prisma migrate dev\` / \`prisma migrate reset\`.
+  // Run by \`prisma db seed\` (\`pnpm db:seed\`), with the .env loaded above.
   migrations: { seed: 'tsx prisma/seed.ts' },`
       : ''
   }
@@ -923,7 +1005,9 @@ export function dbTs(options: ProjectOptions): string {
   return `import { PrismaPg } from '@prisma/adapter-pg'${
     options.tenancy ? `\nimport { tenancyExtension } from '@basaltkit/prisma'` : ''
   }
-import { PrismaClient } from './generated/prisma/client.js'
+// The generated client (./generated/prisma), through the package.json
+// "imports" alias — the same specifier works under tsx and from dist/.
+import { PrismaClient } from '#db/client.js'
 import { env } from './env.js'
 
 /**
@@ -964,8 +1048,9 @@ export const db = prisma
 
 /**
  * `prisma/seed.ts` — creates the `demo` tenant the scaffolded resolvers expect
- * (`x-tenant-id: demo`, `demo.localhost`). Runs from `pnpm db:seed` and after
- * `prisma migrate dev` (prisma.config.ts declares it).
+ * (`x-tenant-id: demo`, `demo.localhost`). Runs from `pnpm db:seed`
+ * (`prisma db seed`, the command prisma.config.ts declares) — Prisma 7's
+ * `migrate dev` does not run it.
  */
 export function prismaSeedTs(options: ProjectOptions): string {
   return `import { prismaTenantSource } from '@basaltkit/tenancy-prisma'
@@ -1059,7 +1144,8 @@ pnpm install${
     options.prisma
       ? `
 # start PostgreSQL — .env points ${envPrefix(options.name)}_DATABASE_URL at localhost:5432 — then
-pnpm db:migrate # create the tables${options.tenancy ? ` (runs the seed too)` : ''}`
+pnpm db:migrate # create the tables${options.tenancy ? `
+pnpm db:seed    # the 'demo' tenant the resolvers expect` : ''}`
       : ''
   }
 pnpm dev        # API on http://localhost:3000
@@ -1075,13 +1161,13 @@ the models this app needs — the reference models of the \`@basaltkit/*-prisma\
 packages it uses, plus your own \`Project\` at the end.
 
 \`\`\`bash
-pnpm db:migrate     # prisma migrate dev  — change the schema, write a migration${
+pnpm db:migrate --name <change>  # prisma migrate dev — writes AND applies a migration (asks for a name without --name)${
         options.tenancy
           ? `
-pnpm db:seed        # the 'demo' tenant the resolvers expect (also run by db:migrate)`
+pnpm db:seed        # prisma db seed — the 'demo' tenant the resolvers expect`
           : ''
       }
-pnpm db:generate    # prisma generate — refresh src/generated/prisma (also runs on install)
+pnpm db:generate    # prisma generate — refresh generated/prisma after a schema change (also runs on install; migrate dev does not)
 pnpm db:deploy      # prisma migrate deploy — apply pending migrations in production
 \`\`\`
 
@@ -1132,7 +1218,7 @@ scaffold with \`--cli\` — \`pnpm basalt prisma:sync\` does the merge for you.)
   } \`.env\`
 automatically — create-basalt wrote one for you: git-ignored, with local
 values${options.auth ? ' and a generated secret' : ''}. \`.env.example\` is its committed template.
-\`pnpm start\` (production, \`src/server.ts\`) loads **nothing**: there the
+\`pnpm start\` (production, \`${PRODUCTION_ENTRY}\`) loads **nothing**: there the
 variables come from the real environment (or \`node --env-file=.env\`).
 
 The variables are **app-prefixed**: \`${envPrefix(options.name)}_PORT\`,
@@ -1161,6 +1247,28 @@ database and \`DATABASE_URL\` is read as \`${envPrefix(options.name)}_DATABASE_U
 To drop the fallback entirely (prefixed names only), write
 \`prefix: { value: '${envPrefix(options.name)}', fallback: false }\`. When in doubt about what
 your shell exports: \`env | grep DATABASE_URL\`.
+
+## Build & ship
+
+\`\`\`bash
+pnpm build          # tsc -p tsconfig.build.json → dist/ (src only)
+pnpm start          # node --enable-source-maps ${PRODUCTION_ENTRY} — no tsx at runtime
+pnpm start:dev      # the server from source with tsx, without building
+docker build -t ${options.name} .   # the Dockerfile: build stage + plain-node runtime
+\`\`\`
+
+\`pnpm start\` runs the compiled server, so build first. The \`Dockerfile\` (also
+what \`basalt publish dockerfile\` writes) installs, ${options.prisma ? 'generates the Prisma client, ' : ''}builds, drops the
+devDependencies and runs ${PRODUCTION_ENTRY} as the \`node\` user, with a
+\`HEALTHCHECK\` on \`/health\`. Pass the configuration as environment variables${
+    options.prisma ? ', and apply migrations (\`pnpm db:deploy\`) before rolling out — the image does not run them' : ''
+  }.${
+    options.prisma
+      ? ` The Prisma client is generated into \`generated/prisma\` (outside \`src/\`) and
+imported as \`#db/client.js\` through the package.json \`imports\` alias, so the same
+import works under tsx and from \`dist/\`.`
+      : ''
+  }
 
 ## Keeping it up to date
 
@@ -1282,20 +1390,7 @@ export function mcpJson(_options: ProjectOptions): string {
  * `certs/server.key` through.
  */
 export function dockerignore(): string {
-  return `**/.env
-**/.env.*
-!**/.env.example
-**/.npmrc
-**/.git
-**/node_modules
-**/coverage
-**/*.log
-**/*.pem
-**/*.key
-**/*.p12
-**/*.pfx
-**/.DS_Store
-`
+  return DOCKERIGNORE
 }
 
 export function gitignore(options: ProjectOptions): string {
@@ -1308,14 +1403,16 @@ dist/
 ${
   options.prisma
     ? `# Generated by \`prisma generate\` (runs on install) — never edit or commit it.
-src/generated/
+generated/
 `
     : ''
 }`
 }
 
 /**
- * pnpm settings: esbuild's build script is required by tsx;
+ * pnpm settings: esbuild's build script is required by tsx; with --prisma,
+ * the Prisma CLI's build scripts (prisma, @prisma/engines) are approved too — pnpm 11 fails
+ * the install on an unapproved build;
  * msgpackr-extract (optional native accelerator via BullMQ) is declined —
  * msgpackr falls back to pure JS. With --ui, `web` is a workspace member so
  * its own dependencies resolve.
@@ -1335,7 +1432,15 @@ export function pnpmWorkspaceYaml(options: ProjectOptions): string {
       : ''
   }allowBuilds:
   esbuild: true
-  msgpackr-extract: false
+  msgpackr-extract: false${
+    options.prisma
+      ? `
+  # The Prisma CLI's install scripts fetch its engines; pnpm 11 refuses to finish
+  # an install (ERR_PNPM_IGNORED_BUILDS) while a dependency's build is unapproved.
+  '@prisma/engines': true
+  prisma: true`
+      : ''
+  }
 # @basaltkit/* releases in lockstep, often within hours — exclude the scope (and
 # create-basalt, which serves \`pnpm basalt update\`) from pnpm's minimumReleaseAge
 # policy so an update is never blocked on a fresh release.

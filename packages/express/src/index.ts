@@ -8,6 +8,8 @@ import {
   runRoute,
   toErrorResponse,
   reportHttpError,
+  RequestDisposers,
+  type RequestDisposer,
   type HttpErrorReporter,
   type HttpReply,
   type HttpRequest,
@@ -241,6 +243,55 @@ function attachRawBody(request: HttpRequest, req: Request): void {
   else if (!bodyAlreadyRead(req)) request.bodyStream = req
 }
 
+/**
+ * The sink for the disposers enrichers return. They run exactly once, when
+ * BOTH the route pipeline (`runRoute`) has settled AND the Node response has
+ * finished or closed — so a client that aborts while the handler is still
+ * running never pulls a resource (a leased database client) out from under
+ * it, and an event stream or a streamed body that outlives the
+ * handler is still covered until its last byte or its abort. Listeners are
+ * attached only when a disposer shows up, so routes without one pay nothing.
+ */
+function disposeAfterResponse(
+  res: Response,
+  onError: (error: unknown) => void,
+): { onDispose: (disposer: RequestDisposer) => void; settled: () => void } {
+  let disposers: RequestDisposers | undefined
+  let handlerSettled = false
+  let responseEnded = false
+  const runIfDone = (): void => {
+    if (disposers && handlerSettled && responseEnded) void disposers.run()
+  }
+  return {
+    onDispose(disposer) {
+      if (!disposers) {
+        disposers = new RequestDisposers(onError)
+        // Already over (the client left while an enricher was awaiting):
+        // 'close' has fired and will not again.
+        if (res.writableFinished || res.destroyed) responseEnded = true
+        else {
+          const ended = (): void => {
+            responseEnded = true
+            runIfDone()
+          }
+          res.once('finish', ended)
+          res.once('close', ended)
+        }
+      }
+      // After run(), add() disposes a late arrival at once. A FIRST
+      // registration that arrives when both conditions already hold (a
+      // handler's timer firing after the reply, a hook on the finished
+      // request context) has no event left to wait for: run it now.
+      disposers.add(disposer)
+      runIfDone()
+    },
+    settled() {
+      handlerSettled = true
+      runIfDone()
+    },
+  }
+}
+
 function basaltHandler(
   definition: BasaltRoute,
   container: Container | undefined,
@@ -250,6 +301,15 @@ function basaltHandler(
 ) {
   return async (req: Request, res: Response): Promise<void> => {
     const reply = new ExpressReply(res)
+    const disposal = disposeAfterResponse(res, (error) =>
+      reportSafely(onError, {
+        error,
+        status: 500,
+        code: 'REQUEST_DISPOSER_FAILED',
+        method: req.method,
+        url: req.originalUrl,
+      }),
+    )
     try {
       const request = toNeutralRequest(req)
       // An upload() route streams the raw body. `express.json()` and
@@ -260,7 +320,8 @@ function basaltHandler(
         ...(container ? { container } : {}),
         enrichers,
         guards,
-      })
+        onDispose: disposal.onDispose,
+      }).finally(disposal.settled)
       if (isSseResponse(result)) {
         res.writeHead(200, SSE_HEADERS)
         // Headers go out now, not with the first event: a stream that starts

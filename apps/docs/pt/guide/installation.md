@@ -142,12 +142,13 @@ mudam o que está lá dentro:
 | `src/env.ts` | `defineEnv` sobre `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` com auth), com `{ prefix: 'MY_SAAS' }` — cada variável é lida primeiro como `MY_SAAS_<NOME>`, com recuo para o nome simples (vê [O `--env-file` nunca sobrepõe variáveis exportadas](#o-env-file-nunca-sobrepoe-variaveis-exportadas)) |
 | `src/app.ts` | `buildApp()` — config, logger, eventos, headers de segurança + um rate limit global, depois tenancy/auth/faturação/MCP/CLI conforme escolhido. Com tenancy + auth: `teamsPlugin()` + `tenantMembershipPlugin()` (pedidos autenticados para um tenant de que o utilizador não é membro recebem `403`) e um seed só de dev que adiciona quem se regista ao tenant `demo` |
 | `src/routes.ts` | `GET /` (um índice amigável) e `GET /health` |
-| `src/server.ts` | Arranca, resolve o `FASTIFY`, escuta e encerra em `SIGINT`/`SIGTERM`. O `pnpm start` corre-o diretamente e **não** carrega nenhum `.env` — a configuração de produção vem do ambiente real |
+| `src/server.ts` | Arranca, resolve o `FASTIFY`, escuta e encerra em `SIGINT`/`SIGTERM`. O `pnpm start` corre a sua forma compilada (`dist/src/server.js`) em node puro e **não** carrega nenhum `.env` — a configuração de produção vem do ambiente real |
 | `src/dev.ts` | A entrada do `pnpm dev`: carrega o `.env` quando existe (as variáveis exportadas ganham), define `NODE_ENV=development` se ainda não estiver definido e carrega o `server.ts` |
 | `tests/app.test.ts` | Um smoke test que arranca a app e chama `/` e `/health` |
-| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — um `NODE_ENV` não definido conta como produção), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` por omissão, `create-basalt --project` com `--no-cli`, para que o `pnpm basalt update` funcione em qualquer app) e, com `--ui`, `dev:web`. O `create-basalt` é uma devDependency. As versões `@basaltkit/*` seguem a linha de release atual de cada pacote |
+| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `build` (`tsc -p tsconfig.build.json`), `start` (`node --enable-source-maps dist/src/server.js` — faz build primeiro; um `NODE_ENV` não definido conta como produção), `start:dev` (`tsx src/server.ts`, o servidor a partir do código-fonte sem build), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` por omissão, `create-basalt --project` com `--no-cli`, para que o `pnpm basalt update` funcione em qualquer app) e, com `--ui`, `dev:web`. O `create-basalt` é uma devDependency. As versões `@basaltkit/*` seguem a linha de release atual de cada pacote |
 | `.basalt/project.json` | O manifesto do scaffold: versão do create-basalt, opções e um hash de cada ficheiro gerado — faz commit dele; o [`add`](#acrescentar-funcionalidades-depois) e o [`update`](#atualizar-uma-app) usam-no para distinguir ficheiros do template intactos dos editados |
 | `.env` | Valores locais de desenvolvimento — uma cópia do `.env.example` mais, com auth, um `APP_SECRET` gerado. Ignorado pelo git, modo `0600`, nunca no manifesto; o `pnpm dev` e o `pnpm basalt` carregam-no, o `pnpm start` não |
+| `tsconfig.build.json`, `Dockerfile` | O [caminho de produção](/pt/guide/production#build-e-envio): o `pnpm build` compila o `src/` para `dist/` (rootDir `.`, por isso `src/server.ts` → `dist/src/server.js`); o `Dockerfile` multi-stage — o mesmo ficheiro que o `basalt publish dockerfile` escreve — faz o build da app e corre-a em node puro como o utilizador `node` |
 | `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem; o `.env.example` usa os nomes com prefixo da app e, com o README, explica a [armadilha de precedência do `--env-file`](#o-env-file-nunca-sobrepoe-variaveis-exportadas); o `pnpm-workspace.yaml` exclui `@basaltkit/*` e `create-basalt` do `minimumReleaseAge` e documenta as [definições do pnpm 11](#pnpm-11-idade-minima-e-verifydepsbeforerun)) |
 | `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | Com `--prisma`: o schema (os modelos de cada domínio Basalt ativo mais os teus), a configuração do Prisma 7 com o URL de ligação, o(s) cliente(s) que a app usa e o seed do tenant `demo` |
 | `bin/basalt.ts` | Por omissão (não com `--no-cli`): o ponto de entrada da CLI que liga os geradores e o `prisma:sync`. Reencaminha `update`, `add`, `doctor` e `info` para o create-basalt e corre o `upgrade` (os codemods) **antes** de importar a app, para funcionarem mesmo com a app partida a meio de uma atualização; depois carrega o `.env` (as variáveis exportadas ganham) e transforma um ambiente inválido, uma base de dados inacessível ou por migrar numa correção legível em vez de um stack trace |
@@ -187,16 +188,33 @@ dados:
 O `MY_SAAS_DATABASE_URL` passa a ser uma variável **obrigatória** (`src/env.ts`)
 e o `.env.example` inclui-a já sem comentário. Os scripts do `package.json` são
 `db:migrate` (`prisma migrate dev`), `db:deploy` (`prisma migrate deploy`),
-`db:generate` e `db:seed`; o `postinstall` corre `prisma generate` para que o
-`pnpm typecheck` tenha os tipos do cliente logo a seguir à instalação.
+`db:generate` e `db:seed` (`prisma db seed`); o `postinstall` corre `prisma generate` para que o
+`pnpm typecheck` tenha os tipos do cliente logo a seguir à instalação. O cliente
+é gerado em `generated/prisma` — **fora** do `src/`, para que o `pnpm build` nunca
+o tenha de copiar — e o `src/db.ts` importa-o como `#db/client.js` através do
+alias `imports` do package.json (`"#db/*": "./generated/prisma/*"`), que resolve
+da mesma forma a partir do `src/` (tsx, vitest) e do `dist/src/` (node). O
+`@prisma/client-runtime-utils` é uma dependência direta porque o runtime gerado o
+pede pelo nome, e o `pnpm-workspace.yaml` aprova os scripts de build do `prisma`
+/ `@prisma/engines` (o pnpm 11 falha a instalação com um por aprovar). Vê
+[Prisma com pnpm](/pt/guide/persistence#prisma-com-pnpm-o-cliente-gerado).
 
 ```bash
 pnpm create basalt my-saas --prisma
 cd my-saas && pnpm install
 # o .env aponta MY_SAAS_DATABASE_URL para postgres://…@localhost:5432/my_saas — arranca o PostgreSQL ou edita-o
-pnpm db:migrate          # cria as tabelas e semeia o tenant demo
+pnpm db:migrate          # cria as tabelas
+pnpm db:seed             # o tenant demo
 pnpm dev
 ```
+
+Depois de alterares o `prisma/schema.prisma`, o `pnpm db:migrate --name <alteração>`
+escreve a migração **e** aplica-a na base de dados de desenvolvimento (o Prisma
+cria e apaga para isso uma base de dados shadow temporária, por isso o
+utilizador da base de dados precisa de `CREATEDB`); sem `--name` pede um nome,
+por isso num script passa-o sempre. Depois corre `pnpm db:generate`: o
+`migrate dev` do Prisma 7 já não regenera o cliente (nem corre o seed). Em
+produção, o `pnpm db:deploy` aplica as migrações versionadas.
 
 ::: warning Migrações, nunca `db push`
 O `src/app.ts` gerado arranca com `assertMigrated: true`, que recusa arrancar a
@@ -217,7 +235,7 @@ O `src/env.ts` valida o `process.env` e mais nada. **Em desenvolvimento o
 scaffold carrega o `.env` por ti:** o `src/dev.ts` (`pnpm dev`) e o
 `bin/basalt.ts` (`pnpm basalt`, gerado por omissão) chamam `process.loadEnvFile()` sobre
 o `.env` do projeto quando existe, antes de a app ser importada. **O
-`pnpm start` não** — o `src/server.ts` é a entrada de produção, e a configuração
+`pnpm start` não** — corre o `src/server.ts` compilado, a entrada de produção, e a configuração
 de produção vem do ambiente real (ou arranca-o tu com `node --env-file=…`). Uma
 app nova já traz um `.env`: os valores do `.env.example` e, com auth, um
 `APP_SECRET` gerado — ignorado pelo git, por isso o segredo nunca chega ao
@@ -279,8 +297,11 @@ migrada (`PRISMA_NOT_MIGRATED`), a mensagem diz o que falhou, que base de dados
 a app usou — `postgres://host:porta/nome` e a variável de onde veio, nunca o
 utilizador nem a password — e a correção: arranca o PostgreSQL
 (`docker compose up -d`, ou o teu serviço local), verifica o
-`MY_SAAS_DATABASE_URL`, corre `pnpm db:migrate`. Qualquer outro erro de arranque
-mantém o stack trace.
+`MY_SAAS_DATABASE_URL`, corre `pnpm db:migrate`. Uma base que recusa o role da
+app (`permission denied`, SQLSTATE `42501`) ou precisa de baseline (`P3005`) é
+identificada como tal, com o `GRANT` ou o `prisma migrate resolve` a correr — ver
+[Operações de base de dados](/pt/guide/database-operations). Qualquer outro erro
+de arranque mantém o stack trace.
 
 Dois hábitos que continuam a ajudar:
 
@@ -393,6 +414,17 @@ aprende a carregar o `.env`; e o cabeçalho do `.env.example` deixa de dizer que
 byte um template conhecido ou o manifesto o regista como intacto. Um
 personalizado fica como está e é impresso o excerto exato a colar.
 
+A uma app anterior ao [caminho de produção](/pt/guide/production#build-e-envio)
+é **oferecido** o que lhe falta, no mesmo plano: `tsconfig.build.json`, um script
+`build`, o `Dockerfile` (apps pnpm) e o `.dockerignore`, e — com Prisma — o
+`@prisma/client-runtime-utils` como dependência direta. Ficheiros que já existem
+nunca são tocados, e **um script `start` existente nunca é reescrito**: passá-lo
+de `tsx src/server.ts` para o servidor compilado muda a forma como a app é
+implantada, por isso são impressas as duas linhas de script a colar. Um cliente
+Prisma ainda gerado em `src/generated` recebe as instruções para o mover (o
+`output` do schema, o alias `#db/*`, o import do `src/db.ts`, o `.gitignore`) e
+nenhum Dockerfile até ser movido — o tsc não copia os ficheiros `.js` gerados.
+
 ## Acrescentar funcionalidades depois
 
 Não escolheste `--ui`, `--cli` ou `--mcp` ao criar? Acrescenta agora — sem
@@ -449,7 +481,11 @@ correção; um `.env` em falta ao lado de um `.env.example`, como aviso; se o
 cliente Prisma está gerado e se existem migrações (se estão *aplicadas* precisa
 de uma base de dados — `prisma migrate status`); o `.mcp.json` quando o
 `@basaltkit/ai-mcp` está instalado; ferramentas de dev declaradas como
-dependência de runtime; e um `bin/basalt.ts` ou `src/dev.ts` desatualizado.
+dependência de runtime; um `bin/basalt.ts` ou `src/dev.ts` desatualizado; e,
+de forma estática, o caminho de produção — um `start` que corre o tsx quando o tsx
+é só devDependency, nenhum script `build`, um `dist/src/server.js` mais antigo do
+que o `src/`, um cliente Prisma gerado dentro do `src/` e um
+`@prisma/client-runtime-utils` em falta. O `doctor` nunca faz build nem arranca a app.
 
 ## Escolher um adaptador HTTP
 
@@ -505,7 +541,8 @@ enquanto nenhum plugin de autenticação o aplicar, e os pedidos anónimos receb
 401. Quando o projeto depende de `@basaltkit/tenancy`, o recurso **pertence ao
 tenant**: o repositório restringe cada leitura e escrita com `requireTenantId()`
 (sem tenant → `TENANT_REQUIRED`, 400), e o modelo Prisma ganha uma coluna
-`tenantId` indexada. O teste gerado autentica-se, verifica que os pedidos
+`tenantId` indexada (com `--tenant=schema` ou `--tenant=database`, sem coluna: o
+schema ou a base de dados é o isolamento). O teste gerado autentica-se, verifica que os pedidos
 anónimos recebem 401 e, para dados de tenant, que um tenant não vê as linhas de
 outro. Uma breve nota de segurança após a geração diz o que se aplica. A
 autorização por linha (quem pode ler ou escrever que linhas) continua a ser
@@ -520,6 +557,7 @@ contigo.
 | `--no-register` | `make:resource` | Salta a ligação automática ao `src/app.ts` |
 | `--public` | `make:resource`, `make:routes`, `make:test` | Rotas sem `meta.auth`, abertas a pedidos anónimos (alias `--no-auth`). Usa apenas para um recurso deliberadamente público |
 | `--tenant` / `--no-tenant` | `make:resource`, `make:repository`, `make:test` | Força o âmbito por tenant ligado ou desligado (por predefinição: ligado quando o `package.json` depende de `@basaltkit/tenancy`) |
+| `--tenant=column\|schema\|database` | `make:resource`, `make:repository`, `make:test` | Como os tenants são isolados: uma coluna `tenantId` (por predefinição), ou um schema/base de dados por tenant — sem coluna `tenantId`, mas sempre `requireTenantId()` em cada acesso. Nunca adivinhado; vê [Gerar recursos de tenant](/pt/guide/database-per-tenant#gerar-recursos-de-tenant) |
 | `--crud` / `--no-crud` | `make:service` | Força o serviço CRUD ou o mínimo (por predefinição: CRUD quando o repositório e o schema irmãos já estão na diretoria de destino) |
 
 Os artefactos individuais estão disponíveis como `make:schema`,
@@ -600,12 +638,12 @@ O `runCli` oferece sempre estes, além do que qualquer plugin registe:
 | Comando | O que faz |
 | --- | --- |
 | `list` (ou sem comando) | Imprime todos os comandos disponíveis |
-| `routes` | As rotas HTTP registadas, lidas do bucket de metadados `http:routes` |
+| `routes` | As rotas HTTP registadas com as guardas que cada uma declara (`auth`, `can`, `rateLimit`, `tenant`, …), lidas do bucket de metadados `http:routes`. `--json` para saída legível por máquina; `--unguarded --require=auth,can [--allow=<glob,…>]` termina com 1 se houver rotas sem essas guardas — só o meta das rotas, vê [Revisão de segurança das rotas](/pt/guide/security#revisao-de-seguranca-das-rotas-—-basalt-routes) |
 | `schedule:list` | Tarefas agendadas com as suas expressões cron e fusos horários |
 | `dev` | Imprime a tabela de rotas e corre a app com watch/restart. `--entry=<file>`, `--worker` (`-w`) para arrancar um worker de fila ao lado, `--queue=<name>` |
 | `upgrade` | Aplica os codemods de atualização da framework. `--dry` para pré-visualizar, `--only=<id>`, `--dir=<path>` |
 | `update`, `add`, `doctor`, `info` | Não são comandos do `runCli`: o `bin/basalt.ts` reencaminha-os para o create-basalt antes de arrancar a app — vê [Atualizar uma app](#atualizar-uma-app) |
-| `publish` | Copia um grupo de stubs para a app (`dockerfile` — com um `.dockerignore` que mantém o `.env` e as chaves fora da imagem —, `ci`, `editorconfig`). Corre sem id para listar; `--force` para sobrescrever |
+| `publish` | Copia um grupo de stubs para a app (`dockerfile` — o build multi-stage + imagem em node puro que o scaffold traz, com um `.dockerignore` que mantém o `.env` e as chaves fora da imagem —, `ci` — install, typecheck, build, test —, `editorconfig`). Corre sem id para listar; `--force` para sobrescrever |
 
 Registar o `queuePlugin` acrescenta `queue:work`, `queue:stats`, `queue:retry` e
 `queue:jobs` —

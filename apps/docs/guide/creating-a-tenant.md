@@ -91,9 +91,13 @@ model Tenant {
 }
 
 model TenantDomain {
-  domain   String @id
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  domain            String    @id
+  tenantId          String
+  verificationToken String?   // set on custom-domain claims (CustomDomains), NULL otherwise
+  verified          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  verifiedAt        DateTime?
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@map("tenant_domains")
@@ -132,8 +136,11 @@ That's it. The tenant is now in your database, `acme.yourapp.com` (or the custom
 domain `app.acme.com`) resolves to it, and it's still there after a restart.
 
 ::: tip Domains must be unique
-`save()` replaces the tenant's set of custom domains. If a domain is already
-owned by a *different* tenant, `save()` refuses — routing has to be unambiguous.
+`save()` brings the tenant's domain rows in line with `domains`. Domains claimed
+and verified through `CustomDomains` are left alone (see
+[a durable domain store](/guide/tenancy#a-durable-domain-store)). If a domain is
+already owned by a *different* tenant, `save()` refuses — routing has to be
+unambiguous.
 :::
 
 ## Level 3 — Your own tenant repository

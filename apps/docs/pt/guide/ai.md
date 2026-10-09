@@ -152,6 +152,7 @@ pipeline). O conjunto completo de regras:
 | `fastify-logger-off` | warning | observability | O `fastifyPlugin` está registado sem configuração de `logger` |
 | `missing-security-plugin` | warning | security | Não há `securityPlugin` — as respostas seguem sem headers seguros |
 | `tenant-scoping-missing` | warning | tenancy | Uma app tenant-scoped tem models Prisma sem `tenantId` |
+| `platform-route-accepts-tenant` | warning | tenancy | Uma rota junta `tenant: false` a `can: 'platform:…'`, por isso continua a correr em hosts de tenant — declara `tenant: 'never'` |
 | `in-memory-security-store` | warning | security | O estado de segurança é guardado num store em memória |
 | `memory-sources-in-use` | info | durability | Estão ligadas fontes `Memory*` não-duráveis |
 | `redis-localhost-default` | info | config | O `REDIS_URL` aponta por predefinição para localhost |

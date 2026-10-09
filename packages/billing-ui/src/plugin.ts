@@ -13,6 +13,12 @@ export interface BillingUiOptions extends BillingPageOptions {
    * {@link billingPageCsp}. Pass a string to override, or `false` to send none.
    */
   csp?: string | false
+  /**
+   * Extra route metadata merged into both routes — a guard such as
+   * `{ can: 'billing:manage' }`, a rate limit, OpenAPI tags. `auth: true` is
+   * always applied on top and cannot be switched off.
+   */
+  meta?: Record<string, unknown>
 }
 
 interface PlanSummary {
@@ -42,12 +48,13 @@ export function billingUiRoutes(options: BillingUiOptions): BasaltRoute[] {
   const html = billingPageHtml(options)
   const csp = options.csp === false ? undefined : (options.csp ?? billingPageCsp(options))
   const plans = summarize(options.plans)
+  const meta = { ...options.meta, auth: true }
 
   return [
     route({
       method: 'GET',
       url: '/billing/info',
-      meta: { auth: true },
+      meta,
       async handler() {
         const id = tenantId()
         const subscription = id ? await (ctx().container as Container).get(SUBSCRIPTIONS).get(id) : null
@@ -57,7 +64,7 @@ export function billingUiRoutes(options: BillingUiOptions): BasaltRoute[] {
     route({
       method: 'GET',
       url: options.path ?? '/billing/ui',
-      meta: { auth: true },
+      meta,
       async handler({ reply }) {
         if (csp !== undefined) reply.header('content-security-policy', csp)
         return reply.header('content-type', 'text/html; charset=utf-8').send(html)

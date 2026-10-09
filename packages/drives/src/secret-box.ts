@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createSecretBox, SecretBoxError, type SecretBoxPrimitive } from '@basaltkit/core/secret-box'
 import { DriveSecretKeyInvalidError, DriveSecretKeyUnknownError, DriveSecretMalformedError } from './errors.js'
 
 /**
@@ -7,12 +8,12 @@ import { DriveSecretKeyInvalidError, DriveSecretKeyUnknownError, DriveSecretMalf
  *
  * ## Relation to `@basaltkit/auth`'s `SecretBox`
  *
- * `@basaltkit/auth` now ships a `SecretBox` for TOTP secrets built on the same
- * model — HKDF-derived keys, a key ring with ids, AAD binding to the owning
- * record, and no plaintext path unless a legacy migration is opted into. The
- * two are still separate implementations because neither package may depend
- * on the other; RFC 0002 proposes promoting one into a lower layer so both
- * share it.
+ * `@basaltkit/auth`'s `SecretBox` (TOTP secrets) and this box share one AEAD
+ * implementation: `createSecretBox` from `@basaltkit/core/secret-box` (HKDF
+ * keys, a key ring with ids, AAD binding to the owning record, no plaintext
+ * path). Each keeps its own envelope version and HKDF label, so a ciphertext
+ * of one never opens in the other; this class maps the primitive's failures
+ * onto the `Drive*` errors.
  *
  * ## Envelope
  *
@@ -26,7 +27,6 @@ import { DriveSecretKeyInvalidError, DriveSecretKeyUnknownError, DriveSecretMalf
 const VERSION = 'bkd1'
 /** A label mixed into HKDF so key material reused elsewhere derives a different box key. */
 const HKDF_INFO = 'basalt:drives:credentials:v1'
-const KEY_ID = /^[A-Za-z0-9_-]{1,64}$/
 
 /** One entry of the key ring. */
 export interface DriveEncryptionKey {
@@ -49,30 +49,20 @@ export interface DriveSecretContext {
   provider: string
 }
 
-const MIN_KEY_BYTES = 32
+/** The context as the primitive's ordered fields (tenant, connection, provider). */
+const fields = (context: DriveSecretContext): [string, string, string] => [context.tenantId, context.connectionId, context.provider]
 
-const toKeyMaterial = (key: string | Uint8Array): Buffer =>
-  typeof key === 'string' ? Buffer.from(key, 'utf8') : Buffer.from(key)
-
-/**
- * Associated data: the row the ciphertext belongs to. GCM authenticates it
- * without storing it, so a blob lifted into another tenant's row fails the tag
- * check instead of decrypting. NUL-separated because none of the three fields
- * may contain a NUL, which keeps the encoding unambiguous (`a|b` + `c` must not
- * collide with `a` + `b|c`).
- */
-const aad = (keyId: string, context: DriveSecretContext): Buffer => {
-  // The separator is only unambiguous if it cannot occur inside a field, so
-  // that is checked rather than assumed: ids come from a store and a tenancy
-  // resolver this package does not control.
-  for (const field of [context.tenantId, context.connectionId, context.provider]) {
-    if (field.includes('\0')) throw new DriveSecretMalformedError('the credential context contains a NUL character.')
+/** Maps a primitive failure onto the drives errors. */
+function translate(error: unknown): never {
+  if (error instanceof SecretBoxError) {
+    if (error.failure === 'config') throw new DriveSecretKeyInvalidError(error.detail)
+    if (error.failure === 'unknown-key') throw new DriveSecretKeyUnknownError(error.keyId ?? '')
+    if (error.failure === 'context') throw new DriveSecretMalformedError('the credential context contains a NUL character.')
+    if (error.failure === 'malformed') throw new DriveSecretMalformedError('not a recognisable credential envelope.')
+    throw new DriveSecretMalformedError('authentication failed (wrong key, tampering, or a blob from another connection).')
   }
-  return Buffer.from([VERSION, keyId, context.tenantId, context.connectionId, context.provider].join('\0'), 'utf8')
+  throw error
 }
-
-/** GCM's full tag. Anything shorter is refused: see {@link DriveSecretBox.open}. */
-const TAG_BYTES = 16
 
 /**
  * Seals and opens credential blobs against a key ring.
@@ -84,100 +74,62 @@ const TAG_BYTES = 16
  * references it.
  */
 export class DriveSecretBox {
-  private readonly keys = new Map<string, Buffer>()
-  private readonly activeId: string
+  private readonly box: SecretBoxPrimitive
 
   constructor(ring: readonly DriveEncryptionKey[]) {
-    if (ring.length === 0) throw new DriveSecretKeyInvalidError('at least one key is required.')
-    for (const entry of ring) {
-      if (!KEY_ID.test(entry.id)) {
-        throw new DriveSecretKeyInvalidError(
-          `key id ${JSON.stringify(entry.id)} must match ${String(KEY_ID)} (it is stored in the ciphertext envelope).`,
-        )
-      }
-      if (this.keys.has(entry.id)) throw new DriveSecretKeyInvalidError(`duplicate key id "${entry.id}".`)
-      const material = toKeyMaterial(entry.key)
-      if (material.length < MIN_KEY_BYTES) {
-        throw new DriveSecretKeyInvalidError(
-          `key "${entry.id}" is ${material.length} bytes; at least ${MIN_KEY_BYTES} are required.`,
-        )
-      }
-      // HKDF rather than a bare SHA-256 of the passphrase: it is the operation
-      // actually specified for turning key material into a key, and the `info`
-      // label domain-separates this box from any other use of the same secret.
-      this.keys.set(entry.id, Buffer.from(hkdfSync('sha256', material, Buffer.alloc(0), HKDF_INFO, 32)))
+    try {
+      this.box = createSecretBox({ keys: ring, info: HKDF_INFO, version: VERSION, aadFields: 3 })
+    } catch (error) {
+      translate(error)
     }
-    this.activeId = ring[0]!.id
   }
 
   /** The key id new ciphertexts are sealed with. */
   get activeKeyId(): string {
-    return this.activeId
+    return this.box.activeKeyId
   }
 
   /** Encrypts `plaintext`, binding it to `context`. */
   seal(plaintext: string, context: DriveSecretContext): string {
-    const key = this.keys.get(this.activeId)!
-    const iv = randomBytes(12)
-    const cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: TAG_BYTES })
-    cipher.setAAD(aad(this.activeId, context))
-    const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
-    const tag = cipher.getAuthTag()
-    return [VERSION, this.activeId, iv.toString('base64url'), tag.toString('base64url'), ciphertext.toString('base64url')].join('.')
+    try {
+      return this.box.seal(plaintext, fields(context))
+    } catch (error) {
+      translate(error)
+    }
   }
 
   /**
    * Decrypts an envelope. Throws {@link DriveSecretMalformedError} for anything
    * that is not a well-formed envelope or whose tag does not verify — including
-   * a blob bound to a different tenant, connection or provider. There is no
-   * path that returns the input unchanged.
+   * a blob bound to a different tenant, connection or provider — and
+   * {@link DriveSecretKeyUnknownError} for a key id the ring does not hold.
+   * There is no path that returns the input unchanged.
    */
   open(envelope: string, context: DriveSecretContext): string {
-    const parts = envelope.split('.')
-    if (parts.length !== 5 || parts[0] !== VERSION) {
-      throw new DriveSecretMalformedError('not a recognisable credential envelope.')
-    }
-    const [, keyId, ivB64, tagB64, ctB64] = parts as [string, string, string, string, string]
-    const key = this.keys.get(keyId)
-    if (!key) throw new DriveSecretKeyUnknownError(keyId)
-    const additional = aad(keyId, context)
-    const tag = Buffer.from(tagB64, 'base64url')
-    let plaintext: Buffer
     try {
-      // GCM accepts a tag as short as 4 bytes unless it is told otherwise, and
-      // every byte shaved off halves the work of forging one. We only ever
-      // write 16, so 16 is all that is read — pinned twice, because the length
-      // check is the part that does not depend on the OpenSSL build.
-      if (tag.length !== TAG_BYTES) throw new Error('truncated tag')
-      const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'), {
-        authTagLength: TAG_BYTES,
-      })
-      decipher.setAAD(additional)
-      decipher.setAuthTag(tag)
-      plaintext = Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64url')), decipher.final()])
-    } catch {
-      // One message for every failure mode: a wrong key, a tampered tag and a
-      // ciphertext lifted from another row must be indistinguishable to a
-      // caller, and the underlying OpenSSL text says nothing useful anyway.
-      throw new DriveSecretMalformedError('authentication failed (wrong key, tampering, or a blob from another connection).')
+      return this.box.open(envelope, fields(context))
+    } catch (error) {
+      translate(error)
     }
-    return plaintext.toString('utf8')
   }
 
   /** Which key id sealed this envelope, without decrypting it. */
   keyIdOf(envelope: string): string | null {
-    const parts = envelope.split('.')
-    return parts.length === 5 && parts[0] === VERSION ? (parts[1] as string) : null
+    return this.box.keyIdOf(envelope)
   }
 
   /**
    * Re-seals an envelope under the active key when it is not already, for
    * rolling rotation. Returns `null` when nothing needed to change, so a caller
-   * can skip the write.
+   * can skip the write — after authenticating the envelope, so a current blob
+   * that does not open is reported instead of vouched for.
    */
   reseal(envelope: string, context: DriveSecretContext): string | null {
-    if (this.keyIdOf(envelope) === this.activeId) return null
-    return this.seal(this.open(envelope, context), context)
+    try {
+      return this.box.reseal(envelope, fields(context))
+    } catch (error) {
+      translate(error)
+    }
   }
 }
 

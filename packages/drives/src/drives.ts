@@ -16,6 +16,7 @@ import {
   DriveTenantRequiredError,
   DriveTenantReservedError,
   DriveUnsupportedError,
+  errorCodeOf,
 } from './errors.js'
 import { createDriveFetch, type GuardedFetch } from './fetch.js'
 import type {
@@ -84,6 +85,13 @@ export type DriveRevocationOutcome = 'revoked' | 'skipped' | 'unsupported' | 'fa
 declare module '@basaltkit/core' {
   interface BasaltHooks {
     'drive:connected': { tenantId: string; connectionId: string; provider: string; label: string }
+    /**
+     * Emitted by `disconnect()` **before** anything is revoked or deleted, while
+     * the row still exists. A handler that throws vetoes the disconnect: the
+     * grant is not revoked, the row is kept and the error propagates — unless
+     * the caller passed `force: true` (see {@link DisconnectOptions.force}).
+     */
+    'drive:disconnecting': { tenantId: string; connectionId: string; provider: string }
     'drive:disconnected': {
       tenantId: string
       connectionId: string
@@ -129,6 +137,13 @@ export interface DrivesOptions {
   retry?: DriveRetryPolicy
   /** Escape hatch for a self-hosted provider on a private network. Off by default. */
   allowPrivateHosts?: boolean
+  /**
+   * Receives a hook handler's error that the engine deliberately did not
+   * propagate — today, a `drive:disconnecting` veto overridden with
+   * `disconnect(…, { force: true })`. Defaults to `process.emitWarning`, so
+   * nothing is swallowed silently.
+   */
+  onHookError?: (error: unknown, info: { hook: string; tenantId: string; connectionId: string }) => void
   /** Injected DNS resolver (tests). */
   lookup?: (host: string) => Promise<{ address: string; family?: number }[]>
   /** Injected transport (tests). */
@@ -156,6 +171,17 @@ export interface DisconnectOptions {
    * that — it only makes the remaining access invisible to us.
    */
   revoke?: boolean
+  /**
+   * Proceed even when a `drive:disconnecting` handler throws. Default `false`.
+   *
+   * A throwing `drive:disconnecting` handler is a veto, which is what an app
+   * wants for "this connection still has imports in flight". It is also how a
+   * buggy handler could stop a user from ever withdrawing a third-party grant,
+   * so an operator path ("revoke this now") should pass `force: true`: the
+   * handler's error is reported to {@link DrivesOptions.onHookError} and the
+   * disconnect carries on.
+   */
+  force?: boolean
 }
 
 /**
@@ -421,10 +447,28 @@ export class Drives {
    * exist in the app's storage and still need their provenance; dropping the
    * ledger would make a re-connect re-import everything as if it were new.
    * {@link forgetImports} is the explicit way to ask for the other behaviour.
+   *
+   * Hook order: `drive:disconnecting` (row still present; a throw vetoes) →
+   * revoke → unwatch → delete → `drive:disconnected` (row already gone).
    */
   async disconnect(connectionId: string, options: DisconnectOptions = {}): Promise<void> {
     const connection = await this.require(connectionId, options.tenantId, 'disconnect')
     const provider = this.provider(connection.provider)
+
+    // The pre-delete hook: the row still exists, so a handler can look it up
+    // and cascade (or refuse). Order is fixed and documented:
+    // disconnecting → revoke → unwatch → delete → disconnected.
+    try {
+      await this.hooks?.emit('drive:disconnecting', {
+        tenantId: connection.tenantId,
+        connectionId: connection.id,
+        provider: connection.provider,
+      })
+    } catch (error) {
+      if (!options.force) throw error
+      this.reportHookError(error, { hook: 'drive:disconnecting', tenantId: connection.tenantId, connectionId: connection.id })
+    }
+
     const revoke = options.revoke !== false
     let revoked = false
     // Decided up front so the two "we did not revoke" cases stay distinguishable:
@@ -477,6 +521,78 @@ export class Drives {
       revoked,
       revocation,
     })
+  }
+
+  private reportHookError(error: unknown, info: { hook: string; tenantId: string; connectionId: string }): void {
+    if (this.options.onHookError) {
+      try {
+        this.options.onHookError(error, info)
+      } catch {
+        // A broken reporter must not undo the decision to proceed.
+      }
+      return
+    }
+    const message = error instanceof Error ? error.message : String(error)
+    process.emitWarning(
+      `drives: a "${info.hook}" handler failed for connection "${info.connectionId}" and was overridden with force: ${message}`,
+      { code: 'BASALT_DRIVES_HOOK_OVERRIDDEN' },
+    )
+  }
+
+  /**
+   * Re-seals every stored credential under the active (first) key, for a key
+   * rotation that must also reach **dormant** connections — an active one
+   * re-seals by itself at its next refresh, a connection nobody uses never
+   * refreshes.
+   *
+   * The tenant ids come from the app, deliberately: the store contract has no
+   * cross-tenant listing, and adding one to serve a maintenance job would hand
+   * every caller a way to read across tenants. Iterate your own tenant table.
+   * When omitted, the call's tenant resolves like every other method (the
+   * context tenant, or the single-tenant key). With a tenant in context, every
+   * id must equal it (`DRIVE_TENANT_MISMATCH`) — this is a job, not a request.
+   *
+   * Each write is a compare-and-set on the row's revision; a row that changed
+   * under us (a refresh, which re-seals with the active key anyway) is counted
+   * in `skippedConflicts` rather than overwritten. A secret sealed with a key
+   * no longer in the ring throws {@link DriveSecretKeyUnknownError}: restore
+   * that key before running the rotation.
+   *
+   * Runbook: prepend the new key → run this over every tenant id → confirm
+   * `remainingOnOldKeys === 0` → drop the old key.
+   */
+  async rotateSecrets(options: { tenantIds?: Iterable<string> } = {}): Promise<{
+    resealed: number
+    skippedConflicts: number
+    remainingOnOldKeys: number
+  }> {
+    const scopes =
+      options.tenantIds === undefined
+        ? [this.tenant(undefined, 'rotateSecrets')]
+        : [...new Set(options.tenantIds)].map((id) => this.tenant(id, 'rotateSecrets'))
+    let resealed = 0
+    let skippedConflicts = 0
+    let remainingOnOldKeys = 0
+    const active = this.box.activeKeyId
+    for (const tenantId of scopes) {
+      for (const connection of await this.store.list(tenantId)) {
+        // Same backstop as `list()`: a store that ignores its tenant argument
+        // must not get another tenant's rows rewritten.
+        if (connection.tenantId !== tenantId) continue
+        const context = { tenantId, connectionId: connection.id, provider: connection.provider }
+        const next = this.box.reseal(connection.secret, context)
+        if (next === null) continue
+        const updated = await this.store.update(tenantId, connection.id, { secret: next }, connection.revision)
+        if (updated) {
+          resealed++
+          continue
+        }
+        skippedConflicts++
+        const latest = await this.store.find(tenantId, connection.id)
+        if (latest && latest.tenantId === tenantId && this.box.keyIdOf(latest.secret) !== active) remainingOnOldKeys++
+      }
+    }
+    return { resealed, skippedConflicts, remainingOnOldKeys }
   }
 
   /** Drops the dedup ledger for a connection, so a later sync re-imports everything. */
@@ -578,7 +694,7 @@ export class Drives {
     connectionId: string,
     options: DriveListOptions & { tenantId?: string; signal?: AbortSignal } = {},
   ): Promise<DrivePage<DriveItem>> {
-    const { tenantId, signal, cursor, ...listOptions } = options
+    const { tenantId, signal, cursor, recursive, ...listOptions } = options
     return this.withConnection(connectionId, tenantId, 'listItems', async (connection) => {
       // The cursor comes back from a caller, and an adapter's own cursor is
       // not something a caller may author: Graph's is a whole URL the adapter
@@ -588,33 +704,101 @@ export class Drives {
       // tenant and connection — and only a cursor that verifies is
       // unwrapped and passed on. Nothing about an adapter's format has to be
       // trusted for that to hold.
+      //
+      // The listing mode (`recursive`) is bound into the cursor as well: a
+      // Google walk cursor and a plain page token are different things, and a
+      // continuation must not switch between a crawl and a browse half-way. A
+      // continuation that omits `recursive` keeps the cursor's mode; one that
+      // names a different mode is refused.
       const provider = this.provider(connection.provider)
-      const inner = cursor !== undefined ? this.openListCursor(cursor, connection, provider.name) : undefined
+      let mode: ListMode = recursive === undefined ? undefined : recursive ? 'r' : 'c'
+      let inner: string | undefined
+      if (cursor !== undefined) {
+        const opened = this.openListCursor(cursor, connection, provider.name)
+        if (recursive !== undefined && opened.mode !== mode) {
+          throw new DriveAccessDeniedError(provider.name, 'the list cursor was issued for a different listing mode')
+        }
+        inner = opened.inner
+        mode = opened.mode
+      }
       const page = await this.run(
         connection,
-        (session, adapter) => adapter.list(session, { ...listOptions, ...(inner !== undefined ? { cursor: inner } : {}) }),
+        (session, adapter) =>
+          adapter.list(session, {
+            ...listOptions,
+            ...(mode !== undefined ? { recursive: mode === 'r' } : {}),
+            ...(inner !== undefined ? { cursor: inner } : {}),
+          }),
         signal ? { signal } : {},
       )
       return {
         items: page.items,
-        ...(page.cursor !== undefined ? { cursor: this.sealListCursor(page.cursor, connection) } : {}),
+        ...(page.cursor !== undefined ? { cursor: this.sealListCursor(page.cursor, connection, mode) } : {}),
       }
     })
   }
 
+  /**
+   * A cheap health probe: lists one item at the connection's root and stamps
+   * `lastSucceededAt`, or `lastFailedAt` + `lastErrorCode`.
+   *
+   * It never throws for a provider-side failure — that is the answer, returned
+   * as `{ ok: false, code }`. It does throw for a caller mistake (an unknown
+   * connection, a tenant mismatch), and rethrows when the caller's `signal`
+   * aborted, without stamping anything. The stamp is best effort: a store error
+   * while writing it does not change the result.
+   */
+  async check(
+    connectionId: string,
+    options: { tenantId?: string; signal?: AbortSignal } = {},
+  ): Promise<{ ok: boolean; code?: string }> {
+    const connection = await this.require(connectionId, options.tenantId, 'check')
+    let result: { ok: boolean; code?: string }
+    try {
+      await this.run(
+        connection,
+        (session, adapter) => adapter.list(session, { limit: 1 }),
+        options.signal ? { signal: options.signal } : {},
+      )
+      result = { ok: true }
+    } catch (error) {
+      // The caller gave up: that says nothing about the connection, so it is
+      // neither an answer nor something to stamp.
+      if (options.signal?.aborted) throw error
+      result = { ok: false, code: errorCodeOf(error) }
+    }
+    // A store that does not persist health gets no write at all.
+    if (this.store.persistsHealth !== true) return result
+    const at = this.now()
+    try {
+      await this.store.update(
+        connection.tenantId,
+        connection.id,
+        result.ok ? { lastSucceededAt: at } : { lastFailedAt: at, lastErrorCode: result.code as string },
+      )
+    } catch {
+      // Best effort — the probe's answer stands either way.
+    }
+    return result
+  }
+
   /** The MAC over everything a list cursor is only valid for. */
-  private listCursorMac(inner: string, connection: DriveConnection): string {
+  private listCursorMac(inner: string, connection: DriveConnection, mode: ListMode): string {
     // Not the folder: every adapter's cursor already names the listing it
     // continues, and the MAC is what stops that from being rewritten. Binding
     // the folder too would refuse the common `listItems(id, { cursor })`
     // continuation that omits it.
-    return createHmac('sha256', this.cursorKey)
-      .update(JSON.stringify([connection.tenantId, connection.id, connection.provider, inner]))
-      .digest('base64url')
+    const bound: string[] = [connection.tenantId, connection.id, connection.provider, inner]
+    // The v1 payload is kept byte-for-byte for a default-mode cursor, so a
+    // cursor issued before the listing mode existed still verifies.
+    if (mode !== undefined) bound.push(mode)
+    return createHmac('sha256', this.cursorKey).update(JSON.stringify(bound)).digest('base64url')
   }
 
-  private sealListCursor(inner: string, connection: DriveConnection): string {
-    return `${LIST_CURSOR_VERSION}.${Buffer.from(inner, 'utf8').toString('base64url')}.${this.listCursorMac(inner, connection)}`
+  private sealListCursor(inner: string, connection: DriveConnection, mode: ListMode): string {
+    const body = Buffer.from(inner, 'utf8').toString('base64url')
+    const mac = this.listCursorMac(inner, connection, mode)
+    return mode === undefined ? `${LIST_CURSOR_VERSION}.${body}.${mac}` : `${LIST_CURSOR_VERSION_MODE}.${body}.${mode}.${mac}`
   }
 
   /**
@@ -629,16 +813,25 @@ export class Drives {
     cursor: string,
     connection: DriveConnection,
     provider: string,
-  ): string {
+  ): { inner: string; mode: ListMode } {
     const refuse = (): DriveAccessDeniedError =>
       new DriveAccessDeniedError(provider, 'the list cursor was not issued for this connection')
     const parts = cursor.split('.')
-    if (parts.length !== 3 || parts[0] !== LIST_CURSOR_VERSION || !/^[A-Za-z0-9_-]*$/.test(parts[1] as string)) {
+    let mode: ListMode
+    let mac: string
+    if (parts.length === 3 && parts[0] === LIST_CURSOR_VERSION) {
+      mode = undefined
+      mac = parts[2] as string
+    } else if (parts.length === 4 && parts[0] === LIST_CURSOR_VERSION_MODE && (parts[2] === 'r' || parts[2] === 'c')) {
+      mode = parts[2]
+      mac = parts[3] as string
+    } else {
       throw refuse()
     }
+    if (!/^[A-Za-z0-9_-]*$/.test(parts[1] as string)) throw refuse()
     const inner = Buffer.from(parts[1] as string, 'base64url').toString('utf8')
-    if (!safeEqual(parts[2] as string, this.listCursorMac(inner, connection))) throw refuse()
-    return inner
+    if (!safeEqual(mac, this.listCursorMac(inner, connection, mode))) throw refuse()
+    return { inner, mode }
   }
 
   /** Metadata for one item. */
@@ -706,6 +899,10 @@ export class Drives {
 
 /** Envelope version of a {@link Drives.listItems} cursor. */
 const LIST_CURSOR_VERSION = 'bkl1'
+/** Envelope version of a cursor that also binds an explicit listing mode. */
+const LIST_CURSOR_VERSION_MODE = 'bkl2'
+/** `r` recursive, `c` children, `undefined` the adapter's default. */
+type ListMode = 'r' | 'c' | undefined
 /** HKDF-style label: the app secret also signs OAuth state, and the two must never be interchangeable. */
 const LIST_CURSOR_LABEL = 'basalt:drives:list-cursor:v1'
 

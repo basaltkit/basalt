@@ -4,11 +4,13 @@ import { prismaActivityStore } from '@basaltkit/activity-prisma'
 import { prismaAuditStore } from '@basaltkit/audit-prisma'
 import { prismaAuthStores } from '@basaltkit/auth-prisma'
 import { prismaCommentsStore } from '@basaltkit/comments-prisma'
-import { prismaInAppStore } from '@basaltkit/notifications-prisma'
+import { prismaInAppStore, prismaPreferenceStore } from '@basaltkit/notifications-prisma'
 import { prismaAccessStore } from '@basaltkit/permissions-prisma'
 import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'
 import { prismaTeamsStores } from '@basaltkit/teams-prisma'
-import { prismaTenantSource } from '@basaltkit/tenancy-prisma'
+import { CustomDomains } from '@basaltkit/tenancy'
+import { domainStoreContract } from '@basaltkit/tenancy/testing'
+import { prismaDomainStore, prismaTenantSource } from '@basaltkit/tenancy-prisma'
 import { prismaOutboxStore } from '@basaltkit/events-prisma'
 import { prismaWebhookStore } from '@basaltkit/webhooks-prisma'
 
@@ -35,8 +37,8 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
       prisma.authToken.deleteMany(), prisma.authApiKey.deleteMany(), prisma.authMfa.deleteMany(),
       prisma.teamMembership.deleteMany(), prisma.teamInvitation.deleteMany(),
       prisma.subscription.deleteMany(), prisma.usageCounter.deleteMany(), prisma.webhookEvent.deleteMany(),
-      prisma.comment.deleteMany(), prisma.auditEntry.deleteMany(), prisma.activityRecord.deleteMany(),
-      prisma.inAppNotification.deleteMany(), prisma.permUserRole.deleteMany(),
+      prisma.comment.deleteMany(), prisma.commentRevision.deleteMany(), prisma.auditEntry.deleteMany(), prisma.activityRecord.deleteMany(),
+      prisma.inAppNotification.deleteMany(), prisma.notificationPreference.deleteMany(), prisma.permUserRole.deleteMany(),
       prisma.permUserPermission.deleteMany(), prisma.permRolePermission.deleteMany(),
       prisma.permTemporaryGrant.deleteMany(), prisma.permDelegation.deleteMany(),
       prisma.tenantDomain.deleteMany(), prisma.tenant.deleteMany(),
@@ -135,6 +137,17 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     expect((await c.list('acme', 'issue', '1')).length).toBe(1)
   })
 
+  it('comments: anchor, soft-delete columns and revisions (BK-080)', async () => {
+    const c = prismaCommentsStore(prisma).store
+    await c.create({ id: 'c9', tenantId: 'acme', resourceType: 'doc', resourceId: '9', authorId: 'u1', body: 'v1', mentions: [], createdAt: 1, anchor: { page: 2 } })
+    expect((await c.find('acme', 'c9'))?.anchor).toEqual({ page: 2 })
+    await c.addRevision({ id: 'r1', tenantId: 'acme', commentId: 'c9', body: 'v0', at: 5, by: 'u1' })
+    expect((await c.revisions('acme', 'c9')).map((r) => r.body)).toEqual(['v0'])
+    expect(await c.update('acme', 'c9', { deletedAt: 10, deletedBy: 'mod', deleteReason: 'spam' })).toMatchObject({ deletedAt: 10, deletedBy: 'mod', deleteReason: 'spam' })
+    await c.delete('acme', 'c9')
+    expect(await c.revisions('acme', 'c9')).toEqual([])
+  })
+
   it('audit: append-only trail with the event wildcard', async () => {
     const a = prismaAuditStore(prisma).store
     await a.append({ id: 'a1', source: 'hook', event: 'auth:login', payload: { ip: '1' }, at: 10 })
@@ -161,6 +174,27 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     expect(await n.unreadCount('u1')).toBe(0)
   })
 
+  it('notifications: grouping, markAllRead, prune, durable preferences (BK-078)', async () => {
+    const n = prismaInAppStore(prisma).store
+    await n.upsertGroup({ id: 'g1', recipientId: 'u9', notification: 'c', title: 'Ana', at: 10, groupKey: 'doc:1' })
+    await n.upsertGroup({ id: 'g2', recipientId: 'u9', notification: 'c', title: 'Rui', at: 20, groupKey: 'doc:1' })
+    const rows = await n.list('u9')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'g1', title: 'Rui', count: 2, groupKey: 'doc:1' })
+    await n.append({ id: 'g3', recipientId: 'u9', notification: 'x', title: 'x', at: 30 })
+    expect(await n.markAllRead('u9')).toBe(2)
+    expect(await n.unreadCount('u9')).toBe(0)
+    expect(await n.prune({ readBefore: Date.now() + 1000 })).toBeGreaterThanOrEqual(2)
+    expect(await n.list('u9')).toEqual([])
+
+    const prefs = prismaPreferenceStore(prisma)
+    await prefs.set({ userId: 'u9', notification: '*', channel: 'sms', enabled: false })
+    await prefs.set({ userId: 'u9', notification: '*', channel: 'sms', enabled: true })
+    expect(await prefs.list('u9')).toEqual([{ userId: 'u9', notification: '*', channel: 'sms', enabled: true }])
+    await prefs.remove('u9', '*', 'sms')
+    expect(await prefs.list('u9')).toEqual([])
+  })
+
   it('tenancy: open JSON records + unique custom-domain lookup', async () => {
     const tenants = prismaTenantSource(prisma)
     await tenants.save({ id: 'acme', name: 'Acme Inc', plan: 'pro', domains: ['app.acme.com'] })
@@ -179,6 +213,51 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     // remove cascades domains
     expect(await tenants.remove('acme')).toBe(true)
     expect(await tenants.findByDomain('new.acme.com')).toBeNull()
+  })
+
+  it('tenancy: PrismaDomainStore honours the DomainStore contract (BK-042)', async () => {
+    // Each case needs an empty store with the tenants acme + globex in place.
+    const fresh = async () => {
+      await prisma.tenantDomain.deleteMany()
+      await prisma.tenant.deleteMany()
+      const tenants = prismaTenantSource(prisma)
+      await tenants.create({ id: 'acme' })
+      await tenants.create({ id: 'globex' })
+      return prismaDomainStore(prisma)
+    }
+    for (const c of domainStoreContract(fresh)) {
+      try {
+        await c.run()
+      } catch (error) {
+        throw new Error(`contract case failed: ${c.name}`, { cause: error })
+      }
+    }
+  })
+
+  it('tenancy: save() keeps a verified custom domain; an unverified claim never resolves (BK-042)', async () => {
+    await prisma.tenantDomain.deleteMany()
+    await prisma.tenant.deleteMany()
+    const tenants = prismaTenantSource(prisma)
+    await tenants.create({ id: 'acme', domains: ['acme.example.com'] })
+    await tenants.create({ id: 'globex' })
+    const records: Record<string, string> = {}
+    const domains = new CustomDomains({
+      store: prismaDomainStore(prisma),
+      resolveTxt: async (host) => (records[host] ? [[records[host]!]] : []),
+    })
+    await domains.add('acme', 'docs.acme.com')
+    const dns = await domains.instructions('acme', 'docs.acme.com')
+    records[dns.host] = dns.value
+    expect(await domains.verify('acme', 'docs.acme.com')).toBe(true)
+    await domains.add('globex', 'victim.com')
+
+    await tenants.save({ id: 'acme', status: 'ready', domains: [] })
+
+    expect((await domains.list('acme')).map((d) => [d.domain, d.verified])).toEqual([['docs.acme.com', true]])
+    expect((await tenants.findByDomain('docs.acme.com'))?.id).toBe('acme')
+    expect(await tenants.findByDomain('acme.example.com')).toBeNull()
+    expect(await tenants.findByDomain('victim.com')).toBeNull()
+    await expect(domains.add('globex', 'docs.acme.com')).rejects.toMatchObject({ code: 'DOMAIN_TAKEN', status: 409 })
   })
 
   it('events outbox: enqueue, pending order, publish/fail lifecycle', async () => {

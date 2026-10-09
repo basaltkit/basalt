@@ -35,9 +35,14 @@ import { sqliteInAppStore } from '@basaltkit/notifications-sqlite'
 const n = sqliteInAppStore('./data/notifications.db')   // ':memory:' by default
 
 const app = await createApp({
-  plugins: [notificationsPlugin({ inApp: n.store, mailer })],
+  plugins: [notificationsPlugin({ inApp: n.store, preferences: n.preferences, mailer })],
 }).boot()
 ```
+
+`n.preferences` is a durable `PreferenceStore` (`notification_preferences`
+table). `SqliteInAppStore` implements the optional `markAllRead`, `prune` and
+`upsertGroup`; `migrate()` adds the `group_key`/`count` columns to a database
+created by an older version.
 
 `SqliteInAppStore` is also exported and takes a `DatabaseSync`, so it can share a
 handle with the other `*-sqlite` stores. `openNotificationsDatabase()` and

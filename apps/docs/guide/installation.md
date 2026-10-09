@@ -138,12 +138,13 @@ inside it:
 | `src/env.ts` | `defineEnv` over `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` with auth), with `{ prefix: 'MY_SAAS' }` — every variable is read as `MY_SAAS_<NAME>` first, falling back to the bare name (see [`--env-file` never overrides exported variables](#env-file-never-overrides-exported-variables)) |
 | `src/app.ts` | `buildApp()` — config, logger, events, security headers + a global rate limit, then tenancy/auth/billing/MCP/CLI as selected. With tenancy + auth: `teamsPlugin()` + `tenantMembershipPlugin()` (authenticated requests for a tenant the user is not a member of get `403`) and a dev-only seed adding registrants to the `demo` tenant |
 | `src/routes.ts` | `GET /` (a friendly index) and `GET /health` |
-| `src/server.ts` | Boots, resolves `FASTIFY`, listens, and shuts down on `SIGINT`/`SIGTERM`. `pnpm start` runs it directly and loads **no** `.env` — production configuration comes from the real environment |
+| `src/server.ts` | Boots, resolves `FASTIFY`, listens, and shuts down on `SIGINT`/`SIGTERM`. `pnpm start` runs its compiled form (`dist/src/server.js`) on plain node and loads **no** `.env` — production configuration comes from the real environment |
 | `src/dev.ts` | The `pnpm dev` entry: loads `.env` when present (exported variables win), sets `NODE_ENV=development` unless already set, then loads `server.ts` |
 | `tests/app.test.ts` | A smoke test that boots the app and hits `/` and `/health` |
-| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `start` (`tsx src/server.ts` — an unset `NODE_ENV` counts as production), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` by default, `create-basalt --project` with `--no-cli`, so `pnpm basalt update` works in every app) and, with `--ui`, `dev:web`. `create-basalt` is a devDependency. `@basaltkit/*` ranges track each package's current release line |
+| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `build` (`tsc -p tsconfig.build.json`), `start` (`node --enable-source-maps dist/src/server.js` — build first; an unset `NODE_ENV` counts as production), `start:dev` (`tsx src/server.ts`, the server from source without a build), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` by default, `create-basalt --project` with `--no-cli`, so `pnpm basalt update` works in every app) and, with `--ui`, `dev:web`. `create-basalt` is a devDependency. `@basaltkit/*` ranges track each package's current release line |
 | `.basalt/project.json` | The scaffold manifest: create-basalt version, options and a hash of every generated file — commit it; [`add`](#adding-features-later) and [`update`](#updating-an-app) use it to tell untouched template files from edited ones |
 | `.env` | Local development values — a copy of `.env.example` plus, with auth, a generated `APP_SECRET`. Git-ignored, mode `0600`, never in the manifest; `pnpm dev` and `pnpm basalt` load it, `pnpm start` does not |
+| `tsconfig.build.json`, `Dockerfile` | The [production path](/guide/production#build-ship): `pnpm build` compiles `src/` to `dist/` (rootDir `.`, so `src/server.ts` → `dist/src/server.js`); the multi-stage `Dockerfile` — the same file `basalt publish dockerfile` writes — builds the app and runs it on plain node as the `node` user |
 | `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers; `.env.example` uses the app-prefixed names and, with the README, explains the [`--env-file` precedence pitfall](#env-file-never-overrides-exported-variables); `pnpm-workspace.yaml` excludes `@basaltkit/*` and `create-basalt` from `minimumReleaseAge` and documents the [pnpm 11 settings](#pnpm-11-release-age-and-verifydepsbeforerun)) |
 | `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | With `--prisma`: the schema (the models of every enabled Basalt domain plus your own), the Prisma 7 config carrying the connection URL, the client(s) the app uses, and the `demo` tenant seed |
 | `bin/basalt.ts` | By default (not with `--no-cli`): the CLI entrypoint wiring the generators and `prisma:sync`. It forwards `update`, `add`, `doctor` and `info` to create-basalt and runs `upgrade` (the codemods) **before** importing the app, so they work while the app is broken mid-upgrade; then it loads `.env` (exported variables win) and turns an invalid environment, an unreachable database or an unmigrated one into a readable fix instead of a stack trace |
@@ -183,16 +184,33 @@ instead:
 `MY_SAAS_DATABASE_URL` becomes a **required** variable (`src/env.ts`), and
 `.env.example` ships it uncommented. The package scripts are `db:migrate`
 (`prisma migrate dev`), `db:deploy` (`prisma migrate deploy`), `db:generate` and
-`db:seed`; `postinstall` runs `prisma generate` so `pnpm typecheck` has the
-client types right after install.
+`db:seed` (`prisma db seed`); `postinstall` runs `prisma generate` so `pnpm typecheck` has the
+client types right after install. The client is generated into
+`generated/prisma` — **outside** `src/`, so `pnpm build` never has to copy it —
+and `src/db.ts` imports it as `#db/client.js` through the package.json
+`imports` alias (`"#db/*": "./generated/prisma/*"`), which resolves the same from
+`src/` (tsx, vitest) and from `dist/src/` (node). `@prisma/client-runtime-utils`
+is a direct dependency because the generated runtime requires it by name, and
+`pnpm-workspace.yaml` approves the `prisma` / `@prisma/engines` build scripts
+(pnpm 11 fails an install on an unapproved one). See
+[Prisma with pnpm](/guide/persistence#prisma-with-pnpm-the-generated-client).
 
 ```bash
 pnpm create basalt my-saas --prisma
 cd my-saas && pnpm install
 # .env points MY_SAAS_DATABASE_URL at postgres://…@localhost:5432/my_saas — start PostgreSQL or edit it
-pnpm db:migrate          # creates the tables and seeds the demo tenant
+pnpm db:migrate          # creates the tables
+pnpm db:seed             # the demo tenant
 pnpm dev
 ```
+
+After a change to `prisma/schema.prisma`, `pnpm db:migrate --name <change>`
+writes the migration **and** applies it to the development database (Prisma
+creates and drops a temporary shadow database for that, so the database user
+needs `CREATEDB`); without `--name` it asks for one, so in a script always pass
+it. Then run `pnpm db:generate`: Prisma 7's `migrate dev` no longer regenerates
+the client (nor seeds). Production applies the committed migrations with
+`pnpm db:deploy`.
 
 ::: warning Migrations, never `db push`
 The generated `src/app.ts` boots with `assertMigrated: true`, which refuses to
@@ -213,7 +231,7 @@ The generated `tests/app.test.ts` skips itself when no database is configured, s
 scaffold loads `.env` for you:** `src/dev.ts` (`pnpm dev`) and `bin/basalt.ts`
 (`pnpm basalt`, scaffolded by default) call `process.loadEnvFile()` on the project's
 `.env` when it exists, before the app is imported. **`pnpm start` does not** —
-`src/server.ts` is the production entry, and production configuration comes from
+it runs the compiled `src/server.ts`, the production entry, and production configuration comes from
 the real environment (or launch it yourself with `node --env-file=…`). A new app
 already has a `.env`: the values of `.env.example` and, with auth, a generated
 `APP_SECRET` — git-ignored, so the secret never reaches the repository.
@@ -273,8 +291,11 @@ PostgreSQL does not answer (`ECONNREFUSED`, Prisma `P1001`, or an
 (`PRISMA_NOT_MIGRATED`), the message says what failed, which database the app
 used — `postgres://host:port/name` and the variable it came from, never the
 user or password — and the fix: start PostgreSQL (`docker compose up -d`, or your
-local service), check `MY_SAAS_DATABASE_URL`, run `pnpm db:migrate`. Any other
-boot error keeps its stack trace.
+local service), check `MY_SAAS_DATABASE_URL`, run `pnpm db:migrate`. A database
+that refuses the app's role (`permission denied`, SQLSTATE `42501`) or needs a
+baseline (`P3005`) is named as such, with the `GRANT` or the
+`prisma migrate resolve` to run — see [Database operations](/guide/database-operations).
+Any other boot error keeps its stack trace.
 
 Two habits that still help:
 
@@ -381,6 +402,17 @@ patched **only** when it is byte-for-byte a known template or the manifest
 records it untouched. A customised one is left alone and the exact snippet to
 paste is printed.
 
+An app from before the [production path](/guide/production#build-ship) is
+**offered** what it lacks, as part of the same plan: `tsconfig.build.json`, a
+`build` script, the `Dockerfile` (pnpm apps) and `.dockerignore`, and — with
+Prisma — `@prisma/client-runtime-utils` as a direct dependency. Files that
+exist are never touched, and **an existing `start` script is never rewritten**:
+moving it from `tsx src/server.ts` to the compiled server changes how the app is
+deployed, so the two script lines to paste are printed instead. A Prisma client
+still generated under `src/generated` gets the move instructions (schema
+`output`, the `#db/*` alias, the `src/db.ts` import, `.gitignore`) and no
+Dockerfile until it is moved — tsc does not copy the generated `.js` files.
+
 ## Adding features later
 
 Didn't pick `--ui`, `--cli` or `--mcp` at creation time? Add it now — no need
@@ -434,8 +466,11 @@ neither in the environment nor in `.env`, as an error with the fix; a missing
 `.env` next to a `.env.example`, as a warning; that the Prisma client is
 generated and migrations exist (whether they are *applied* needs a database —
 `prisma migrate status`); `.mcp.json` when `@basaltkit/ai-mcp` is installed; dev
-tooling declared as a runtime dependency; and an outdated `bin/basalt.ts` or
-`src/dev.ts`.
+tooling declared as a runtime dependency; an outdated `bin/basalt.ts` or
+`src/dev.ts`; and, statically, the production path — a `start` that runs tsx
+while tsx is only a devDependency, no `build` script, a `dist/src/server.js`
+older than `src/`, a Prisma client generated under `src/`, and a missing
+`@prisma/client-runtime-utils`. `doctor` never builds or starts the app.
 
 ## Choose an HTTP adapter
 
@@ -490,7 +525,8 @@ an auth plugin enforces it and anonymous callers get 401. When the project
 depends on `@basaltkit/tenancy`, the resource is **tenant-owned**: the
 repository scopes every read and write with `requireTenantId()` (no tenant →
 `TENANT_REQUIRED`, 400), and the Prisma model gets an indexed `tenantId`
-column. The generated test signs in, checks that anonymous calls get 401 and,
+column (with `--tenant=schema` or `--tenant=database`, no column: the schema or
+database is the isolation). The generated test signs in, checks that anonymous calls get 401 and,
 for tenant-owned data, that one tenant cannot see another's rows. A short
 security note after generation says which of these applies. Row-level
 authorization (who may read or write which rows) is still up to you.
@@ -504,6 +540,7 @@ authorization (who may read or write which rows) is still up to you.
 | `--no-register` | `make:resource` | Skip the automatic wiring into `src/app.ts` |
 | `--public` | `make:resource`, `make:routes`, `make:test` | Routes without `meta.auth`, open to anonymous callers (alias `--no-auth`). Use only for a deliberately public resource |
 | `--tenant` / `--no-tenant` | `make:resource`, `make:repository`, `make:test` | Force tenant scoping on or off (default: on when `package.json` depends on `@basaltkit/tenancy`) |
+| `--tenant=column\|schema\|database` | `make:resource`, `make:repository`, `make:test` | How tenants are isolated: a `tenantId` column (default), or a schema/database per tenant — no `tenantId` column, still `requireTenantId()` on every access. Never guessed; see [Generating tenant resources](/guide/database-per-tenant#generating-tenant-resources) |
 | `--crud` / `--no-crud` | `make:service` | Force the CRUD service or the minimal one (default: CRUD when the sibling repository and schema are already in the target directory) |
 
 Individual artifacts are available as `make:schema`, `make:repository`,
@@ -584,12 +621,12 @@ directions — `--no-prisma` overrides `prisma: true`.
 | Command | What it does |
 | --- | --- |
 | `list` (or no command) | Print every available command |
-| `routes` | The registered HTTP routes, read from the `http:routes` metadata bucket |
+| `routes` | The registered HTTP routes with the guards each declares (`auth`, `can`, `rateLimit`, `tenant`, …), read from the `http:routes` metadata bucket. `--json` for machine output; `--unguarded --require=auth,can [--allow=<glob,…>]` exits 1 on routes missing those guards — route meta only, see [Route security review](/guide/security#route-security-review-—-basalt-routes) |
 | `schedule:list` | Scheduled tasks with their cron expressions and timezones |
 | `dev` | Print the route table, then run the app with watch/restart. `--entry=<file>`, `--worker` (`-w`) to start a queue worker alongside, `--queue=<name>` |
 | `upgrade` | Apply framework upgrade codemods. `--dry` to preview, `--only=<id>`, `--dir=<path>` |
 | `update`, `add`, `doctor`, `info` | Not `runCli` commands: `bin/basalt.ts` forwards them to create-basalt before booting the app — see [Updating an app](#updating-an-app) |
-| `publish` | Copy a stub group into the app (`dockerfile` — with a `.dockerignore` that keeps `.env` and keys out of the image —, `ci`, `editorconfig`). Run with no id to list; `--force` to overwrite |
+| `publish` | Copy a stub group into the app (`dockerfile` — the multi-stage build + plain-node image the scaffold ships, with a `.dockerignore` that keeps `.env` and keys out of the image —, `ci` — install, typecheck, build, test —, `editorconfig`). Run with no id to list; `--force` to overwrite |
 
 Registering `queuePlugin` adds `queue:work`, `queue:stats`, `queue:retry` and
 `queue:jobs` —

@@ -58,6 +58,7 @@ Cada módulo tem documentação completa no seu próprio `README.md`, escrita pa
 | [@basaltkit/subscriptions](../packages/subscriptions/README.md) | Faturação: planos declarativos, trials, limites de uso, gateways e webhooks idempotentes. |
 | [@basaltkit/notifications](../packages/notifications/README.md) | Notificações multi-canal (in-app, email, custom) com preferências por destinatário. |
 | [@basaltkit/mailer](../packages/mailer/README.md) | Emails tipados e declarativos, drivers SMTP/log/memória e integração com filas. |
+| [@basaltkit/inbound-mail](../packages/inbound-mail/README.md) | Receber email: entregas assinadas em bytes em bruto a partir de um relay, parse MIME com limites e encaminhamento por endereço. |
 | [@basaltkit/webhooks](../packages/webhooks/README.md) | Webhooks de saída assinados, com retries e subscrições por tenant. |
 
 ### Operações

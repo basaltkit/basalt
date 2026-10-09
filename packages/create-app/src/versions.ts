@@ -25,5 +25,5 @@ export const SCAFFOLD_VERSIONS: Readonly<Record<string, string>> = {
   '@basaltkit/tenancy': '^3.1.0',
   '@basaltkit/tenancy-prisma': '^2.0.0',
   '@basaltkit/testing': '^2.0.0',
-  'create-basalt': '^1.10.0',
+  'create-basalt': '^1.11.0',
 }

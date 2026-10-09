@@ -192,7 +192,7 @@ import type { UserSource, AuthUser, UserPatch } from '@basaltkit/auth'
 const users: UserSource = {
   async findByEmail(email) { /* SELECT … WHERE email = ? */ return null },
   async findById(id) { /* SELECT … WHERE id = ? */ return null },
-  async create(data) { // data = { email, passwordHash } — hash já calculado
+  async create(data) { // data = { email, passwordHash, emailVerified? } — hash já calculado; persiste o emailVerified (omissão false)
     return { id: crypto.randomUUID(), ...data } as AuthUser
   },
   async update(id, patch: UserPatch) { /* UPDATE … */ return null },
@@ -250,7 +250,7 @@ fastifyPlugin({ routes: [...appRoutes, ...authRoutes(), ...mfaRoutes(), ...apiKe
 
 | Endpoint | Body | Notas |
 | --- | --- | --- |
-| `POST /auth/register` | `{ email, password }` | Sempre `202 { ok: true }` — à prova de enumeração (ver abaixo) |
+| `POST /auth/register` | `{ email, password }` | Sempre `202 { ok: true }` — à prova de enumeração (ver abaixo). Com `register: 'closed'`, `404`; ver [Política de registo](#registration-policy) |
 | `POST /auth/login` | `{ email, password, mfaCode? }` | → `{ user, accessToken, refreshToken }` |
 | `POST /auth/refresh` | `{ refreshToken }` | novo par de tokens; mata a família em caso de reutilização |
 | `POST /auth/logout` | `{ refreshToken? }` (corpo opcional) | `204`; revoga a família de refresh quando é dado, e termina a sessão do cookie / `x-session-id` e expira o cookie. Uma SPA só com cookie não envia corpo. Um logout cross-site só com cookie é recusado (`403 AUTH_CSRF_REJECTED`) |
@@ -274,7 +274,10 @@ As rotas não autenticadas que fazem hash, enviam email ou aceitam tentativas �
 declaram `meta.rateLimit: { limit: 10, windowMs: 60_000 }` (por ip de cliente e
 rota), imposto quando o rate limiter do `securityPlugin` está ligado. Altera-o ou
 remove-o com `authRoutes({ rateLimit: { limit, windowMs } })` /
-`authRoutes({ rateLimit: false })`. Independentemente disso, o `Auth` envia no
+`authRoutes({ rateLimit: false })`. Sem `securityPlugin({ rateLimit })` nada o
+aplica, e o adapter imprime um `console.warn` no arranque com o nome destas rotas
+(o arranque não é recusado) — regista o limiter, ou silencia o aviso com
+`allowUnguardedMeta: ['rateLimit']` no adapter. Independentemente disso, o `Auth` envia no
 máximo 3 emails de reposição e 3 de verificação por conta a cada 15 minutos
 (`emailRequestThrottle`): pedidos a mais continuam a responder `200` mas não criam
 token, por isso os endpoints não servem para inundar um utilizador de emails nem
@@ -295,6 +298,49 @@ seus tokens são enviados por email através dos hooks `auth:verify_requested` /
 `auth:password_reset_requested`, nunca devolvidos por HTTP. Uma reposição de password
 concluída revoga todas as sessões e refresh tokens.
 :::
+
+### Política de registo {#registration-policy}
+
+O `POST /auth/register` serve todos os planos. Num host de tenant isso normalmente
+não deve significar "qualquer pessoa que escreva o endereço da empresa fica com
+conta lá": o padrão multi-tenant canónico torna o registo num host de tenant
+**só por convite**. Diz quem se pode registar com `authRoutes({ register })`, ou
+uma vez para todos os caminhos self-service com `authPlugin({ registerPolicy })`:
+
+```ts
+import { authPlugin, authRoutes } from '@basaltkit/auth'
+
+// Uma vez: aplica-se à rota de registo E a um primeiro login social / SSO.
+authPlugin({ users, secret, registerPolicy: ({ email, tenantId }) => tenantId === undefined || allowList.has(email) })
+// …ou por rota:
+authRoutes({ register: 'closed' }) // 404 estático AUTH_REGISTRATION_CLOSED
+```
+
+| `register` | Comportamento |
+| --- | --- |
+| omitido (omissão) | A `registerPolicy` do `authPlugin()`, ou aberto quando não há nenhuma |
+| `'open'` | Qualquer pessoa, mesmo quando o `authPlugin()` tem uma `registerPolicy` |
+| `'closed'` | `404 AUTH_REGISTRATION_CLOSED` para **todos** os pedidos. O corpo não é lido, logo a resposta não diz nada sobre nenhum endereço |
+| `(input) => boolean` | Consultada com o `email` canónico e o `tenantId` do pedido (`ctx().tenant?.id`, `undefined` no apex) |
+
+Um predicado que recusa responde o **mesmo `202 { ok: true }`** que um registo bem
+sucedido, não cria nada, faz o mesmo trabalho de hash e emite
+`auth:register_refused` (`{ email, tenantId?, source: 'register' }`) para o teu
+registo de auditoria ou um email fora de banda. Um `404` para "não convidado" ao
+lado de um `202` para "convidado" transformaria a rota num oráculo de quem a
+empresa convidou. Uma política que lança falha o pedido (fail closed).
+
+A `registerPolicy` do `authPlugin()` também controla o ramo de **criação** de um
+login social / SSO (`Auth.socialLogin`). Esse fluxo já está autenticado pelo
+fornecedor, por isso a recusa é explícita: `RegistrationClosedError`
+(`404 AUTH_REGISTRATION_CLOSED`) mais `auth:register_refused` com
+`source: 'social'`. Logins em contas existentes e o `auth.register()` de
+confiança nunca são controlados.
+
+Para o habitual "só por convite nos hosts de tenant", o `@basaltkit/teams` traz a
+política: `teamsInviteGate(teams)` admite o apex e, num tenant, apenas um endereço
+com um convite pendente e não expirado para esse tenant. Ver
+[Equipas: registo só por convite](/pt/guide/teams#invite-only-registration).
 
 ### O fluxo register → login → refresh (HTTP)
 
@@ -332,6 +378,36 @@ const { user: u, tokens } = await auth.login('ada@example.com', 'secretpassword1
 const next = await auth.refresh(tokens.refreshToken) // → novo { accessToken, refreshToken }
 await auth.revoke(next.refreshToken) // logout para clientes baseados em tokens
 ```
+
+### Criar contas a partir de fluxos de confiança {#trusted-account-creation}
+
+O `auth.register()` é a forma de confiança, no servidor, de criar uma conta
+(seeding, um back-office, um fluxo de registo que provou o endereço antes de criar
+a conta). Nunca faças tu o hash de uma password e insiras a linha. Quando o fluxo já
+provou o endereço (o link "abrir empresa" foi clicado a partir dessa caixa de
+correio), cria a conta já verificada:
+
+```ts
+const owner = await auth.register(email, password, { emailVerified: true })
+```
+
+A flag é persistida com a linha (`UserSource.create({ email, passwordHash,
+emailVerified })`), por isso o `auth:registered` já traz `emailVerified: true` e um
+hook de correio decide sozinho: não verificada, envia o link de verificação;
+verificada, não envia. Um login social verificado pelo fornecedor cria a sua conta
+da mesma forma.
+
+O `POST /auth/register` público nunca cria uma conta verificada: um campo
+`emailVerified` no corpo é ignorado. Um `UserSource` próprio escrito antes de o
+`create()` aceitar a flag é corrigido através do `update()`. Uma fonte que não
+consegue nenhuma das duas (sem `update()`, um `create()` que ignora a flag) não
+consegue guardar a verificação. O `register(…, { emailVerified: true })` exige
+`update()` — o mesmo requisito da verificação de email — e sem ele falha com
+`UserUpdateUnsupportedError` **antes** de escrever o que quer que seja, por isso
+uma nova tentativa recebe o mesmo erro e nunca `EmailTakenError`; um login social cria a conta não verificada, liga-a e autentica o
+utilizador — nunca falha a meio, o que deixaria uma conta que todos os logins
+seguintes desse fornecedor recusam. Persiste o `emailVerified` no `create()` (ou
+implementa o `update()`) para teres contas verificadas.
 
 ## Rotação de refresh com deteção de reutilização
 
@@ -431,6 +507,65 @@ servidores) passam. Permite um front-end servido de outra origem, ou desativa:
 authPlugin({ users, secret, csrf: { trustedOrigins: ['https://app.example.com'] } })
 authPlugin({ users, secret, csrf: false }) // não recomendado
 ```
+
+### Duração da sessão: timeout de inatividade e cookies `__Host-` {#session-hardening}
+
+`sessionTtl` (por omissão `30d`) é uma duração **absoluta**: uma sessão ativa
+termina nesse momento na mesma. `sessionIdleTtl` acrescenta um timeout de
+**inatividade** — uma sessão sem uso durante mais tempo é recusada (o pedido fica
+anónimo, por isso uma rota `meta.auth` responde `401`) e apagada:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  sessions: s.sessions,
+  sessionTtl: '12h',      // absoluta
+  sessionIdleTtl: '30m',  // inatividade
+  sessionCookie: { name: '__Host-session' },
+})
+```
+
+A atividade é registada com o `touch()` do store, no máximo uma vez por
+`min(60s, sessionIdleTtl / 4)`, por isso o limite efetivo de inatividade pode
+exceder a configuração nessa medida. O store tem de implementar `touch`: o store
+em memória e o `@basaltkit/auth-sqlite` implementam; o `@basaltkit/auth-prisma`
+implementa com `prismaAuthStores(prisma, { trackSessionActivity: true })` depois
+de acrescentares a coluna `lastSeenAt`. Um store sem `touch` faz o `authPlugin`
+falhar no arranque em vez de não aplicar o timeout em silêncio.
+
+Quando ativas a opção, uma sessão sem `lastSeenAt` (gravada antes de o store o
+registar) começa a contar a inatividade no próximo uso. Uma sessão que já o tem
+é medida a partir dele — e, com a opção desligada, nada o atualizou, por isso
+ainda guarda a hora de criação. Conta que as sessões mais antigas do que
+`sessionIdleTtl` terminem uma vez, no pedido seguinte, quando ativares a opção.
+
+Um cookie chamado `__Host-…` ou `__Secure-…` tem de cumprir as regras de prefixo
+do browser, senão o browser descarta-o em silêncio e cada login «tem sucesso»
+sem sessão. O Basalt aplica-as: os dois prefixos implicam `Secure` quando
+`secure` não está definido — em qualquer ambiente, por isso também funciona em
+`http://localhost` — e `__Host-` implica `Path=/` (o Basalt nunca define
+`Domain`). Fora de produção, esse `Secure` implícito regista um aviso único no
+arranque: os cookie jars dos clientes de teste (supertest, tough-cookie) não
+devolvem um cookie `Secure` sobre `http` simples, por isso usa um nome sem
+prefixo fora de produção (`name: isProd ? '__Host-sid' : 'sid'`) ou define
+`secure: true` explicitamente, o que silencia o aviso.
+
+Um `secure: false` contraditório (incluindo `secure: process.env.NODE_ENV ===
+'production'` em dev e testes), ou um cookie `__Host-` com outro `path`, continua
+a arrancar e o cookie é emitido tal como configurado, mas regista um aviso no
+arranque: o browser descarta esse cookie. A próxima major recusa-o no arranque
+com `AUTH_SESSION_COOKIE_INVALID`. `__Host-` é a escolha mais forte para um
+cookie de sessão: um subdomínio irmão não o consegue definir nem sombrear.
+
+Os prefixos são reconhecidos sem distinguir maiúsculas, como nos browsers
+actuais (`__host-sid` é um cookie `__Host-`). Os avisos são independentes e cada
+um aparece uma vez por objecto `sessionCookie`: um cookie `__Host-` com
+`path: '/app'` e `secure` por definir regista o aviso do path e, fora de
+produção, o do `Secure` implícito. Um cookie sem prefixo com `sameSite: 'None'`
+e sem `Secure` (o valor por omissão fora de produção) também gera um aviso,
+porque os browsers descartam `SameSite=None` sem `Secure`; é emitido sem
+alterações.
 
 ### Rotas de conta: `meta.account` e `meta.mfa` {#account-routes}
 
@@ -586,6 +721,13 @@ As rotas com `meta.mfa: false` estão isentas (todo o `authRoutes()` — login,
 não estão sujeitos à política; criar uma chave exige uma sessão com MFA sob
 ela. Independentemente da política, `meta: { auth: true, mfa: true }` exige
 MFA numa única rota (step-up para uma ação sensível). Desligado por omissão.
+
+As listagens seguem a mesma regra: o [`tools/list` do MCP](/pt/guide/mcp#what-tools-list-shows)
+esconde as rotas com `meta.mfa: true` (e, com `requireMfa: true`, todas as rotas
+autenticadas não isentas) a uma sessão sem `mfa` no `ctx().amr`. Essa
+verificação só lê o `ctx()`. Uma `requireMfa` **função** nunca é chamada numa
+listagem, por isso com uma política em função as rotas continuam listadas e o
+guard decide na chamada.
 
 ::: tip Escrever o teu próprio `MfaStore`
 Implementa os opcionais `consumeTotpStep(userId, step)` e
@@ -944,7 +1086,8 @@ uma vez. Podem ter uma expiração opcional; chaves expiradas são rejeitadas pe
 servidor e omitidas das listagens.
 
 O guard do plugin impõe três fronteiras em cada pedido autenticado por chave
-(`403` em cada caso, com um evento `auth:apikey_rejected`):
+(`403` em cada caso, com um evento `auth:apikey_rejected` e um
+`auth:apikey_refused`):
 
 - **Ligação ao tenant.** Uma chave criada dentro de um tenant só funciona quando o
   pedido resolve esse mesmo tenant — nunca noutro escolhido via `x-tenant-id`, um
@@ -960,6 +1103,12 @@ O guard do plugin impõe três fronteiras em cada pedido autenticado por chave
 - **Rotas só de sessão.** Uma rota com `meta.apiKey: false` recusa qualquer chave
   (`AUTH_APIKEY_NOT_ALLOWED`). `apiKeyRoutes()` e `mfaRoutes()` declaram-no, por isso
   uma chave nunca pode criar, listar ou revogar chaves, nem alterar o MFA.
+- **As listagens seguem as mesmas regras.** O plugin regista uma verificação de
+  visibilidade sem efeitos secundários, por isso o
+  [`tools/list` do MCP](/pt/guide/mcp#what-tools-list-shows) esconde as tools com
+  `meta.scopes` que a chave não cobre e as tools com `meta.apiKey: false` a quem
+  tem uma chave, e as rotas restritas por identidade sem `meta.scopes` às chaves
+  estreitas — sem emitir `auth:apikey_rejected`.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'
@@ -1002,6 +1151,71 @@ Regista ambos os plugins. Um bearer com prefixo `mk_` é ignorado pelo `authPlug
 tratado pelo `apiKeysPlugin`. Se as chaves "não funcionam", provavelmente falta-te o
 `apiKeysPlugin()`.
 :::
+
+### Chaves para clientes máquina {#apikeys-machine-clients}
+
+Uma chave apresentada que não verifica (desconhecida, revogada, expirada, mal
+formada) é ignorada por padrão: o pedido continua como anónimo e respondem os
+guards da própria rota — `401 AUTH_REQUIRED` numa rota `meta.auth`, `403
+AUTH_SCOPE_REQUIRED` numa rota `meta.scopes`, ou a resposta pública. Um cliente
+máquina não consegue então distinguir «a minha chave morreu» de «falta-me um
+scope». Ativa uma recusa clara:
+
+```ts
+apiKeysPlugin({ users, rejectInvalid: true })
+// chave morta → 401 { error: { code: 'AUTH_APIKEY_INVALID', … } }
+//               WWW-Authenticate: Bearer error="invalid_token"
+```
+
+A recusa acontece antes de qualquer guard, de forma idêntica em fastify, express
+e hono. Um pedido sem chave nenhuma não é afetado.
+
+O `verify()` regista `lastUsedAt`, mas no máximo uma vez por `touchEveryMs` por
+chave (60 s por padrão), por isso um cliente que consulta a cada segundo custa
+uma escrita no store por minuto em vez de uma por pedido. O `lastUsedAt` é exato
+dentro dessa janela; `touchEveryMs: 0` escreve em cada pedido.
+
+Cada recusa emite `auth:apikey_rejected`. Para uma chave inválida, o payload traz
+o `prefix` de apresentação da chave (`mk_live_` mais seis caracteres, o que as
+listagens mostram — nunca o segredo) e o `ip` do cliente, para poderes alertar
+ou limitar por chamador. Como qualquer cliente anónimo o consegue disparar, este
+hook **não** é registado pelos padrões do `auditPlugin`. A recusa de uma chave
+que foi verificada (`tenant_mismatch`, `not_allowed`, `scope`) é também emitida
+como `auth:apikey_refused`, que **é** auditado por padrão — vê
+[que hooks são auditados](/pt/guide/persistence#which-hooks-are-audited).
+
+**Uma API pública, de ponta a ponta.** Os clientes máquina estão muitas vezes
+atrás de um só endereço (um ERP, uma plataforma de integração), por isso um
+limite por IP é o teto errado para eles. Dá aos caminhos da API o seu próprio
+orçamento de borda e depois orçamenta cada chave e cada cliente nas rotas:
+
+```ts
+import { securityPlugin, type RouteRateLimits } from '@basaltkit/http'
+
+securityPlugin({
+  rateLimit: {
+    limit: 300, windowMs: 60_000,                                  // o resto da app
+    prefixes: [{ prefix: '/v1', limit: 3_000, windowMs: 60_000 }], // por IP, antes de procurar a chave
+  },
+})
+apiKeysPlugin({ users, rejectInvalid: true })
+
+const v1Budget = [
+  { limit: 10, windowMs: 1_000, key: 'apiKey' },                                          // rajada, por chave
+  { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'v1-daily' },             // quota, por cliente
+] satisfies RouteRateLimits
+
+route({ method: 'GET', url: '/v1/orders', meta: { scopes: ['orders:read'], rateLimit: v1Budget }, /* … */ })
+```
+
+O prefixo mantém um orçamento por IP à frente do `verify()`, por isso uma
+avalanche de chaves inventadas continua limitada; `'apiKey'` só usa chaves que
+verificaram; a quota diária é por tenant porque uma quota por chave se multiplica
+por cada chave que um cliente cria. Vê [rate limiting](/pt/guide/security#rate-limiting)
+para as regras de ordem e de cabeçalhos. O documento OpenAPI anuncia estas rotas
+com um esquema `apiKeyAuth` e `x-required-scopes` — passa
+`openapiPlugin({ apiKey: { header } })` se mudaste o header da chave
+([esquemas de segurança OpenAPI](/pt/guide/openapi#security-schemes-sessions-and-api-keys)).
 
 ## Bloqueio por força bruta
 
@@ -1071,8 +1285,9 @@ plugin fornece:
 | `mfa` | `MfaStore` | em memória | Estado de inscrição TOTP e códigos de recuperação |
 | `accessTtl` | `DurationInput` | `'15m'` | Duração do access token. Curta por desenho — é o refresh token que sustenta a sessão |
 | `refreshTtl` | `DurationInput` | `'30d'` | Duração do refresh token — na prática, "quanto tempo até o utilizador ter de entrar outra vez" |
-| `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor |
-| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test` |
+| `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor (absoluta) |
+| `sessionIdleTtl` | `DurationInput` | — (sem timeout de inatividade) | Recusa e apaga uma sessão sem uso durante mais tempo; requer um store com `touch` ([detalhes](#session-hardening)) |
+| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test`. Um nome `__Host-`/`__Secure-` implica `Secure` (e `Path=/` para `__Host-`); um valor contraditório gera um aviso no arranque (recusado na próxima major) |
 | `verificationTtl` | `DurationInput` | `'24h'` | Duração do link de verificação de email |
 | `resetTtl` | `DurationInput` | `'1h'` | Duração do link de reposição de password; mantém-na curta |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 por 15m, por email) | Bloqueio por força bruta por email. `false` desativa-o — só em testes |
@@ -1082,6 +1297,8 @@ plugin fornece:
 | `csrf` (plugin) | `{ trustedOrigins?: string[] } \| false` | ligado | Verificação CSRF da sessão por cookie em métodos não seguros — ver [Sessões por cookie e CSRF](#cookie-sessions-and-csrf) |
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Orçamento por IP que apanha *password spraying* (uma tentativa em muitas contas), que um contador por email não vê. Só se aplica quando quem chama passa o ip do cliente — o `authRoutes()` passa |
 | `enumerationSafeRegister` | `boolean` | `true` | Impede que o `POST /auth/register` revele que um email já tem conta. `false` repõe o `409 AUTH_EMAIL_TAKEN` |
+| `registerPolicy` | `({ email, tenantId? }) => boolean \| Promise<boolean>` | — (aberto) | Quem pode criar uma conta **nova** pelo `POST /auth/register` e por um primeiro login social / SSO. Ver [Política de registo](#registration-policy) |
+| `register` (`authRoutes`) | `'open' \| 'closed' \| RegisterPolicy` | a `registerPolicy` acima | Sobreposição por rota para o `POST /auth/register` |
 | `tokenVersions` | `TokenVersionStore` | — (desligado) | **Revogação** opcional de access tokens: os tokens levam uma claim `tv` que o `resetPassword`/`revokeAllTokens` incrementa, matando os tokens em circulação antes do TTL. Custa uma leitura ao store por pedido autenticado |
 | `accountLinks` | `AccountLinkStore` | em memória | Ligações de contas OAuth/OIDC (fornecedor + subject → conta) — durável em produção, ou as ligações perdem-se ao reiniciar |
 | `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy?: { v1Keys?, plaintext? } }` | — (texto simples) | Cifra os segredos TOTP em repouso (AES-256-GCM, chaves HKDF com id, ligadas ao utilizador); valores que não sejam envelopes são recusados salvo adesão em `legacy`. Ver [Cifrar os segredos TOTP em repouso](#mfa-encryption) |
@@ -1112,6 +1329,8 @@ ambos.
 | `users` | `UserSource` | — | Quando definido, uma chave com `userId` também preenche `ctx().user`, para que as rotas protegidas por scopes leiam o utilizador que age |
 | `allowTenantlessKeys` | `boolean` | `false` | Deixa chaves emitidas sem tenant agir em pedidos com tenant (só chaves de plataforma de confiança) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Deixa uma chave sem `*` alcançar rotas `meta.auth`/`can`/`teamRole`/`audience` que não declaram `meta.scopes` |
+| `rejectInvalid` | `boolean` | `false` | Uma chave apresentada que não verifica → `401 AUTH_APIKEY_INVALID` + `WWW-Authenticate: Bearer error="invalid_token"`, em vez de continuar como anónimo |
+| `touchEveryMs` | `number` | `60_000` | Intervalo mínimo entre duas escritas de `lastUsedAt` para uma chave; `0` escreve em cada pedido |
 | `now` | `() => number` | `Date.now` | Relógio injetável (testes) |
 
 `webauthnPlugin(options)` e a sua `config`:
@@ -1168,7 +1387,8 @@ autenticar os utilizadores.
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` numa conta com MFA ativo — desativa-o primeiro com um código |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | Uma rota `meta.auth` recebeu um pedido cross-site, só com cookie, que altera estado |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | O orçamento de logins falhados por email ou por IP esgotou-se; traz `retryAfterMs` |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição, e para o `register(…, { emailVerified: true })` (recusado antes de escrever o que quer que seja) |
+| `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, ou uma `registerPolicy` recusou o primeiro login social / SSO de um endereço |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | arranque | `secret` em falta, ou com menos de 32 caracteres fora de um `NODE_ENV=development`/`test` explícito |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | Uma rota com `meta.scopes` foi chamada sem uma API key que tenha esse scope (ou `*`), ou uma chave sem `*` chamou uma rota protegida por identidade que não declara `meta.scopes` |
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | Uma chave usada fora do tenant em que foi emitida (ou uma chave sem tenant num pedido com tenant) |
@@ -1227,13 +1447,15 @@ autenticar os utilizadores.
 | --- | --- | --- |
 | `auth:registered` | `{ user }` | Email de boas-vindas, provisionamento |
 | `auth:register_existing_email` | `{ email }` | O email fora de banda "já tens conta" — o sinal que a resposta HTTP retém deliberadamente |
+| `auth:register_refused` | `{ email, tenantId?, source }` | Uma [política de registo](#registration-policy) recusou uma conta nova (`source`: `'register'` ou `'social'`); nada foi criado |
 | `auth:login` · `auth:login_failed` | `{ user }` · `{ email }` | Trilho de auditoria, alertas |
 | `auth:logout` | `{ user }` | Trilho de auditoria |
 | `auth:verify_requested` · `auth:email_verified` | `{ user, token }` · `{ user }` | **Envia o token por email** — nunca é devolvido por HTTP |
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Envia o token por email**; o segundo confirma a alteração |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Notificação de segurança |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Trilho de auditoria |
-| `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alertas — `reason` é `invalid`, `tenant_mismatch`, `not_allowed` ou `scope`; nunca a chave |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alertas — `reason` é `invalid`, `tenant_mismatch`, `not_allowed` ou `scope`; `prefix` é o prefixo de apresentação de uma chave inválida, nunca a chave. Não auditado por padrão |
+| `auth:apikey_refused` | `{ id, reason, tenantId? }` | Uma chave verificada foi recusada (`tenant_mismatch`, `not_allowed`, `scope`); emitido logo após o `auth:apikey_rejected`. Auditado por padrão |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | Alertas de força bruta de MFA e de bloqueio |
 | `auth:refresh_reused` | `{ userId, familyId }` | Alertas de roubo de token — um refresh token consumido voltou |
 | `auth:social_account_adopted` | `{ user }` | Um login social verificado assumiu uma conta não verificada; as credenciais antigas e as ligações de contas foram revogadas |

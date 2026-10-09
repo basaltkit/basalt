@@ -4,6 +4,12 @@ import {
   assertAuditQuery,
   AuditChainConflictError,
   auditChainKey,
+  AuditRedactionConflictError,
+  type AuditRedactionMarker,
+  AuditRedactionRefusedError,
+  type AuditRedactionWrite,
+  auditStableJson,
+  parseAuditHash,
   type AuditChainHead,
   type AuditChainRange,
   type AuditEntry,
@@ -29,7 +35,8 @@ const PKG = '@basaltkit/audit-prisma'
 
 /**
  * Prisma-backed implementation of the `@basaltkit/audit` `AuditStore` for
- * production databases (PostgreSQL, MySQL, …). Append-only by contract. Bring
+ * production databases (PostgreSQL, MySQL, …). Append-only by contract — the
+ * one in-place change is `redact()`, an attested erasure. Bring
  * your generated `PrismaClient` with the `AuditEntry` model (see the bundled
  * `prisma/schema.prisma`). The production counterpart to `@basaltkit/audit-sqlite`.
  */
@@ -51,6 +58,11 @@ interface PAuditEntry {
   hash?: string | null
   ip?: string | null
   userAgent?: string | null
+  // Added in @basaltkit/audit-prisma 2.1 — the marker of an attested erasure.
+  redaction?: string | null
+  redactedBy?: string | null
+  /** v3 hashes only (`integrity.erasable`). */
+  nonce?: string | null
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -60,27 +72,55 @@ export interface PrismaAuditClient {
     create(a: any): Promise<PAuditEntry>
     /** Used by `verify()` to count unchained legacy rows (every generated client has it). */
     count?(a: any): Promise<number>
+    /** Used by `get()` (falls back to `findMany`). Every generated client has it. */
+    findUnique?(a: any): Promise<PAuditEntry | null>
+    /** Used by `redact()`. Every generated client has it. */
+    updateMany?(a: any): Promise<{ count: number }>
   }
+  /** Interactive transaction, used by `redact()`. Every generated client has it. */
+  $transaction?(fn: (tx: any) => Promise<any>, options?: any): Promise<any>
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 const at = (n: number): Date => new Date(n)
 
-const toEntry = (r: PAuditEntry): AuditEntry => ({
-  id: r.id,
-  source: r.source as AuditEntry['source'],
-  event: r.event,
-  payload: r.payload === null ? undefined : (JSON.parse(r.payload) as unknown),
-  actorId: r.actorId ?? undefined,
-  tenantId: r.tenantId ?? undefined,
-  requestId: r.requestId ?? undefined,
-  at: r.at.getTime(),
-  ...(r.ip != null ? { ip: r.ip } : {}),
-  ...(r.userAgent != null ? { userAgent: r.userAgent } : {}),
-  ...(r.seq != null ? { seq: r.seq } : {}),
-  ...(r.prevHash != null ? { prevHash: r.prevHash } : {}),
-  ...(r.hash != null ? { hash: r.hash } : {}),
-})
+/**
+ * The redaction marker of a row, or `undefined` when it has none. A half-set
+ * or unparsable marker is returned malformed rather than dropped, so
+ * `verify()` fails closed (`redaction-mismatch`) instead of silently reading
+ * the row as unredacted.
+ */
+function toMarker(r: PAuditEntry): AuditRedactionMarker | undefined {
+  if (r.redaction == null && r.redactedBy == null) return undefined
+  let erased: unknown
+  try {
+    erased = r.redaction == null ? undefined : (JSON.parse(r.redaction) as unknown)
+  } catch {
+    erased = undefined
+  }
+  return { ...(erased !== null && typeof erased === 'object' ? erased : {}), attestationId: r.redactedBy } as AuditRedactionMarker
+}
+
+const toEntry = (r: PAuditEntry): AuditEntry => {
+  const redaction = toMarker(r)
+  return {
+    id: r.id,
+    source: r.source as AuditEntry['source'],
+    event: r.event,
+    payload: r.payload === null ? undefined : (JSON.parse(r.payload) as unknown),
+    actorId: r.actorId ?? undefined,
+    tenantId: r.tenantId ?? undefined,
+    requestId: r.requestId ?? undefined,
+    at: r.at.getTime(),
+    ...(r.ip != null ? { ip: r.ip } : {}),
+    ...(r.userAgent != null ? { userAgent: r.userAgent } : {}),
+    ...(r.seq != null ? { seq: r.seq } : {}),
+    ...(r.prevHash != null ? { prevHash: r.prevHash } : {}),
+    ...(r.hash != null ? { hash: r.hash } : {}),
+    ...(r.nonce != null ? { nonce: r.nonce } : {}),
+    ...(redaction !== undefined ? { redaction } : {}),
+  }
+}
 
 /**
  * A unique violation (`P2002`) on the `(chain, seq)` constraint — another
@@ -111,6 +151,9 @@ export type AuditColumn =
   | 'chain'
   | 'prevHash'
   | 'hash'
+  | 'redaction'
+  | 'redactedBy'
+  | 'nonce'
 
 export type AuditColumnLimits = ColumnLimits<{ AuditEntry: AuditColumn }>
 
@@ -132,6 +175,9 @@ export const auditMysqlColumnLimits: AuditColumnLimits = {
     chain: V,
     prevHash: V,
     hash: V,
+    redaction: MYSQL_TEXT,
+    redactedBy: V,
+    nonce: V,
   },
 }
 
@@ -158,6 +204,19 @@ export class PrismaAuditStore implements AuditStore {
   }
 
   async append(entry: AuditEntry): Promise<void> {
+    const data = this.toData(entry)
+    try {
+      await this.client.auditEntry.create({ data })
+    } catch (error) {
+      if (entry.seq !== undefined && isChainConflict(error)) {
+        throw new AuditChainConflictError(entry.tenantId, entry.seq, { cause: error })
+      }
+      throw error
+    }
+  }
+
+  /** The row to insert for `entry`, length-checked. */
+  private toData(entry: AuditEntry): Record<string, unknown> {
     // The 1.2 columns are only sent when set: an app that upgrades without
     // enabling integrity / request capture keeps working on its old schema.
     const data: Record<string, unknown> = {
@@ -178,17 +237,72 @@ export class PrismaAuditStore implements AuditStore {
     }
     if (entry.ip !== undefined) data.ip = entry.ip
     if (entry.userAgent !== undefined) data.userAgent = entry.userAgent
+    // Only v3 entries (integrity.erasable) carry one: apps that do not opt in
+    // need no `nonce` column.
+    if (entry.nonce !== undefined) data.nonce = entry.nonce
     // Before the insert: a truncated row would be written and then fail
     // verification forever; a refused one leaves the chain as it was.
     assertColumnLengths(PKG, this.limits, 'AuditEntry', data)
-    try {
-      await this.client.auditEntry.create({ data })
-    } catch (error) {
-      if (entry.seq !== undefined && isChainConflict(error)) {
-        throw new AuditChainConflictError(entry.tenantId, entry.seq, { cause: error })
-      }
-      throw error
+    return data
+  }
+
+  async get(id: string): Promise<AuditEntry | undefined> {
+    // A non-string id (an object from a parsed query string) would be read by
+    // Prisma as a filter operator.
+    if (typeof id !== 'string') throw new TypeError('get: `id` must be a string')
+    const delegate = this.client.auditEntry
+    const row =
+      typeof delegate.findUnique === 'function'
+        ? await delegate.findUnique({ where: { id } })
+        : (await delegate.findMany({ where: { id }, take: 1 }))[0]
+    return row == null ? undefined : toEntry(row)
+  }
+
+  /**
+   * The attested erasure, in one interactive transaction: an `updateMany`
+   * conditioned on the row's `hash` and `redactedBy` still equalling `expect`
+   * (count ≠ 1 → {@link AuditRedactionConflictError}), then the attestation's
+   * insert under the `(chain, seq)` unique constraint (`AuditChainConflictError`).
+   * Any error rolls both back. Needs the `redaction` / `redactedBy` columns of
+   * the 2.1 schema.
+   */
+  async redact(write: AuditRedactionWrite): Promise<void> {
+    const client = this.client
+    if (typeof client.$transaction !== 'function' || typeof client.auditEntry.updateMany !== 'function') {
+      throw new AuditRedactionRefusedError(
+        'unsupported-store',
+        `${PKG}: redact() needs a Prisma client with $transaction and auditEntry.updateMany ` +
+          '(every generated PrismaClient has both — a hand-written client or an extension must expose them).',
+      )
     }
+    const { attestationId, ...erased } = write.redaction
+    const update: Record<string, unknown> = {
+      payload: write.payload === undefined ? null : JSON.stringify(write.payload),
+      ip: write.ip ?? null,
+      userAgent: write.userAgent ?? null,
+      redaction: auditStableJson(erased),
+      redactedBy: attestationId,
+    }
+    // A v3 row has a nonce to destroy (and therefore the column); clearing it on
+    // other rows would make the 2.1 schema without `nonce` fail for nothing.
+    if (parseAuditHash(write.expect.hash)?.version === 3) update.nonce = null
+    assertColumnLengths(PKG, this.limits, 'AuditEntry', update)
+    const attestation = this.toData(write.attestation)
+    await client.$transaction(async (tx: PrismaAuditClient) => {
+      const { count } = await tx.auditEntry.updateMany!({
+        where: { id: write.id, hash: write.expect.hash ?? null, redactedBy: write.expect.redactedBy ?? null },
+        data: update,
+      })
+      if (count !== 1) throw new AuditRedactionConflictError(write.id)
+      try {
+        await tx.auditEntry.create({ data: attestation })
+      } catch (error) {
+        if (write.attestation.seq !== undefined && isChainConflict(error)) {
+          throw new AuditChainConflictError(write.attestation.tenantId, write.attestation.seq, { cause: error })
+        }
+        throw error
+      }
+    })
   }
 
   async chainHead(tenantId: string | undefined): Promise<AuditChainHead | undefined> {

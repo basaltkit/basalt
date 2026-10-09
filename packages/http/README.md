@@ -250,7 +250,10 @@ request, and is never flagged.
 Route-meta keys that *relax* a check rather than request one are deliberately **not**
 guarded: `central` (skips `tenantMembershipPlugin`'s check — a missing plugin removes a
 bypass, never a check), `mcp` (opts a route into MCP exposure) and `rateLimit` (abuse
-throttling, not an authorization boundary).
+throttling, not an authorization boundary). A route that declares `meta.rateLimit` with no
+limiter registered (`securityPlugin` without `rateLimit`) does not refuse the boot, but
+the adapter **warns once** that those budgets are not enforced. Silence it with
+`allowUnguardedMeta: ['rateLimit']` (or `true`) when an outer edge throttles.
 
 **The escape hatch.** If protection genuinely happens at an outer edge (an API gateway
 that authenticates before Basalt ever sees the request), waive the check with the
@@ -311,8 +314,9 @@ run on every call.
 | `auth` | `boolean` (or plugin-specific) | `@basaltkit/auth` guard | Requires an authenticated user. Boot-checked. |
 | `can` | `string \| string[]` | `@basaltkit/permissions` guard | Requires the permission — an array means **all** are required. Boot-checked. |
 | `teamRole` | plugin-specific | `@basaltkit/teams` guard | Requires a team-membership rank. Boot-checked. |
-| `rateLimit` | `{ limit: number; windowMs: number; key?: RateLimitKey }` | `securityPlugin` | Per-route bucket at a stricter threshold, per IP (default), `'user'`, `'tenant'`, `'user+tenant'` or `(ctx) => id`. |
+| `rateLimit` | `RouteRateLimits` — `{ limit; windowMs; key?: RateLimitKey; bucket? }` or an array of them | `securityPlugin` | Per-route bucket(s) at a stricter threshold, per IP (default), `'user'`, `'tenant'`, `'user+tenant'`, `'apiKey'` or `(ctx) => id`; `bucket` shares one across routes. |
 | `etag` | `true` | the shared pipeline | Strong `ETag` + `304` on `If-None-Match`, for `GET`/`HEAD`. |
+| `headers` | `Record<string, string>` | the shared pipeline | Static response headers set as soon as the route matches — on its errors (guard `401`, validation `400`, thrown `500`) too. Boot-checked: no control characters; not `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, hop-by-hop or `x-request-id`. |
 | `summary` · `description` · `tags` · `operationId` | `string` · `string` · `string[]` · `string` | `openapiPlugin` | Operation metadata in the generated document. |
 
 `meta.can` accepts a permission string (`'projects:delete'`) **or** a non-empty array of
@@ -320,6 +324,28 @@ strings. Anything else — an empty array, a number, an object — is unenforcea
 permissions guard throws `InvalidCanMetaError` (`PERMISSION_META_INVALID`, HTTP 500) on
 **every request** to that route rather than skipping the check. Authorization fails
 closed, loudly.
+
+### The route table — `describeRoutes()` / `findUnguardedRoutes()`
+
+`describeRoutes(entries)` normalises the `http:routes` bucket every adapter fills at
+boot into sorted `RouteRow`s — `{ method, url, auth, can, rateLimit, tenant, public, guards }`
+(`auth`/`can`/`rateLimit`/`tenant` are `null` when undeclared; `can: false` becomes
+`[]`; `rateLimit` reads `'10/1m per user'`, several budgets joined by `', '` and a shared bucket as `' [name]'`; `tenant` is `'required' | 'exempt' | 'central-only' | null`, read from `meta.tenant` only — `'central-only'` is `meta.tenant: 'never'`; `meta.central: true` is listed in `guards` as `'central'`; new values may be added in a minor, so switch with a `default` branch).
+`findUnguardedRoutes(rows, { require: ['auth', 'can'], allow? })` returns the rows that
+do not declare the required guards, treating `auth: false` / `public: true` (and
+`can: false`, for `can`) as intentional; only `auth: true` — the one value `authPlugin`
+enforces — satisfies `auth`. Both are pure and also importable from the
+zod-free subpath `@basaltkit/http/route-table`; `basalt routes` uses them.
+
+```ts
+const app = await buildApp().boot() // no listen needed
+const rows = describeRoutes(ensureMetadata(app.container).get('http:routes'))
+expect(findUnguardedRoutes(rows, { require: ['auth', 'can'], allow: (r) => r.url === '/health' })).toEqual([])
+```
+
+They read route **meta only**: an app-wide rate limit, URL-based tenancy, app hooks
+and the edge routes added through `HTTP_SERVER.addRoute()` (health, metrics, openapi)
+are not in the table.
 
 ### Conditional GETs — `meta: { etag: true }`
 
@@ -676,11 +702,43 @@ route({
 
 The id is resolved in the guard, after enrichers (auth, tenancy) set `ctx()`. When it is
 missing — anonymous caller, no tenant, the function returns nothing — the bucket **falls
-back to the client IP** (never to one shared bucket; identity buckets are namespaced so
-they never collide with IP ones). The same `store` (memory/Redis) is used. A keyed route
+back to the client IP** (identity buckets are namespaced so they never collide with IP
+ones). When `request.ip` itself is unresolved — Hono without `getClientIp`, a hand-built
+`runRoute`, an MCP tool called over stdio or through `McpServer.callTool` — the guard keys
+an identified caller by `user:<id>|tenant:<id>` (as `'user+tenant'` would), and **every
+anonymous ip-less request shares one fail-closed `unknown` bucket**. Configure the adapter
+to resolve the client IP to get per-client buckets back. The same `store` (memory/Redis) is used. A keyed route
 is always charged by the guard, so on every adapter it also counts against the global
 per-IP bucket (the pre-routing hook cannot know the user). An unknown `key` string keeps
 the per-IP bucket.
+
+`'apiKey'` keys the bucket by `ctx().apiKey.id` — only a key `apiKeysPlugin` verified, so
+made-up keys fall back like any missing id. Never derive the **global** `rateLimit.key`
+from a credential header: it runs before authentication, and a client rotating made-up
+values would get a fresh bucket per request.
+
+**Several budgets, shared buckets.** `meta.rateLimit` also takes an array
+(`RouteRateLimits`): every budget is enforced in order, the first refusal answers 429 and
+the later ones are not charged (put the burst first). `bucket: 'name'` shares one budget
+across every route declaring it; all declarations must agree on `limit`, `windowMs` and key
+string, or the boot is refused (`InvalidRouteMetaError`). These forms are charged in the
+guard on every adapter, on top of the edge bucket — on Fastify that differs from the
+single object, which replaces the global bucket.
+
+```ts
+meta: {
+  rateLimit: [
+    { limit: 10, windowMs: 1_000, key: 'apiKey' },
+    { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'public-api-daily' },
+  ] satisfies RouteRateLimits,
+}
+```
+
+**Path-prefix budgets.** `rateLimit.prefixes: [{ prefix: '/v1', limit, windowMs, key? }]`
+charges matching paths on their own pre-routing bucket instead of the global one (longest
+prefix wins, segment-boundary match, minimal normalisation), on every adapter — the way to
+lift the per-IP ceiling for a public API. Prefixes set or lift a budget; a budget that
+must hold for one endpoint belongs in its `meta.rateLimit`.
 
 By default the plugin also sets a **restrictive CSP** — `DEFAULT_CSP`, i.e.
 `default-src 'none'; frame-ancestors 'none'` — which is right for a JSON API but blocks
@@ -758,7 +816,7 @@ import { openapiPlugin } from '@basaltkit/http'
 openapiPlugin({ info: { title: 'My API', version: '1.0.0' } })
 ```
 
-Routes with `meta: { auth: true }` are marked with `bearerAuth` security in the document. The route's `response` field (schemas per status code) feeds the documented responses, and `meta.summary` / `meta.description` / `meta.tags` / `meta.operationId` enrich the operation. Pass `tags` to the plugin to give those groups top-level names and descriptions.
+Routes with `meta: { auth: true }` are marked with `bearerAuth` security in the document; routes with `meta.scopes` get an `apiKeyAuth` scheme (header `x-api-key`, or `apiKey: { header }`) plus an `x-required-scopes` extension listing the scopes (OpenAPI 3.0.3 allows no scopes in an `apiKey` requirement). `apiKey: { header, onAuthRoutes: true }` also offers the key on `meta.auth` routes — only when your keys really pass them; `apiKey: false` hides the scheme. With `idempotencyPlugin` registered, guarded methods document its `Idempotency-Key` header (`idempotency: false` hides it). The route's `response` field (schemas per status code) feeds the documented responses, and `meta.summary` / `meta.description` / `meta.tags` / `meta.operationId` enrich the operation. Pass `tags` to the plugin to give those groups top-level names and descriptions.
 
 The document is built on `app:booted` — after every plugin has published its routes, and before the server listens — so plugin order never matters.
 
@@ -771,6 +829,74 @@ basalt generate:docs                 # writes openapi.json
 basalt generate:docs --out=api.json  # custom path
 basalt generate:docs --stdout        # print instead of writing
 ```
+
+### Idempotent mutations — `idempotencyPlugin()`
+
+Repeating a request must not repeat its effect. When a client sends an `Idempotency-Key`,
+the first response is stored and every repeat with the same key receives **the same
+response** without running the handler again — a network retry never charges a card
+twice. It runs inside the shared route pipeline (`runRoute`), so it behaves identically on
+Fastify, Express and Hono.
+
+```ts
+import { createApp } from '@basaltkit/core'
+import { idempotencyPlugin, RedisIdempotencyStore } from '@basaltkit/http'
+import { Redis } from 'ioredis'
+
+createApp({
+  plugins: [
+    expressPlugin({ routes }), // or fastifyPlugin / honoPlugin
+    idempotencyPlugin({
+      store: new RedisIdempotencyStore(new Redis(process.env.REDIS_URL!)), // default: in-memory
+      fingerprint: 'body',     // a different body under the same key → 422
+      replayAfterGuards: true, // a revoked caller gets 401/403, not the cached success
+    }),
+  ],
+})
+```
+
+Rules:
+- Every handler shape is covered: one that returns its payload is replayed exactly like
+  one that sends it through `reply.send()`. A replay carries `Idempotent-Replayed: true`.
+- A repeat while the first request is still in flight → `409 IDEMPOTENCY_CONFLICT`.
+- Only the **handler's own** outcome is stored. A refusal raised before the handler ran —
+  a guard's `401`/`403`, the rate limiter's `429`, a validation `400`, an unreadable body —
+  releases the key, so the retry (after `Retry-After`, or once signed in) runs the operation.
+- Responses `>= 500`, the retry-later statuses `408`, `425` and `429` (even from the
+  handler), `stream()` and `sse()` responses are **not** stored. Any other client error the
+  handler throws or sends (`4xx`) is stored and replayed byte-for-byte.
+- Keys are scoped by **caller credentials + tenant headers + method + route pattern + key**;
+  the store only sees a SHA-256 of that scope. Credentials are every header in
+  `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`, `x-api-key`); the
+  tenant part is only the raw `x-tenant-id` + `host` headers. Requests with none of the
+  credential headers are skipped unless `allowAnonymous: true`.
+- **What the scope does not cover:** a tenant resolved another way (a path segment such as
+  `/t/:tenant/...`, a token claim) and the concrete path params. The same credential
+  reusing one key on `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and
+  `/orders/2/pay`, receives the **first** response. Have clients mint a fresh key per
+  operation (and per tenant), and bind the key to the URL with a fingerprint function so
+  such a reuse is refused with `422`:
+  `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
+- `fingerprint: 'body'` binds the key to the body: canonical JSON (sorted keys) of a parsed
+  body, the exact bytes of a `rawBody()` route — **not** the query string or the path
+  params. A mismatch → `422 IDEMPOTENCY_KEY_REUSED`, also against a request still in
+  flight. `upload()` routes need a function: `fingerprint: ({ route, request }) => string | undefined`.
+- By default the check runs after the enrichers and **before** the guards — so a replay is
+  decided after, e.g., tenant resolution: a suspended tenant gets its `403`, not the replay.
+  `replayAfterGuards: true` runs it after guards and validation, just before the handler.
+  A `rawBody()` route fingerprinted by `'body'` is always checked after the guards.
+- An `Idempotency-Key` longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`.
+- The reservation is an **atomic** `setPending()` before the handler runs.
+- Only Basalt `route()` definitions are covered — not handlers registered on the
+  underlying framework by hand. A raw `fastify.post(...)` (or `app.post(...)` on Express or
+  Hono) is **not** protected: declare it with `route()` and pass it to the adapter plugin.
+- Rolling deploys: with `fingerprint` on, `RedisIdempotencyStore` writes in-flight
+  reservations as `pending:<fingerprint>`; an instance running a release older than this
+  one reads that as a completed record and fails the repeat. Roll out with `fingerprint`
+  off, then turn it on. Empty responses (`204`) are stored and replayed too.
+
+`fingerprint` and `replayAfterGuards` default to off so existing apps keep their
+behaviour; a future major turns them on.
 
 ### Advanced: `runRoute()` and the pipeline
 
@@ -845,10 +971,14 @@ readonly field — it is a boot failure, never an HTTP response.
 |---|---|
 | `runRoute(definition, request, reply, pipeline?)` | Executes a request's full pipeline; returns the handler's value. |
 | `toErrorResponse(error)` → `ErrorResponse` | Converts any error into a standardized `{ status, body }`. |
-| `RequestEnricher` | `(info: { request, context, container }) => void \| Promise<void>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. |
+| `RequestEnricher` | `(info: { request, context, container, route?, reply? }) => void \| RequestDisposer \| Promise<void \| RequestDisposer>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. An enricher that answers the request itself (`reply.send()`) ends it: the remaining enrichers, the guards and the handler do not run. A returned disposer runs exactly once when the response has ended (sent, streamed out, failed or abandoned) and the handler has settled — never while the handler still runs after a client abort — on every adapter. |
+| `RequestDisposer` | `() => void \| Promise<void>` — cleanup an enricher returns (e.g. releasing a leased database client). |
+| `ctx().onDispose` | `readonly ((disposer: RequestDisposer) => void) \| undefined` — hands a disposer to the current request from outside an enricher's return value (a hook listener, a handler). Runs once the pipeline has settled and the response is complete (on Hono, a buffered response is complete when built: its disposers are awaited before the Response is returned). Set by `runRoute` on the request context only (non-enumerable and read-only, so a context copied by `tenancy.run()` does not inherit it); absent outside a request, in queue/scheduler contexts and before 2.8, which tells a plugin not to take what it cannot give back. Check for its presence, not `?.`: `ctx().onDispose?.(fn)` silently drops the cleanup where it is absent. |
+| `RequestDisposers` | Per-request disposer list for adapter authors and other `runRoute` callers (frozen semantics): `new RequestDisposers(onError?)`, `add(disposer)`, once-guarded `run()` that never throws (last-registered first, serially, each awaited; one failure never stops the others; a disposer added after `run()` runs at once); `onError` is never rethrown and a throwing `onError` is swallowed. |
 | `RouteGuard` | `(info: { route, request, context, container }) => void \| Promise<void>` — rejects by throwing. Bucket `'http:guards'`. |
-| `RoutePipeline` | `{ container?, enrichers?, guards? }`. |
+| `RoutePipeline` | `{ container?, enrichers?, guards?, onDispose? }`. `onDispose` receives the disposers enrichers return; an adapter passes it and runs them once `runRoute` has settled and the response has ended. Without it, `runRoute` runs them itself when it returns or throws, and reports a failing disposer to `console.error` (`REQUEST_DISPOSER_FAILED`). |
 | `assertRoutesGuarded(routes, claimed, allow?)` | The boot check every adapter runs. `claimed` is a `Set` of claimed keys or a booted `Container` (the keys are read from its `'http:guarded-meta'` bucket). |
+| `describeRoutes(entries)` → `RouteRow[]` · `findUnguardedRoutes(rows, { require, allow? })` | The route table with declared guards, and the routes missing required guards — see [The route table](#the-route-table--describeroutes--findunguardedroutes). Also at `@basaltkit/http/route-table`. |
 | `isJsonMediaType(contentType)` | `true` for `application/json` or a `+json` type, parameters and case ignored — never a substring match (`text/plain; application/json` is CORS-safelisted, not JSON). The rule every adapter parses bodies by. |
 | `mediaTypeOf(contentType)` | The bare, lower-cased media type of a `Content-Type` header (`''` when absent). |
 | `DEFAULT_BODY_LIMIT` | `1048576` (1 MiB) — the default body limit of every adapter. |
@@ -862,6 +992,31 @@ readonly field — it is a boot failure, never an HTTP response.
 | `HttpServer` | `use(preHook)`, `after(afterHook)`, `addRoute(method, url, handler)`. |
 | `HttpServerCollector` | Implementation that accumulates hooks/routes for the adapter to mount at startup (`runPre`, `runAfter`). |
 | `PreHook` / `AfterHook` / `SimpleHandler` | Types for hooks and standalone routes. |
+
+### `idempotencyPlugin(options?)` → Basalt plugin (`basalt:idempotency`)
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `store` | `IdempotencyStore` | `new MemoryIdempotencyStore(ttlMs)` | Where outcomes live. `RedisIdempotencyStore` shares them across instances. |
+| `header` | `string` | `'idempotency-key'` | Header carrying the key. |
+| `methods` | `string[]` | `['POST']` | Methods the check applies to. |
+| `ttlMs` | `number` | `86_400_000` (24 h) | Retention of the default in-memory store. |
+| `credentialHeaders` | `string[]` | `authorization`, `x-session-id`, `cookie`, `x-api-key` | Headers folded into the replay scope. |
+| `allowAnonymous` | `boolean` | `false` | Also cache requests carrying none of the credential headers. |
+| `fingerprint` | `'body' \| false \| (input) => string \| undefined` | `false` | Bind a key to its request; a mismatch → `422 IDEMPOTENCY_KEY_REUSED`. |
+| `replayAfterGuards` | `boolean` | `false` | Run the check after guards and validation instead of before the guards. |
+
+`idempotencyHeaderOf(container)` → `string | undefined`: the header the registered `idempotencyPlugin` reads the key from, lower-cased (`'idempotency-key'` unless `header` renames it), or `undefined` when the plugin is not registered. Use it instead of reading http's internal metadata (`@basaltkit/mcp` does, to never forward the key into a tool call). It caches nothing.
+
+`IdempotencyStore`: `get(key)` → `IdempotencyRecord | IdempotencyPending | 'pending' | undefined`;
+`setPending(key, info?)` → `boolean` (**an atomic check-and-set** — Redis `SET NX`, or one
+synchronous step in-process; `info.fingerprint` may be kept on the reservation and returned
+as `{ pending: true, fingerprint }`); `complete(key, record)`; `release(key)`.
+`IdempotencyRecord` = `{ status, body, contentType?, fingerprint? }`. A store that ignores
+fingerprints keeps working; a concurrent repeat is then a `409` rather than a `422`.
+`MemoryIdempotencyStore(ttlMs?, clock?, { maxEntries? })` is the in-process store (default
+10 000 entries, oldest evicted first). `RedisIdempotencyStore(redis, { prefix?, ttlMs? })`
+takes any ioredis-compatible `RedisIdempotencyClient` (`get`/`set`/`del`).
 
 ### `securityPlugin(options?)`
 

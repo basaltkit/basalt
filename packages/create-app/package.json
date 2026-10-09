@@ -21,8 +21,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "node scripts/sync-versions.mjs && tsc -p tsconfig.build.json",
+    "build": "node scripts/sync-versions.mjs && node scripts/sync-stubs.mjs && tsc -p tsconfig.build.json",
     "sync-versions": "node scripts/sync-versions.mjs",
+    "sync-stubs": "node scripts/sync-stubs.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -49,10 +50,12 @@
     "@basaltkit/tsconfig": "workspace:^",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
+    "@prisma/client-runtime-utils": "^7.10.0",
     "@types/node": "^26.6.1",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.0",
     "prisma": "^7.10.0",
+    "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1",
     "zod": "^4.6.5"

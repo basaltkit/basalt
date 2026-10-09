@@ -212,6 +212,20 @@ throw error
     expect(stderr).not.toMatch(/alice|s3cret|^\s+at /m)
   })
 
+  it('explains a permission-denied database with the GRANT from the diagnosis (BK-041)', async () => {
+    const dir = await failingBoot(
+      'denied',
+      `throw Object.assign(new Error('Database "dbapp" refused the migration check'), { code: 'PRISMA_NOT_MIGRATED', details: { diagnosis: { code: 'DB_PERMISSION_DENIED', cause: 'permission denied for schema public', fix: 'GRANT USAGE ON SCHEMA public TO alice_app;' } } })`,
+    )
+    const { code, stderr } = run(dir, 'bin/basalt.ts', ['routes'])
+    expect(code).toBe(1)
+    expect(stderr).toContain('The app cannot start — the database refused the app database role (permission denied):')
+    expect(stderr).toContain('permission denied for schema public')
+    expect(stderr).toContain('Fix: GRANT USAGE ON SCHEMA public TO alice_app;')
+    expect(stderr).not.toContain('did not answer')
+    expect(stderr).not.toMatch(/s3cret|^\s+at /m)
+  })
+
   it('leaves other boot errors alone', async () => {
     const dir = await scaffold('other')
     await write(dir, 'src/app.js', `throw new Error('database unreachable')\n`)
@@ -231,9 +245,11 @@ describe('src/dev.ts', () => {
     const dev = run(dir, 'src/dev.ts', [], { DEVTS_PORT: '4000' })
     expect(dev.stderr).toBe('')
     expect(JSON.parse(dev.stdout)).toEqual({ url: 'postgres://from-dotenv/devts', port: '4000', nodeEnv: 'development' })
-    // `pnpm start` runs server.ts directly: production configuration comes from the environment only.
+    // `pnpm start` runs the compiled server.ts: production configuration comes from the environment only.
     expect(await read(dir, 'src/server.ts')).not.toMatch(/loadEnvFile|\.env/)
-    expect(JSON.parse(await read(dir, 'package.json')).scripts.start).toBe('tsx src/server.ts')
+    const scripts = JSON.parse(await read(dir, 'package.json')).scripts
+    expect(scripts.start).toBe('node --enable-source-maps dist/src/server.js')
+    expect(scripts['start:dev']).toBe('tsx src/server.ts')
   })
 
   it('still starts without a .env', async () => {

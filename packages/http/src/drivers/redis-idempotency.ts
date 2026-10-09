@@ -1,15 +1,17 @@
-import type { IdempotencyRecord, IdempotencyStore } from '../idempotency.js'
+import type { IdempotencyPending, IdempotencyRecord, IdempotencyStore } from '../idempotency.js'
 
-/** Minimal ioredis-compatible surface — inject your client, no hard dependency. */
-export interface RedisLike {
+/** Minimal ioredis-compatible surface the idempotency store needs — inject your client, no hard dependency. */
+export interface RedisIdempotencyClient {
   get(key: string): Promise<string | null>
   set(key: string, value: string, ...args: (string | number)[]): Promise<unknown>
   del(...keys: string[]): Promise<number>
 }
 
-// A completed record is always JSON of an object (starts with '{'), so this bare
-// word can never collide with a serialized record.
+// A completed record is always JSON of an object (starts with '{'), so these
+// bare words can never collide with a serialized record. A reservation that
+// carries a request fingerprint is stored as `pending:<fingerprint>`.
 const PENDING = 'pending'
+const PENDING_WITH = 'pending:'
 
 export interface RedisIdempotencyStoreOptions {
   /** Key prefix. Default: 'basalt:idem'. */
@@ -33,7 +35,7 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   private readonly ttlMs: number
 
   constructor(
-    private readonly redis: RedisLike,
+    private readonly redis: RedisIdempotencyClient,
     options: RedisIdempotencyStoreOptions = {},
   ) {
     this.prefix = options.prefix ?? 'basalt:idem'
@@ -48,18 +50,20 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     return Math.max(1, Math.ceil(this.ttlMs))
   }
 
-  async get(key: string): Promise<IdempotencyRecord | 'pending' | undefined> {
+  async get(key: string): Promise<IdempotencyRecord | IdempotencyPending | 'pending' | undefined> {
     const raw = await this.redis.get(this.key(key))
     if (raw === null) return undefined
     if (raw === PENDING) return 'pending'
+    if (raw.startsWith(PENDING_WITH)) return { pending: true, fingerprint: raw.slice(PENDING_WITH.length) }
     return JSON.parse(raw) as IdempotencyRecord
   }
 
-  async setPending(key: string): Promise<boolean> {
+  async setPending(key: string, info?: { fingerprint?: string }): Promise<boolean> {
     // SET ... NX makes the reservation atomic: Redis writes the key only if it is
     // absent, returning 'OK'; a losing racer gets null. This closes the TOCTOU gap
     // where two concurrent first-time requests could both reserve and both run.
-    const result = await this.redis.set(this.key(key), PENDING, 'PX', this.px(), 'NX')
+    const value = info?.fingerprint !== undefined ? `${PENDING_WITH}${info.fingerprint}` : PENDING
+    const result = await this.redis.set(this.key(key), value, 'PX', this.px(), 'NX')
     return result !== null
   }
 

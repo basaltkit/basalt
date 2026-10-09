@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { CommandDefinition } from './command.js'
 
@@ -121,6 +121,115 @@ function discoverSchemas(domains: string[], provider?: string): DiscoveredSchema
     }
   }
   return found
+}
+
+/**
+ * The `prisma.config.ts` of one plane: its own schema and its own migration
+ * history, both relative to the config's directory (Prisma resolves config
+ * paths against the file, not the project root).
+ */
+export function planeConfigTs(schemaFile: string): string {
+  return `import { defineConfig, env } from 'prisma/config'
+
+// One plane, one config: this schema and ONLY this plane's migration history.
+// Paths are relative to this file's directory. Migrate with
+// \`prisma migrate dev --config <this file>\`; tenants via tenant:migrate
+// (prismaMigrator({ configPath })), which sets DATABASE_URL per tenant.
+export default defineConfig({
+  schema: '${schemaFile}',
+  migrations: { path: 'migrations' },
+  datasource: { url: env('DATABASE_URL') },
+})
+`
+}
+
+/**
+ * A root `prisma.config.ts` that only serves `prisma generate`: no migrations
+ * and no datasource, so a reflexive `prisma migrate dev` at the root fails
+ * (Prisma 7 needs `datasource.url` from the config) instead of diffing both
+ * planes into one database.
+ */
+export function generateOnlyRootConfigTs(schema: string): string {
+  return `import { defineConfig } from 'prisma/config'
+
+// Generate-only: no \`migrations\`, no \`datasource\`. Each plane migrates
+// with its own config (--config), so \`prisma migrate dev\` here refuses to
+// run instead of recreating tenant tables in the central database.
+export default defineConfig({
+  schema: '${schema}',
+})
+`
+}
+
+/**
+ * With declared targets: every plane needs its own `prisma.config.ts`, and a
+ * root config that can migrate is how tenant tables end up in the central
+ * database. Prints (or, with `--yes`, writes) the missing plane configs, and
+ * warns about a root config that declares migrations or a datasource. Never
+ * overwrites an existing file.
+ */
+function checkPlaneConfigs(
+  targets: Record<string, PrismaSyncTarget>,
+  io: { log(m: string): void },
+  write: boolean,
+): void {
+  const root = resolve('prisma.config.ts')
+  const planeConfigs = new Set<string>()
+  for (const [name, target] of Object.entries(targets)) {
+    const schemaPath = resolve(target.schemaPath)
+    const configPath = join(dirname(schemaPath), 'prisma.config.ts')
+    if (planeConfigs.has(configPath)) {
+      // Two planes in one directory would share one config — and one migration
+      // history, which is exactly the mix this check exists to prevent.
+      io.log(
+        `! [${name}] shares ${relative(process.cwd(), dirname(schemaPath)) || '.'} with another plane: give each ` +
+          'plane its own directory, so each has its own prisma.config.ts and migrations.',
+      )
+      continue
+    }
+    planeConfigs.add(configPath)
+    // The plane's schema sits at the project root: its config is the root one.
+    if (configPath === root) continue
+    const content = planeConfigTs(basename(schemaPath))
+    if (write) {
+      try {
+        // 'wx': create only — an existing config is the app's, never ours to replace.
+        writeFileSync(configPath, content, { flag: 'wx' })
+        io.log(`[${name}] Wrote ${relative(process.cwd(), configPath)}: this plane's schema and migration history.`)
+      } catch (error) {
+        if ((error as { code?: unknown }).code !== 'EEXIST') throw error
+      }
+      continue
+    }
+    let exists = true
+    try {
+      readFileSync(configPath)
+    } catch {
+      exists = false
+    }
+    if (exists) continue
+    io.log(
+      `[${name}] No prisma.config.ts next to ${relative(process.cwd(), schemaPath)}. Each plane needs its own ` +
+        `(re-run with --yes to write it) — ${relative(process.cwd(), configPath)}:`,
+    )
+    io.log(content)
+  }
+
+  if (Object.keys(targets).length < 2 || planeConfigs.has(root)) return
+  let rootText: string
+  try {
+    rootText = readFileSync(root, 'utf8')
+  } catch {
+    return
+  }
+  if (!/\bmigrations\s*:|\bdatasource\s*:/.test(rootText)) return
+  const schema = /\bschema\s*:\s*['"`]([^'"`]+)['"`]/.exec(rootText)?.[1] ?? 'prisma/schema.prisma'
+  io.log(
+    `! prisma.config.ts at the project root declares migrations or a datasource while ${Object.keys(targets).length} ` +
+      "planes are declared: `prisma migrate dev` there can recreate one plane's tables in the other database. " +
+      'Make it generate-only (not changed for you):',
+  )
+  io.log(generateOnlyRootConfigTs(schema))
 }
 
 /**
@@ -253,6 +362,8 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
         total = n
         if (n > 0) escritos.push(resolve(schemaPath))
       }
+
+      if (targets) checkPlaneConfigs(targets, io, flags['yes'] === true || flags['all'] === true)
 
       if (total === 0) {
         io.log('Schema is already up to date — nothing to add.')

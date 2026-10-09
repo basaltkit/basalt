@@ -96,9 +96,13 @@ model Tenant {
 }
 
 model TenantDomain {
-  domain   String @id
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  domain            String    @id
+  tenantId          String
+  verificationToken String?   // preenchido nas reivindicações de domínio (CustomDomains), NULL nas restantes
+  verified          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  verifiedAt        DateTime?
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@map("tenant_domains")
@@ -138,9 +142,11 @@ antes o `create()`. Ele insere, e um `id` existente lança
 próprio `app.acme.com`) resolve para ele, e continua lá depois de um reinício.
 
 ::: tip Os domínios têm de ser únicos
-O `save()` substitui o conjunto de domínios próprios do tenant. Se um domínio já
-pertencer a um tenant *diferente*, o `save()` recusa — o encaminhamento tem de ser
-inequívoco.
+O `save()` alinha as linhas de domínio do tenant com `domains`. Os domínios
+reivindicados e verificados através do `CustomDomains` ficam intactos (vê
+[um domain store durável](/pt/guide/tenancy#um-domain-store-duravel)). Se um
+domínio já pertencer a um tenant *diferente*, o `save()` recusa — o encaminhamento
+tem de ser inequívoco.
 :::
 
 ## Nível 3 — O teu próprio repositório de tenants

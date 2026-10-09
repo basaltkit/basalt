@@ -23,6 +23,7 @@ import {
   CanResourceUnavailableError,
   InvalidCanMetaError,
   MissingPolicyError,
+  MissingPolicyFilterError,
   ReservedScopeError,
   ResourceNotFoundError,
   ScopeRequiredError,
@@ -33,6 +34,7 @@ export {
   CanResourceUnavailableError,
   InvalidCanMetaError,
   MissingPolicyError,
+  MissingPolicyFilterError,
   PermissionDeniedError,
   ReservedScopeError,
   ResourceNotFoundError,
@@ -295,10 +297,39 @@ export type PolicyCheck<TResource = unknown> = (
   resource: TResource,
 ) => boolean | Promise<boolean>
 
-export interface Policy<TResource = unknown> {
+/**
+ * The list form of a check: the predicate the data layer applies to list and
+ * count queries. Return `true` for "no access narrowing", `false` for "no
+ * rows", or the predicate itself (a Prisma `where`, a `Prisma.Sql` fragment, a
+ * function of a table alias — whatever the app's data layer composes).
+ */
+export type PolicyFilter<TWhere = unknown> = (user: PolicyUser) => TWhere | boolean | Promise<TWhere | boolean>
+
+export interface PolicyOptions<TWhere = unknown> {
+  /**
+   * List form of the checks: action → the predicate the data layer applies to
+   * list/count queries ({@link Gate.listFilter}). Every key must also be a key
+   * of `checks` — a list rule never exists without its single-object rule.
+   */
+  filters?: Record<string, PolicyFilter<TWhere>>
+}
+
+export interface Policy<TResource = unknown, TWhere = unknown> {
   resource: string
   checks: Record<string, PolicyCheck<TResource>>
+  /** List form of the checks — see {@link PolicyOptions.filters}. */
+  filters?: Record<string, PolicyFilter<TWhere>>
 }
+
+/**
+ * What {@link Gate.listFilter} answers. `unrestricted` means no access
+ * narrowing within whatever tenant isolation the data layer already applies —
+ * the filter never carries tenant isolation.
+ */
+export type ListFilter<TWhere = unknown> =
+  | { readonly kind: 'unrestricted' }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'where'; readonly where: TWhere }
 
 /**
  * Contextual (ABAC) rules for a resource type:
@@ -306,12 +337,22 @@ export interface Policy<TResource = unknown> {
  * const ProjectPolicy = definePolicy('project', {
  *   update: (user, project) => project.ownerId === user.id,
  * })
+ *
+ * With `filters`, the same rules in list form, for {@link Gate.listFilter}:
+ *
+ * definePolicy<Project, Prisma.ProjectWhereInput>('project',
+ *   { read: (user, project) => project.ownerId === user.id },
+ *   { filters: { read: (user) => ({ ownerId: user.id }) } },
+ * )
  */
-export function definePolicy<TResource>(
+export function definePolicy<TResource, TWhere = unknown>(
   resource: string,
   checks: Record<string, PolicyCheck<TResource>>,
-): Policy<TResource> {
-  return { resource, checks: snapshotChecks(resource, checks) }
+  options?: PolicyOptions<TWhere>,
+): Policy<TResource, TWhere> {
+  const snapshot = snapshotChecks<TResource>(resource, checks)
+  const filters = snapshotFilters<TWhere>(resource, snapshot, options?.filters)
+  return filters ? { resource, checks: snapshot, filters } : { resource, checks: snapshot }
 }
 
 /**
@@ -336,6 +377,33 @@ function snapshotChecks<TResource>(
       throw new TypeError(`definePolicy(${resource}): check "${action}" must be a function`)
     }
     snapshot[action] = check as PolicyCheck<TResource>
+  }
+  return snapshot
+}
+
+/**
+ * The filters as a prototype-free lookup of their OWN entries, for the same
+ * reason as {@link snapshotChecks}. `undefined` when there are none. Every
+ * filter must pair with a check of the same action.
+ */
+function snapshotFilters<TWhere>(
+  resource: string,
+  checks: Record<string, unknown>,
+  filters: unknown,
+): Record<string, PolicyFilter<TWhere>> | undefined {
+  if (filters === undefined) return undefined
+  if (typeof filters !== 'object' || filters === null || Array.isArray(filters)) {
+    throw new TypeError(`definePolicy(${resource}): filters must be an object of action → filter`)
+  }
+  const snapshot = Object.create(null) as Record<string, PolicyFilter<TWhere>>
+  for (const [action, filter] of Object.entries(filters)) {
+    if (typeof filter !== 'function') {
+      throw new TypeError(`definePolicy(${resource}): filter "${action}" must be a function`)
+    }
+    if (!Object.hasOwn(checks, action)) {
+      throw new TypeError(`definePolicy(${resource}): filter "${action}" has no matching check`)
+    }
+    snapshot[action] = filter as PolicyFilter<TWhere>
   }
   return snapshot
 }
@@ -487,7 +555,9 @@ export class Gate {
   register(policy: Policy<never>): this {
     // Snapshotted here too: a Policy is a public shape, and one built by hand
     // (not through definePolicy) must not bring its prototype into the lookup.
-    this.policies.set(policy.resource, { resource: policy.resource, checks: snapshotChecks(policy.resource, policy.checks) })
+    const checks = snapshotChecks<never>(policy.resource, policy.checks)
+    const filters = snapshotFilters<unknown>(policy.resource, checks, policy.filters)
+    this.policies.set(policy.resource, filters ? { resource: policy.resource, checks, filters } : { resource: policy.resource, checks })
     return this
   }
 
@@ -564,11 +634,68 @@ export class Gate {
   }
 
   /**
-   * The policy check for exactly `resource:action`. Own entries only (see
-   * {@link snapshotChecks}), and only for two segments: `project:update:billing`
-   * is a different permission from `project:update`, so the `update` check must
-   * not decide it — that is a missing policy, not a match.
+   * The list form of `can(user, permission, resource)`: the predicate a
+   * repository applies to list and count queries, from the registered policy's
+   * `filters` (see {@link definePolicy}).
+   *
+   * ```ts
+   * const f = await gate.listFilter<Prisma.DocumentWhereInput>(me, 'document:read')
+   * if (f.kind === 'none') return { rows: [], total: 0 }
+   * const where = f.kind === 'unrestricted' ? filter : { AND: [f.where, filter] }
+   * ```
+   *
+   * - `superAdmin` short-circuits to `unrestricted`, as in `can()`.
+   * - No filter for exactly `resource:action` throws
+   *   {@link MissingPolicyFilterError} — whatever `onMissingPolicy` says. There
+   *   is no RBAC fallback: "RBAC allows" has no row-set meaning.
+   * - The policy decides alone: RBAC grants and Gate delegations are not
+   *   consulted (the route's `meta.can` still gates the endpoint).
+   * - A filter returning literal `true` is `unrestricted`, `false` is `none`,
+   *   `null`/`undefined` throws a `TypeError`, anything else is returned
+   *   verbatim as `where`.
+   * - Side-effect free, like `can()`.
+   *
+   * `TWhere` is a caller-side type ASSERTION: it is not linked to the `TWhere`
+   * the policy was defined with.
    */
+  async listFilter<TWhere = unknown>(user: PolicyUser, permission: string): Promise<ListFilter<TWhere>> {
+    if (!isPolicyUser(user)) throw new AuthRequiredGuardError()
+    assertPermission(permission, 'listFilter')
+    if (await this.options.superAdmin?.(user)) return { kind: 'unrestricted' }
+
+    const filter = this.policyFilter(permission)
+    if (!filter) throw new MissingPolicyFilterError(permission, this.registeredFilters())
+    const result: unknown = await filter(user)
+    if (result === true) return { kind: 'unrestricted' }
+    if (result === false) return { kind: 'none' }
+    if (result === undefined || result === null) {
+      throw new TypeError(
+        `listFilter(${permission}): the filter returned ${String(result)} — return true (unrestricted), ` +
+          `false (none) or the predicate`,
+      )
+    }
+    return { kind: 'where', where: result as TWhere }
+  }
+
+  /** The filter for exactly `resource:action` — the same lookup rules as {@link policyCheck}. */
+  private policyFilter(permission: string): PolicyFilter<unknown> | undefined {
+    const segments = permission.split(':')
+    if (segments.length !== 2) return undefined
+    const [resourceName, action] = segments as [string, string]
+    const filters = this.policies.get(resourceName)?.filters
+    if (!filters || !Object.hasOwn(filters, action)) return undefined
+    const filter = filters[action]
+    return typeof filter === 'function' ? filter : undefined
+  }
+
+  private registeredFilters(): string[] {
+    const out: string[] = []
+    for (const [resourceName, policy] of this.policies) {
+      for (const action of Object.keys(policy.filters ?? {})) out.push(`${resourceName}:${action}`)
+    }
+    return out
+  }
+
   /**
    * True when a registered policy check decides exactly `permission`
    * (`resource:action`) — i.e. when `can(user, permission, resource)` would
@@ -579,6 +706,12 @@ export class Gate {
     return isValidPermission(permission) && this.policyCheck(permission) !== undefined
   }
 
+  /**
+   * The policy check for exactly `resource:action`. Own entries only (see
+   * {@link snapshotChecks}), and only for two segments: `project:update:billing`
+   * is a different permission from `project:update`, so the `update` check must
+   * not decide it — that is a missing policy, not a match.
+   */
   private policyCheck(permission: string): PolicyCheck<never> | undefined {
     const segments = permission.split(':')
     if (segments.length !== 2) return undefined

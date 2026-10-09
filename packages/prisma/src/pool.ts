@@ -45,12 +45,37 @@ export interface TenantClientLease<TClient> {
  */
 export class TenantPoolExhaustedError extends BasaltError {
   readonly status = 503
-  constructor(tenantId: string, max: number, waitedMs: number) {
+  /**
+   * The message and details (tenant id, `max`, lease counts) describe the
+   * shared pool every tenant draws from: kept for the server log. The client
+   * gets the code and a neutral "Service unavailable."
+   */
+  readonly expose = false
+  /**
+   * @param usage How the `max` slots were held when the wait gave up:
+   *   `leased` clients have an open `acquire()` lease (a request or job is
+   *   using them right now); `recentlyUsed` ones were only handed out by
+   *   `get()` or released less than `idleMs` ago.
+   */
+  constructor(
+    tenantId: string,
+    max: number,
+    waitedMs: number,
+    usage: { leased: number; recentlyUsed: number } = { leased: 0, recentlyUsed: 0 },
+  ) {
+    const { leased, recentlyUsed } = usage
+    // Leases dominate → that many tenants are genuinely active at once, and
+    // only more slots help. Otherwise the slots are held by the idle grace
+    // window, and a shorter `idleMs` frees them.
+    const advice =
+      leased >= recentlyUsed
+        ? 'Raise `max` to at least the number of tenants active at the same time, or release leases sooner.'
+        : 'Lower `idleMs` (clients stay reserved that long after use) or raise `max`.'
     super(
       'PRISMA_POOL_EXHAUSTED',
       `No database client slot for tenant "${tenantId}": all ${max} pooled clients stayed in use ` +
-        `for ${waitedMs}ms. Raise \`max\` (open clients) or lower \`idleMs\`, or release leases sooner.`,
-      { details: { tenantId, max } },
+        `for ${waitedMs}ms (${leased} leased, ${recentlyUsed} recently used). ${advice}`,
+      { details: { tenantId, max, leased, recentlyUsed } },
     )
   }
 }
@@ -257,10 +282,22 @@ export class TenantClientPool<TClient> {
         return
       }
       if (Date.now() >= deadline) {
-        throw new TenantPoolExhaustedError(tenantId, this.max, Date.now() - started)
+        throw new TenantPoolExhaustedError(tenantId, this.max, Date.now() - started, this.usage())
       }
       await this.waitForSlot(deadline)
     }
+  }
+
+  /** Open clients by why they cannot be evicted right now. */
+  private usage(): { leased: number; recentlyUsed: number } {
+    const now = Date.now()
+    let leased = 0
+    let recentlyUsed = 0
+    for (const entry of this.clients.values()) {
+      if (entry.leases > 0) leased++
+      else if (now - entry.lastUsed < this.idleMs) recentlyUsed++
+    }
+    return { leased, recentlyUsed }
   }
 
   /** Least-recently-used client that is neither leased nor within `idleMs`. */

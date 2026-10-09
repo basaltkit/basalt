@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { detectProject, hasErrors, memoryReader, runDoctor } from '../src/index.js'
+import { detectProject, hasErrors, memoryReader, nodeReader, runDoctor } from '../src/index.js'
 
 const brokenFiles = {
   'package.json': JSON.stringify({ dependencies: { '@basaltkit/fastify': '^1.0.0', '@basaltkit/prisma': '^1.0.0' } }),
@@ -200,5 +203,68 @@ describe('in-memory-security-store rule', () => {
       'src/app.ts': 'export const app = createApp({ plugins: [] })',
     })))
     expect(clean.find((x) => x.id === 'in-memory-security-store')).toBeUndefined()
+  })
+})
+
+describe('platform-route-accepts-tenant (BK-043)', () => {
+  const base = {
+    'package.json': JSON.stringify({ dependencies: { '@basaltkit/tenancy': '^3.0.0' } }),
+    'src/app.ts': 'export const app = createApp({ plugins: [tenancyPlugin({ source, resolvers })] })',
+  }
+  const run = (files: Record<string, string>) =>
+    runDoctor(detectProject('/p', memoryReader({ ...base, ...files }))).find(
+      (d) => d.id === 'platform-route-accepts-tenant',
+    )
+
+  it('warns on a tenant: false route guarded by a platform: permission, naming file and line', () => {
+    const d = run({
+      'src/modules/platform/plans.routes.ts': [
+        "import { route } from '@basaltkit/http'",
+        'export const routes = [',
+        "  route({ method: 'GET', url: '/platform/plans', meta: { tenant: false, auth: true, can: 'platform:plans.read' }, handler }),",
+        "  route({ method: 'PUT', url: '/platform/operators/:id', meta: { tenant: false, can: ['platform:operators.manage'] }, handler }),",
+        ']',
+      ].join('\n'),
+    })
+    expect(d?.severity).toBe('warning')
+    expect(d?.category).toBe('tenancy')
+    expect(d?.detected).toContain('src/modules/platform/plans.routes.ts:3')
+    expect(d?.detected).toContain('src/modules/platform/plans.routes.ts:4')
+  })
+
+  it("stays quiet for tenant: 'never', for non-platform permissions and for commented-out code", () => {
+    expect(
+      run({
+        'src/platform.routes.ts': [
+          "route({ url: '/platform/plans', meta: { tenant: 'never', can: 'platform:plans.read' }, handler })",
+          "route({ url: '/me', meta: { tenant: false, can: 'account:read' }, handler })",
+          "// route({ url: '/old', meta: { tenant: false, can: 'platform:x' }, handler })",
+        ].join('\n'),
+      }),
+    ).toBeUndefined()
+  })
+
+  it('skips test files, and readers that cannot list files', () => {
+    expect(run({ 'src/platform.test.ts': "meta: { tenant: false, can: 'platform:x' }" })).toBeUndefined()
+    const { list: _list, ...noList } = memoryReader(base)
+    expect(detectProject('/p', noList).centralPlatformRoutes).toBeUndefined()
+  })
+
+  it('scans route files on disk through nodeReader, skipping node_modules', () => {
+    const root = mkdtempSync(join(tmpdir(), 'basalt-doctor-'))
+    try {
+      mkdirSync(join(root, 'src/modules/platform'), { recursive: true })
+      mkdirSync(join(root, 'src/node_modules/x'), { recursive: true })
+      writeFileSync(join(root, 'package.json'), base['package.json'])
+      writeFileSync(join(root, 'src/app.ts'), base['src/app.ts'])
+      const line = "route({ url: '/platform/plans', meta: { tenant: false, can: 'platform:plans.read' }, handler })"
+      writeFileSync(join(root, 'src/modules/platform/plans.routes.ts'), line)
+      writeFileSync(join(root, 'src/node_modules/x/index.js'), line)
+      expect(detectProject(root, nodeReader(root)).centralPlatformRoutes).toEqual([
+        { path: 'src/modules/platform/plans.routes.ts', line: 1 },
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

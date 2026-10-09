@@ -32,6 +32,7 @@ Cada um funciona por si só; juntos formam o framework. Cada pacote é versionad
 | `@basaltkit/storage` | Local/S3/MinIO sob um contrato, isolamento por tenant, URLs assinados |
 | `@basaltkit/storage-gcs` · `@basaltkit/storage-azure` | Drivers para Google Cloud Storage e Azure Blob |
 | `@basaltkit/mailer` | Emails declarativos tipados, drivers SMTP/log/memory, remetente por tenant |
+| `@basaltkit/inbound-mail` | Receber email: entregas assinadas em bytes em bruto a partir de um relay, parse MIME com limites e veredictos A-R/ARC de confiança, encaminhamento por endereço |
 | `@basaltkit/scheduler` | Cron fluente: `schedule.job(X).daily().at('03:00')`; `defineReconciler` volta a despachar trabalho encalhado |
 
 ## Filas
@@ -77,7 +78,7 @@ Cada um funciona por si só; juntos formam o framework. Cada pacote é versionad
 | `@basaltkit/files` | Pipeline de upload sobre o storage — validação de tipo/tamanho, quota por tenant, metadados, hooks de scan |
 | `@basaltkit/comments` | Threads de comentários por recurso — @mentions, resolver/reabrir, eventos para realtime e notificações |
 | `@basaltkit/i18n` | Internacionalização — locale resolvido pelo contexto, catálogos tipados com plurais, formatação Intl |
-| `@basaltkit/exports` · `@basaltkit/exports-xlsx` | Exportações de dados tipadas → CSV/TSV/JSON/NDJSON e um formatador XLSX zero-dep |
+| `@basaltkit/exports` · `@basaltkit/exports-xlsx` | Exportações de dados tipadas → CSV/TSV/JSON/NDJSON (BOM + números/datas por locale) e um formatador XLSX zero-dep; importação CSV estrita (`defineImport`/`readImport`) |
 
 ## UIs autossuficientes
 

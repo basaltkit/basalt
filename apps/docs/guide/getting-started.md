@@ -113,7 +113,7 @@ environment* change.
 `pnpm dev` runs `src/dev.ts`, which loads `.env` and sets `NODE_ENV=development`
 (unless it is already set), so the app boots even with an empty environment. `APP_SECRET` uses
 `secret({ minLength: 32 })`: it falls back to a throwaway value **only** with
-`NODE_ENV=development`/`test`. `pnpm start` runs `src/server.ts` directly, where
+`NODE_ENV=development`/`test`. `pnpm start` runs the compiled `src/server.ts` (`dist/src/server.js`, after `pnpm build`), where
 an unset `NODE_ENV` counts as production, so it **refuses to boot** until you set
 a real `MY_SAAS_APP_SECRET` of at least 32 characters
 (`openssl rand -base64 48`).
@@ -121,7 +121,7 @@ a real `MY_SAAS_APP_SECRET` of at least 32 characters
 ::: tip `.env` is loaded in development, not in production
 `defineEnv` reads `process.env` and nothing else. The scaffold's dev
 entrypoints — `pnpm dev` (`src/dev.ts`) and `pnpm basalt` (`bin/basalt.ts`) —
-load `.env` into it before the app is imported. `pnpm start` (`src/server.ts`)
+load `.env` into it before the app is imported. `pnpm start` (`dist/src/server.js`)
 does **not**: in production, export the variables, let your process manager
 inject them, or launch with `node --env-file=…`. See
 [Configuration](/guide/config). Loading `.env` never overrides a variable

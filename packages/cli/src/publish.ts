@@ -1,4 +1,5 @@
 import { defineCommand, type CommandDefinition } from './command.js'
+import { CI_WORKFLOW, DOCKERFILE, DOCKERIGNORE, EDITORCONFIG } from './stubs.js'
 
 /** One file a publishable drops into the app. */
 export interface PublishableFile {
@@ -25,82 +26,17 @@ export interface PublishResult {
   skipped: string[]
 }
 
-const DOCKERFILE = `# syntax=docker/dockerfile:1
-FROM node:22-slim AS base
-ENV NODE_ENV=production
-WORKDIR /app
-
-FROM base AS deps
-COPY package.json pnpm-lock.yaml* ./
-RUN corepack enable && pnpm install --prod --frozen-lockfile
-
-FROM base AS run
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-EXPOSE 3000
-CMD ["node", "dist/main.js"]
-`
-
-/**
- * Published with the Dockerfile: its \`COPY . .\` would otherwise bake \`.env\`,
- * private keys and VCS metadata into an image layer. Every rule is \`**\/\`-prefixed:
- * .dockerignore patterns are anchored at the context root, so a bare \`.env\`
- * or \`*.pem\` would still let \`prisma/.env\` or \`certs/server.key\` through.
- */
-const DOCKERIGNORE = `**/.env
-**/.env.*
-!**/.env.example
-**/.npmrc
-**/.git
-**/node_modules
-**/coverage
-**/*.log
-**/*.pem
-**/*.key
-**/*.p12
-**/*.pfx
-**/.DS_Store
-`
-
-const CI_WORKFLOW = `name: ci
-on:
-  push: { branches: [main] }
-  pull_request:
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run build
-      - run: pnpm run test
-`
-
-const EDITORCONFIG = `root = true
-
-[*]
-charset = utf-8
-end_of_line = lf
-insert_final_newline = true
-indent_style = space
-indent_size = 2
-trim_trailing_whitespace = true
-`
-
 /** Stubs bundled with the CLI. Apps can register more via the metadata bucket. */
 export const PUBLISHABLES: Publishable[] = [
   {
     id: 'dockerfile',
-    description: 'Production multi-stage Dockerfile (+ .dockerignore keeping secrets out of the image)',
+    description: 'Production multi-stage Dockerfile — build stage + plain-node runtime (+ .dockerignore keeping secrets out of the image)',
     files: () => [
       { path: 'Dockerfile', content: DOCKERFILE },
       { path: '.dockerignore', content: DOCKERIGNORE },
     ],
   },
-  { id: 'ci', description: 'GitHub Actions CI workflow', files: () => [{ path: '.github/workflows/ci.yml', content: CI_WORKFLOW }] },
+  { id: 'ci', description: 'GitHub Actions CI workflow (install, typecheck, build, test)', files: () => [{ path: '.github/workflows/ci.yml', content: CI_WORKFLOW }] },
   { id: 'editorconfig', description: 'Shared .editorconfig', files: () => [{ path: '.editorconfig', content: EDITORCONFIG }] },
 ]
 

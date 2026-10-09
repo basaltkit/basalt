@@ -1,0 +1,269 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createApp, ctx, type BasaltApp, type BasaltPlugin } from '@basaltkit/core'
+import { FASTIFY, fastifyPlugin, route } from '@basaltkit/fastify'
+import { headerResolver, MemoryTenantSource, TENANCY, tenancyPlugin } from '@basaltkit/tenancy'
+import { DB_POOL, prismaPlugin, TenantClientPool, TenantPoolExhaustedError } from '../src/index.js'
+
+// BK-077: prismaPlugin handed clients out with `pool.get()` — "in use" for
+// `idleMs` (30s) after the call, never leased. The (max+1)th distinct tenant
+// within 30s waited `acquireTimeoutMs` and got a 503, while nothing was in use.
+
+interface LeaseCounts {
+  acquired: number
+  released: number
+  gets: number
+}
+
+/** Counts the pool's hand-outs, so a test can assert every lease came back. */
+function instrument(pool: TenantClientPool<unknown>): LeaseCounts {
+  const counts: LeaseCounts = { acquired: 0, released: 0, gets: 0 }
+  const acquire = pool.acquire.bind(pool)
+  const get = pool.get.bind(pool)
+  pool.acquire = async (tenantId: string) => {
+    const lease = await acquire(tenantId)
+    counts.acquired++
+    let done = false
+    return {
+      client: lease.client,
+      release: () => {
+        if (!done) counts.released++
+        done = true
+        lease.release()
+      },
+    }
+  }
+  pool.get = async (tenantId: string) => {
+    counts.gets++
+    return get(tenantId)
+  }
+  return counts
+}
+
+const TENANTS = ['t1', 't2', 't3', 't4', 't5', 't6']
+
+const source = () => {
+  const tenants = new MemoryTenantSource()
+  for (const id of TENANTS) tenants.add({ id, name: id })
+  return tenants
+}
+
+const routes = [
+  route({
+    method: 'GET',
+    url: '/who',
+    handler: () => ({ tenant: ctx().tenant?.id ?? null, db: (ctx().db as { tenantId?: string })?.tenantId ?? null }),
+  }),
+  route({
+    method: 'GET',
+    url: '/boom',
+    handler: () => {
+      throw new Error('handler failed')
+    },
+  }),
+]
+
+let app: BasaltApp | undefined
+afterEach(async () => {
+  await app?.shutdown()
+  app = undefined
+})
+
+// `idleMs: 0` keeps the tests independent of the (1s) grace window, which is
+// covered on its own below.
+const prisma = () =>
+  prismaPlugin({
+    forTenant: (tenantId) => ({ tenantId }),
+    max: 2,
+    idleMs: 0,
+    acquireTimeoutMs: 200,
+  })
+
+async function boot(order: 'tenancy-first' | 'prisma-first') {
+  const tenancy = tenancyPlugin({ source: source(), resolvers: [headerResolver()] })
+  const plugins: BasaltPlugin[] =
+    order === 'tenancy-first' ? [tenancy, prisma()] : [prisma(), tenancy]
+  app = await createApp({ plugins: [...plugins, fastifyPlugin({ routes })] }).boot()
+  const counts = instrument(app.container.get(DB_POOL))
+  const server = app.container.get(FASTIFY)
+  const get = (url: string, tenant: string) =>
+    server.inject({ method: 'GET', url, headers: { 'x-tenant-id': tenant } })
+  return { counts, get }
+}
+
+describe('prismaPlugin leases the tenant client per request (BK-077)', () => {
+  for (const order of ['tenancy-first', 'prisma-first'] as const) {
+    it(`serves more distinct tenants than \`max\` back to back, no 503 (${order})`, async () => {
+      const { counts, get } = await boot(order)
+      for (const tenant of TENANTS) {
+        const res = await get('/who', tenant)
+        expect(res.statusCode).toBe(200)
+        expect(res.json()).toEqual({ tenant, db: tenant })
+      }
+      // One lease per request — the tenancy enricher's 'tenancy:switched' must
+      // not take a second one that nobody releases — and every one returned.
+      expect(counts.acquired).toBe(TENANTS.length)
+      expect(counts.released).toBe(TENANTS.length)
+      expect(counts.gets).toBe(0)
+      expect(app!.container.get(DB_POOL).size).toBeLessThanOrEqual(2)
+    })
+  }
+
+  it('with the default grace window a new tenant waits ~1s for an idle slot, not a 503', async () => {
+    app = await createApp({
+      plugins: [
+        tenancyPlugin({ source: source(), resolvers: [headerResolver()] }),
+        prismaPlugin({ forTenant: (tenantId) => ({ tenantId }), max: 2, acquireTimeoutMs: 5_000 }),
+        fastifyPlugin({ routes }),
+      ],
+    }).boot()
+    const server = app.container.get(FASTIFY)
+    for (const tenant of ['t1', 't2']) {
+      expect((await server.inject({ url: '/who', headers: { 'x-tenant-id': tenant } })).statusCode).toBe(200)
+    }
+    const started = Date.now()
+    const res = await server.inject({ url: '/who', headers: { 'x-tenant-id': 't3' } })
+    expect(res.statusCode).toBe(200)
+    expect(Date.now() - started).toBeLessThan(2_500)
+  })
+
+  it('releases the lease when the handler throws', async () => {
+    const { counts, get } = await boot('tenancy-first')
+    const res = await get('/boom', 't1')
+    expect(res.statusCode).toBe(500)
+    expect(counts.acquired).toBe(1)
+    expect(counts.released).toBe(1)
+  })
+
+  it('still answers 503 when more tenants than `max` are genuinely in use at once', async () => {
+    app = await createApp({ plugins: [prisma()] }).boot()
+    const pool = app.container.get(DB_POOL)
+    const a = await pool.acquire('t1')
+    const b = await pool.acquire('t2')
+    const error = await pool.get('t3').catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(TenantPoolExhaustedError)
+    expect((error as TenantPoolExhaustedError).details).toMatchObject({ max: 2, leased: 2, recentlyUsed: 0 })
+    expect((error as Error).message).toContain('Raise `max`')
+    a.release()
+    b.release()
+  })
+})
+
+describe('prismaPlugin leases the tenant client per tenancy.run (BK-077)', () => {
+  it('leases on entry, releases on exit, and restores the outer client when nested', async () => {
+    app = await createApp({
+      plugins: [tenancyPlugin({ source: source(), resolvers: [headerResolver()] }), prisma()],
+    }).boot()
+    const counts = instrument(app.container.get(DB_POOL))
+    const tenancy = app.container.get(TENANCY)
+    const seen: string[] = []
+    await tenancy.run('t1', async () => {
+      seen.push((ctx().db as { tenantId: string }).tenantId)
+      await tenancy.run('t2', async () => {
+        seen.push((ctx().db as { tenantId: string }).tenantId)
+      })
+      // the inner lease is already back; the outer one is still held
+      expect(counts.released).toBe(1)
+      seen.push((ctx().db as { tenantId: string }).tenantId)
+    })
+    expect(seen).toEqual(['t1', 't2', 't1'])
+    expect(counts.acquired).toBe(2)
+    expect(counts.released).toBe(2)
+    expect(counts.gets).toBe(0)
+  })
+
+  it('releases when the callback throws', async () => {
+    app = await createApp({
+      plugins: [tenancyPlugin({ source: source(), resolvers: [headerResolver()] }), prisma()],
+    }).boot()
+    const counts = instrument(app.container.get(DB_POOL))
+    const tenancy = app.container.get(TENANCY)
+    await expect(
+      tenancy.run('t1', () => {
+        throw new Error('job failed')
+      }),
+    ).rejects.toThrow('job failed')
+    expect(counts.acquired).toBe(1)
+    expect(counts.released).toBe(1)
+  })
+
+  it('cycles through more tenants than `max` in tenancy.forEach', async () => {
+    app = await createApp({
+      plugins: [tenancyPlugin({ source: source(), resolvers: [headerResolver()] }), prisma()],
+    }).boot()
+    const counts = instrument(app.container.get(DB_POOL))
+    const visited: string[] = []
+    await app.container.get(TENANCY).forEach(
+      () => void visited.push((ctx().db as { tenantId: string }).tenantId),
+      { concurrency: 2 },
+    )
+    expect(visited.sort()).toEqual(TENANTS)
+    expect(counts.released).toBe(counts.acquired)
+  })
+
+  it('falls back to a 30s time-based hand-out for a switch that never says when it ends', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      app = await createApp({ plugins: [prisma()] }).boot()
+      const counts = instrument(app.container.get(DB_POOL))
+      const { runWithContext } = await import('@basaltkit/core')
+      await runWithContext({ tenant: { id: 't1' } }, async () => {
+        await app!.hooks.emit('tenancy:switched', { tenant: { id: 't1' } } as never)
+        expect((ctx().db as { tenantId: string }).tenantId).toBe('t1')
+      })
+      // An older @basaltkit/tenancy (no `via`, no 'tenancy:exited'): held for
+      // the 30s `get()` used to give — not the plugin's 1s grace window —
+      // then returned on its own.
+      expect(counts.acquired).toBe(1)
+      vi.advanceTimersByTime(29_000)
+      expect(counts.released).toBe(0)
+      vi.advanceTimersByTime(1_001)
+      expect(counts.released).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('never parks a lease in a request slot that already closed (switch after the response ended)', async () => {
+    let captured: object | undefined
+    app = await createApp({
+      plugins: [
+        prisma(),
+        fastifyPlugin({
+          routes: [
+            route({
+              method: 'GET',
+              url: '/capture',
+              handler: () => {
+                captured = ctx()
+                return { ok: true }
+              },
+            }),
+          ],
+        }),
+      ],
+    }).boot()
+    const counts = instrument(app.container.get(DB_POOL))
+    const server = app.container.get(FASTIFY)
+    expect((await server.inject({ method: 'GET', url: '/capture' })).statusCode).toBe(200)
+    // Let the request's disposer sink settle: it has run, so a disposer added
+    // now is invoked synchronously, on the spot.
+    await new Promise((resolve) => setImmediate(resolve))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const { runWithContext } = await import('@basaltkit/core')
+      // A hand-rolled switch (no `via`) on the finished request's context — a
+      // timer the handler left behind, a hook fired late.
+      await runWithContext(captured as never, async () => {
+        await app!.hooks.emit('tenancy:switched', { tenant: { id: 't1' } } as never)
+        expect((ctx().db as { tenantId: string }).tenantId).toBe('t1')
+      })
+      expect(counts.acquired).toBe(1)
+      expect(counts.released).toBe(0)
+      // Held for the legacy window, then returned — not leaked in an orphan slot.
+      vi.advanceTimersByTime(30_001)
+      expect(counts.released).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

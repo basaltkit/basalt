@@ -189,7 +189,7 @@ import type { UserSource, AuthUser, UserPatch } from '@basaltkit/auth'
 const users: UserSource = {
   async findByEmail(email) { /* SELECT … WHERE email = ? */ return null },
   async findById(id) { /* SELECT … WHERE id = ? */ return null },
-  async create(data) { // data = { email, passwordHash } — hash already computed
+  async create(data) { // data = { email, passwordHash, emailVerified? } — hash already computed; persist emailVerified (default false)
     return { id: crypto.randomUUID(), ...data } as AuthUser
   },
   async update(id, patch: UserPatch) { /* UPDATE … */ return null },
@@ -247,7 +247,7 @@ fastifyPlugin({ routes: [...appRoutes, ...authRoutes(), ...mfaRoutes(), ...apiKe
 
 | Endpoint | Body | Notes |
 | --- | --- | --- |
-| `POST /auth/register` | `{ email, password }` | Always `202 { ok: true }` — enumeration-safe (see below) |
+| `POST /auth/register` | `{ email, password }` | Always `202 { ok: true }` — enumeration-safe (see below). With `register: 'closed'`, `404`; see [Registration policy](#registration-policy) |
 | `POST /auth/login` | `{ email, password, mfaCode? }` | → `{ user, accessToken, refreshToken }` |
 | `POST /auth/refresh` | `{ refreshToken }` | new token pair; kills the family on reuse |
 | `POST /auth/logout` | `{ refreshToken? }` (body optional) | `204`; revokes the refresh family when given, and ends the cookie / `x-session-id` session and expires the cookie. A cookie-only SPA sends no body. A cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`) |
@@ -271,6 +271,9 @@ The unauthenticated routes that hash, mail or guess — `register`, `login`,
 `meta.rateLimit: { limit: 10, windowMs: 60_000 }` (per client ip and route),
 enforced when `securityPlugin`'s rate limiter is on. Override or drop it with
 `authRoutes({ rateLimit: { limit, windowMs } })` / `authRoutes({ rateLimit: false })`.
+Without `securityPlugin({ rateLimit })` nothing enforces it, and the adapter prints
+one `console.warn` at boot naming these routes (the boot is not refused) — register
+the limiter, or silence it with `allowUnguardedMeta: ['rateLimit']` on the adapter.
 Independently of that, `Auth` sends at most 3 reset and 3 verification emails per
 account every 15 minutes (`emailRequestThrottle`): extra requests still answer
 `200` but mint no token, so the endpoints can't mail-bomb a user or keep
@@ -291,6 +294,49 @@ tokens are emailed via the `auth:verify_requested` /
 `auth:password_reset_requested` hooks, never returned over HTTP. A completed
 password reset revokes every session and refresh token.
 :::
+
+### Registration policy {#registration-policy}
+
+`POST /auth/register` serves every plane. On a tenant host that usually should
+not mean "anyone who types the company's address gets an account there": the
+canonical multi-tenant pattern makes registration on a tenant host
+**invite-only**. Say who may sign up with `authRoutes({ register })`, or once
+for every self-service path with `authPlugin({ registerPolicy })`:
+
+```ts
+import { authPlugin, authRoutes } from '@basaltkit/auth'
+
+// Once: applies to the register route AND to a first social / SSO login.
+authPlugin({ users, secret, registerPolicy: ({ email, tenantId }) => tenantId === undefined || allowList.has(email) })
+// …or per route:
+authRoutes({ register: 'closed' }) // static 404 AUTH_REGISTRATION_CLOSED
+```
+
+| `register` | Behaviour |
+| --- | --- |
+| omitted (default) | The `registerPolicy` of `authPlugin()`, or open when there is none |
+| `'open'` | Anyone, even when `authPlugin()` has a `registerPolicy` |
+| `'closed'` | `404 AUTH_REGISTRATION_CLOSED` for **every** request. No body is read, so the answer says nothing about any address |
+| `(input) => boolean` | Asked with the canonical `email` and the request's `tenantId` (`ctx().tenant?.id`, `undefined` on the apex) |
+
+A predicate that refuses answers the **same `202 { ok: true }`** as a successful
+signup, creates nothing, does the same hashing work, and emits
+`auth:register_refused` (`{ email, tenantId?, source: 'register' }`) for your
+audit log or an out-of-band email. A `404` for "not invited" next to a `202` for
+"invited" would turn the route into an oracle for who the company invited. A
+policy that throws fails the request (fail closed).
+
+`registerPolicy` on `authPlugin()` also gates the **create** branch of a social /
+SSO login (`Auth.socialLogin`). That flow is already authenticated by the
+provider, so the refusal is explicit: `RegistrationClosedError`
+(`404 AUTH_REGISTRATION_CLOSED`) plus `auth:register_refused` with
+`source: 'social'`. Logins into existing accounts and the trusted
+`auth.register()` are never gated.
+
+For the usual "invite-only on tenant hosts", `@basaltkit/teams` ships the
+policy: `teamsInviteGate(teams)` admits the apex and, on a tenant, only an
+address with a pending, unexpired invitation to that tenant. See
+[Teams: invite-only registration](/guide/teams#invite-only-registration).
 
 ### The register → login → refresh flow (HTTP)
 
@@ -328,6 +374,37 @@ const { user: u, tokens } = await auth.login('ada@example.com', 'secretpassword1
 const next = await auth.refresh(tokens.refreshToken) // → new { accessToken, refreshToken }
 await auth.revoke(next.refreshToken) // logout for token-based clients
 ```
+
+### Creating accounts from trusted flows {#trusted-account-creation}
+
+`auth.register()` is the trusted, server-side way to create an account
+(seeding, a back-office, a sign-up flow that proved the address before creating
+the account). Never hash a password and insert a row yourself. When the flow has
+already proved the address (the "open a company" link was clicked from that
+inbox), create the account verified:
+
+```ts
+const owner = await auth.register(email, password, { emailVerified: true })
+```
+
+The flag is persisted with the row (`UserSource.create({ email, passwordHash,
+emailVerified })`), so `auth:registered` already carries `emailVerified: true`
+and a mail hook decides on its own: unverified, send the verification link;
+verified, don't. A provider-verified social login creates its account the same
+way.
+
+The public `POST /auth/register` never creates a verified account: an
+`emailVerified` field in the body is ignored. A custom `UserSource` written
+before `create()` took the flag is patched through `update()`. A source that
+can do neither (no `update()`, a `create()` that ignores the flag) cannot record
+verification. `register(…, { emailVerified: true })` needs `update()` — the
+same requirement as email verification — and without it fails with
+`UserUpdateUnsupportedError` **before** writing anything, so a retry gets the
+same error and never `EmailTakenError`; a
+social login creates the account unverified, links it and signs the user in —
+it never fails half-way, which would leave an account every later login of that
+provider refuses. Persist `emailVerified` in `create()` (or implement
+`update()`) to get verified accounts.
 
 ## Refresh rotation with reuse detection
 
@@ -427,6 +504,63 @@ pass. Allow a front-end served from another origin, or opt out:
 authPlugin({ users, secret, csrf: { trustedOrigins: ['https://app.example.com'] } })
 authPlugin({ users, secret, csrf: false }) // not recommended
 ```
+
+### Session lifetime: idle timeout and `__Host-` cookies {#session-hardening}
+
+`sessionTtl` (default `30d`) is an **absolute** lifetime: an active session
+still ends then. `sessionIdleTtl` adds an **idle** timeout — a session unused
+for longer is refused (the request is anonymous, so a `meta.auth` route answers
+`401`) and deleted:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  sessions: s.sessions,
+  sessionTtl: '12h',      // absolute
+  sessionIdleTtl: '30m',  // idle
+  sessionCookie: { name: '__Host-session' },
+})
+```
+
+Activity is recorded with the store's `touch()`, at most once per
+`min(60s, sessionIdleTtl / 4)`, so the effective idle limit can exceed the
+setting by that much. The store must implement `touch`: the memory store and
+`@basaltkit/auth-sqlite` do; `@basaltkit/auth-prisma` does with
+`prismaAuthStores(prisma, { trackSessionActivity: true })` after you add the
+`lastSeenAt` column. A store without it makes `authPlugin` fail at boot rather
+than silently not enforcing the timeout.
+
+When you turn the option on, a session row with no `lastSeenAt` (written before
+the store recorded it) starts its idle clock on its next use. A row that does
+carry one is measured from it — and while the option was off nothing touched
+it, so it still holds the creation time. Expect sessions older than
+`sessionIdleTtl` to be signed out once, on their next request, at rollout.
+
+A cookie named `__Host-…` or `__Secure-…` must follow the browser's prefix
+rules, or the browser silently drops it and every login "succeeds" without a
+session. Basalt applies them: both prefixes imply `Secure` when `secure` is
+unset — in every environment, so it also works on `http://localhost` — and
+`__Host-` implies `Path=/` (Basalt never sets `Domain`). Outside production
+that implied `Secure` logs a one-time boot warning: cookie jars in test clients
+(supertest, tough-cookie) do not send a `Secure` cookie back over plain `http`,
+so use an unprefixed name outside production (`name: isProd ? '__Host-sid' :
+'sid'`) or set `secure: true` explicitly, which silences it.
+
+A contradicting `secure: false` (including `secure: process.env.NODE_ENV ===
+'production'` in dev and test), or a `__Host-` cookie with another `path`, still
+boots and the cookie is emitted as configured, but it logs a boot warning: the
+browser drops that cookie. The next major refuses it at boot with
+`AUTH_SESSION_COOKIE_INVALID`. `__Host-` is the strongest choice for a session
+cookie: a sibling subdomain cannot set or shadow it.
+
+The prefixes match case-insensitively, as in current browsers (`__host-sid` is
+a `__Host-` cookie). The warnings are independent and each is logged once per
+`sessionCookie` object: a `__Host-` cookie with `path: '/app'` and `secure`
+unset logs both the path warning and, outside production, the implied-`Secure`
+one. An unprefixed cookie with `sameSite: 'None'` and no `Secure` (the default
+outside production) also warns, because browsers drop `SameSite=None` without
+`Secure`; it is emitted unchanged.
 
 ### Account routes: `meta.account` and `meta.mfa` {#account-routes}
 
@@ -580,6 +714,13 @@ Routes declaring `meta.mfa: false` are exempt (all of `authRoutes()` — login,
 not subject to the policy; minting a key needs an MFA session under it.
 Independently of the policy, `meta: { auth: true, mfa: true }` requires MFA on
 one route (step-up for a sensitive action). Off by default.
+
+Listings follow the same rule: the [MCP `tools/list`](/guide/mcp#what-tools-list-shows)
+hides `meta.mfa: true` routes (and, under `requireMfa: true`, every
+authenticated route not exempted) from a session without `mfa` in `ctx().amr`.
+That check only reads `ctx()`. A `requireMfa` **function** is never called for a
+listing, so under a function policy the routes stay listed and the guard
+decides on the call.
 
 ::: tip Writing your own `MfaStore`
 Implement the optional `consumeTotpStep(userId, step)` and
@@ -935,7 +1076,8 @@ short display prefix — the plaintext is shown exactly once. Keys may optionall
 expire; expired keys are rejected by the server and omitted from listings.
 
 The plugin's guard enforces three boundaries on every key-authenticated request
-(`403` in each case, with an `auth:apikey_rejected` event):
+(`403` in each case, with an `auth:apikey_rejected` and an `auth:apikey_refused`
+event):
 
 - **Tenant binding.** A key created inside a tenant works only when the request
   resolves that same tenant — never in another one chosen through `x-tenant-id`,
@@ -951,6 +1093,11 @@ The plugin's guard enforces three boundaries on every key-authenticated request
 - **Session-only routes.** A route with `meta.apiKey: false` refuses every key
   (`AUTH_APIKEY_NOT_ALLOWED`). `apiKeyRoutes()` and `mfaRoutes()` declare it, so
   a key can never mint, list or revoke keys, or change MFA.
+- **Listings follow the same rules.** The plugin registers a side-effect-free
+  visibility check, so the [MCP `tools/list`](/guide/mcp#what-tools-list-shows)
+  hides `meta.scopes` tools the key does not cover and `meta.apiKey: false` tools
+  from key holders, and identity-gated routes without `meta.scopes` from narrow
+  keys — without emitting `auth:apikey_rejected`.
 
 ```ts
 import { authPlugin, apiKeysPlugin, apiKeyRoutes, authRoutes, MemoryUserSource } from '@basaltkit/auth'
@@ -998,6 +1145,70 @@ await apiKeys.issue({
 A bearer prefixed with `mk_` is ignored by `authPlugin` and handled by
 `apiKeysPlugin`. If keys "don't work", you're likely missing `apiKeysPlugin()`.
 :::
+
+### Keys for machine clients {#apikeys-machine-clients}
+
+A presented key that does not verify (unknown, revoked, expired, malformed) is
+ignored by default: the request continues as anonymous and the route's own
+guards answer — `401 AUTH_REQUIRED` on a `meta.auth` route, `403
+AUTH_SCOPE_REQUIRED` on a `meta.scopes` one, or the public response. A machine
+client then cannot tell "my key is dead" from "I lack a scope". Opt in to a
+clear refusal:
+
+```ts
+apiKeysPlugin({ users, rejectInvalid: true })
+// dead key → 401 { error: { code: 'AUTH_APIKEY_INVALID', … } }
+//            WWW-Authenticate: Bearer error="invalid_token"
+```
+
+The refusal happens before any guard, identically on fastify, express and hono.
+A request with no key at all is unaffected.
+
+`verify()` records `lastUsedAt`, but at most once per `touchEveryMs` per key
+(default 60 s), so a client polling every second costs one store write a minute
+instead of one per request. `lastUsedAt` is accurate to within that window;
+`touchEveryMs: 0` writes on every request.
+
+Every refusal emits `auth:apikey_rejected`. For an invalid key the payload
+carries the presented key's display `prefix` (`mk_live_` plus six characters,
+what listings show — never the secret) and the client `ip`, so you can alert or
+throttle per caller. Because any anonymous client can trigger it, this hook is
+**not** recorded by `auditPlugin`'s defaults. A refusal of a key that verified
+(`tenant_mismatch`, `not_allowed`, `scope`) is also emitted as
+`auth:apikey_refused`, which **is** audited by default — see
+[which hooks are audited](/guide/persistence#which-hooks-are-audited).
+
+**A public API, end to end.** Machine clients often sit behind one address (an
+ERP, an integration platform), so a per-IP limit is the wrong ceiling for them.
+Give the API's paths their own edge budget, then budget each key and each
+customer on the routes:
+
+```ts
+import { securityPlugin, type RouteRateLimits } from '@basaltkit/http'
+
+securityPlugin({
+  rateLimit: {
+    limit: 300, windowMs: 60_000,                                  // the rest of the app
+    prefixes: [{ prefix: '/v1', limit: 3_000, windowMs: 60_000 }], // per IP, before any key lookup
+  },
+})
+apiKeysPlugin({ users, rejectInvalid: true })
+
+const v1Budget = [
+  { limit: 10, windowMs: 1_000, key: 'apiKey' },                                          // burst, per key
+  { limit: 50_000, windowMs: 86_400_000, key: 'tenant', bucket: 'v1-daily' },             // quota, per customer
+] satisfies RouteRateLimits
+
+route({ method: 'GET', url: '/v1/orders', meta: { scopes: ['orders:read'], rateLimit: v1Budget }, /* … */ })
+```
+
+The prefix keeps a per-IP budget in front of `verify()`, so a flood of made-up
+keys is still limited; `'apiKey'` uses only keys that verified; the daily quota
+is per tenant because a per-key quota multiplies with every key a customer
+mints. See [rate limiting](/guide/security#rate-limiting) for the ordering and
+header rules. The OpenAPI document advertises these routes with an `apiKeyAuth`
+scheme and `x-required-scopes` — pass `openapiPlugin({ apiKey: { header } })` if
+you changed the key header ([OpenAPI security schemes](/guide/openapi#security-schemes-sessions-and-api-keys)).
 
 ## Brute-force lockout
 
@@ -1066,8 +1277,9 @@ the plugin supplies:
 | `mfa` | `MfaStore` | in-memory | TOTP enrollment state and recovery codes |
 | `accessTtl` | `DurationInput` | `'15m'` | Access-token lifetime. Short by design — the refresh token is what carries the session |
 | `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
-| `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime |
-| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test` |
+| `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime (absolute) |
+| `sessionIdleTtl` | `DurationInput` | — (no idle timeout) | Refuse and delete a session unused for longer; needs a store with `touch` ([details](#session-hardening)) |
+| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value warns at boot (refused in the next major) |
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
@@ -1077,6 +1289,8 @@ the plugin supplies:
 | `csrf` (plugin) | `{ trustedOrigins?: string[] } \| false` | on | Cookie-session CSRF check on unsafe methods — see [Cookie sessions and CSRF](#cookie-sessions-and-csrf) |
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Per-IP budget that catches password *spraying* (one attempt across many accounts), which a per-email counter misses. Only applies when the caller passes the client ip — `authRoutes()` does |
 | `enumerationSafeRegister` | `boolean` | `true` | Keeps `POST /auth/register` from revealing that an email already has an account. `false` restores `409 AUTH_EMAIL_TAKEN` |
+| `registerPolicy` | `({ email, tenantId? }) => boolean \| Promise<boolean>` | — (open) | Who may create a **new** account through `POST /auth/register` and a first social / SSO login. See [Registration policy](#registration-policy) |
+| `register` (`authRoutes`) | `'open' \| 'closed' \| RegisterPolicy` | `registerPolicy` above | Per-route override for `POST /auth/register` |
 | `tokenVersions` | `TokenVersionStore` | — (off) | Opt-in access-token **revocation**: tokens carry a `tv` claim that `resetPassword`/`revokeAllTokens` bump, killing outstanding tokens before their TTL. Costs one store read per authenticated request |
 | `accountLinks` | `AccountLinkStore` | in-memory | OAuth/OIDC account links (provider + subject → account) — durable in production, or links are forgotten on restart |
 | `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy?: { v1Keys?, plaintext? } }` | — (plaintext) | Encrypts TOTP secrets at rest (AES-256-GCM, HKDF keys with ids, bound to the user); non-envelope values are refused unless `legacy` opts in. See [Encrypting TOTP secrets at rest](#mfa-encryption) |
@@ -1106,6 +1320,8 @@ synchronous; with an async one they return promises — `Auth` awaits both.
 | `users` | `UserSource` | — | When set, a key carrying a `userId` also populates `ctx().user`, so scope-guarded routes can read the acting user |
 | `allowTenantlessKeys` | `boolean` | `false` | Let keys issued without a tenant act on tenant-scoped requests (trusted platform keys only) |
 | `allowNarrowKeysOnUnscopedRoutes` | `boolean` | `false` | Let a key without `*` reach `meta.auth`/`can`/`teamRole`/`audience` routes that declare no `meta.scopes` |
+| `rejectInvalid` | `boolean` | `false` | A presented key that does not verify → `401 AUTH_APIKEY_INVALID` + `WWW-Authenticate: Bearer error="invalid_token"`, instead of continuing as anonymous |
+| `touchEveryMs` | `number` | `60_000` | Minimum interval between two `lastUsedAt` writes for one key; `0` writes on every request |
 | `now` | `() => number` | `Date.now` | Injectable clock (tests) |
 
 `webauthnPlugin(options)` and its `config`:
@@ -1162,7 +1378,8 @@ users in.
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` on an account whose MFA is on — disable it with a code first |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | A `meta.auth` route got a cross-site, cookie-only state-changing request |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset, and for `register(…, { emailVerified: true })` (refused before anything is written) |
+| `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, or a `registerPolicy` refused the first social / SSO login of an address |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars outside an explicit `NODE_ENV=development`/`test` |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`), or a key without `*` hit an identity-gated route that declares no `meta.scopes` |
 | `ApiKeyTenantMismatchError` | `AUTH_APIKEY_TENANT_MISMATCH` | 403 | A key used outside the tenant it was issued in (or a tenantless key on a tenant-scoped request) |
@@ -1219,13 +1436,15 @@ users in.
 | --- | --- | --- |
 | `auth:registered` | `{ user }` | Welcome email, provisioning |
 | `auth:register_existing_email` | `{ email }` | The out-of-band "you already have an account" email — the signal the HTTP response deliberately withholds |
+| `auth:register_refused` | `{ email, tenantId?, source }` | A [registration policy](#registration-policy) refused a new account (`source`: `'register'` or `'social'`); nothing was created |
 | `auth:login` · `auth:login_failed` | `{ user }` · `{ email }` | Audit trail, alerting |
 | `auth:logout` | `{ user }` | Audit trail |
 | `auth:verify_requested` · `auth:email_verified` | `{ user, token }` · `{ user }` | **Email the token** — it is never returned over HTTP |
 | `auth:password_reset_requested` · `auth:password_reset` | `{ user, token }` · `{ user }` | **Email the token**; the second confirms the change |
 | `auth:mfa_enabled` · `auth:mfa_disabled` | `{ user }` | Security notification |
 | `auth:apikey_issued` · `auth:apikey_revoked` | `{ id, tenantId?, userId? }` · `{ id }` | Audit trail |
-| `auth:apikey_rejected` | `{ id?, reason, tenantId? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; never the key |
+| `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alerting — `reason` is `invalid`, `tenant_mismatch`, `not_allowed` or `scope`; `prefix` is the display prefix of an invalid key, never the key. Not audited by default |
+| `auth:apikey_refused` | `{ id, reason, tenantId? }` | A key that verified was refused (`tenant_mismatch`, `not_allowed`, `scope`); emitted right after `auth:apikey_rejected`. Audited by default |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
 | `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
 | `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials and account links were revoked |

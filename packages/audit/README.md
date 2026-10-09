@@ -69,15 +69,20 @@ await audit.record('data.export', { format: 'csv' })
 
 ### Automatic hook capture
 
-By default, hooks matching `auth:**`, `billing:**`, `tenancy:created`, or `permission:**` are recorded (not `tenancy:switched`, which fires on every request). You can replace the list:
+By default, hooks matching `auth:**`, `billing:**`, `tenancy:created`, or `permission:**` are recorded (not `tenancy:switched`, which fires on every request), except those in `DEFAULT_AUDIT_HOOK_EXCLUDES`: `auth:apikey_rejected`, which any anonymous client can trigger on every request by presenting a dead API key. Refusals of a key that did verify are still recorded, as `auth:apikey_refused`. You can replace the list:
 
 ```ts
 import { auditPlugin } from '@basaltkit/audit'
 
 auditPlugin({
-  hooks: ['auth:**', 'billing:**', 'api-keys:**'], // replaces the defaults
+  hooks: ['auth:**', 'billing:**', 'api-keys:**'], // replaces the defaults (the default excludes still apply)
 })
+
+// Object form: a hook is recorded when it matches `include` and not `exclude`.
+auditPlugin({ hooks: { include: ['auth:**'], exclude: ['auth:login'] } })
 ```
+
+A hook named exactly (no wildcard) in `include` is always recorded, which is how you opt `auth:apikey_rejected` back in: `hooks: ['auth:**', 'auth:apikey_rejected']`. `exclude: []` turns the default excludes off.
 
 Enrichment comes from the active context: `ctx().user.id` → `actorId`, `ctx().tenant.id` → `tenantId`, `ctx().requestId` → `requestId`.
 
@@ -104,6 +109,23 @@ await runWithContext({ user: { id: 'u1' }, tenant: { id: 'acme' } }, async () =>
 ```
 
 `record` returns the created entry (already frozen).
+
+Outside a request (a script, a CLI command) there is no context, so the entry
+goes to the system chain with no actor. Wrap the work in `runWithContext` as
+above, or pass an explicit scope as the third argument:
+
+```ts
+await audit.record('report.generated', { rows }, { tenantId: 'acme', actorId: 'job:nightly' })
+```
+
+The scope can only **narrow**: inside a context with a tenant (or a user), a
+different `scope.tenantId` (or `scope.actorId`) throws a `TypeError`. Queue jobs
+need neither: `@basaltkit/queue` restores the dispatcher's tenant and user.
+
+The `audit:` event prefix is **reserved** for framework events. Today only
+`'audit:redacted'` is enforced — `record('audit:redacted', …)` throws a
+`TypeError`, because only `audit.redact()` may write it — but do not name your
+own events `audit:*`: a later major will reserve the whole prefix.
 
 ### Querying the trail
 
@@ -210,6 +232,10 @@ integrity: {
 
 **Legacy hashes.** Entries written before hashes carried a key id hold a bare 64-hex hash (v1). They keep verifying: an unkeyed verifier recomputes the SHA-256, a keyed one accepts the HMAC under **any** key it holds (`key` or `verifyKeys`) — v1 never said which. New entries link onto them as usual. A chain that started unkeyed and later gained a key can be verified in two windows: the unkeyed prefix with an unkeyed `Audit` (`to: n`), the keyed tail with the keyed one (`from: n + 1`).
 
+**Redacted entries.** An entry erased with [`audit.redact()`](#erasing-personal-data-auditredact) keeps its original `hash` — it still carries the chain links — but its content no longer matches it. `verify` checks such an entry through its `audit:redacted` attestation instead: the attestation must exist in the same chain after the entry, be a `manual` entry that verifies (keyed, on a keyed chain), name the entry's `id`, `seq` and `hash`, declare the same erased fields as the entry's `redaction` marker, and record the digest of the entry's current state (`auditRedactionState`); every erased field must hold `'[erased]'`. The walk also checks each `audit:redacted` attestation the other way: its entry must still carry a marker naming that attestation or a later one for the same entry — so a row restored to its original content (which matches its original hash again) or rolled back to an older redaction is caught. Anything else is `'redaction-mismatch'` (with a `detail`). Redacted entries count in `checked` and in `redacted`. Every other entry is verified exactly as before.
+
+**v3 hashes (`erasable`).** After an erasure a v1/v2 hash can still confirm a *guess* of the erased value to whoever can compute it — anyone on a plain SHA-256 chain, the key holder on a keyed one. `integrity: { mode: 'hash-chain', key, erasable: true }` writes v3 entries instead (`v3:sha256:<hex>` / `v3:hmac-sha256:<keyId>:<hex>`): the v2 canonical form plus a random 256-bit `nonce`, which a redaction destroys, so nobody can recompute the hash any more. Off by default (entries stay v2, byte for byte). It needs a store that persists `nonce` — `Audit` reads its first v3 entry back and throws if the nonce was dropped — and every verifier must be upgraded first: an older `@basaltkit/audit` reports v3 entries as `hash-mismatch`. Chains may mix v1, v2 and v3 entries.
+
 **Harden the table.** Make the database enforce append-only too — the application role should only be able to insert and read. On PostgreSQL:
 
 ```sql
@@ -217,7 +243,7 @@ REVOKE UPDATE, DELETE, TRUNCATE ON audit_entries FROM app_role;
 GRANT SELECT, INSERT ON audit_entries TO app_role;
 ```
 
-(Run migrations with a separate owner role.) SQLite has no roles: protect the file with filesystem permissions and back it up.
+(Run migrations with a separate owner role.) Keep this even if you erase personal data: erasure runs through a **dedicated eraser role** that may update only the erasable columns — see [the eraser role](https://github.com/basaltkit/basalt/tree/main/packages/audit-prisma#the-eraser-role) in `@basaltkit/audit-prisma`. SQLite has no roles: protect the file with filesystem permissions and back it up (the `@basaltkit/audit-sqlite` README has optional guard triggers against buggy updates).
 
 #### `basalt audit:verify`
 
@@ -250,9 +276,69 @@ To take them from elsewhere, pass a resolver instead: `requestContext: (context)
 
 **An IP address is personal data.** It is off by default. The request fields go through the configured redactor as `{ ip, userAgent }` before they are stored, so with `createPiiMinimizingRedactor({ key })` the IP is stored as a `pii_<hmac>` pseudonym (still correlatable, not reversible without the key); a redactor that drops them wins. Include `ip`/`userAgent` in your retention and data-subject-request policies.
 
+### Erasing personal data (`audit.redact`)
+
+Prefer [`fieldPolicies`](#personal-data-per-event): a value that is never stored
+needs no erasure. For what is already stored — a data-subject request, a field
+that should never have been recorded — `audit.redact()` erases chosen fields of
+one entry **in place** and keeps the trail verifiable:
+
+```ts
+const { entry, attestation, changed, residual } = await audit.redact(entryId, {
+  payload: ['customer.email', 'items[].note'], // fieldPolicies paths, or 'all'
+  ip: true,                                     // and/or userAgent: true
+  reasonRef: 'DSR-2026-114',                    // opaque, non-personal reference
+})
+```
+
+- Each value a path reaches becomes `'[erased]'` (`AUDIT_ERASED`); `ip` /
+  `userAgent` are dropped. Absent paths are skipped, and a request that changes
+  nothing writes nothing (`changed: false`). Erasing again merges into the same
+  cumulative `redaction` marker on the entry.
+- In the same transaction an **attestation** is appended to the entry's own
+  chain: an `audit:redacted` entry (source `manual`, actor = the eraser) whose
+  payload binds the entry's `id`, `seq` and original `hash`, the erased fields,
+  a digest of the entry's new state and `reasonRef` — never the erased data.
+  `verify()` checks the redacted entry through it (see "Redacted entries" above).
+- **Scope** mirrors `trail()`: inside a tenant context only that tenant's
+  entries are reachable (any other id is `AuditEntryNotFoundError`, 404 — no
+  existence oracle); without one, `tenantId` in the request pins the tenant; with
+  neither, a multi-tenant app must call `audit.systemRedact()`, the deliberate
+  cross-tenant path for trusted tooling. `actorId` names the eraser outside a
+  request (it must equal the context user inside one).
+- **Refused** (`AuditRedactionRefusedError`, nothing written) with a `reason`:
+  `'unverified'` — the entry does not verify as it is now (so a redaction never
+  launders tampered content), it is an attestation, or it is chained but this
+  `Audit` has no integrity; `'residual'` — see below; `'unsupported-store'` — the
+  store lacks `get()` / `redact()`.
+- Concurrent redactions of one entry (other replicas too) are safe: the store
+  only applies one whose base is still current (`AuditRedactionConflictError`
+  otherwise), and `Audit` re-reads and merges.
+
+**Residual.** After erasure the entry's old hash may still let someone confirm a
+guess of the erased value:
+
+| Entry hash | `residual` | Who can confirm a guess |
+|---|---|---|
+| none (unchained), v3 | `'none'` | nobody |
+| v2 HMAC, v1 under a keyed verifier | `'keyed'` | the integrity-key holder |
+| v2 SHA-256, unkeyed v1 | `'public'` | anyone who reads the row |
+
+`request.residual` is the most you accept, default `'keyed'`: erasing from a
+plain SHA-256 chain must be acknowledged with `residual: 'public'`. Turn on
+`erasable` (above) so entries written from now on have no residual.
+
+**What is not erased.** Opaque ids (`actorId`, `tenantId`, `requestId`), the
+event name and the time stay — erase the user in your auth store and `actorId`
+no longer identifies anyone. Copies elsewhere are yours to erase: the events
+outbox, activity feeds, search indexes, logs and **backups** (keep the
+data-subject-request ledger outside the database and re-apply it after a
+restore). Who may erase is the app's decision: wrap the call in an authorized
+job or command — there is deliberately no HTTP route, CLI command or MCP tool.
+
 ### Custom store (production)
 
-`MemoryAuditStore` loses everything when the process ends. In production, implement `AuditStore` over your database — the contract is append-only (no update or delete):
+`MemoryAuditStore` loses everything when the process ends. In production, implement `AuditStore` over your database — the contract is append-only (no delete, and no update but the attested erasure, `redact()`):
 
 ```ts
 import type { AuditEntry, AuditQuery, AuditStore } from '@basaltkit/audit'
@@ -261,6 +347,8 @@ import { auditPlugin } from '@basaltkit/audit'
 // Hash-chain support (optional): also implement chainHead, readChain,
 // countUnchained and chainTenants (and ideally readUnchained), and reject a
 // duplicate (chain, seq) with AuditChainConflictError — see "interface AuditStore" below.
+// Erasure support (optional): implement get() and redact(), and round-trip the
+// `nonce` and `redaction` fields.
 class SqlAuditStore implements AuditStore {
   async append(entry: AuditEntry): Promise<void> {
     // INSERT into the audit_entries table…
@@ -283,23 +371,27 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | Option | Type | Required? | Default | Description |
 |---|---|---|---|---|
 | `store` | `AuditStore` | No | `new MemoryAuditStore()` | Where entries are stored. |
-| `hooks` | `string[]` | No | `['auth:**', 'billing:**', 'tenancy:created', 'permission:**']` | Hook patterns recorded automatically (replaces the defaults). |
+| `hooks` | `string[] \| { include: string[]; exclude?: string[] }` | No | `['auth:**', 'billing:**', 'tenancy:created', 'permission:**']`, minus `DEFAULT_AUDIT_HOOK_EXCLUDES` | Hook patterns recorded automatically (replaces the defaults). `exclude` defaults to `DEFAULT_AUDIT_HOOK_EXCLUDES`; a hook named exactly in `include` is always recorded. |
 | `events` | `string[]` | No | `['**']` (everything) | EventBus event patterns recorded. `[]` disables it. |
 | `redact` | `AuditRedactor` | No | `defaultAuditRedactor` | Scrubs each payload (and the request fields) before it is stored. See "Redaction". |
 | `onCaptureError` | `(error, { source, event }) => void` | No | logs | Called when a bridged hook/event capture fails; the emitting operation continues. |
-| `integrity` | `'none' \| 'hash-chain' \| { mode: 'hash-chain', key?, keyId?, verifyKeys? }` | No | `'none'` | Hash-chains every entry per tenant so `verify()` detects tampering, and registers `audit:verify`. With `key` (>= 128 bits) the hash is HMAC-SHA256 and records `keyId` (default `auditKeyId(key)`); `verifyKeys` holds retired keys (bare, or `{ id, key }`) so a rotation keeps history verifiable. Needs a store with the chain methods. See "Verifiable trail". |
+| `integrity` | `'none' \| 'hash-chain' \| { mode: 'hash-chain', key?, keyId?, verifyKeys?, erasable? }` | No | `'none'` | Hash-chains every entry per tenant so `verify()` detects tampering, and registers `audit:verify`. With `key` (>= 128 bits) the hash is HMAC-SHA256 and records `keyId` (default `auditKeyId(key)`); `verifyKeys` holds retired keys (bare, or `{ id, key }`) so a rotation keeps history verifiable. `erasable: true` writes v3 (nonce) entries. Needs a store with the chain methods. See "Verifiable trail". |
 | `requestContext` | `boolean \| (ctx) => { ip?, userAgent? }` | No | off | Records the client `ip` / `userAgent`. `true` registers an HTTP enricher (all adapters) filling `ctx().client`. IP is PII — see "Request context". |
+| `fieldPolicies` | `Record<string, { omit?: string[]; pseudonymize?: string[] }>` | No | none | Per-event personal-data policy, keyed by exact event/hook name, applied before the redactor and before hashing. See "Personal data per event". |
+| `fieldPolicyKey` | `string \| Uint8Array` | No | random per process | Keys the `pseudonymize` pseudonyms (>= 128 bits). |
 
 ### `class Audit`
 
 | Method | Signature | Description |
 |---|---|---|
-| `constructor` | `new Audit(store, redact?, tenancyActive?, options?: AuditOptions)` | Creates the facade over a store. `options` takes `integrity` and `requestContext` (as in the plugin). |
-| `record` | `(event: string, payload?: unknown) => Promise<AuditEntry>` | Manual entry (`source: 'manual'`), enriched from context. Returns the entry (with `seq`/`hash` when chained). |
+| `constructor` | `new Audit(store, redact?, tenancyActive?, options?: AuditOptions)` | Creates the facade over a store. `options` takes `integrity`, `requestContext`, `fieldPolicies` and `fieldPolicyKey` (as in the plugin). |
+| `record` | `(event: string, payload?: unknown, scope?: { tenantId?, actorId? }) => Promise<AuditEntry>` | Manual entry (`source: 'manual'`), enriched from context. `scope` attributes an entry recorded outside a request and can only narrow (a value differing from the context throws). Returns the entry (with `seq`/`hash` when chained). |
 | `trail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | Query, most recent first, tenant-scoped (see above). |
 | `systemTrail` | `(query?: AuditQuery) => Promise<AuditEntry[]>` | System-only cross-tenant read. |
-| `verify` | `(options?: { tenantId?, from?, to?, expectedHead?, legacyUntil? }) => Promise<AuditVerifyResult>` | Verifies one hash chain and the tenant's rows outside it: `{ ok, tenantId, checked, unchained, unverified, firstBrokenAt?, entryId?, reason?, head? }`. `reason` is one of `hash-mismatch`, `prev-hash-mismatch`, `sequence-gap`, `sequence-duplicate`, `missing-predecessor`, `unchained-entry`, `truncated`, `head-mismatch`, `unknown-key`. Tenant-scoped like `trail()`. |
+| `verify` | `(options?: { tenantId?, from?, to?, expectedHead?, legacyUntil? }) => Promise<AuditVerifyResult>` | Verifies one hash chain and the tenant's rows outside it: `{ ok, tenantId, checked, redacted, unchained, unverified, firstBrokenAt?, entryId?, reason?, detail?, head? }`. `reason` is one of `hash-mismatch`, `prev-hash-mismatch`, `sequence-gap`, `sequence-duplicate`, `missing-predecessor`, `unchained-entry`, `truncated`, `head-mismatch`, `unknown-key`, `redaction-mismatch`. Tenant-scoped like `trail()`. |
 | `verifyAll` | `(options?: { expectedHeads?, legacyUntil? }) => Promise<{ ok, chains: AuditVerifyResult[] }>` | System-only: verifies every chain (system chain first); a forged chain name fails with `unknown-chain`. Inside a tenant context, only that tenant's chain. |
+| `redact` | `(entryId: string, request: AuditRedactRequest) => Promise<AuditRedactResult>` | Erases payload paths / `ip` / `userAgent` of one entry, keeping the chain verifiable through an `audit:redacted` attestation. Tenant-scoped like `trail()`. See "Erasing personal data". |
+| `systemRedact` | `(entryId: string, request: AuditRedactRequest) => Promise<AuditRedactResult>` | System-only cross-tenant `redact` (`request.tenantId` still pins). |
 | `capture` | `(source: 'hook' \| 'event', event, payload) => Promise<void>` | **Advanced/internal**: used by the plugin's listeners. |
 
 ### `interface AuditEntry` (all fields `readonly`)
@@ -318,7 +410,9 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 | `at` | `number` | Timestamp (`Date.now()`, milliseconds). |
 | `seq` | `number \| undefined` | Position in the tenant's chain (from 1) — only with `integrity`. |
 | `prevHash` | `string \| undefined` | Previous entry's `hash` (`AUDIT_CHAIN_GENESIS` for the first). |
-| `hash` | `string \| undefined` | `v2:sha256:<hex>` or `v2:hmac-sha256:<keyId>:<hex>` over `prevHash` + `canonicalAuditEntry(entry, { alg, keyId })` (see `computeAuditHashV2`); a bare 64-hex (v1) hash on entries written by earlier releases. Up to 144 characters. |
+| `hash` | `string \| undefined` | `v2:sha256:<hex>` or `v2:hmac-sha256:<keyId>:<hex>` over `prevHash` + `canonicalAuditEntry(entry, { alg, keyId })` (see `computeAuditHashV2`); `v3:…` with `erasable` (`computeAuditHashV3`); a bare 64-hex (v1) hash on entries written by earlier releases. Up to 144 characters. A redacted entry keeps its original hash. |
+| `nonce` | `string \| undefined` | v3 entries only: the random secret inside the hash, cleared by a redaction. |
+| `redaction` | `{ attestationId, payload: string[] \| 'all', ip, userAgent } \| undefined` | Present once the entry was erased with `redact()`: what was erased and which `audit:redacted` entry vouches for it. |
 
 ### `interface AuditQuery`
 
@@ -335,7 +429,7 @@ Registers an `Audit` (singleton, token `AUDIT`), hooks into **all** hooks (`hook
 
 ### `interface AuditStore`
 
-Storage contract, **append-only by contract** (no update/delete):
+Storage contract, **append-only by contract** (no delete; no update but `redact()`):
 
 - `append(entry: AuditEntry): Promise<void>`
 - `query(query: AuditQuery): Promise<AuditEntry[]>` — must return most recent first and apply filters/limit.
@@ -350,7 +444,13 @@ Optional, required for `integrity: 'hash-chain'` (implemented by `MemoryAuditSto
 - `readUnchained?(tenantId, { since, limit }): Promise<AuditEntry[]>` — optional: the tenant's rows outside its chain with `at >= since`, plus any that carries a `seq` or chain name whatever its `at`, oldest first. Without it `verify` scans `query()` for seq-less rows instead.
 - `append` must reject an entry whose `(auditChainKey(tenantId), seq)` already exists with `AuditChainConflictError` — a unique constraint in SQL. `auditChainKey` maps a tenant to a never-NULL key (`'t:<id>'`, or `'@system'`), because SQL unique indexes treat NULLs as distinct.
 
-Hash-chain helpers are exported for stores and tooling: `computeAuditHashV2(entry, { id, key }?)` (what `Audit` writes), `computeAuditHash(entry, key?)` (the legacy v1 hash), `checkAuditHash(entry, keysById)`, `parseAuditHash(hash)` / `isAuditHash(value)`, `auditKeyId(key)`, `AUDIT_KEY_ID_PATTERN`, `canonicalAuditEntry(entry, scheme?)`, `AUDIT_CHAIN_GENESIS`, `auditChainKey` / `parseAuditChainKey`, `AuditChainConflictError` (code `AUDIT_CHAIN_CONFLICT`) and `createAuditVerifyCommand`.
+Optional, required for `redact()` (and by `verify()` once a redacted entry exists):
+
+- `get(id): Promise<AuditEntry | undefined>` — one entry by id, any chain.
+- `redact(write: AuditRedactionWrite): Promise<void>` — the only sanctioned in-place change, **atomic**: set `payload`, `ip`, `userAgent` and `redaction` (persist `redaction.attestationId` as a `redactedBy` column) and clear `nonce`, only while the row's `hash` and `redactedBy` still equal `write.expect` (else `AuditRedactionConflictError`), and append `write.attestation` in the same transaction with `append()`'s `(chain, seq)` semantics. On any error nothing is written.
+- A store must round-trip `nonce` and `redaction`: one that drops them turns v3 or redacted entries into `hash-mismatch`. A store without `get()` that holds a redacted entry fails `verify()` closed (`redaction-mismatch`, `detail` names the method).
+
+Hash-chain helpers are exported for stores and tooling: `computeAuditHashV2(entry, { id, key }?)` (what `Audit` writes), `computeAuditHashV3(entry, { id, key }?)` (with `erasable`), `computeAuditHash(entry, key?)` (the legacy v1 hash), `auditRedactionState(entry)`, `auditStableJson(value)`, `AUDIT_ERASED`, `AUDIT_REDACTED_EVENT`, `AuditRedactionConflictError` (`AUDIT_REDACTION_CONFLICT`), `AuditEntryNotFoundError` (`AUDIT_ENTRY_NOT_FOUND`, 404), `AuditRedactionRefusedError` (`AUDIT_REDACTION_REFUSED`, with `reason`), `checkAuditHash(entry, keysById)`, `parseAuditHash(hash)` / `isAuditHash(value)`, `auditKeyId(key)`, `AUDIT_KEY_ID_PATTERN`, `canonicalAuditEntry(entry, scheme?)`, `AUDIT_CHAIN_GENESIS`, `auditChainKey` / `parseAuditChainKey`, `AuditChainConflictError` (code `AUDIT_CHAIN_CONFLICT`) and `createAuditVerifyCommand`.
 
 Two helpers exist so a driver can push the limit down safely:
 
@@ -359,7 +459,7 @@ Two helpers exist so a driver can push the limit down safely:
 
 ### `class MemoryAuditStore`
 
-In-memory implementation of `AuditStore` (freezes each entry; filters and reverses on query). Ideal for dev and tests; does not persist.
+In-memory implementation of `AuditStore` (freezes each entry; filters and reverses on query), with the chain methods and `get` / `redact`. Ideal for dev and tests; does not persist.
 
 ### Redaction
 
@@ -373,11 +473,56 @@ A **phone-shaped** value is one in international form: a leading `+` and 8–15 
 auditPlugin({ redact: createPiiMinimizingRedactor({ key: process.env.AUDIT_PII_KEY! }) })
 ```
 
+The match is on the key, not the value, so a flag like `passwordProtected: true` or `mfaEnabled: false` is masked too. When such booleans belong in the trail, wrap the default redactor rather than weakening it — a boolean carries no secret:
+
+```ts
+import { auditPlugin, isSensitiveKey, redactSensitive, type AuditRedactor } from '@basaltkit/audit'
+
+const keepBooleanFlags: AuditRedactor = (payload) => {
+  const redacted = redactSensitive(payload)
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return redacted
+  // Top-level booleans under a secret-looking key are restored; everything else stays masked.
+  const flags = Object.entries(payload).filter(([k, v]) => typeof v === 'boolean' && isSensitiveKey(k))
+  return { ...(redacted as Record<string, unknown>), ...Object.fromEntries(flags) }
+}
+
+auditPlugin({ redact: keepBooleanFlags })
+```
+
 IP-address keys (`ip`, `ipAddress`, `clientIp`, `remoteAddr`, `x-forwarded-for`, matched exactly — not `zip` or `recipient`) count as PII too, and so does the entry's own `ip` field when `requestContext` is on.
 
 Every value under a PII key is pseudonymized whatever its shape — a number, a list, or a nested object (each scalar leaf; secret-looking keys inside are still masked). The key must be a string or `Uint8Array` secret of at least 16 bytes (128 bits); keep it out of the audit database. With the key, the same value always maps to the same pseudonym, so entries stay correlatable; without it, a pseudonym cannot be reversed by hashing candidate emails or phone numbers. If no key is configured (`createPiiMinimizingRedactor()` or the `piiMinimizingRedactor` constant), a random per-process key is used and a warning is logged: pseudonyms are still irreversible but no longer correlate across restarts.
 
 Both walk **6 levels deep**. Anything deeper is replaced with `'[truncated]'` — not passed through. Payloads are arbitrary and the default subscription is `events: ['**']`, so returning the raw subtree meant a secret nested seven levels down reached the trail in cleartext. If your payloads are deeply nested, flatten them before recording rather than relying on depth.
+
+### Personal data per event
+
+The redactors decide by key name and value shape, so they cannot know that the
+`notes` of one event is health data. A value that reaches the trail can only be
+erased later through [`audit.redact()`](#erasing-personal-data-auditredact) —
+attested in the chain, and with an old hash that may still confirm a guess of
+it. Declaring up front what must never be stored is cheaper and leaves nothing
+behind:
+
+```ts
+auditPlugin({
+  fieldPolicies: {
+    'customer.created': { omit: ['notes', 'address.street'], pseudonymize: ['email', 'fullName'] },
+    'order.placed': { pseudonymize: ['items[].buyer.phone'] },
+  },
+  fieldPolicyKey: process.env.AUDIT_PII_KEY!,
+})
+```
+
+Keys are exact event or hook names. Paths are dotted, arrays are walked
+transparently (`items[].x` spells it out), and absent paths are ignored. `omit`
+removes the field; `pseudonymize` replaces every scalar under it with a
+`pii_<hmac>` pseudonym, the same one `createPiiMinimizingRedactor` produces under
+the same key. A path in both lists is omitted. The policy runs on a copy, for
+`record()`, hooks and events, before the redactor and before hashing. Invalid
+policies (unknown option, empty or `__proto__`/`constructor` segment, more than
+8 segments) throw a `TypeError` at configuration time. Without `fieldPolicyKey`
+a random per-process key is used and a warning is logged once.
 
 ### `patternMatches(pattern: string, name: string): boolean`
 
@@ -398,13 +543,13 @@ patternMatches('auth:**', 'billing:paid')    // false
 ## Common errors and solutions (FAQ)
 
 **Entries come back with empty `actorId`/`tenantId`.**
-There was no active context at record time. Make sure the code runs inside `runWithContext({ user, tenant }, …)` — in HTTP, this is established by the middleware.
+There was no active context at record time. Make sure the code runs inside `runWithContext({ user, tenant }, …)` — in HTTP, this is established by the middleware. Outside a request (a script, a CLI command), you can instead pass `audit.record(event, payload, { tenantId, actorId })`; see "Manual records".
 
 **Domain events aren't being recorded.**
 Either `eventsPlugin()` isn't registered (`auditPlugin` only subscribes to the bus if `container.has(EVENTS)`), or you passed `events: []`, or the patterns don't match the event names.
 
 **One of my hooks doesn't show up in the trail.**
-The defaults only cover `auth/billing/tenancy/permission`. Pass `hooks: [...]` with your own patterns — note that the list **replaces** the defaults, so include the ones you want to keep too.
+The defaults only cover `auth/billing/tenancy/permission`, and leave out `auth:apikey_rejected`. Pass `hooks: [...]` with your own patterns — note that the list **replaces** the defaults, so include the ones you want to keep too; name a default-excluded hook exactly to record it.
 
 **I lost the history after restarting.**
 `MemoryAuditStore` is volatile. In production, implement `AuditStore` over a database.
@@ -413,7 +558,13 @@ The defaults only cover `auth/billing/tenancy/permission`. Pass `hooks: [...]` w
 The redactors stop at 6 levels and drop everything below, so a secret can never slip past the depth bound. Flatten the payload (or record the interesting fields explicitly) if you need that data in the trail.
 
 **Can I edit or delete an entry?**
-No — the contract is append-only and entries are frozen. This is a feature, not a limitation: it's what gives the trail evidentiary value. To make that hold against someone with database access too, enable `integrity: 'hash-chain'`, revoke `UPDATE`/`DELETE` on the table, and run `basalt audit:verify` (see "Verifiable trail").
+No — the contract is append-only and entries are frozen. This is a feature, not a limitation: it's what gives the trail evidentiary value. To make that hold against someone with database access too, enable `integrity: 'hash-chain'`, revoke `UPDATE`/`DELETE` on the table, and run `basalt audit:verify` (see "Verifiable trail"). The one exception is **erasing personal data** with `audit.redact()` — and that is itself recorded in the chain as an `audit:redacted` entry that `verify` checks.
+
+**`verify()` fails with `redaction-mismatch`.**
+A redacted entry no longer matches its `audit:redacted` attestation (`detail` says how): its content, header fields or marker were changed after the erasure, the attestation is gone or edited, or the store cannot read it back (`get()`). When `entryId` is an attestation, its entry was un-erased (restored from a backup) or rolled back to an older redaction — re-apply your DSR ledger. Treat it as tampering.
+
+**`audit.redact()` throws `AuditRedactionRefusedError`.**
+Check `reason`: `'unverified'` — the entry does not verify as it is (investigate before erasing anything), or it is chained and this `Audit` has no integrity configured; `'residual'` — the chain is unkeyed, pass `residual: 'public'` to accept that the old hash can confirm a guess; `'unsupported-store'` — the store has no `get()` / `redact()` (upgrade the store package, or implement them).
 
 **`verify()` reports `unchained` rows.**
 They were written before `integrity` was enabled and carry no hash. They are not broken — just not verifiable. New entries are chained from `seq` 1.

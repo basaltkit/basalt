@@ -141,6 +141,11 @@ handler para o mesmo filtro.
 fundidos num objeto plano com os `required` certos — para o cliente saber
 exatamente o que enviar.
 
+**Forma dos argumentos.** O `arguments` tem de ser um objeto JSON (ou ser
+omitido). Um array, string, número ou `null` é recusado com JSON-RPC `-32602`
+antes de a rota correr, por isso uma chamada malformada nunca chega ao teu
+handler nem devolve ao cliente uma exceção interna (como um `TypeError`).
+
 **Coerção de argumentos.** Os clientes MCP e os LLMs enviam frequentemente
 números e booleanos como *strings* (`"7"`, `"true"`). Antes da validação, o
 bridge coage cada argumento para o tipo escalar que o campo Zod declara, por isso
@@ -330,10 +335,15 @@ auditoria ou de recusa:
 | a rota tem `meta.auth` e o chamador não tem `ctx().user` | embutido, quando um guard reivindica `auth` (ex.: `authPlugin`); com uma dispensa de auth na edge nada é escondido |
 | a rota tem `meta.teamRole` e o chamador não tem esse papel (ou um superior) no tenant atual | a verificação de visibilidade do `teamsPlugin` (uma leitura de membership) |
 | a rota tem `meta.can` e ao chamador falta uma das suas permissões (RBAC, scope atual; o `superAdmin` passa sempre) | a verificação de visibilidade do `permissionsPlugin` (leituras de grants — nenhum registo `permission:denied`) |
+| a rota tem `meta.scopes` e a API key do chamador não tem todos os scopes (ou não há chave); ou a rota tem `meta.apiKey: false` e o chamador tem uma chave; ou a rota é restrita por identidade (`meta.auth`/`can`/`teamRole`/`audience`) sem `meta.scopes` e a chave do chamador é estreita (sem `*`) | a verificação de visibilidade do `apiKeysPlugin` (só lê `ctx().apiKey` — nenhum hook `auth:apikey_rejected`) |
+| a rota tem `meta.mfa: true` (ou aplica-se `authPlugin({ requireMfa: true })`) e a sessão do chamador autenticado não tem segundo fator (`ctx().amr` sem `'mfa'`) | a verificação de visibilidade do `authPlugin` (só lê o `ctx()` — nenhuma leitura do store de MFA) |
 | qualquer chave cujo plugin registe uma verificação em `http:route-visibility` | o `RouteVisibilityCheck` desse plugin |
 
-**Não filtrado** — listado, e recusado na chamada: `mfa`, `scopes`,
-`subscribed`/`feature`, audiências, rate limits e tudo o que um handler verifique
+**Não filtrado** — listado, e recusado na chamada: `subscribed`/`feature`
+(decidi-los exige uma leitura de entitlement por tool, e uma verificação de
+entitlement pode medir uso — algo que uma listagem não pode fazer), um requisito
+de MFA vindo de uma política `requireMfa` *função* (código da app sem contrato de
+pureza, por isso nunca é chamada numa listagem), audiências, rate limits e tudo o que um handler verifique
 por si (ex.: uma policy que corre sobre um recurso carregado com
 `authorize(user, permission, resource)` — numa listagem não há recurso), e um
 [requisito de recurso do `meta.can`](/pt/guide/authorization#politicas-no-guard-requisitos-de-recurso)
@@ -349,7 +359,11 @@ Num deployment exposto, dá ao `/mcp` o seu próprio orçamento de rate limit:
 O `meta.rateLimit` próprio de uma rota-ferramenta é imposto por um guard de
 rota, por isso aplica-se também às chamadas de tools através do `/mcp`, com a
 chave no ip de quem chama o `/mcp`, que o pedido da tool herda. (Auth e guards
-correm de forma idêntica em ambos os caminhos.)
+correm de forma idêntica em ambos os caminhos.) Uma chamada de tool sem ip do
+chamador — por stdio, ou `MCP.callTool()` sem `ip` — fica com a chave da
+identidade do chamador (`ctx().user` / `ctx().tenant`) quando existe; todas as
+chamadas anónimas sem ip partilham um único balde `unknown` (falha fechada).
+Passa o `ip` (ou resolve-o no adaptador) para ter baldes por cliente.
 
 ## Referência de opções
 
@@ -362,9 +376,10 @@ As tabelas abaixo são as opções públicas completas dos quatro pontos de entr
 | `routes` | `BasaltRoute[]` | — (obrigatório) | As rotas analisadas à procura de `meta.mcp` — tipicamente o mesmo array que passas ao adaptador |
 | `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt', version: '0.1.0' }` | O que o `initialize` reporta aos clientes |
 | `filter` | `(route: BasaltRoute) => boolean` | expõe todas as rotas com opt-in | Um portão ao nível do deployment por cima do `meta.mcp` (ex.: esconder rotas de admin num ambiente) |
-| `forwardHeaders` | `string[]` | nenhum | Headers extra que uma chamada de tool herda, além de `DEFAULT_FORWARDED_HEADERS` (ex.: um header de tenant próprio); todos os outros são descartados |
+| `forwardHeaders` | `string[]` | nenhum | Headers extra que uma chamada de tool herda, além de `DEFAULT_FORWARDED_HEADERS` (ex.: um header de tenant próprio); todos os outros são descartados. A chave de idempotência (`idempotency-key`, ou `idempotencyPlugin({ header })`) nunca é encaminhada, mesmo listada: um replay devolveria o corpo de erro gravado sem redação |
 | `redactErrorDetails` | `ErrorDetailsRedactor \| false` | `redactSensitiveDetails` | Filtra os `details` públicos de um erro lançado antes de entrarem num resultado de tool (ver [O que o modelo vê](#what-the-model-sees-when-a-tool-fails)); `false` envia-os como o HTTP enviaria. Uma rota substitui-o com `meta.mcp.redactErrorDetails` |
 | `reportError` | `HttpErrorReporter \| false` | reporter de consola | Recebe cada erro que uma chamada de tool lança, `internalDetails` incluído; `false` não reporta nada |
+| `onError` | `(error, message) => void \| false` | `reportMcpInternalError` (uma linha no stderr) | Recebe um erro que escapou ao tratamento da própria tool — o cliente só recebe `INTERNAL_ERROR` / `Internal error`. Nunca no stdout, que transporta o protocolo stdio; `false` silencia-o |
 
 ### `mcpRoutes(options)`
 
@@ -409,13 +424,15 @@ texto é o mesmo corpo de erro que o HTTP teria devolvido (ex.:
 | O arranque lança `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) | Uma rota declara `meta.auth`/`meta.can`/`meta.teamRole` e nenhum plugin o impõe | Regista `authPlugin` / `permissionsPlugin` / `teamsPlugin` — vê [Segurança](/pt/guide/security) |
 | `isError: true` com um corpo `UNAUTHORIZED`/`FORBIDDEN` | A rota da tool está guardada e a chamada não levou credenciais (ou levou más) | Envia headers `Authorization`/tenant com o `POST /mcp`, ou `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Nome de tool não registado — rota sem `meta.mcp`, excluída pelo `filter`, ou renomeada | Verifica o `tools/list`; lembra os overrides via `meta.mcp.name` |
+| JSON-RPC `-32602` ``tools/call `arguments` must be an object`` | O cliente enviou `arguments` como array, string, número ou `null` | Envia um objeto de argumentos nomeados conforme o input schema da tool |
+| JSON-RPC `-32603` `Internal error` | Algo lançou fora de um resultado de tool (as falhas de tool em si voltam como `isError`) | O texto é genérico de propósito; vê a causa nos logs do servidor |
 | JSON-RPC `-32601` `Method not found` | O cliente chamou um método MCP que o servidor não implementa | Só existem `initialize`, `ping`, `tools/list`, `tools/call` (mais resources/prompts quando registados) |
-| Uma chamada de tool devolve `RATE_LIMITED` mais cedo do que o esperado | O `meta.rateLimit` próprio da rota-ferramenta aplica-se também através do `/mcp` (por ip do chamador) | Aumenta o orçamento da rota, ou passa uma `key` ao `securityPlugin({ rateLimit })` |
+| Uma chamada de tool devolve `RATE_LIMITED` mais cedo do que o esperado | O `meta.rateLimit` próprio da rota-ferramenta aplica-se também através do `/mcp` (por ip do chamador; chamadas anónimas sem ip partilham um balde `unknown`) | Aumenta o orçamento da rota, chaveia-o pela identidade (`meta.rateLimit.key: 'user'` ou `'apiKey'`), ou garante que o ip / a identidade do chamador são resolvidos |
 | `403` `MCP_ORIGIN_FORBIDDEN` do `POST /mcp` | Um browser enviou um pedido de outra origem | Acrescenta a origem da página a `mcpRoutes({ allowedOrigins })` |
 | `415` do `POST /mcp` | O corpo não foi enviado como `Content-Type: application/json` | Envia `application/json` (os clientes MCP fazem-no) |
 | `400` `Mcp-Session-Id header required` | Chegou uma mensagem que não é `initialize` sem sessão | Envia primeiro `initialize` e repete o seu `Mcp-Session-Id` (os clientes da spec fazem-no), ou `mcpRoutes({ sessions: false })` |
 | `404` `Session not found` | A sessão expirou, foi despejada ou terminada, o processo reiniciou, respondeu outra réplica — ou foi apresentada por outro chamador | Volta a inicializar; atrás de réplicas usa sticky sessions |
-| Uma tool falta no `tools/list` mas pode ser chamada | O chamador falha estaticamente o seu `meta.auth`/`meta.teamRole`/`meta.can` (a listagem esconde-a) | Esperado; `mcpRoutes({ listVisibleOnly: false })` lista tudo |
+| Uma tool falta no `tools/list` mas pode ser chamada | O chamador falha estaticamente o seu `meta.auth`/`meta.teamRole`/`meta.can`/`meta.scopes`/`meta.mfa` (a listagem esconde-a) | Esperado; `mcpRoutes({ listVisibleOnly: false })` lista tudo |
 | Por stdio, `-32000` `Too many requests in flight` | Mais de `maxConcurrentRequests` chamadas em simultâneo na ligação | Espera pelas respostas, ou aumenta `serveMcpStdio(app, { maxConcurrentRequests })` |
 | Uma tool lê um header que chega `undefined` | O header não está na allowlist de headers encaminhados | `mcpPlugin({ forwardHeaders: ['x-my-header'] })` |
 | O Claude Desktop mostra um servidor morto/quebrado | Algo imprimiu no stdout — ele é o canal JSON-RPC | `logLevel: 'silent'`, remove `console.log`; vê a checklist de stdio acima |

@@ -99,3 +99,14 @@ describe('escaping + route-scoped CSP (S-5)', () => {
     expect(billingPageCsp(opts)).toContain("default-src 'none'")
   })
 })
+
+describe('billingUiRoutes meta (BK-078)', () => {
+  it('merges extra meta into both routes and keeps auth on', () => {
+    const routes = billingUiRoutes({ plans, meta: { can: 'billing:manage', auth: false } })
+    expect(routes.map((r) => r.meta)).toEqual([
+      { can: 'billing:manage', auth: true },
+      { can: 'billing:manage', auth: true },
+    ])
+    expect(billingUiRoutes({ plans })[0]!.meta).toEqual({ auth: true })
+  })
+})

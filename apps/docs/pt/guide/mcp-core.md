@@ -142,7 +142,16 @@ Há **duas** formas de uma ferramenta falhar, e a diferença importa:
   que queres para argumentos inválidos, uma operação recusada, uma credencial em
   falta: o modelo consegue ver a razão e tentar outra coisa.
 - **Um erro lançado** — torna-se um `INTERNAL_ERROR` JSON-RPC (`-32603`) com a
-  `message` do erro. Reserva-o para bugs a sério.
+  mensagem genérica `Internal error`: o texto de uma exceção pode conter segredos,
+  caminhos ou SQL, por isso nunca chega ao cliente. O erro original vai para o
+  hook `onError(error, message)` do servidor — regista-o aí. Um erro com
+  `expose: true` mantém a sua própria mensagem. Reserva o lançar para bugs a sério.
+
+O `arguments` é verificado antes de qualquer ferramenta correr: um `tools/call`
+cujo `arguments` existe mas não é um objeto JSON (um array, string, número ou
+`null`) é recusado com `INVALID_PARAMS` (`-32602`), tal como um `prompts/get`
+cujo `arguments` não é um objeto de valores string. Validar os campos em si
+continua a ser trabalho da ferramenta.
 
 ### O contexto de invocação — signal, progress, elicit
 
@@ -419,6 +428,7 @@ a mesma validação, tenancy e auth que o HTTP.
 | `resources` | `McpResourceDef[]` | `[]` | Contexto read-only. Registar algum ativa o `resources/list` + `resources/read` |
 | `prompts` | `McpPromptDef[]` | `[]` | Modelos de mensagens. Registar algum ativa o `prompts/list` + `prompts/get` |
 | `serverInfo` | `{ name: string; version: string }` | `{ name: 'basalt-mcp-core', version: '0.1.0' }` | O que o `initialize` reporta — os clientes mostram isto, por isso define-o |
+| `onError` | `(error: unknown, message: JsonRpcRequest) => void` | nenhum | Recebe o erro original quando uma ferramenta, recurso ou prompt lança (o cliente só vê `Internal error`). Regista-o aqui; um hook que lança é ignorado |
 
 ### `McpToolDef`
 
@@ -509,7 +519,9 @@ Só constróis isto tu quando embutes o `handleMessage` no teu próprio transpor
 | `Unknown tool: <name>` | `-32602` (ou um `Error` lançado pelo `callTool`) | despachante / `callTool` | Não há ferramenta registada com esse nome |
 | ``resources/read requires a string `uri` `` · `Unknown resource: <uri>` | `-32602` | `dispatchResourceRead` | URI de recurso em falta/desconhecido |
 | ``prompts/get requires a string `name` `` · `Unknown prompt: <name>` | `-32602` | `dispatchPromptGet` | Nome de prompt em falta/desconhecido |
-| *(a mensagem do erro lançado)* | `-32603` | catch do `handleMessage` | Uma ferramenta, recurso ou prompt **lançou**. Prefere `isError: true` para falhas esperadas |
+| ``tools/call `arguments` must be an object `` | `-32602` | `dispatchToolCall` | O `params.arguments` é um array, string, número ou `null`; a ferramenta nunca corre |
+| ``prompts/get `arguments` must be an object of string values `` | `-32602` | `dispatchPromptGet` | O `params.arguments` não é um objeto, ou um dos seus valores não é string |
+| `Internal error` | `-32603` | catch do `handleMessage` | Uma ferramenta, recurso ou prompt **lançou**. O erro real vai para o `onError`; define `expose: true` num erro para enviar a sua própria mensagem. Prefere `isError: true` para falhas esperadas |
 
 - **O cliente mostra o servidor como morto, logo de imediato** — em stdio, algo
   escreveu no stdout que não era JSON-RPC. Encaminha todo o logging para o stderr.

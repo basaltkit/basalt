@@ -176,6 +176,22 @@ Fix it by registering the check, correcting the `resource:action` spelling, or d
 
 **The match is exact.** Only the policy's *own* actions count (`project:constructor` / `project:toString` are missing policies, never `Object.prototype`), only a two-segment `resource:action` selects a check (`project:update:billing` is not decided by `update`), and a check authorizes only when it returns `true`. `can()` refuses a permission that is not a non-empty string without whitespace (`TypeError`); a user without a non-empty string `id` makes `can`/`authorize`/`hasRole` throw `AuthRequiredGuardError` (401).
 
+**Policies decide one object, not a list.** Filtering a query's rows through `gate.can()` afterwards gives short pages and a wrong `total`. For listings, declare the list form of the check next to it and apply it in the query, reusing the same `where` for `findMany` and `count`:
+
+```ts
+const DocumentPolicy = definePolicy<Document, Prisma.DocumentWhereInput>(
+  'document',
+  { read: (user, doc) => doc.ownerId === user.id },
+  { filters: { read: (user) => ({ ownerId: user.id }) } }, // true = unrestricted, false = none
+)
+
+const f = await gate.listFilter<Prisma.DocumentWhereInput>(me, 'document:read')
+if (f.kind === 'none') return { rows: [], total: 0 }
+const where = f.kind === 'unrestricted' ? filter : { AND: [f.where, filter] }
+```
+
+`listFilter` fails closed: no filter for exactly `resource:action` throws `MissingPolicyFilterError` (`PERMISSION_FILTER_MISSING`), with no RBAC fallback; `superAdmin` answers `unrestricted`, as in `can()`. `unrestricted` never bypasses tenant isolation — the tenant is your data layer's. See [Policies decide one object, not a list](https://basaltkit.dev/guide/authorization#policies-decide-one-object-not-a-list).
+
 ### Super admin
 
 A function that, when it returns `true` for a user, authorizes everything (equivalent to Laravel's `Gate::before`):
@@ -419,16 +435,18 @@ Implement this on top of your database. `scope` is the tenant id or `GLOBAL_SCOP
 |---|---|
 | `permissionMatches(granted, requested)` | Wildcard matching. |
 | `gate.rolePermissions(role, scope)` | The permissions `role` carries when held in `scope`: store grants in that scope + `roleCatalog` + (opt-in) the global definition. Used by checks and `GET /me/access`. |
-| `definePolicy<T>(resource, checks)` | Creates a `Policy<T>` (checks: `(user, resource) => boolean \| Promise<boolean>`). |
+| `definePolicy<T, W>(resource, checks, { filters }?)` | Creates a `Policy<T, W>` (checks: `(user, resource) => boolean \| Promise<boolean>`; optional `filters`: the list form, action → `(user) => W \| true \| false`, each key paired with a check). |
 | `GLOBAL_SCOPE` | The string `'@global'` (was `'global'` before 1.5). |
 | `LEGACY_GLOBAL_SCOPE` | The string `'global'` — the old global scope, read only with `readLegacyGlobalScope`. |
 | `isReservedScope(id)` | `true` for ids a tenant must not use (`'@global'`, `'global'`). |
 | `currentScope()` | The scope of the current request (tenant id or `GLOBAL_SCOPE`); throws `ReservedScopeError` for a reserved tenant id. |
 | `ReservedScopeError` | `PERMISSION_SCOPE_RESERVED` (403). |
 | `ScopeRequiredError` | `PERMISSION_SCOPE_REQUIRED` (400) — a scope-less grant write outside a tenant while tenancy is active. |
-| `definePolicy` snapshot | Checks are copied into a prototype-free lookup of the object's own function entries; a non-function check or a resource containing `:` throws `TypeError`. |
+| `definePolicy` snapshot | Checks (and `filters`) are copied into a prototype-free lookup of the object's own function entries; a non-function check or filter, a resource containing `:`, or a filter with no check of the same action throws `TypeError`. |
 | `GATE` | DI token for the Gate in the container. |
 | `gate.hasPolicy(permission)` | `true` when a registered policy check decides exactly `resource:action` — a pure lookup. |
+| `gate.listFilter<W>(user, permission)` | The list form of `can(user, permission, resource)`: `{ kind: 'unrestricted' }`, `{ kind: 'none' }` or `{ kind: 'where', where }` from the policy's `filters`. Fails closed with `MissingPolicyFilterError`; `W` is a caller-side type assertion. |
+| `ListFilter<W>`, `PolicyFilter<W>`, `PolicyOptions<W>` | Types of `listFilter`'s answer and of `definePolicy`'s `filters`. |
 | `canResource<T>(permission?)` | The resource the `meta.can` guard loaded for this request. Pass the permission when requirements loaded different resources. Throws `CanResourceUnavailableError` when none was loaded. |
 | `CanMeta`, `CanRequirement`, `CanResourceLoader`, `CanResourceInput`, `CanResourceNotFound` | Types of the `meta.can` value and its resource requirement. |
 | `PolicyUser` | Minimal user type: `{ id: string; [key: string]: unknown }`. |
@@ -599,6 +617,7 @@ calls — it is a route guard of the shared pipeline.
 | `CanResourceUnavailableError` | `PERMISSION_RESOURCE_UNAVAILABLE` | 500 | `canResource()` was called where the guard loaded no resource (or, without a permission, several different ones). |
 | `InvalidRouteMetaError` | `HTTP_INVALID_ROUTE_META` | boot | A resource-aware `meta.can` is malformed, or no policy decides its permission (under `onMissingPolicy: 'error'`). Raised by the adapter, from `@basaltkit/http`. |
 | `MissingPolicyError` | `PERMISSION_POLICY_MISSING` | 500 | `can`/`authorize` was given a resource but no policy check matches `resource:action` — the ABAC rule you intended would be skipped. |
+| `MissingPolicyFilterError` | `PERMISSION_FILTER_MISSING` | 500 | `gate.listFilter(user, 'resource:action')` found no list filter for exactly that permission — never answered from RBAC or `onMissingPolicy`. |
 | `UnguardedRouteMetaError` | `HTTP_UNGUARDED_ROUTE_META` | boot | A route declares `meta.can` and `permissionsPlugin` isn't registered. Raised by the adapter, from `@basaltkit/http`. |
 
 All the runtime errors declare a `status`, so adapters return the code above
@@ -611,6 +630,10 @@ with the real error code in the body.
   call was already answering silently from RBAC. Check both halves of
   `resource:action` against `definePolicy`, register the missing check, or stop
   passing the resource if the call really is plain RBAC.
+- **`PERMISSION_FILTER_MISSING` from a listing** — the policy has no list form
+  for that action. Add `filters: { <action>: (user) => … }` as the third
+  argument of its `definePolicy` call, next to the check, or fix the
+  `resource:action` spelling. There is deliberately no fallback.
 - **403 on a permission you definitely granted** — check the *scope*. A grant in
   `'acme'` only applies when the check runs in the `acme` tenant; use
   `GLOBAL_SCOPE` for grants that apply everywhere.

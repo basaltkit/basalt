@@ -97,7 +97,49 @@ antes de um teste o fazer.
 O histórico dos tenants migra-se schema a schema com
 [`migrateTenants`](/pt/guide/database-per-tenant#migrar-todos-os-tenants) e o
 `prisma.config.ts` dos tenants. O histórico central é `prisma migrate deploy`
-normal.
+normal. O `basalt db:status` reporta os dois planos só em leitura, e as
+[Operações de base de dados](/pt/guide/database-operations) cobrem os erros e os
+grants que as migrações não conseguem manter no sítio.
+
+### Proteger contra o plano errado
+
+Um único `prisma.config.ts` na raiz que alcança o schema completo é uma
+armadilha: o comando que toda a gente escreve por reflexo, `prisma migrate dev`,
+compara **os dois** planos com a base central e recria lá todas as tabelas de
+tenant — `auth_users`, `team_memberships`, `perm_*` — depois vê drift e oferece um
+reset. As tabelas ficam vazias e inalcançáveis, e são exactamente o `User` global
+que este padrão proíbe.
+
+Três protecções, da mais barata à mais forte:
+
+1. **Uma config por plano.** Com `targets` declarados, o `basalt prisma:sync`
+   imprime o `prisma.config.ts` em falta de cada plano (`--yes` escreve-os, nunca
+   por cima de um existente): o seu próprio `schema` e o seu próprio
+   `migrations.path`, relativos à pasta da config.
+2. **Uma config de raiz só para generate.** Quando o `prisma.config.ts` da raiz
+   ainda declara `migrations` ou uma `datasource`, o `prisma:sync` avisa e imprime
+   uma substituta só com `schema`. O Prisma 7 precisa do URL da datasource na
+   config, por isso o `prisma migrate dev` na raiz passa a recusar correr; cada
+   plano migra com `--config prisma/prisma.config.ts` ou
+   `--config prisma/tenants/prisma.config.ts`.
+3. **Uma protecção no boot.** Lista as tabelas do plano tenant como proibidas na
+   base central, e a app recusa arrancar sobre uma base misturada:
+
+```ts
+prismaPlugin({
+  client: centralDb,
+  assertMigrated: {
+    tables: ['tenants', 'tenant_domains'],
+    // As tabelas do plano tenant: a presença delas aqui significa que uma
+    // migração correu contra o plano errado. Falha o boot com PRISMA_PLANE_MIXED.
+    forbiddenTables: ['auth_users', 'team_memberships', 'perm_roles'],
+  },
+})
+```
+
+A verificação consulta cada nome da mesma forma que `tables`, por isso funciona
+em PostgreSQL, MySQL e SQLite. O erro lista as tabelas que encontrou
+(`error.details.tables`); apaga-as depois de confirmares que não têm linhas.
 
 ## Regra 3 — Resolver pelo host, registar com uma lista reservada
 
@@ -182,10 +224,11 @@ export function centralDb(): CentralDb {
 
 O segundo helper é o que as pessoas deixam de fora. `meta: { tenant: false }`
 levanta a *exigência* de tenant; não impede a resolução. Uma rota de plataforma
-alcançada em `acme.example.com/platform/...` continua com `ctx().tenant` a
-apontar para a Acme, e um `centralDb()` que simplesmente devolve `central` passa
-a ser a única coisa entre o dono da Acme e as tabelas do operador. A Regra 5
-fecha a rota; isto fecha o caminho dos dados. Mantém os dois.
+declarada `tenant: false` e alcançada em `acme.example.com/platform/...` continua
+com `ctx().tenant` a apontar para a Acme, e um `centralDb()` que simplesmente
+devolve `central` passa a ser a única coisa entre o dono da Acme e as tabelas do
+operador. A Regra 5 fecha a rota (`tenant: 'never'`); isto fecha o caminho dos
+dados. Mantém os dois.
 
 ::: danger Nunca recuar para o plano central
 `try { return db() } catch { return central }` é a linha mais perigosa que
@@ -204,7 +247,7 @@ chamador precisa legitimamente do plano central, dá-lhe uma instância ligada a
 | --- | --- | --- | --- |
 | Rota de tenant (por omissão) | nada | só host de tenant | facturas, documentos, equipa |
 | Rota de conta | `tenant: false` | apex **e** hosts de tenant | `authRoutes()`, `mfaRoutes()`, aceitar convite |
-| Rota de plataforma | `tenant: false, platform: true, auth: true, can: 'platform:…'` | só apex | aprovar tenant, planos, roles de operador |
+| Rota de plataforma | `tenant: 'never', auth: true, can: 'platform:…'` | só apex | aprovar tenant, planos, roles de operador |
 
 As rotas de conta são o caso interessante. `POST /auth/login` no apex autentica
 contra `public.auth_users`; a mesma rota em `acme.example.com` autentica contra
@@ -218,35 +261,44 @@ const central = (r: RouteDef) => ({ ...r, meta: { ...r.meta, tenant: false } })
 routes: [...authRoutes().map(central), ...mfaRoutes().map(central), ...appRoutes]
 ```
 
-As rotas de plataforma precisam de um guard que o framework não fornece, porque
-`platform` é uma chave tua, não dele:
+As rotas de plataforma declaram `tenant: 'never'`. O `tenancyPlugin` resolve o
+tenant primeiro e, quando um resolve numa rota que o recusa, responde com o
+mesmo corpo de uma rota inexistente — `404 { error: { code: 'NOT_FOUND',
+message: 'Route not found.' } }` — antes de qualquer guard, sem entrar no
+contexto do tenant e sem emitir `tenancy:switched`. Igual em Fastify, Express e
+Hono:
 
 ```ts
-// src/platform/guard.ts — registado como qualquer outro guard
-const platformOnly: RouteGuard = async ({ route, context }) => {
-  if (route.meta?.['platform'] !== true) return
-  if (context.tenant) throw new HttpError(404, 'Not found')
-}
-metadata.add('http:guards', platformOnly)
+const platform = (r: RouteDef) => ({ ...r, meta: { ...r.meta, tenant: 'never' as const } })
+routes: [...platformRoutes.map(platform), ...authRoutes().map(central), ...appRoutes]
 ```
 
 Porquê 404 e não 403: num host de tenant a consola de plataforma não existe. Um
-403 diz ao dono da Acme que há ali algo de que está proibido.
+403 — ou um 401 do guard de auth — diz ao dono da Acme que há ali algo de que
+está proibido. Um valor que não seja `true`, `false` ou `'never'` (um erro como
+`tenant: 'none'`) recusa o arranque, e o `basalt ai doctor` avisa de uma rota que
+junta `tenant: false` a `can: 'platform:…'`.
 
 ::: warning Os wildcards chegam mais longe do que pensas
 Um role `owner` de tenant com `'*'` satisfaz `can: 'platform:tenants:approve'`.
 Dentro do plano de tenant isso é inofensivo — as tabelas centrais não estão lá —
-até uma rota de plataforma ser servida num host de tenant sem o guard acima.
+até uma rota de plataforma ser servida num host de tenant sem `tenant: 'never'`.
 Encontrámos esta cadeia completa numa app: dono no próprio subdomínio →
 `platform:*` satisfeito por `*` → `centralDb()` devolveu o cliente do tenant →
 uma escrita de role de operador caiu no schema do tenant e a entrada de
-auditoria na cadeia **central**. O guard é o que quebra a cadeia; prefixar as
-permissões de plataforma é higiene, não protecção.
+auditoria na cadeia **central**. O `tenant: 'never'` é o que quebra a cadeia;
+prefixar as permissões de plataforma é higiene, não protecção.
 :::
 
-O registo em hosts de tenant está fechado: as pessoas entram num tenant por
-convite, não por descobrirem o subdomínio. Devolve 404 do `/auth/register`
-quando resolveu tenant. O registo no apex ou está fechado também (o staff é
+O registo em hosts de tenant é só por convite: as pessoas entram num tenant por
+convite, não por descobrirem o subdomínio. Declara-o uma vez com
+`authPlugin({ registerPolicy: teamsInviteGate(…) })` (ver
+[Equipas: registo só por convite](/pt/guide/teams#invite-only-registration)): um
+registo recusado responde o mesmo `202` que um admitido, por isso a rota não é um
+oráculo de quem foi convidado, e um primeiro login social também é recusado.
+Junta `teamsPlugin({ acceptOnVerifiedEmail: true })` para que o convidado que
+confirma o endereço já seja membro. Se os teus tenants nunca se registam no seu
+host, `authRoutes({ register: 'closed' })` responde um 404 estático. O registo no apex ou está fechado também (o staff é
 criado pela CLI) ou está aberto mas sem privilégios — uma conta no apex sem role
 de plataforma não consegue fazer nada.
 
@@ -415,16 +467,17 @@ consola de plataforma.
 - [ ] `prismaPlugin({ client: central, schemaPerTenant | forTenant })` — dois planos
 - [ ] dois `schema.prisma`, dois generators, dois tipos de cliente
 - [ ] resolvers: subdomínio, domínio; header só sob `NODE_ENV === 'test'`
-- [ ] `required: true`; `meta.tenant: false` só em rotas de conta e de plataforma
+- [ ] `required: true`; `meta.tenant: false` só em rotas de conta
 - [ ] um módulo de slugs reservados usado pelo `validateTenantId` e pelo signup
 - [ ] `canonicalDomain` definido no plugin
 - [ ] todos os stores dos dois planos construídos sobre `tenantClient()`; todos os stores centrais ligados a `central`
 - [ ] `tenantDb()` exige tenant; `centralDb()` recusa-o
 - [ ] nenhum `catch { return central }` em lado nenhum
-- [ ] rotas de plataforma declaram `platform: true` e um guard devolve 404 num host de tenant
-- [ ] `/auth/register` é 404 em hosts de tenant
+- [ ] rotas de plataforma declaram `meta.tenant: 'never'` (404 num host de tenant)
+- [ ] `tenancyPlugin` antes do `authPlugin` / `apiKeysPlugin` (os enrichers deles responderiam primeiro)
+- [ ] `/auth/register` é só por convite em hosts de tenant (`registerPolicy: teamsInviteGate(…)`) ou `register: 'closed'` (404)
 - [ ] um `authPlugin`; sem modelo de operador, sem segunda tabela de sessões
-- [ ] utilizadores criados pelo `AUTH`, nunca inseridos com hash feito à mão
+- [ ] utilizadores criados pelo `AUTH`, nunca inseridos com hash feito à mão (`register(…, { emailVerified: true })` quando o fluxo já provou o endereço)
 - [ ] a política de MFA responde pelos roles de plataforma
 - [ ] roles de tenant semeados sob o id do tenant no `onProvision`; roles de plataforma sob `GLOBAL_SCOPE` (importado) pelo store central
 - [ ] `can:` nas rotas; verificações por nome de role justificadas num comentário

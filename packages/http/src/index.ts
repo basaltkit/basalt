@@ -31,7 +31,9 @@ export {
 export {
   runRoute,
   toErrorResponse,
+  RequestDisposers,
   type RequestEnricher,
+  type RequestDisposer,
   type RouteGuard,
   type RoutePipeline,
   type ErrorResponse,
@@ -60,6 +62,8 @@ export {
   type RateLimitResult,
   type RateLimitStore,
   type RouteRateLimit,
+  type RouteRateLimits,
+  type PrefixRateLimit,
   type RateLimitKey,
   type CorsOptions,
   type SecurityHeadersOptions,
@@ -69,6 +73,24 @@ export {
   type RedisLike,
   type RedisRateLimitStoreOptions,
 } from './drivers/redis-rate-limit.js'
+export {
+  idempotencyPlugin,
+  idempotencyHeaderOf,
+  MemoryIdempotencyStore,
+  DEFAULT_IDEMPOTENCY_CREDENTIAL_HEADERS,
+  MAX_IDEMPOTENCY_KEY_LENGTH,
+  type IdempotencyPluginOptions,
+  type IdempotencyStore,
+  type IdempotencyRecord,
+  type IdempotencyPending,
+  type IdempotencyFingerprintInput,
+  type MemoryIdempotencyStoreOptions,
+} from './idempotency.js'
+export {
+  RedisIdempotencyStore,
+  type RedisIdempotencyClient,
+  type RedisIdempotencyStoreOptions,
+} from './drivers/redis-idempotency.js'
 export { metricsPlugin, METRICS, type MetricsPluginOptions } from './metrics.js'
 export { tracingPlugin, TRACER, type TracingPluginOptions } from './tracing.js'
 export {
@@ -78,6 +100,8 @@ export {
   type OpenApiPluginOptions,
   type OpenApiInfo,
   type OpenApiTag,
+  type GenerateOpenApiOptions,
+  type OpenApiApiKeyOptions,
   type RouteLike,
 } from './openapi.js'
 
@@ -145,6 +169,7 @@ export { escapeHtml, scriptJson, pageCsp, cspHash, type PageCspOptions } from '.
 export {
   GUARDED_META_BUCKET,
   GUARDED_META_KEYS,
+  RATE_LIMIT_META_KEY,
   UnguardedRouteMetaError,
   assertRoutesGuarded,
   META_VALIDATORS_BUCKET,
@@ -158,6 +183,15 @@ export {
   type RouteVisibilityCheck,
 } from './route-visibility.js'
 export { redactUrl, REDACTED } from './redact-url.js'
+export {
+  describeRoutes,
+  findUnguardedRoutes,
+  type RouteTableEntry,
+  type RouteRow,
+  type RouteRequirement,
+  type FindUnguardedOptions,
+  type UnguardedRoute,
+} from './route-table.js'
 export {
   reportHttpError,
   httpErrorReporter,
