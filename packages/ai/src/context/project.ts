@@ -47,10 +47,17 @@ export function nodeReader(root: string): ProjectReader {
           else if (entry.isFile()) out.push(rel)
         }
       }
-      walk(relDir.replace(/\/+$/, ''))
+      walk(trimTrailingSlashes(relDir))
       return out
     },
   }
+}
+
+/** Drops trailing `/` characters in linear time (a `/\/+$/` regex backtracks on long runs of `/`). */
+function trimTrailingSlashes(path: string): string {
+  let end = path.length
+  while (end > 0 && path.charCodeAt(end - 1) === 47) end--
+  return path.slice(0, end)
 }
 
 /** In-memory reader for tests: keys are relative paths. */
@@ -59,7 +66,7 @@ export function memoryReader(files: Record<string, string>): ProjectReader {
     read: (relPath) => files[relPath] ?? null,
     exists: (relPath) => relPath in files,
     list: (relDir) => {
-      const prefix = `${relDir.replace(/\/+$/, '')}/`
+      const prefix = `${trimTrailingSlashes(relDir)}/`
       return Object.keys(files).filter((path) => path.startsWith(prefix))
     },
   }

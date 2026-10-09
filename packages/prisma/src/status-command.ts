@@ -105,7 +105,7 @@ export function parseMigrateStatus(output: string, exitCode: number): MigrationS
   const line = clean
     .split('\n')
     .map((entry) => entry.trim())
-    .find((entry) => /^Error|P\d{4}|error/i.test(entry))
+    .find((entry) => /P\d{4}|error/i.test(entry))
   return {
     state: 'error',
     detail: (diagnosis?.cause ?? line ?? `prisma migrate status exited with ${exitCode}`).slice(0, 300),
