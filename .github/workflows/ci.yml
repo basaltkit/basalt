@@ -181,7 +181,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      BASALT_SCAFFOLD_DATABASE_URL: postgresql://basalt:basalt@localhost:5432/basalt_scaffold
+      BASALT_SCAFFOLD_DATABASE_URL: postgresql://basalt:basalt@localhost:5999/basalt_scaffold
       BASALT_SCAFFOLD_PG_REQUIRED: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
