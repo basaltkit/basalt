@@ -184,7 +184,7 @@ instead:
 `MY_SAAS_DATABASE_URL` becomes a **required** variable (`src/env.ts`), and
 `.env.example` ships it uncommented. The package scripts are `db:migrate`
 (`prisma migrate dev`), `db:deploy` (`prisma migrate deploy`), `db:generate` and
-`db:seed`; `postinstall` runs `prisma generate` so `pnpm typecheck` has the
+`db:seed` (`prisma db seed`); `postinstall` runs `prisma generate` so `pnpm typecheck` has the
 client types right after install. The client is generated into
 `generated/prisma` — **outside** `src/`, so `pnpm build` never has to copy it —
 and `src/db.ts` imports it as `#db/client.js` through the package.json
@@ -199,7 +199,8 @@ is a direct dependency because the generated runtime requires it by name, and
 pnpm create basalt my-saas --prisma
 cd my-saas && pnpm install
 # .env points MY_SAAS_DATABASE_URL at postgres://…@localhost:5432/my_saas — start PostgreSQL or edit it
-pnpm db:migrate          # creates the tables and seeds the demo tenant
+pnpm db:migrate          # creates the tables
+pnpm db:seed             # the demo tenant
 pnpm dev
 ```
 

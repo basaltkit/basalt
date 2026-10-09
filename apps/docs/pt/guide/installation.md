@@ -188,7 +188,7 @@ dados:
 O `MY_SAAS_DATABASE_URL` passa a ser uma variável **obrigatória** (`src/env.ts`)
 e o `.env.example` inclui-a já sem comentário. Os scripts do `package.json` são
 `db:migrate` (`prisma migrate dev`), `db:deploy` (`prisma migrate deploy`),
-`db:generate` e `db:seed`; o `postinstall` corre `prisma generate` para que o
+`db:generate` e `db:seed` (`prisma db seed`); o `postinstall` corre `prisma generate` para que o
 `pnpm typecheck` tenha os tipos do cliente logo a seguir à instalação. O cliente
 é gerado em `generated/prisma` — **fora** do `src/`, para que o `pnpm build` nunca
 o tenha de copiar — e o `src/db.ts` importa-o como `#db/client.js` através do
@@ -203,7 +203,8 @@ pede pelo nome, e o `pnpm-workspace.yaml` aprova os scripts de build do `prisma`
 pnpm create basalt my-saas --prisma
 cd my-saas && pnpm install
 # o .env aponta MY_SAAS_DATABASE_URL para postgres://…@localhost:5432/my_saas — arranca o PostgreSQL ou edita-o
-pnpm db:migrate          # cria as tabelas e semeia o tenant demo
+pnpm db:migrate          # cria as tabelas
+pnpm db:seed             # o tenant demo
 pnpm dev
 ```
 
