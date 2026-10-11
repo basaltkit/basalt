@@ -14,9 +14,21 @@ lock-in, TypeScript inference from the route to the client.
 Runs on **Fastify, Express or Hono** (swap adapters without touching your
 routes), with Prisma, PostgreSQL, Redis, MinIO, BullMQ and Zod.
 
-> **Status: Basalt 1.12 — the release that keeps its word. 95 packages, each
-> versioned independently. 🎉**
-> An independent audit, in two passes, read every package's source next to its
+> **Status: Basalt 1.13 — the release that closes the backlog without a major.
+> 96 packages, each versioned independently. 🎉**
+> A document-management SaaS building on the framework kept a list — BK-025 to
+> BK-087 — of everything it had to write by hand, and this wave closes it in
+> forty-five minors and patches, **no package publishing a major**: idempotency
+> and request disposers on Fastify, Express and Hono alike, tenant database
+> clients leased per request instead of held for thirty seconds, a webhook
+> outbox that works under schema-per-tenant, rate-limit budgets per API key and
+> per path prefix, audit entries that can erase a person without breaking the
+> hash chain, policy list filters, a route security review in `basalt routes`, a
+> tested production path for scaffolded apps, and one new package,
+> `@basaltkit/inbound-mail`. Configurations the next major will refuse print a
+> boot warning now — see
+> [What's new in Basalt 1.13](https://basaltkit-docs.pages.dev/guide/whats-new).
+> Before that, 1.12 kept its word: an independent audit, in two passes, read every package's source next to its
 > documentation and found eighty places where the two disagreed — ten rated high:
 > an audit trail that let a forged row pass `verify()`, an idempotency plugin
 > that re-ran handlers returning a value, a policy for `project:constructor`

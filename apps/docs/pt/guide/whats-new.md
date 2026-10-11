@@ -1,76 +1,42 @@
-# Novidades no Basalt 1.12
+# Novidades no Basalt 1.13
 
-> *"Basalt 1.12" é o rótulo umbrella desta vaga de trabalho; os pacotes
+> *"Basalt 1.13" é o rótulo umbrella desta vaga de trabalho; os pacotes
 > `@basaltkit/*` são publicados de forma independente (ver
 > [Versionamento](/pt/guide/versioning)). Abaixo está o que aterrou e a versão do
 > pacote que o traz.*
 
-::: warning Trinta e dois pacotes publicam um major — seis deles duas vezes
-`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 4
-(`permissions-prisma` / `-sqlite` 2), `tenancy` 3, `tenancy-prisma` 2,
-`storage` 5, `files` 6, `comments` 4, `search` 2, `search-elasticsearch` 2,
-`audit` 3 (`audit-prisma` / `-sqlite` 2), `webhooks` 4 (`webhooks-prisma` /
-`-sqlite` 2), `subscriptions` 5 (`subscriptions-prisma` / `-sqlite` 3),
-`teams` 4, `queue` 3, `prisma` 3, `mcp` 5, `express` 2 e `hono` 2 — e os três
-adapters de drives chegam à 1.0. Alguns pacotes passaram por dois majors nesta
-vaga: `permissions`, `storage`, `files`, `audit`, `webhooks` e `mcp` publicaram
-primeiro as correcções da auditoria (como 3, 4, 5, 2, 3 e 4) e depois, um dia
-mais tarde, os seguimentos de [Fechar a colheita da
-auditoria](#fechar-a-colheita-da-auditoria). Vindo da 1.11, aplicas os dois
-conjuntos de passos. Três pacotes 0.x partem num minor: `drives` 0.3,
-`mcp-core` 0.4 e `ai-mcp` 0.3 (passando pela 0.2). A maioria resolve-se com uma
-opção ou uma chamada renomeada; quatro precisam de um passo de dados (uma
-re-chavagem, uma re-cifragem, dois modelos de auth novos, políticas RLS
-regeneradas). Ver [Atualização](#atualizacao).
+::: tip Nenhum pacote publica um major
+Quarenta e cinco pacotes publicam nesta vaga: quarenta e quatro minors e
+patches, e uma estreia, `@basaltkit/inbound-mail` 0.1. Três pacotes 0.x sobem
+um minor — `drives` 0.4, `mcp-core` 0.5 e `ai-mcp` 0.4 — e nenhum deles remove
+uma API. Algumas predefinições mudam e algumas configurações que arrancavam em
+silêncio passam a mostrar um aviso no arranque; as recusas mais estritas chegam
+numa futura major. Lê a [Atualização](#atualizacao) antes de subir versões.
 :::
 
-O Basalt 1.12 é a versão que **cumpre o que promete**. Cada pacote faz
-promessas — no README, nos tipos, no nome de uma opção — e o 1.11 tinha
-garantido que o comportamento seguro era a predefinição. O que ninguém tinha
-verificado de forma sistemática era se a predefinição fazia o que a promessa
-dizia. Por isso uma auditoria independente, em duas passagens, leu o código de
-cada pacote ao lado da sua documentação e transformou cada discrepância que
-encontrou num teste a falhar contra o build publicado.
+O Basalt 1.13 é a versão que **fecha o backlog sem uma major**. Enquanto a 1.12
+era auditada, um SaaS de gestão documental continuou a construir sobre o
+framework e manteve uma lista — os itens BK-025 a BK-087 — de cada sítio onde
+teve de escrever à mão o que o framework devia ter escrito: um plugin de
+idempotência que só o Fastify tinha, um cliente de base de dados do tenant que
+ficava reservado trinta segundos depois de cada pedido, um outbox de webhooks
+que matava todas as entradas em schema por tenant, um trilho de auditoria que
+não conseguia esquecer uma pessoa sem falhar a sua própria verificação de
+integridade, API keys que partilhavam todas o mesmo balde de rate limit.
 
-Encontrou oitenta. Dez foram classificadas como altas, e nenhuma parecia um bug
-de segurança vista de fora — cada uma era uma frase que o framework dizia sobre
-si próprio. O README prometia que o `audit.verify()` detectava uma linha forjada,
-e uma linha inserida directamente na tabela passava. O `idempotencyPlugin`
-estava documentado para handlers `route()`, e um handler que *devolvia* o payload
-— a forma que todos os exemplos usam — corria outra vez em cada retry. Uma
-política para `project:constructor` resolvia através de `Object.prototype` e
-autorizava qualquer pessoa. `meta.teamRole: 'Admin'`, um erro de escrita de
-`'admin'`, tinha rank zero e admitia todos os membros. O `swap()` passava uma
-subscrição gratuita para um plano pago sem a cobrar. O `@basaltkit/env` dizia que
-um `NODE_ENV` por definir era produção e o `@basaltkit/auth` dizia que era
-desenvolvimento.
+Esta vaga fecha essa lista. Cada item aterrou como minor ou patch, com testes no
+Fastify, no Express e no Hono sempre que toca num pedido, e uma auditoria de
+release leu o resultado antes de ser publicado. Os itens que só podiam aterrar
+como mudança incompatível — um aviso que devia passar a recusa, um override
+obsoleto que devia deixar de ser consultado — mantêm o aviso por agora e
+esperam pela próxima major. Três desenhos adiados tiveram primeiro o seu RFC:
+cadeias de auditoria apagáveis, filtros de listagem nas políticas (onde um
+filtro de linhas ao nível do ORM foi considerado e rejeitado) e mail de
+entrada.
 
-As oitenta estão fechadas. Cada defeito real foi reproduzido com um teste a
-falhar antes de ser corrigido, e esse teste vive agora na suite do próprio
-pacote; uma hipótese que não se reproduziu fica documentada, não "corrigida". O
-tema é a distância entre o comportamento declarado e o real, e atravessa todos
-os itens abaixo: uma chave single-tenant que não pode ser o nome de um tenant,
-um resolver que um header não consegue contrariar, três adapters que enviam os
-mesmos bytes para a mesma rota, um endpoint MCP que sabe com que sessão está a
-falar.
+## Destaques
 
-O relatório terminava também com uma colheita: lacunas de desenho e melhorias
-para lá das oitenta constatações numeradas. Mais dois pull requests fecharam
-essa lista depois do lançamento e seguem dentro da mesma vaga — políticas que
-correm no guard da rota, detalhes de erro públicos por construção, hashes de
-auditoria que nomeiam a sua chave, webhooks que respeitam uma política de portas
-e um tecto de fan-out, e mais. Ver [Fechar a colheita da
-auditoria](#fechar-a-colheita-da-auditoria).
-
-## Desde a 1.12 (por publicar)
-
-Entrou no `main` depois da publicação da 1.12 em minors e patches — nenhum
-pacote precisa de uma major. Alguns defaults mudam, algumas configurações que
-arrancavam passam a mostrar um aviso no arranque (recusadas na próxima major),
-e só usos mal formados das novas formas de rate limit recusam o arranque. Lê [Mudanças de comportamento e notas de
-upgrade](#behaviour-changes-and-upgrade-notes) antes de actualizar.
-
-
+### Todos os adapters correm o mesmo pipeline de pedidos
 - **Idempotência em todos os adapters.** O `idempotencyPlugin` passou de
   `@basaltkit/fastify` para o pipeline de rotas partilhado em `@basaltkit/http`,
   por isso o Express e o Hono também o têm (o import do Fastify continua a
@@ -80,56 +46,229 @@ upgrade](#behaviour-changes-and-upgrade-notes) antes de actualizar.
   para que um caller revogado receba `401`/`403` em vez do sucesso em cache. As
   duas vão passar a default numa futura major — vê
   [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).
+  *(`@basaltkit/http` 2.8, `fastify` 2.6, `express` 2.1, `hono` 2.1)*
+- **Disposers de pedido.** Um enricher pode devolver um `RequestDisposer`, e o
+  `ctx().onDispose()` regista um a partir de qualquer ponto do pedido: limpeza
+  que corre exactamente uma vez, depois de o handler terminar e de a resposta
+  estar completa — streams, erros e abortos do cliente incluídos, de forma
+  idêntica nos três adapters. Vê
+  [Escrever o teu próprio guard ou enricher](/pt/guide/concepts#escrever-o-teu-proprio-guard-ou-enricher).
+  *(`@basaltkit/http` 2.8 e todos os adapters)*
 - **Cabeçalhos por rota.** `meta.responseHeaders` aplica cabeçalhos de resposta
   estáticos (por exemplo `X-Robots-Tag: noindex` num link de partilha público) em
   todas as respostas que a rota produz, incluindo os erros dos guards, da
   validação e do handler — vê
   [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-responseheaders).
-- **Webhooks operáveis.** `secretBox` sela os secrets de assinatura dos endpoints
-  em repouso, `onAttempt` e `DeliveryResult.durationMs` reportam cada tentativa
-  de entrega, `headerPrefix` muda o nome dos headers `x-basalt-*`, e
-  `signPayload()` / `verifySignature()` aceitam bytes em bruto — vê
-  [Webhooks](/pt/guide/webhooks#selar-secrets-em-repouso).
+  *(`@basaltkit/http` 2.8)*
+- **Um enricher pode recusar com um cabeçalho.** Os enrichers recebem o
+  `reply`, por isso uma recusa pode levar `WWW-Authenticate`; um enricher que
+  envia uma resposta termina o pedido. Os schemas `rawBody()` e `upload()`
+  criados por uma cópia aninhada de `@basaltkit/http` passam a ser reconhecidos
+  pela cópia do adapter. *(`@basaltkit/http` 2.8)*
+
+### API keys e rate limits para clientes máquina
+- **As API keys comportam-se como credenciais, não como pistas.**
+  `apiKeysPlugin({ rejectInvalid: true })` responde a uma chave que não
+  verifica com `401 AUTH_APIKEY_INVALID` e `WWW-Authenticate` antes de qualquer
+  guard; `touchEveryMs` limita as escritas de `lastUsedAt` a uma por chave por
+  minuto; uma rejeição indica o prefixo de apresentação da chave e o IP do
+  cliente, nunca o segredo. *(`@basaltkit/auth` 4.2)*
+- **Orçamentos por chave, por rota e por prefixo.** O `meta.rateLimit` aceita
+  `key: 'apiKey'` (um orçamento por chave verificada), um array de orçamentos
+  cobrados por ordem, e `bucket: '<nome>'` para partilhar um contador entre
+  rotas; `securityPlugin({ rateLimit: { prefixes } })` cobra um prefixo de
+  caminho como `/v1` em vez do balde global. Um caller identificado sem IP
+  resolvido (uma tool MCP por stdio, o Hono sem `getClientIp`) tem o seu
+  próprio balde em vez do balde partilhado `unknown`. Vê
+  [Orçamentos por prefixo de caminho](/pt/guide/security#path-prefix-budgets).
+  *(`@basaltkit/http` 2.8)*
+- **O OpenAPI documenta chaves, scopes e idempotência.** Uma rota com
+  `meta.scopes` recebe um requisito `apiKeyAuth` e uma extensão
+  `x-required-scopes`, e com o `idempotencyPlugin` registado os métodos
+  protegidos documentam o cabeçalho `Idempotency-Key`. Os documentos de apps que
+  não usam nada disto ficam idênticos byte a byte. *(`@basaltkit/http` 2.8)*
+- **Uma chave desconhecida não consegue inundar o trilho de auditoria.** O
+  `auth:apikey_rejected` sai da captura por defeito; as recusas de uma chave que
+  verificou ficam registadas com o novo `auth:apikey_refused`.
+  *(`@basaltkit/audit` 3.1, `auth` 4.2)*
+
+### Tenants, domínios e a base de dados
+- **Clientes de tenant alugados por pedido.** O `prismaPlugin` passa a alugar
+  (lease) o cliente do pool de um tenant para cada pedido HTTP e cada
+  `tenancy.run()`, e devolve-o quando a resposta termina, através dos disposers
+  de pedido. Antes, um cliente contava como em uso durante `idleMs` (30 s)
+  depois de cada pedido, por isso, com os defaults, o 11.º tenant distinto em
+  30 s esperava 10 s por um `503` sem nada a correr. O pool que o plugin cria
+  passa a usar `idleMs` de 1 s por defeito, um período de tolerância e não um
+  orçamento por pedido — vê
+  [O pool de clientes por tenant](/pt/guide/database-per-tenant#o-pool-de-clientes-por-tenant).
+  *(`@basaltkit/prisma` 3.1, `tenancy` 3.2, `http` 2.8)*
 - **O outbox de webhooks funciona com endpoints por tenant.** Com schema por
   tenant (ou base de dados por tenant) e o store de webhooks sobre
   `tenantClient()`, cada entrada do relay falhava com `DB_UNAVAILABLE` e acabava
   morta. O `tenancyPlugin` passa a publicar um sinal `'tenancy:run'`
-  (`TenantRunner`, minor do `@basaltkit/tenancy`), e o `webhooksPlugin` usa-o
-  para correr a pesquisa de endpoints de um `dispatch()` fora do pedido
-  delimitado por `tenantId` dentro de `tenancy.run` — só a pesquisa, nunca a
-  entrega, por isso um endpoint lento não consegue prender um cliente do pool.
-  `webhookOutboxPlugin({ tenantOnly: true })` ignora eventos emitidos sem tenant.
-  **Ativo por defeito** sempre que o `tenancyPlugin` está registado, o que as
-  apps em schema partilhado também notam: um `TenantSource.find` e um par
-  `tenancy:switched`/`tenancy:exited` por cada dispatch destes, e as entradas de
-  um tenant que já não existe acabam mortas (`TENANT_NOT_FOUND`) em vez de serem
-  entregues. Desativa com `webhooksPlugin({ runInTenant: false })` — vê
-  [Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant).
-- **Mail de entrada.** Um pacote novo, `@basaltkit/inbound-mail` 0.1, recebe
-  email de um relay como bytes em bruto assinados (um destinatário por pedido,
-  envelope dentro da assinatura), encaminha-o pelo destinatário assinado para
-  handlers conscientes do tenant e faz o parse dentro de limites, confiando em
-  `Authentication-Results` e ARC só de servidores que indicares. Traz um Worker
-  de referência para o Cloudflare Email Routing — vê
-  [Mail de entrada](/pt/guide/inbound-mail).
-- **Clientes de tenant alugados por pedido.** O `prismaPlugin`
-  (`@basaltkit/prisma` 3.1) passa a alugar (lease) o cliente do pool de um
-  tenant para cada pedido HTTP e cada `tenancy.run()`, e devolve-o quando a
-  resposta termina, através dos novos disposers de pedido (`RequestDisposer`,
-  `ctx().onDispose()`) do `@basaltkit/http` 2.8 e de todos os adapters — vê
-  [Escrever o teu próprio guard ou enricher](/pt/guide/concepts#escrever-o-teu-proprio-guard-ou-enricher). Antes,
-  um cliente contava como em uso durante `idleMs` (30 s) depois de cada pedido,
-  por isso, com os defaults, o 11.º tenant distinto em 30 s esperava 10 s por um
-  `503` sem nada a correr. O pool que o plugin cria passa a usar `idleMs` de 1 s
-  por defeito, um período de tolerância e não um orçamento por pedido — vê
-  [O pool de clientes por tenant](/pt/guide/database-per-tenant#o-pool-de-clientes-por-tenant).
+  (`TenantRunner`), e o `webhooksPlugin` usa-o para correr a pesquisa de
+  endpoints de um `dispatch()` fora do pedido delimitado por `tenantId` dentro
+  de `tenancy.run` — só a pesquisa, nunca a entrega, por isso um endpoint lento
+  não consegue prender um cliente do pool. `webhookOutboxPlugin({ tenantOnly: true })`
+  ignora eventos emitidos sem tenant. Ativo por defeito; vê a nota de
+  atualização abaixo e [Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant).
+  *(`@basaltkit/webhooks` 4.1, `tenancy` 3.2)*
+- **Rotas só centrais.** `meta: { tenant: 'never' }` recusa um tenant resolvido
+  com um `404` simples antes de qualquer guard, por isso uma rota de plataforma
+  não pode correr dentro de um tenant acedido pelo seu host. O
+  `basalt ai doctor` assinala rotas que juntam `tenant: false` a uma permissão
+  `platform:`. *(`@basaltkit/tenancy` 3.2, `ai` 1.4)*
+- **Os domínios personalizados sobrevivem a um save do tenant.** O
+  `PrismaDomainStore` e o `SqliteDomainStore` são `DomainStore`s duráveis; os
+  saves de tenants comparam o conjunto de domínios em vez de o apagar (e à sua
+  prova de verificação), e um domínio reclamado mas não verificado nunca
+  resolve um pedido. O `@basaltkit/tenancy/testing` traz uma suite de contrato
+  para o teu próprio store. *(`@basaltkit/tenancy` 3.2, `tenancy-prisma` 2.1,
+  `tenancy-sqlite` 1.3)*
+- **Falhas de base de dados que dizem o que fazer.** O `describeDbError()`
+  transforma uma falta de permissões, uma baseline necessária, um host
+  inalcançável ou uma migração em falta numa causa e numa correcção (o
+  `GRANT`, o `migrate resolve`); o `basalt db:status` reporta todos os planos
+  sem mudar nada; e `assertMigrated({ forbiddenTables })` recusa uma base de
+  dados central que um `migrate dev` na raiz encheu de tabelas de tenant.
+  *(`@basaltkit/prisma` 3.1)*
+- **Módulos gerados para cada modo de isolamento.** `--tenant=schema|database`
+  gera um repositório sobre o cliente do próprio tenant, sem coluna
+  `tenantId`, e continua a falhar fechado. *(`@basaltkit/generator` 1.6)*
 
-### Mudanças de comportamento e notas de upgrade {#behaviour-changes-and-upgrade-notes}
+### Registo, sessões e permissões
+- **Política de registo por plano.** `authRoutes({ register: 'open' | 'closed' | policy })`
+  controla o `POST /auth/register`; uma política que recusa responde o mesmo
+  `202` que um sucesso, por isso a rota não revela quem foi convidado. O
+  `teamsInviteGate()` torna os hosts de tenant só por convite, e o
+  `teams.acceptByEmail()` aceita um convite assim que o endereço está provado.
+  *(`@basaltkit/auth` 4.2, `teams` 4.1)*
+- **Contas verificadas a partir de fluxos de confiança.**
+  `auth.register(…, { emailVerified: true })` cria a conta já verificada, e
+  uma conta social verificada pelo fornecedor é criada verificada antes de o
+  `auth:registered` disparar. *(`@basaltkit/auth` 4.2, `auth-prisma` /
+  `auth-sqlite` 2.1)*
+- **As sessões inactivas expiram.** `sessionIdleTtl` recusa uma sessão sem uso
+  durante mais tempo, para lá do `sessionTtl` absoluto, e um cookie
+  `__Host-`/`__Secure-` passa a implicar `Secure` em todos os ambientes.
+  *(`@basaltkit/auth` 4.2, `auth-prisma` / `auth-sqlite` 2.1)*
+- **Uma política pode responder por uma lista.**
+  `definePolicy(resource, checks, { filters })` declara a forma de listagem de
+  uma verificação ao lado dela, e `gate.listFilter(user, 'resource:action')`
+  devolve `unrestricted`, `none` ou um `where` para queries de listagem e
+  contagem — falha fechado com `PERMISSION_FILTER_MISSING` quando nenhum filtro
+  corresponde (RFC 0003; um filtro de linhas ao nível do ORM foi considerado e
+  rejeitado). Vê
+  [As políticas decidem um objeto, não uma lista](/pt/guide/authorization#as-politicas-decidem-um-objeto-nao-uma-lista).
+  *(`@basaltkit/permissions` 4.1)*
+- **As listagens escondem o que o caller não consegue passar.** O `tools/list`
+  e outras superfícies de listagem escondem rotas cujos `meta.scopes` faltam à
+  chave do caller, e as rotas `meta.mfa` de uma sessão sem MFA.
+  *(`@basaltkit/auth` 4.2)*
+- **Os conjuntos de rotas montados aceitam os teus guards.** `fileRoutes()`,
+  `apiKeysUiRoutes()`, `billingUiRoutes()`, `teamsUiRoutes()`,
+  `commentRoutes()` e `inAppRoutes()` aceitam `meta`
+  (`{ teamRole: 'admin' }`, `{ can: 'billing:manage' }`, um rate limit); o
+  `auth: true` fica sempre ligado. *(`@basaltkit/files` 6.1, `api-keys-ui` 1.4,
+  `billing-ui` 1.2, `teams-ui` 1.2, `comments` 4.1, `notifications` 1.3)*
+
+### Auditoria e dados pessoais
+- **Apagar uma pessoa sem partir a cadeia.** `audit.redact(entryId, …)`
+  substitui os caminhos escolhidos do payload por `'[erased]'` e acrescenta uma
+  atestação `audit:redacted` à cadeia da própria entrada na mesma transacção; o
+  `verify()` verifica a entrada redigida através dela. O opt-in
+  `integrity: { mode: 'hash-chain', erasable: true }` escreve hashes v3 com um
+  nonce por entrada que a redacção destrói, por isso o valor apagado já não
+  pode ser confirmado a partir do hash (RFC 0003). Vê
+  [Apagar dados pessoais](/pt/guide/persistence#erasing-personal-data-audit-redact).
+  *(`@basaltkit/audit` 3.1, `audit-prisma` / `audit-sqlite` 2.1)*
+- **Políticas de dados pessoais por evento.** `fieldPolicies` omite ou
+  pseudonimiza campos antes do redactor e antes do hash, e
+  `audit.record(…, scope)` atribui uma entrada escrita por um script à cadeia
+  do seu tenant. *(`@basaltkit/audit` 3.1)*
+- **Um só AEAD para segredos em repouso.** `@basaltkit/core/secret-box` é a
+  caixa AES-256-GCM com key ring por trás do `SecretBox` do auth e do
+  `DriveSecretBox` das drives; os ciphertexts existentes continuam compatíveis
+  byte a byte. *(`@basaltkit/core` 1.6)*
+
+### Webhooks, mail e drives
+- **Webhooks operáveis.** `secretBox` sela os secrets de assinatura dos endpoints
+  em repouso, `onAttempt` e `DeliveryResult.durationMs` reportam cada tentativa
+  de entrega, `headerPrefix` muda o nome dos headers `x-basalt-*`, e
+  `signPayload()` / `verifySignature()` aceitam bytes em bruto — vê
+  [Webhooks](/pt/guide/webhooks#selar-secrets-em-repouso). O
+  `createGuardedFetch()` é o cliente em streaming, protegido contra SSRF, para
+  URLs não confiáveis. *(`@basaltkit/webhooks` 4.1)*
+- **Mail de entrada.** Um pacote novo recebe email de um relay como bytes em
+  bruto assinados (um destinatário por pedido, envelope dentro da assinatura),
+  encaminha-o pelo destinatário assinado para handlers conscientes do tenant e
+  faz o parse dentro de limites, confiando em `Authentication-Results` e ARC só
+  de servidores que indicares. Traz um Worker de referência para o Cloudflare
+  Email Routing (RFC 0003) — vê [Mail de entrada](/pt/guide/inbound-mail).
+  *(`@basaltkit/inbound-mail` 0.1)*
+- **Drives que se conseguem operar.** Saúde da ligação e uma sonda
+  `drives.check()`, um hook `drive:disconnecting` com veto, um modo de listagem
+  `recursive` por chamada, as explicações do fornecedor guardadas no canal só de
+  log, `rotateSecrets()` para ligações adormecidas, e uma suite de conformidade
+  para stores duráveis; colunas do SharePoint através de `listItemFields`.
+  *(`@basaltkit/drives` 0.4, `drives-google` / `drives-dropbox` /
+  `drives-microsoft` 1.1)*
+
+### Colaboração e dados que entram e saem
+- **Comentários com âncoras, remoção suave e revisões**, e menções que deixam
+  de ler o domínio de um e-mail como um utilizador. *(`@basaltkit/comments`
+  4.1, `comments-prisma` 1.2, `comments-sqlite` 1.1)*
+- **Notificações que marcam tudo como lido**, agrupam repetições, podam linhas
+  antigas e aceitam `defaults` por canal e canais `mandatory`, com stores de
+  preferências duráveis. *(`@basaltkit/notifications` 1.3,
+  `notifications-prisma` 1.2, `notifications-sqlite` 1.1)*
+- **CSV nos dois sentidos.** `parseDelimited()` e `defineImport()` lêem CSV de
+  forma estrita e reportam cada célula inválida por linha e coluna; as
+  exportações CSV e XLSX escrevem números e datas para um locale, com BOM,
+  células de data reais e formatos por coluna. *(`@basaltkit/exports` 1.3,
+  `exports-xlsx` 1.1)*
+- **Realtime sobre `sse()`.** `realtimeSse(hub, …)` corre um endpoint SSE
+  apoiado num hub sem alterações no Fastify, no Express e no Hono.
+  *(`@basaltkit/realtime` 1.6)*
+
+### MCP que não deixa escapar os seus erros
+- **Argumentos mal formados são recusados, erros internos são genéricos.** Um
+  `arguments` que não é objecto dá `INVALID_PARAMS` antes de a tool correr, e
+  uma excepção inesperada responde `Internal error` em vez da mensagem da
+  excepção; a causa vai para o `onError` (stderr por defeito). Uma chamada de
+  tool nunca reencaminha a chave de idempotência, por isso um replay não pode
+  entregar ao modelo um erro por redigir. *(`@basaltkit/mcp-core` 0.5, `mcp`
+  5.1, `ai-mcp` 0.4)*
+
+### Do `npm create` à produção
+- **Um caminho de produção testado.** As apps novas recebem um script `build`,
+  um `start` que corre o output compilado e um `Dockerfile` multi-stage que
+  corre como utilizador sem privilégios e com health check; as apps `--prisma`
+  geram o cliente fora de `src/`. O `create-basalt update` oferece as peças em
+  falta às apps mais antigas e o `create-basalt doctor` assinala o que falta. O
+  `basalt publish dockerfile` / `ci` emitem os mesmos ficheiros.
+  *(`create-basalt` 1.12, `@basaltkit/cli` 1.4)*
+- **Uma revisão de segurança das rotas.** O `basalt routes` mostra uma coluna
+  por guard, `--json` para ferramentas, e `--unguarded --require=auth,can` sai
+  com 1 numa rota a que falte algum dos dois — vê
+  [Revisão de segurança das rotas](/pt/guide/security#revisao-de-seguranca-das-rotas-—-basalt-routes).
+  `describeRoutes()` e `findUnguardedRoutes()` deixam um teste afirmar o mesmo.
+  *(`@basaltkit/http` 2.8, `cli` 1.4)*
+- **Um scaffold verificado contra PostgreSQL real.** Um novo job de CI conduz
+  os scripts `db:*` de uma app criada contra uma base de dados real, o que
+  encontrou o script `db:seed` mais abaixo. *(`create-basalt` 1.12)*
+- **Um `sharp` corrigido.** O `@basaltkit/image-sharp` 1.1.8 exige `sharp`
+  0.35.5 ou posterior (uma vulnerabilidade no librsvg incluído).
+
+## Atualização
 
 Nenhum pacote precisa de uma major, mas estas minors mudam o que algumas
-aplicações vêem. Lê esta lista antes de actualizar.
+aplicações vêem. Os pacotes são independentes — sobe só o que usas; o
+`CHANGELOG.md` de cada pacote traz as notas completas. Lê esta lista antes de
+actualizar.
 
-#### Idempotência
+### Idempotência
 
 - **Os handlers Fastify crus perdem a idempotência.** O `idempotencyPlugin`
   cobre agora só definições `route()` do Basalt. Um handler registado
@@ -169,7 +308,7 @@ aplicações vêem. Lê esta lista antes de actualizar.
 
 Vê [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).
 
-#### Disposers de pedido e leases do Prisma
+### Disposers de pedido e leases do Prisma
 
 - **Os leases precisam do `@basaltkit/http` 2.8.** O `prismaPlugin` só aluga
   quando o pipeline liberta o lease no fim da resposta: `@basaltkit/http` 2.8
@@ -215,7 +354,7 @@ Vê [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idemp
   "Service unavailable.". `max`, `leased`, `recentlyUsed` e o id do tenant vão
   só para o log do servidor.
 
-#### Configurações que passam a mostrar um aviso no arranque (recusadas na próxima major) {#configurations-that-now-warn-at-boot-refused-in-the-next-major}
+### Configurações que passam a mostrar um aviso no arranque (recusadas na próxima major) {#configurations-that-now-warn-at-boot-refused-in-the-next-major}
 
 Cada uma destas arrancava e continua a arrancar, com o mesmo comportamento em
 runtime de antes; cada uma mostra agora um aviso `[basalt] …` no arranque que
@@ -249,7 +388,7 @@ arranque, por isso corrige-as já — cada uma tem uma correcção de uma linha.
   A chave é nova: uma app que guarda dados seus em `meta.headers` não é
   afectada, porque nada lê nem envia `meta.headers`.
 
-#### Configurações que passam a recusar o arranque {#configurations-that-now-refuse-to-boot}
+### Configurações que passam a recusar o arranque {#configurations-that-now-refuse-to-boot}
 
 Só uma, e só para formas acrescentadas nesta versão:
 
@@ -260,7 +399,7 @@ Só uma, e só para formas acrescentadas nesta versão:
   `HTTP_INVALID_ROUTE_META`. O objecto único sem `bucket` string — incluindo
   `bucket: null` — mantém o parse tolerante e é aplicado por rota, como antes.
 
-#### Outras mudanças
+### Outras mudanças
 
 - **Audit — recusas de API keys.** O `auth:apikey_rejected` deixa de ser
   registado por defeito, porque qualquer cliente anónimo podia inundar o trail
@@ -365,9 +504,81 @@ Só uma, e só para formas acrescentadas nesta versão:
   `.env` e corre o comando `migrations.seed` que já declara — e corre
   `pnpm db:seed` depois do `pnpm db:migrate`. Nada reescreve o script por ti:
   o `create-basalt doctor` assinala-o e o `create-basalt update` mostra a
-  linha.
+- **Não verificado automaticamente.** O e2e do scaffold contra PostgreSQL real
+  cobre `db:migrate --name <mudança>`, mas não o `db:migrate` sem `--name`
+  numa mudança de schema (o Prisma pede o nome e bloqueia mesmo com o stdin
+  fechado) nem os pedidos de reset do `migrate dev` para uma mudança
+  destrutiva ou uma base de dados com drift: os dois precisam de um terminal.
+- **Ainda sem atestações de proveniência npm.** Os pacotes desta vaga são
+  publicados sem atestações de proveniência; a reposição está a ser seguida na
+  issue #409.
 
-## Destaques
+---
+
+## Anteriormente — Basalt 1.12
+
+> *A versão que **cumpre o que promete**: as oitenta constatações de uma
+> auditoria independente fechadas, cada defeito real com um teste de regressão;
+> trinta e dois majors que fazem o código fazer o que a documentação dizia; um
+> só protocolo no Fastify, no Express e no Hono; e a colheita da auditoria
+> fechada um dia depois.*
+
+::: warning Trinta e dois pacotes publicam um major — seis deles duas vezes
+`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 4
+(`permissions-prisma` / `-sqlite` 2), `tenancy` 3, `tenancy-prisma` 2,
+`storage` 5, `files` 6, `comments` 4, `search` 2, `search-elasticsearch` 2,
+`audit` 3 (`audit-prisma` / `-sqlite` 2), `webhooks` 4 (`webhooks-prisma` /
+`-sqlite` 2), `subscriptions` 5 (`subscriptions-prisma` / `-sqlite` 3),
+`teams` 4, `queue` 3, `prisma` 3, `mcp` 5, `express` 2 e `hono` 2 — e os três
+adapters de drives chegam à 1.0. Alguns pacotes passaram por dois majors nesta
+vaga: `permissions`, `storage`, `files`, `audit`, `webhooks` e `mcp` publicaram
+primeiro as correcções da auditoria (como 3, 4, 5, 2, 3 e 4) e depois, um dia
+mais tarde, os seguimentos de [Fechar a colheita da
+auditoria](#fechar-a-colheita-da-auditoria). Vindo da 1.11, aplicas os dois
+conjuntos de passos. Três pacotes 0.x partem num minor: `drives` 0.3,
+`mcp-core` 0.4 e `ai-mcp` 0.3 (passando pela 0.2). A maioria resolve-se com uma
+opção ou uma chamada renomeada; quatro precisam de um passo de dados (uma
+re-chavagem, uma re-cifragem, dois modelos de auth novos, políticas RLS
+regeneradas). Ver [Atualizar para 1.12](#atualizar-para-1-12).
+:::
+
+O Basalt 1.12 é a versão que **cumpre o que promete**. Cada pacote faz
+promessas — no README, nos tipos, no nome de uma opção — e o 1.11 tinha
+garantido que o comportamento seguro era a predefinição. O que ninguém tinha
+verificado de forma sistemática era se a predefinição fazia o que a promessa
+dizia. Por isso uma auditoria independente, em duas passagens, leu o código de
+cada pacote ao lado da sua documentação e transformou cada discrepância que
+encontrou num teste a falhar contra o build publicado.
+
+Encontrou oitenta. Dez foram classificadas como altas, e nenhuma parecia um bug
+de segurança vista de fora — cada uma era uma frase que o framework dizia sobre
+si próprio. O README prometia que o `audit.verify()` detectava uma linha forjada,
+e uma linha inserida directamente na tabela passava. O `idempotencyPlugin`
+estava documentado para handlers `route()`, e um handler que *devolvia* o payload
+— a forma que todos os exemplos usam — corria outra vez em cada retry. Uma
+política para `project:constructor` resolvia através de `Object.prototype` e
+autorizava qualquer pessoa. `meta.teamRole: 'Admin'`, um erro de escrita de
+`'admin'`, tinha rank zero e admitia todos os membros. O `swap()` passava uma
+subscrição gratuita para um plano pago sem a cobrar. O `@basaltkit/env` dizia que
+um `NODE_ENV` por definir era produção e o `@basaltkit/auth` dizia que era
+desenvolvimento.
+
+As oitenta estão fechadas. Cada defeito real foi reproduzido com um teste a
+falhar antes de ser corrigido, e esse teste vive agora na suite do próprio
+pacote; uma hipótese que não se reproduziu fica documentada, não "corrigida". O
+tema é a distância entre o comportamento declarado e o real, e atravessa todos
+os itens abaixo: uma chave single-tenant que não pode ser o nome de um tenant,
+um resolver que um header não consegue contrariar, três adapters que enviam os
+mesmos bytes para a mesma rota, um endpoint MCP que sabe com que sessão está a
+falar.
+
+O relatório terminava também com uma colheita: lacunas de desenho e melhorias
+para lá das oitenta constatações numeradas. Mais dois pull requests fecharam
+essa lista depois do lançamento e seguem dentro da mesma vaga — políticas que
+correm no guard da rota, detalhes de erro públicos por construção, hashes de
+auditoria que nomeiam a sua chave, webhooks que respeitam uma política de portas
+e um tecto de fan-out, e mais. Ver [Fechar a colheita da
+auditoria](#fechar-a-colheita-da-auditoria).
 
 ### Promessas que o código passa a cumprir
 - **O trilho de auditoria detecta o que o README dizia que detectava.** O
@@ -615,13 +826,13 @@ seis pacotes publicam o seu segundo major da vaga.
   segredos](/pt/guide/webhooks#rodar-um-secret-de-assinatura); o
   `CONTRIBUTING.md` ganhou uma checklist de testes.
 
-## Atualização
+### Atualizar para 1.12
 
 Os pacotes são independentes — sobe só o que usas. Cada changeset traz as notas
 de migração completas no `CHANGELOG.md` do pacote; abaixo estão as mudanças com
 maior probabilidade de chegar a uma aplicação.
 
-### Predefinições que passam a recusar
+#### Predefinições que passam a recusar
 
 | Pacote | O que recusa | Opt-out / correcção |
 | --- | --- | --- |
@@ -639,10 +850,10 @@ maior probabilidade de chegar a uma aplicação.
 | `queue` 3 | dois jobs diferentes com o mesmo nome; `attempts: 0`; contexto de job com um tenant fora da gramática | renomear, ou `queuedOn(…, { name })`; `attempts` ≥ 1; passar o mesmo `validateTenantId` ao plugin de queue |
 | `subscriptions` 5 | `swap()` para um plano pago sem subscrição no gateway (`402`); `subscribe()` a um plano pago no Paddle ou Lemon Squeezy (`501`); uso que não seja inteiro positivo | `swap(id, plan, { allowUnpaid: true })`; `checkout()` |
 | `search` 2 | um `reindex()` simples fora de um tenant com tenancy registada; `limit` acima de 1000, `offset` acima de 10000; filtros em campos não declarados ou com valores `null` | `reindex(name, { all: true })`; `searchPlugin({ maxLimit, maxOffset })`; declarar o campo `filterable` |
-| `prisma` 3 | um tenant novo quando todos os clientes do pool estão em uso — `503` depois do `acquireTimeoutMs` | dimensionar `max` para os tenants activos em simultâneo; no `prisma` 3.0 manter `idleMs` acima do pedido mais longo, ou `pool.use(tenantId, fn)` — a partir da 3.1 cada pedido tem um lease (vê as [notas de upgrade](#behaviour-changes-and-upgrade-notes)) |
+| `prisma` 3 | um tenant novo quando todos os clientes do pool estão em uso — `503` depois do `acquireTimeoutMs` | dimensionar `max` para os tenants activos em simultâneo; no `prisma` 3.0 manter `idleMs` acima do pedido mais longo, ou `pool.use(tenantId, fn)` — a partir da 3.1 cada pedido tem um lease (vê as [notas de upgrade da 1.13](#disposers-de-pedido-e-leases-do-prisma)) |
 | `audit` 2 | `verify()` / `verifyAll()` falham para linhas fora da cadeia escritas depois de ela começar | `legacyUntil` para uma origem conhecida e benigna, como um deploy gradual |
 
-### Passos de dados
+#### Passos de dados
 
 **A sentinela `'@single'`.** Uma app single-tenant com registos persistidos
 re-chaveia-os uma vez, ou passam a ler-se como inexistentes. Salta este passo se
@@ -696,7 +907,7 @@ especiais de URL no tenant ou no id precisam de um
 `reindex(name, { all: true })`. As atribuições guardadas com um segmento de
 permissão vazio nunca concederam nada e podem ser apagadas.
 
-### O Express e o Hono mudam o que o cliente recebe
+#### O Express e o Hono mudam o que o cliente recebe
 
 No **Express**: devolve HTML com um `content-type` explícito; envia JSON com um
 media type JSON; um corpo JSON vazio passa a ser `undefined`, por isso define-lhe
@@ -708,7 +919,7 @@ por isso constrói um URL absoluto com `new URL(request.url, base)`; um corpo JS
 malformado é um 400 antes do handler; passa `errorHandler: false` se instalas o
 teu próprio `onError`.
 
-### Stores, drivers e gateways custom implementam mais
+#### Stores, drivers e gateways custom implementam mais
 
 Um `PasskeyStore` custom tem de implementar `compareAndSetCounter` (o serviço
 recusa arrancar sem ele). Um `BillingGateway` custom implementa
@@ -721,14 +932,14 @@ fakes de teste precisam de `$transaction` (`tenancy-prisma`) e de `create` /
 `updateMany` (`webhooks-prisma`, `auth-prisma`); um `PrismaClient` gerado já os
 tem.
 
-### Os limites de coluna do MySQL são opt-in
+#### Os limites de coluna do MySQL são opt-in
 
 Nada muda em PostgreSQL nem em SQLite, nem em MySQL até o pedires. Para o adoptar,
 deixa o `basalt prisma:sync` copiar as variantes `schema.mysql.prisma`, migra, e
 passa `columnLimits: 'mysql'` às factories dos stores. O
 [guia de MySQL](/pt/guide/persistence#mysql) tem os detalhes.
 
-### O que a colheita muda
+#### O que a colheita muda
 
 Estes são os passos para as versões de [Fechar a colheita da
 auditoria](#fechar-a-colheita-da-auditoria). Vindo da 1.11, aplica-os por cima
