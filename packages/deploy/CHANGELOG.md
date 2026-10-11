@@ -1,5 +1,11 @@
 # @basaltkit/deploy
 
+## 0.2.0
+
+### Minor Changes
+
+- 70146bd: Phase 2 of RFC 0006 (§13): Docker Compose apps. `compose({ file, images, upstream, env, keepImages })` builds each image once per commit as `<tag>:<7-char sha>` (skipped when it exists), starts the project with `compose up -d`, checks the upstream service's own healthcheck and that no service is restarting, rolls back to the previous commit's images without a rebuild, and after a healthy release removes `<sha>` tags of the configured images outside the last `keepImages` releases (tags must be `<app>` or `<app>-…`, C4). C1 understands a port published by `docker-proxy`. New: `hooks.infra` / `hooks.verify` — the app's own commands at fixed points (a failing `verify` rolls back); `migrate.command` and `migrate.env` (values that override the `.env` for the migration and the pre-migration dump, e.g. host URLs for container names); `env.file` may be absolute and `env.mirror` keeps exact copies (a differing mirror is C10); `apache({ managed: false, vhosts })` checks C1/C2 on vhosts the app writes itself and never writes them; `install` gives an env file outside the checkout — and the app's own directory — to the deploy user. C1 now reads quoted `ProxyPass "/x" "http://127.0.0.1:N/"` lines, which it silently skipped before. Under compose the `.env` gets no `PORT`.
+
 ## 0.1.4
 
 ### Patch Changes
