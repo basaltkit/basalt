@@ -35,10 +35,10 @@ describe('server overrides', () => {
   it('apply port, branch and infra ports; nothing else', () => {
     const base = lexfirmaConfig({ infra: dockerInfra('lexfirma', { minio: { buckets: ['lexfirma-documents'] } }) })
     const next = applyOverrides(base, { port: 3002, branch: 'main', infra: { postgres: { port: 5434 }, minio: { consolePort: 9111 } } })
-    expect(next.runtime.port).toBe(3002)
+    expect(next.runtime).toMatchObject({ kind: 'pm2', port: 3002 })
     expect(next.branch).toBe('main')
     expect(next.infra).toMatchObject({ postgres: { port: 5434 }, minio: { consolePort: 9111, port: 'auto' } })
-    expect(base.runtime.port).toBe('auto')
+    expect(base.runtime).toMatchObject({ port: 'auto' })
   })
 
   it('reject unknown keys and non-objects', () => {
