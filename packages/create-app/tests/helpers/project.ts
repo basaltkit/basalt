@@ -16,6 +16,7 @@ export const hoursAgo = (hours: number): string => new Date(NOW - hours * 3_600_
 export interface FakePackage {
   version: string
   peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
   /** `last-modified` of the packument (default: long ago). */
   modified?: string
 }
@@ -34,7 +35,12 @@ export function fakeRegistry(packages: Record<string, FakePackage | 'down'>, cal
     const entry = packages[name]
     if (entry === 'down') throw new TypeError('fetch failed')
     if (entry === undefined) return new Response('not found', { status: 404 })
-    return new Response(JSON.stringify({ name, version: entry.version, peerDependencies: entry.peerDependencies ?? {} }), {
+    return new Response(JSON.stringify({
+        name,
+        version: entry.version,
+        peerDependencies: entry.peerDependencies ?? {},
+        ...(entry.peerDependenciesMeta ? { peerDependenciesMeta: entry.peerDependenciesMeta } : {}),
+      }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })

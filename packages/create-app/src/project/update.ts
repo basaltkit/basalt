@@ -102,6 +102,12 @@ export interface UpdatePlan {
   warnings: string[]
   /** Framework packages crossing a major: name → changelog URL. */
   majors: { name: string; from: string; to: string; changelog: string }[]
+  /**
+   * Required `@basaltkit/*` peers of the framework releases the app ends up on
+   * that its package.json did not list (testing 3 takes mailer): added at their
+   * latest version, in `dependencies` when a runtime dependency needs them.
+   */
+  addedPeers: { name: string; range: string; section: 'dependencies' | 'devDependencies'; requiredBy: string[] }[]
   registry: string
 }
 
@@ -392,6 +398,51 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
       }
     }
   }
+  // A required @basaltkit peer the app never declared: pnpm and npm may
+  // auto-install it, but yarn PnP, `auto-install-peers=false` or
+  // `--legacy-peer-deps` do not, and `doctor` checks installed versions, not
+  // the manifest. Add it at its latest version; when that is impossible
+  // (registry, release-age window, out of range), say so.
+  const declared = new Set(entries.filter((entry) => entry.file === 'package.json').map((entry) => entry.name))
+  const missing = new Map<string, { wanted: string; requiredBy: string[]; section: 'dependencies' | 'devDependencies' }>()
+  for (const entry of entries) {
+    if (!entry.framework || (entry.status !== 'update' && entry.status !== 'current') || entry.file !== 'package.json') continue
+    const info = results.get(entry.name)
+    for (const [peer, wanted] of Object.entries(info?.peers ?? {})) {
+      if (!isFramework(peer) || declared.has(peer) || info?.optionalPeers?.includes(peer)) continue
+      const prior = missing.get(peer)
+      const section = entry.section === 'dependencies' || prior?.section === 'dependencies' ? 'dependencies' : 'devDependencies'
+      const requiredBy = [...(prior?.requiredBy ?? []), `${entry.name}@${info?.latest}`]
+      missing.set(peer, { wanted: prior?.wanted ?? wanted, requiredBy: [...new Set(requiredBy)], section })
+    }
+  }
+  const addedPeers: UpdatePlan['addedPeers'] = []
+  if (missing.size > 0) {
+    const peerLookup = await lookupLatestVersions([...missing.keys()].sort(), (name) => !exempt(name), {
+      ...options.registry,
+      minimumReleaseAge: window,
+    })
+    const additions: Record<'dependencies' | 'devDependencies', Record<string, string>> = { dependencies: {}, devDependencies: {} }
+    for (const [peer, need] of missing) {
+      const found = peerLookup.results.get(peer)
+      if (found?.latest !== undefined && found.age === 'mature' && satisfies(found.latest, need.wanted) === true) {
+        const range = `^${found.latest}`
+        additions[need.section][peer] = range
+        addedPeers.push({ name: peer, range, section: need.section, requiredBy: need.requiredBy })
+      } else {
+        warnings.push(
+          `${need.requiredBy.join(', ')} requires ${peer} ${need.wanted}, which package.json does not list — add it (${ctx.pm} add ${
+            need.section === 'devDependencies' ? '-D ' : ''
+          }${peer})`,
+        )
+      }
+    }
+    if (addedPeers.length > 0) {
+      const merged = mergePackageJson(files['package.json']?.after ?? ctx.packageJsonText, additions)
+      if (merged.changes.length > 0) files['package.json'] = { before: ctx.packageJsonText, after: merged.text }
+    }
+  }
+
   const failed = entries.filter((entry) => entry.status === 'failed').map((entry) => entry.name)
   if (failed.length > 0) warnings.push(`The registry did not answer for ${[...new Set(failed)].join(', ')} — left unchanged.`)
 
@@ -405,7 +456,7 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
     }))
     .filter((major, i, all) => all.findIndex((other) => other.name === major.name) === i)
 
-  return { entries, updates, files, tooling: toolingNotes, manual, warnings, majors, registry }
+  return { entries, updates, files, tooling: toolingNotes, manual, warnings, majors, addedPeers, registry }
 }
 
 /** The plan as terminal lines: the update table, then notes, tooling, warnings and majors. */
@@ -452,6 +503,12 @@ export function renderUpdatePlan(plan: UpdatePlan, colors: Colors): string[] {
     lines.push('', colors.bold('Framework majors — read before applying:'))
     for (const major of plan.majors) lines.push(`  ${major.name} ${major.from} → ${major.to}: ${major.changelog}`)
     lines.push(`  Upgrade notes: ${DOCS_UPGRADING_URL}`)
+  }
+  if (plan.addedPeers.length > 0) {
+    lines.push('', colors.bold('Required peers the app did not list (added):'))
+    for (const peer of plan.addedPeers) {
+      lines.push(`  ${colors.cyan(peer.name)} ${peer.range} (${peer.section}) — required by ${peer.requiredBy.join(', ')}`)
+    }
   }
   if (plan.tooling.length > 0) {
     lines.push('', colors.bold('Project tooling:'))

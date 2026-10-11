@@ -357,6 +357,11 @@ It applies the **same policy as a new scaffold** (it is the same registry code):
   install can't refuse it.
 - When a framework release declares a peer range the app would not meet (say
   `zod ^5` while zod is held on 4), the plan warns before anything is written.
+- When a framework release requires an `@basaltkit/*` peer the app's
+  `package.json` does not list (`@basaltkit/testing` 3 takes
+  `@basaltkit/mailer`), the plan adds it at its latest version — in
+  `dependencies` when a runtime dependency needs it, else `devDependencies` —
+  or warns when it cannot. Optional peers are never added.
 
 ```text
 4 update(s):
