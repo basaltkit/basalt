@@ -1,5 +1,17 @@
 # create-basalt
 
+## 1.13.0
+
+### Minor Changes
+
+- 2400720: BK-083: `--prisma` scaffolds now emit the `@basaltkit/auth-prisma` 3.0 `AuthApiKey` model: `serviceId`, `previousHash`, `previousHashExpiresAt`, `rotatedAt`, `allowedIps`, `meta` and an index on `serviceId`. That is what API key rotation with grace, service keys and per-key IP allowlists need. A new app depends on `@basaltkit/auth-prisma ^3`; the range comes from the workspace version at build time. The existing parity test keeps the template model identical to the package's reference schema.
+- 31b82c3: `update` adds a required `@basaltkit/*` peer the app's `package.json` does not list. On an app scaffolded by create-basalt 1.12 or earlier, moving `@basaltkit/testing` to 3 left `@basaltkit/mailer` out of the manifest: the app only worked because pnpm and npm install peers on their own, and failed under yarn PnP, `auto-install-peers=false` or `--legacy-peer-deps`. The plan now adds such a peer at its latest version (in `dependencies` when a runtime dependency needs it, else `devDependencies`) and lists it under "Required peers the app did not list (added)"; when the registry, the release-age window or the peer's range rules that out, it warns with the `add` command instead. Optional peers (`peerDependenciesMeta`) are never added. `UpdatePlan` gains `addedPeers`, and `LatestInfo` gains `optionalPeers`.
+
+### Patch Changes
+
+- 9df6cd7: A new app's `@basaltkit/*` ranges are floored at the exact published version (`^3.0.2`), not at the start of its minor line (`^3.0.0`). A patch can carry the dependency ranges that make a package work with the rest of the scaffold — a dependent patch after a sibling's major — and a `.0` floor let a fresh install resolve the older patch of the same line.
+- 0cc9549: A new app lists `@basaltkit/mailer` in `devDependencies` next to `@basaltkit/testing`, whose 3.0 takes it as a peer (`fakeMailer()` binds the app's own `MAILER` token). A new test checks every flag combination: each required `@basaltkit/*` peer of a scaffolded package is in the app's manifest, so a package manager that does not install peers on its own still gets a loadable app.
+
 ## 1.12.0
 
 ### Minor Changes

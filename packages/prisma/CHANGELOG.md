@@ -1,5 +1,18 @@
 # @basaltkit/prisma
 
+## 4.0.0
+
+### Major Changes
+
+- 86fea74: The optional `@basaltkit/http` peer range moves from 2.x to `^3`; no API change. The major is forced by the peer leaving its 2.x range: the request lease reads `ctx().onDispose` from the app's http pipeline, so the plugin must sit next to the same `@basaltkit/http` the adapter runs. Upgrade it together with `@basaltkit/http` 3 and a 3.x adapter.
+
+### Patch Changes
+
+- Updated dependencies [0d6e137]
+- Updated dependencies [14181b0]
+- Updated dependencies [24c317b]
+  - @basaltkit/http@3.0.0
+
 ## 3.1.0
 
 ### Minor Changes

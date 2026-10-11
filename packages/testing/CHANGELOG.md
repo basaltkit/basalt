@@ -1,5 +1,20 @@
 # @basaltkit/testing
 
+## 3.0.0
+
+### Major Changes
+
+- 14181b0: Peer ranges move to the 3.x adapters (`@basaltkit/fastify`, `@basaltkit/express`, `@basaltkit/hono`); no API change. The major is forced by the optional adapter peers leaving their 2.x range.
+- 465e68e: `@basaltkit/mailer` becomes a **peer dependency** (`^2.1.0`, the range the previous dependency already had). `fakeMailer()` binds `MAILER` for the app under test; from a private copy of `@basaltkit/mailer` that binding is invisible to the app's `@basaltkit/notifications` and `Mailer` users, so a test would assert on a fake nothing writes to. Install `@basaltkit/mailer` next to `@basaltkit/testing` (a `create-basalt` app already has it when it sends mail). No API change.
+
+### Patch Changes
+
+- Updated dependencies [14181b0]
+- Updated dependencies [14181b0]
+  - @basaltkit/express@3.0.0
+  - @basaltkit/hono@3.0.0
+  - @basaltkit/fastify@3.0.0
+
 ## 2.0.3
 
 ### Patch Changes

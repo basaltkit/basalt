@@ -1,5 +1,36 @@
 # @basaltkit/http
 
+## 3.0.0
+
+### Major Changes
+
+- 0d6e137: Enrichers that cannot run fail closed, like guards.
+  
+  `runRoute()` ran the request enrichers only when the pipeline carried a `container`; a hand-built pipeline that passed `enrichers` but no `container` dropped them silently and ran the handler with no tenant and no user resolved (tenancy's per-request refusal of an unknown `meta.tenant` included). It now throws the newly exported `EnrichersWithoutContainerError` (`HTTP_ENRICHERS_UNRUNNABLE`, 500) naming the route and the number of enrichers, before any of them or the handler runs — the rule `GuardsWithoutContainerError` already applied to guards.
+  
+  Every shipped adapter (fastify, express, hono) and `mcpPlugin` pass the container, so nothing changes for them. A pipeline with no enrichers, no guards and no container still runs.
+  
+  **Migrating.** A bespoke driver that passes `enrichers` must also pass `container` (the app's container, as the adapters do).
+- 14181b0: `idempotencyPlugin` is strict by default.
+  
+  - `fingerprint` defaults to the new `'request'` mode: each key is bound to the route params, the query and the body (the exact bytes for a `rawBody()` route; params and query only for an `upload()` route). A reused key with a different request — `/accounts/2/charge` after `/accounts/1/charge`, another query string or another body — is refused with `422 IDEMPOTENCY_KEY_REUSED` instead of replaying the first result. `'body'` keeps its 2.x meaning (the body only).
+  - `replayAfterGuards` defaults to `true`: guards and request validation run before a replay, so a revoked caller gets `401`/`403` instead of the cached success, guards run on every replay, and a request failing validation never reserves the key.
+  - A `fingerprint` function may return any value: an object or array is canonicalized (keys sorted at every level); a string or other primitive is hashed by its string form, as before. An object used to hash as `"[object Object]"`, the same for every request.
+  - `replayAfterGuards` now rejects non-boolean values with a `TypeError`.
+  
+  To keep the 2.x behaviour: `idempotencyPlugin({ fingerprint: false, replayAfterGuards: false })`.
+  
+  No data step: scope hashes are unchanged and records stored by 2.x carry no fingerprint, so they keep replaying until they expire — except records 2.x fingerprinted under a hash that changes now (an app dropping an explicit `'body'` for the `'request'` default, or a function returning an object): a retry spanning the deploy gets `422`. Rolling deploys that share a `RedisIdempotencyStore` with `@basaltkit/fastify` ≤ 2.5 instances must move the whole fleet onto the last 2.x line (`@basaltkit/http` 2.8 / `@basaltkit/fastify` 2.6) first: older readers answer a concurrent repeat with `500` on the `pending:<fingerprint>` reservation every request now writes. Upgrade notes: https://basaltkit-docs.pages.dev/guide/whats-new#idempotency-strict-by-default
+- 24c317b: An invalid `meta.responseHeaders` refuses the boot again.
+  
+  `assertRouteMetaValid` (which every adapter runs at boot through `assertRoutesGuarded`) checks `meta.responseHeaders` itself, whether or not any plugin registered a route-meta validator: a record that is not an object of string values, carries a CR/LF/NUL or other control character, or sets `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, a hop-by-hop header or `x-request-id` refuses the boot with `HTTP_INVALID_ROUTE_META`, naming each route, on fastify, express and hono. 2.8 printed one boot warning and silently sent none of the record's headers.
+  
+  `applyRouteHeaders` (the shared pipeline) now throws the newly exported `InvalidRouteHeadersError` (`HTTP_INVALID_ROUTE_HEADERS`, 500) on every request for a record that skipped the boot check — a bespoke `runRoute` driver that never called `assertRouteMetaValid` — before setting any of its headers.
+  
+  `meta.headers` is still app-owned data: never read, validated or sent.
+  
+  **Migrating.** If 2.8 printed `[basalt] invalid meta.responseHeaders …`, fix or remove the record it named: set a cookie with `reply.header()` in the handler, let the payload decide its `content-type`, and keep values free of line breaks. A bespoke driver should call `assertRouteMetaValid(routes, container)` once at startup.
+
 ## 2.8.0
 
 ### Minor Changes

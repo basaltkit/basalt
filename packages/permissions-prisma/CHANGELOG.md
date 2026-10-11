@@ -1,5 +1,16 @@
 # @basaltkit/permissions-prisma
 
+## 3.0.0
+
+### Major Changes
+
+- 86fea74: Peer range moves to `@basaltkit/permissions` `^5`; no API change. The major is forced by the `@basaltkit/permissions` peer leaving its 4.x range. Upgrade it together with `@basaltkit/permissions` 5.
+
+### Patch Changes
+
+- Updated dependencies [86fea74]
+  - @basaltkit/permissions@5.0.0
+
 ## 2.1.0
 
 ### Minor Changes

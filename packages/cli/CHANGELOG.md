@@ -1,5 +1,17 @@
 # @basaltkit/cli
 
+## 1.4.1
+
+### Patch Changes
+
+- 8af28a1: Dependency moves only. The `@basaltkit/http` dependency moves to `^3.0.0` (`api-keys-ui`, `cli`, `comments`, `drives`, `files`, `inbound-mail`, `teams`, `teams-ui`); `activity` moves `@basaltkit/tenancy` to `^4.0.0`, `backup` moves `@basaltkit/prisma` to `^4.0.0` and `dashboard` moves `@basaltkit/subscriptions` to `^6.0.0` (types only). Each is an ordinary dependency used as a private copy: these packages build routes, escape HTML or read the request context through it, and share no container token, error class or `RouteMeta` augmentation with the app, so their routes run on either line at runtime. No API change.
+  
+  On an app still on `@basaltkit/fastify` 2.6 / `http` 2.8, a caret update of one of these installs a second, private copy of the new line next to the app's. Mixed lines are tested at runtime only: upgrade with the whole set (`pnpm basalt update`), see https://basaltkit-docs.pages.dev/guide/whats-new#upgrading-since-1-13.
+- Updated dependencies [0d6e137]
+- Updated dependencies [14181b0]
+- Updated dependencies [24c317b]
+  - @basaltkit/http@3.0.0
+
 ## 1.4.0
 
 ### Minor Changes

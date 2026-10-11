@@ -1,5 +1,17 @@
 # @basaltkit/tenancy-sqlite
 
+## 2.0.0
+
+### Major Changes
+
+- 86fea74: Peer range moves to `@basaltkit/tenancy` `^4`; no API change. The major is forced by the `@basaltkit/tenancy` peer leaving its 3.x range. Upgrade it together with `@basaltkit/tenancy` 4.
+
+### Patch Changes
+
+- Updated dependencies [bb33bbe]
+- Updated dependencies [b048ab4]
+  - @basaltkit/tenancy@4.0.0
+
 ## 1.3.0
 
 ### Minor Changes

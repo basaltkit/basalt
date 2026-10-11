@@ -1,5 +1,17 @@
 # @basaltkit/notifications-prisma
 
+## 2.0.0
+
+### Major Changes
+
+- 86fea74: Peer range moves to `@basaltkit/notifications` `^2`; no API change. The major is forced by the `@basaltkit/notifications` peer leaving its 1.x range. Upgrade it together with `@basaltkit/notifications` 2.
+
+### Patch Changes
+
+- Updated dependencies [465e68e]
+- Updated dependencies [b1f35dc]
+  - @basaltkit/notifications@2.0.0
+
 ## 1.2.0
 
 ### Minor Changes
