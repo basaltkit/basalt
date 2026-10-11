@@ -1,6 +1,16 @@
 import { BasaltError, createToken, definePlugin, ensureMetadata, type RequestContext } from '@basaltkit/core'
 import type { RequestEnricher, RouteGuard, RouteVisibilityCheck } from '@basaltkit/http'
-import { ApiKeys, ScopeRequiredError, apiKeyDisplayPrefix, resolveTouchEveryMs, scopesSatisfy, type ApiKeyContext, type ApiKeysOptions } from './apikeys.js'
+import {
+  ApiKeyIpNotAllowedError,
+  ApiKeys,
+  ScopeRequiredError,
+  apiKeyDisplayPrefix,
+  resolveTouchEveryMs,
+  scopesSatisfy,
+  type ApiKeyContext,
+  type ApiKeysOptions,
+  type ApiKeyUpdatedField,
+} from './apikeys.js'
 import { publicUser } from './auth.js'
 import type { UserSource } from './stores.js'
 
@@ -10,10 +20,21 @@ declare module '@basaltkit/core' {
     apiKey?: ApiKeyContext
   }
   interface BasaltHooks {
-    'auth:apikey_issued': { id: string; tenantId?: string; userId?: string }
+    'auth:apikey_issued': { id: string; tenantId?: string; userId?: string; serviceId?: string }
     'auth:apikey_revoked': { id: string }
+    /** A key's secret was replaced. `graceUntil` (ms) is when the replaced secret stops working, if it was given a grace window. */
+    'auth:apikey_rotated': { id: string; tenantId?: string; userId?: string; serviceId?: string; graceUntil?: number }
+    /** A key's mutable fields changed. `changes` lists field names only, never their values. */
+    'auth:apikey_updated': {
+      id: string
+      tenantId?: string
+      userId?: string
+      serviceId?: string
+      changes: ApiKeyUpdatedField[]
+    }
     /**
      * A presented API key was refused: unknown/revoked/expired (`invalid`), used
+     * from an address outside its `allowedIps` (`ip_not_allowed`), used
      * outside the tenant it is bound to (`tenant_mismatch`), used on a
      * session-only route (`not_allowed`) or beyond its scopes (`scope`). Never
      * carries the key itself.
@@ -28,13 +49,14 @@ declare module '@basaltkit/core' {
      */
     'auth:apikey_rejected': {
       id?: string
-      reason: 'invalid' | 'tenant_mismatch' | 'not_allowed' | 'scope'
+      reason: 'invalid' | 'ip_not_allowed' | 'tenant_mismatch' | 'not_allowed' | 'scope'
       tenantId?: string
       prefix?: string
       ip?: string
     }
     /**
-     * A key that verified was refused: used outside its tenant
+     * A key that verified was refused: used from an address outside its
+     * `allowedIps` (`ip_not_allowed`), outside its tenant
      * (`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond
      * its scopes (`scope`). Emitted right after the matching
      * `auth:apikey_rejected`. Unlike an unknown key, it is attributable (`id`)
@@ -43,7 +65,7 @@ declare module '@basaltkit/core' {
      */
     'auth:apikey_refused': {
       id: string
-      reason: 'tenant_mismatch' | 'not_allowed' | 'scope'
+      reason: 'ip_not_allowed' | 'tenant_mismatch' | 'not_allowed' | 'scope'
       tenantId?: string
     }
   }
@@ -122,7 +144,8 @@ export interface ApiKeysPluginOptions extends ApiKeysOptions {
   header?: string
   /**
    * When provided, a key that carries a `userId` also populates `ctx().user`,
-   * so scope-guarded routes can read the acting user.
+   * so scope-guarded routes can read the acting user. A service key (one with
+   * a `serviceId`) never does.
    */
   users?: UserSource
   /**
@@ -196,7 +219,20 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
         const presented = bearer ?? custom
         if (!presented) return
 
-        const record = await c.get(API_KEYS).verify(presented)
+        const result = await c.get(API_KEYS).authenticate(presented, { ip })
+        if (!result.ok && result.reason === 'ip_not_allowed') {
+          // A genuine key used from the wrong place: always refused, whatever
+          // `rejectInvalid` says — silently downgrading to anonymous would hide
+          // a misconfiguration (or a stolen key). Nothing is set, nothing touched.
+          // Only the key holder can cause it, so it is also the attributable
+          // `auth:apikey_refused` the audit records by default.
+          const tenantId = result.record.tenantId
+          const scope = { id: result.record.id, reason: 'ip_not_allowed' as const, ...(tenantId !== undefined ? { tenantId } : {}) }
+          await hooks.emit('auth:apikey_rejected', { ...scope, ...(ip !== undefined ? { ip } : {}) })
+          await hooks.emit('auth:apikey_refused', scope)
+          throw new ApiKeyIpNotAllowedError()
+        }
+        const record = result.ok ? result.record : null
         if (!record) {
           const prefix = apiKeyDisplayPrefix(presented)
           await hooks.emit('auth:apikey_rejected', {
@@ -216,8 +252,10 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
           scopes: record.scopes,
           ...(record.tenantId !== undefined ? { tenantId: record.tenantId } : {}),
           ...(record.userId !== undefined ? { userId: record.userId } : {}),
+          ...(record.serviceId !== undefined ? { serviceId: record.serviceId } : {}),
         }
-        if (record.userId && options.users) {
+        // A service key acts as its service, never as a user.
+        if (record.userId && record.serviceId === undefined && options.users) {
           const user = await options.users.findById(record.userId)
           if (user) context.user = publicUser(user)
         }

@@ -1831,8 +1831,11 @@ export function crossCopyParitySuite(adapter: string, driver: ParityDriver): voi
 
 /**
  * Idempotency on every adapter (BK-084e): the stage lives in the shared route
- * pipeline, so a key replays, conflicts and refuses a reused body identically
- * on Fastify, Express and Hono.
+ * pipeline, so a key replays, conflicts and refuses a reused request
+ * identically on Fastify, Express and Hono. From `@basaltkit/http` 3 the
+ * defaults are strict: keys are bound to params, query and body
+ * (`fingerprint: 'request'`) and replays happen after the guards
+ * (`replayAfterGuards: true`).
  */
 export function idempotencyParitySuite(adapter: string, driver: ParityDriver): void {
   describe(`${adapter}: idempotency parity (BK-084e)`, () => {
@@ -1899,6 +1902,34 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
         handler: ({ body }) => {
           runs += 1
           return { charge: runs, length: body.bytes.length }
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/accounts/:id/charge',
+        body: z.object({ amount: z.number() }),
+        handler: ({ body, request }) => {
+          runs += 1
+          return { charge: runs, account: request.params['id'], amount: body.amount }
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/touch',
+        handler: () => {
+          runs += 1
+          return { charge: runs }
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/upload',
+        body: upload({ maxBytes: 64 * 1024, maxFiles: 1 }),
+        async handler({ body }) {
+          runs += 1
+          let size = 0
+          for await (const file of body.files) for await (const chunk of file.stream) size += (chunk as Buffer).length
+          return { charge: runs, size }
         },
       }),
     ]
@@ -1972,12 +2003,58 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
       expect(runs).toBe(1)
     })
 
-    it('without fingerprinting, a different body under the same key replays the first result (current default)', async () => {
+    it('by default a different body under the same key is refused 422 IDEMPOTENCY_KEY_REUSED', async () => {
       const send = await boot()
+      await send({ method: 'POST', url: '/charge', headers: headers('k2'), body: json({ amount: 10 }) })
+      const reused = await send({ method: 'POST', url: '/charge', headers: headers('k2'), body: json({ amount: 99 }) })
+      expect(reused.status).toBe(422)
+      expect(codeOf(reused)).toBe('IDEMPOTENCY_KEY_REUSED')
+      expect(runs).toBe(1)
+    })
+
+    it('fingerprint: false restores the 2.x replay of the first result for a different body', async () => {
+      const send = await boot({ fingerprint: false })
       await send({ method: 'POST', url: '/charge', headers: headers('k2'), body: json({ amount: 10 }) })
       const reused = await send({ method: 'POST', url: '/charge', headers: headers('k2'), body: json({ amount: 99 }) })
       expect(reused.status).toBe(201)
       expect(reused.json).toEqual({ charge: 1, amount: 10 })
+    })
+
+    it('by default the same key and body on another resource or query string is refused 422', async () => {
+      const send = await boot()
+      const first = await send({ method: 'POST', url: '/accounts/1/charge', headers: headers('kp'), body: json({ amount: 10 }) })
+      expect(first.status).toBe(200)
+      const otherAccount = await send({ method: 'POST', url: '/accounts/2/charge', headers: headers('kp'), body: json({ amount: 10 }) })
+      expect(otherAccount.status).toBe(422)
+      expect(codeOf(otherAccount)).toBe('IDEMPOTENCY_KEY_REUSED')
+
+      await send({ method: 'POST', url: '/charge?a=1&b=2', headers: headers('kq'), body: json({ amount: 10 }) })
+      const otherQuery = await send({ method: 'POST', url: '/charge?a=2&b=2', headers: headers('kq'), body: json({ amount: 10 }) })
+      expect(otherQuery.status).toBe(422)
+      expect(codeOf(otherQuery)).toBe('IDEMPOTENCY_KEY_REUSED')
+      // Same params and query, keys in another order: the same request.
+      const reordered = await send({ method: 'POST', url: '/charge?b=2&a=1', headers: headers('kq'), body: json({ amount: 10 }) })
+      expect(reordered.status).toBe(201)
+      expect(reordered.headers['idempotent-replayed']).toBe('true')
+      expect(runs).toBe(2)
+    })
+
+    it("fingerprint: 'body' does not bind params: the same body on another resource replays", async () => {
+      const send = await boot({ fingerprint: 'body' })
+      await send({ method: 'POST', url: '/accounts/1/charge', headers: headers('kb'), body: json({ amount: 10 }) })
+      const otherAccount = await send({ method: 'POST', url: '/accounts/2/charge', headers: headers('kb'), body: json({ amount: 10 }) })
+      expect(otherAccount.status).toBe(200)
+      expect(otherAccount.headers['idempotent-replayed']).toBe('true')
+      expect(otherAccount.json).toEqual({ charge: 1, account: '1', amount: 10 })
+    })
+
+    it('by default a reordered same body replays', async () => {
+      const send = await boot()
+      await send({ method: 'POST', url: '/charge', headers: headers('k3d'), body: json({ amount: 10, note: 'a' }) })
+      const reordered = await send({ method: 'POST', url: '/charge', headers: headers('k3d'), body: Buffer.from('{"note":"a","amount":10}') })
+      expect(reordered.status).toBe(201)
+      expect(reordered.headers['idempotent-replayed']).toBe('true')
+      expect(runs).toBe(1)
     })
 
     it("fingerprint: 'body' refuses a different body under the same key with 422, and replays a reordered same body", async () => {
@@ -1993,7 +2070,7 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
     })
 
     it('a concurrent repeat gets 409 with the same body and 422 with a different one', async () => {
-      const send = await boot({ fingerprint: 'body' })
+      const send = await boot()
       gate.release = undefined
       const first = send({ method: 'POST', url: '/slow', headers: headers('k4'), body: json({ amount: 10 }) })
       while (!gate.release) await new Promise((resolve) => setTimeout(resolve, 5))
@@ -2008,71 +2085,144 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
       expect(runs).toBe(1)
     })
 
-    it('by default a replay runs before the guards; replayAfterGuards answers a revoked caller 401', async () => {
+    it('by default a replay runs after the guards: a revoked caller gets 401; replayAfterGuards: false replays', async () => {
       let send = await boot()
-      await send({ method: 'POST', url: '/charge', headers: headers('k5'), body: json({ amount: 10 }) })
-      revoked.add('Bearer user-1')
-      const legacy = await send({ method: 'POST', url: '/charge', headers: headers('k5'), body: json({ amount: 10 }) })
-      expect(legacy.status).toBe(201) // the cached success, despite the revoked token
-      await driver.close()
-
-      send = await boot({ replayAfterGuards: true })
       await send({ method: 'POST', url: '/charge', headers: headers('k6'), body: json({ amount: 10 }) })
       revoked.add('Bearer user-1')
       const guarded = await send({ method: 'POST', url: '/charge', headers: headers('k6'), body: json({ amount: 10 }) })
       expect(guarded.status).toBe(401)
       expect(guarded.headers['idempotent-replayed']).toBeUndefined()
       expect(runs).toBe(1)
-    })
+      await driver.close()
 
-    it("a rate limiter's 429 is not recorded: the retry after the window runs the operation (W3)", async () => {
-      runs = 0
-      revoked.clear()
-      let now = 1_000_000
-      const store = new MemoryRateLimitStore(() => now)
-      const send = await driver.boot(routes, [
-        idempotencyPlugin(),
-        auth,
-        securityPlugin({ rateLimit: { limit: 1_000, windowMs: 60_000, store }, headers: false }),
-      ])
-      const first = await send({ method: 'POST', url: '/limited', headers: headers('rl-a') })
-      expect(first.status).toBe(201)
-      const limited = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
-      expect(limited.status).toBe(429)
-      expect(limited.headers['idempotent-replayed']).toBeUndefined()
-      now += 1_001 // the client honours Retry-After
-      const retry = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
-      expect(retry.status).toBe(201)
-      expect(retry.json).toEqual({ charge: 2 })
-      expect(retry.headers['idempotent-replayed']).toBeUndefined()
-      // Its outcome is now recorded: a repeat replays it (decided before the guards).
-      const repeat = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
-      expect(repeat.status).toBe(201)
-      expect(repeat.headers['idempotent-replayed']).toBe('true')
-      expect(runs).toBe(2)
-    })
-
-    it("a guard's 401 is not recorded: the authenticated retry runs the handler (W3)", async () => {
-      const send = await boot()
+      send = await boot({ replayAfterGuards: false })
+      await send({ method: 'POST', url: '/charge', headers: headers('k5'), body: json({ amount: 10 }) })
       revoked.add('Bearer user-1')
-      const refused = await send({ method: 'POST', url: '/charge', headers: headers('auth-1'), body: json({ amount: 10 }) })
-      expect(refused.status).toBe(401)
-      revoked.delete('Bearer user-1')
-      const retry = await send({ method: 'POST', url: '/charge', headers: headers('auth-1'), body: json({ amount: 10 }) })
-      expect(retry.status).toBe(201)
-      expect(retry.headers['idempotent-replayed']).toBeUndefined()
+      const legacy = await send({ method: 'POST', url: '/charge', headers: headers('k5'), body: json({ amount: 10 }) })
+      expect(legacy.status).toBe(201) // the 2.x order: the cached success, despite the revoked token
+      expect(legacy.headers['idempotent-replayed']).toBe('true')
+    })
+
+    it('by default a request that fails validation does not reserve the key; replayAfterGuards: false releases it', async () => {
+      let send = await boot()
+      const invalid = await send({ method: 'POST', url: '/charge', headers: headers('kv'), body: json({ amount: 'x' }) })
+      expect(invalid.status).toBe(400)
+      const valid = await send({ method: 'POST', url: '/charge', headers: headers('kv'), body: json({ amount: 10 }) })
+      expect(valid.status).toBe(201)
+      expect(valid.headers['idempotent-replayed']).toBeUndefined()
+      expect(runs).toBe(1)
+      await driver.close()
+
+      // Before the guards the key is reserved, then released by the refusal
+      // (pre-handler refusals are never recorded): the corrected retry runs.
+      send = await boot({ replayAfterGuards: false, fingerprint: false })
+      const refused = await send({ method: 'POST', url: '/charge', headers: headers('kv2'), body: json({ amount: 'x' }) })
+      expect(refused.status).toBe(400)
+      const retried = await send({ method: 'POST', url: '/charge', headers: headers('kv2'), body: json({ amount: 10 }) })
+      expect(retried.status).toBe(201)
+      expect(retried.headers['idempotent-replayed']).toBeUndefined()
       expect(runs).toBe(1)
     })
 
-    it('a validation 400 before the handler is not recorded either (W3)', async () => {
+    it('a keyed POST without a body replays under the defaults', async () => {
       const send = await boot()
-      const invalid = await send({ method: 'POST', url: '/charge', headers: headers('val-1'), body: json({ amount: 'ten' }) })
-      expect(invalid.status).toBe(400)
-      const fixed = await send({ method: 'POST', url: '/charge', headers: headers('val-1'), body: json({ amount: 10 }) })
-      expect(fixed.status).toBe(201)
-      expect(fixed.headers['idempotent-replayed']).toBeUndefined()
+      const keyed = { authorization: 'Bearer user-1', 'idempotency-key': 'kn' }
+      const first = await send({ method: 'POST', url: '/touch', headers: keyed })
+      const second = await send({ method: 'POST', url: '/touch', headers: keyed })
+      expect(first.status).toBe(200)
+      expect(second.status).toBe(200)
+      expect(second.headers['idempotent-replayed']).toBe('true')
+      expect(second.json).toEqual({ charge: 1 })
       expect(runs).toBe(1)
     })
+
+    it('a keyed upload() route replays without the body being bound or hanging', async () => {
+      const send = await boot()
+      const file = (data: string) => multipart([{ name: 'doc', filename: 'a.pdf', type: 'application/pdf', data }])
+      const up = (key: string, body: Buffer) =>
+        send({
+          method: 'POST',
+          url: '/upload',
+          headers: { authorization: 'Bearer user-1', 'idempotency-key': key, 'content-type': contentType() },
+          body,
+        })
+      const first = await up('ku', file('hello'))
+      const again = await up('ku', file('hello'))
+      expect(first.status).toBe(200)
+      expect(first.json).toEqual({ charge: 1, size: 5 })
+      expect(again.status).toBe(200)
+      expect(again.headers['idempotent-replayed']).toBe('true')
+      expect(again.json).toEqual({ charge: 1, size: 5 })
+      // The stream is the handler's: 'request' binds only params + query here.
+      const other = await up('ku', file('a different file'))
+      expect(other.status).toBe(200)
+      expect(other.headers['idempotent-replayed']).toBe('true')
+      expect(runs).toBe(1)
+      // The server is still serving after the unread replays.
+      const fresh = await up('ku2', file('xyz'))
+      expect(fresh.json).toEqual({ charge: 2, size: 3 })
+    })
+
+    // Pre-handler refusals are released wherever the check runs: after the
+    // guards (the 3.x default) they never reserve the key; before them
+    // (`replayAfterGuards: false`) the reservation is released.
+    for (const replayAfterGuards of [true, false]) {
+      const placement = replayAfterGuards ? 'after the guards' : 'before the guards'
+      it(`a rate limiter's 429 is not recorded: the retry after the window runs the operation (W3, ${placement})`, async () => {
+        runs = 0
+        revoked.clear()
+        let now = 1_000_000
+        const store = new MemoryRateLimitStore(() => now)
+        const send = await driver.boot(routes, [
+          idempotencyPlugin({ replayAfterGuards }),
+          auth,
+          securityPlugin({ rateLimit: { limit: 1_000, windowMs: 60_000, store }, headers: false }),
+        ])
+        const first = await send({ method: 'POST', url: '/limited', headers: headers('rl-a') })
+        expect(first.status).toBe(201)
+        const limited = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+        expect(limited.status).toBe(429)
+        expect(limited.headers['idempotent-replayed']).toBeUndefined()
+        now += 1_001 // the client honours Retry-After
+        const retry = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+        expect(retry.status).toBe(201)
+        expect(retry.json).toEqual({ charge: 2 })
+        expect(retry.headers['idempotent-replayed']).toBeUndefined()
+        // Its outcome is now recorded: a repeat replays it. After the guards the
+        // rate limiter counts the repeat too, so it waits for the window first.
+        if (replayAfterGuards) {
+          const throttled = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+          expect(throttled.status).toBe(429)
+          now += 1_001
+        }
+        const repeat = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+        expect(repeat.status).toBe(201)
+        expect(repeat.headers['idempotent-replayed']).toBe('true')
+        expect(runs).toBe(2)
+      })
+
+      it(`a guard's 401 is not recorded: the authenticated retry runs the handler (W3, ${placement})`, async () => {
+        const send = await boot({ replayAfterGuards })
+        revoked.add('Bearer user-1')
+        const refused = await send({ method: 'POST', url: '/charge', headers: headers('auth-1'), body: json({ amount: 10 }) })
+        expect(refused.status).toBe(401)
+        revoked.delete('Bearer user-1')
+        const retry = await send({ method: 'POST', url: '/charge', headers: headers('auth-1'), body: json({ amount: 10 }) })
+        expect(retry.status).toBe(201)
+        expect(retry.headers['idempotent-replayed']).toBeUndefined()
+        expect(runs).toBe(1)
+      })
+
+      it(`a validation 400 before the handler is not recorded either (W3, ${placement})`, async () => {
+        const send = await boot({ replayAfterGuards })
+        const invalid = await send({ method: 'POST', url: '/charge', headers: headers('val-1'), body: json({ amount: 'ten' }) })
+        expect(invalid.status).toBe(400)
+        const fixed = await send({ method: 'POST', url: '/charge', headers: headers('val-1'), body: json({ amount: 10 }) })
+        expect(fixed.status).toBe(201)
+        expect(fixed.headers['idempotent-replayed']).toBeUndefined()
+        expect(runs).toBe(1)
+      })
+    }
 
     it("the handler's own 4xx is still recorded and replayed byte-for-byte", async () => {
       const send = await boot()
@@ -2140,7 +2290,7 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
     })
 
     it('fingerprints a rawBody() route on its exact bytes', async () => {
-      const send = await boot({ fingerprint: 'body' })
+      const send = await boot()
       const bytes = Buffer.from('{"b":1, "a":2}')
       const first = await send({ method: 'POST', url: '/hook', headers: headers('k9'), body: bytes })
       const again = await send({ method: 'POST', url: '/hook', headers: headers('k9'), body: bytes })
@@ -2244,37 +2394,30 @@ export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): 
       expect(plain.headers['x-robots-tag']).toBeUndefined()
     })
 
-    it('an invalid meta.responseHeaders boots, warns once, and none of its headers is sent', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      try {
-        const bad = [
-          route({ method: 'GET', url: '/crlf', meta: { responseHeaders: { 'X-Note': 'a\r\nSet-Cookie: x=1', 'X-Ok': 'fine' } }, handler: () => 'x' }),
-          route({ method: 'GET', url: '/cookie', meta: { responseHeaders: { 'Set-Cookie': 'a=1' } }, handler: () => 'x' }),
-          route({ method: 'GET', url: '/number', meta: { responseHeaders: { 'X-Count': 1 } as never }, handler: () => 'x' }),
-          // The old name is app-owned data: never sent, never validated.
-          route({ method: 'GET', url: '/old-name', meta: { headers: { 'x-a': 'b' } }, handler: () => 'x' }),
-        ]
-        const send = await driver.boot(bad, [])
-        const warnings = warn.mock.calls.map((call) => String(call[0])).filter((m) => m.includes('meta.responseHeaders'))
-        expect(warnings).toHaveLength(1)
-        for (const name of ['GET /crlf', 'GET /cookie', 'GET /number']) expect(warnings[0]).toContain(name)
-        expect(warnings[0]).not.toContain('/old-name')
-        const crlf = await send({ method: 'GET', url: '/crlf' })
-        expect(crlf.status).toBe(200)
-        expect(crlf.headers['x-note']).toBeUndefined()
-        expect(crlf.headers['x-ok']).toBeUndefined()
-        const cookie = await send({ method: 'GET', url: '/cookie' })
-        expect(cookie.status).toBe(200)
-        expect(cookie.headers['set-cookie']).toBeUndefined()
-        const number = await send({ method: 'GET', url: '/number' })
-        expect(number.status).toBe(200)
-        expect(number.headers['x-count']).toBeUndefined()
-        const old = await send({ method: 'GET', url: '/old-name' })
-        expect(old.status).toBe(200)
-        expect(old.headers['x-a']).toBeUndefined()
-      } finally {
-        warn.mockRestore()
-      }
+    it('an invalid meta.responseHeaders refuses the boot, naming every offending route', async () => {
+      const bad = [
+        route({ method: 'GET', url: '/crlf', meta: { responseHeaders: { 'X-Note': 'a\r\nSet-Cookie: x=1', 'X-Ok': 'fine' } }, handler: () => 'x' }),
+        route({ method: 'GET', url: '/cookie', meta: { responseHeaders: { 'Set-Cookie': 'a=1' } }, handler: () => 'x' }),
+        route({ method: 'GET', url: '/number', meta: { responseHeaders: { 'X-Count': 1 } as never }, handler: () => 'x' }),
+        route({ method: 'GET', url: '/array', meta: { responseHeaders: ['X-A'] as never }, handler: () => 'x' }),
+      ]
+      const booting = driver.boot(bad, [])
+      await expect(booting).rejects.toBeInstanceOf(InvalidRouteMetaError)
+      await booting.catch((error: InvalidRouteMetaError) => {
+        expect(error.code).toBe('HTTP_INVALID_ROUTE_META')
+        expect(error.problems.map((p) => p.route)).toEqual(['GET /crlf', 'GET /cookie', 'GET /number', 'GET /array'])
+      })
+    })
+
+    it('the old meta.headers name is app-owned data: it boots and is never sent', async () => {
+      const send = await driver.boot(
+        [route({ method: 'GET', url: '/old-name', meta: { headers: { 'x-a': 'b', 'Set-Cookie': 'a=1' } }, handler: () => 'x' })],
+        [],
+      )
+      const old = await send({ method: 'GET', url: '/old-name' })
+      expect(old.status).toBe(200)
+      expect(old.headers['x-a']).toBeUndefined()
+      expect(old.headers['set-cookie']).toBeUndefined()
     })
   })
 }

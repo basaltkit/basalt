@@ -18,7 +18,7 @@ Saving an upload "by hand" involves validating type/size, writing to storage in 
 pnpm add @basaltkit/files @basaltkit/storage
 ```
 
-Depends on `@basaltkit/core`, `@basaltkit/storage`, and `@basaltkit/fastify` (routes). Configure a disk in `@basaltkit/storage` (local in dev, S3/GCS in production).
+Depends on `@basaltkit/core`, `@basaltkit/storage`, and `@basaltkit/http` (3.x; routes served by any adapter). Configure a disk in `@basaltkit/storage` (local in dev, S3/GCS in production).
 
 ## Get started in 5 minutes
 

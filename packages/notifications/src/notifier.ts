@@ -1,6 +1,6 @@
 import { BasaltError, type HookBus } from '@basaltkit/core'
 import type { NotificationChannel } from './channels.js'
-import { NotificationPreferences } from './preferences.js'
+import type { NotificationPreferences } from './preferences.js'
 import {
   validateNotificationData,
   type Notifiable,
@@ -12,6 +12,22 @@ export class UnknownChannelError extends BasaltError {
     super(
       'NOTIFICATION_UNKNOWN_CHANNEL',
       `Notification "${notification}" targets channel "${channel}", but no such channel driver is registered.`,
+    )
+  }
+}
+
+/**
+ * The preferences object still defines `allowed()`, which the `Notifier` no
+ * longer consults (`@basaltkit/notifications` 2.0). Refused rather than
+ * ignored, so quiet hours or a compliance block written there are never
+ * silently dropped: move the logic into `preference()`.
+ */
+export class LegacyAllowedOverrideError extends BasaltError {
+  constructor() {
+    super(
+      'NOTIFICATION_ALLOWED_OVERRIDE_REMOVED',
+      'NotificationPreferences.allowed() is no longer consulted by the Notifier: move this logic into preference() ' +
+        '(return false to block, true to send, undefined for no stated preference).',
     )
   }
 }
@@ -56,6 +72,11 @@ export class Notifier {
   constructor(options: NotifierOptions) {
     for (const channel of options.channels) this.channels.set(channel.name, channel)
     this.hooks = options.hooks
+    // `allowed()` left the base class in 2.0; one still present on the object
+    // is a subclass override the Notifier would otherwise skip in silence.
+    if (typeof (options.preferences as { allowed?: unknown } | undefined)?.allowed === 'function') {
+      throw new LegacyAllowedOverrideError()
+    }
     this.preferences = options.preferences
   }
 
@@ -125,24 +146,12 @@ export class Notifier {
    * it, then the most specific stored preference decides, then an inline
    * `true`, and only when the recipient stated nothing does the definition's
    * `defaults[channel]` (default `true`) apply.
-   *
-   * When the preferences object overrides `allowed()`, that override decides
-   * instead of `preference()` + `defaults` (the pre-`preference()` contract).
    */
   private async wanted<T>(recipient: Notifiable, definition: NotificationDefinition<T>, channel: string): Promise<boolean> {
     if (definition.mandatory?.includes(channel)) return true
     const inline = recipient.channelPreferences?.[channel]
     if (inline === false) return false
-    const prefs = this.preferences
-    // A subclass that overrides `allowed()` (quiet hours, compliance blocks,
-    // plan gating) keeps deciding, as before `preference()` existed: its
-    // answer is final and the definition's `defaults` do not apply. Deprecated
-    // — override `preference()` instead; dropped in the next major.
-    const stored = !prefs
-      ? undefined
-      : prefs.allowed !== NotificationPreferences.prototype.allowed
-        ? await prefs.allowed(recipient.id, definition.name, channel)
-        : await prefs.preference(recipient.id, definition.name, channel)
+    const stored = await this.preferences?.preference(recipient.id, definition.name, channel)
     if (stored !== undefined) return stored
     if (inline === true) return true
     return definition.defaults?.[channel] ?? true

@@ -264,6 +264,41 @@ export class CentralOnlyRouteError extends BasaltError {
 }
 
 /**
+ * A request reached a route whose `meta.tenant` is not one of `true`, `false`,
+ * `'never'` or absent. `tenancyPlugin` refuses such a route at boot through the
+ * `http:meta-validators` bucket every adapter (and `mcpPlugin`) runs, so only a
+ * route that skipped that check — a custom driver that calls `runRoute()` with
+ * the app's enrichers but without `assertRouteMetaValid()` — gets this error
+ * (`@basaltkit/http` 3 refuses enrichers without a container, so they cannot
+ * be skipped). 500 and fail-closed: the request
+ * never runs, rather than falling back to the app-wide `required` default
+ * (which for a typo of `'never'` would serve a central route on a tenant host).
+ */
+export class InvalidTenantMetaError extends BasaltError {
+  readonly status = 500
+  constructor(declared: unknown) {
+    super('TENANCY_INVALID_ROUTE_META', `Route ${describeTenantMeta(declared)}`)
+  }
+}
+
+/**
+ * The problem with a route's `meta.tenant` value, or `undefined` when it is
+ * valid (`true`, `false`, `'never'` or absent). Shared by the boot validator and
+ * the request-time fail-closed check so the two can never disagree.
+ */
+export function tenantMetaProblem(declared: unknown): string | undefined {
+  if (declared === undefined || declared === true || declared === false || declared === 'never') return undefined
+  return describeTenantMeta(declared)
+}
+
+function describeTenantMeta(declared: unknown): string {
+  return (
+    `meta.tenant ${JSON.stringify(declared) ?? String(declared)} is not valid ` +
+    `(expected true, false or 'never'; if you meant central-only, the value is 'never')`
+  )
+}
+
+/**
  * Two resolvers named different tenants for the same request and the plugin
  * runs with `onConflict: 'error'`. 400: the request contradicts itself (e.g. an
  * `x-tenant-id` header that disagrees with the Host).

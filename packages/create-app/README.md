@@ -273,7 +273,11 @@ newest release **on the app's current major** (a newer major is listed as
 `minimumReleaseAge`, read from the project's `pnpm-workspace.yaml` when set) is
 left for later so the install cannot refuse it. When a framework release
 declares a peer range the app would not meet (say `zod ^5` while zod is held on
-4), the plan warns before anything is written.
+4), the plan warns before anything is written. When a framework release
+requires an `@basaltkit/*` peer the app does not list (`@basaltkit/testing` 3
+takes `@basaltkit/mailer`), the plan adds it at its latest version (in
+`dependencies` when a runtime dependency needs it, else `devDependencies`), or
+warns when it cannot; optional peers are never added.
 
 Both `package.json` and `web/package.json` are updated, **in place**: only the
 version strings change — order, indentation and range style (`^`, `~`, exact)
@@ -466,7 +470,7 @@ Detects the manager that invoked the command from `npm_config_user_agent` (or th
 | --- | --- |
 | `runProjectCommand(argv, deps)` | Runs `update`/`add`/`doctor`/`info` and returns the exit code; every side effect (output, prompts, package-manager runs, registry fetch, codemods) is injected through `deps` |
 | `loadProject(dir, pm?)` | Reads an app: package.json (+ `web/`), manifest, detected features and package manager. Throws `NotABasaltAppError` |
-| `planUpdate(ctx, { major?, only?, tooling?, registry? })` | The update plan — entries, the full before/after of every file, tooling, warnings, framework majors. Writes nothing |
+| `planUpdate(ctx, { major?, only?, tooling?, registry? })` | The update plan — entries, the full before/after of every file, tooling, warnings, framework majors, required peers it adds (`addedPeers`). Writes nothing |
 | `planAdd(ctx, feature, { force?, resolveLatest?, registry? })` | The add plan — created/merged/skipped files and manual steps. Writes nothing |
 | `runDoctor(ctx, options)` | Doctor findings (`{ level: 'ok' \| 'info' \| 'warn' \| 'error', area, message }`) |
 | `MANIFEST_PATH`, `readManifest(dir)`, `hashContent(text)` | The scaffold manifest |

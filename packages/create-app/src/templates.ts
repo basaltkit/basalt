@@ -27,8 +27,8 @@ export { SCAFFOLD_VERSIONS } from './versions.js'
 export { THIRD_PARTY_VERSIONS } from './latest-versions.js'
 
 /**
- * The dependency range for a @basaltkit/* package: the current release line
- * (`^<major>.<minor>.0`) of its workspace version, from the generated
+ * The dependency range for a @basaltkit/* package: its workspace version as
+ * the floor (`^<major>.<minor>.<patch>`), from the generated
  * {@link SCAFFOLD_VERSIONS} map. Throws for an unknown package rather than
  * guessing a range — a stale guess once pinned new apps to frozen 1.x lines.
  */
@@ -124,6 +124,10 @@ export function packageJson(options: ProjectOptions): string {
 
   const devDependencies: Record<string, string> = {
     '@basaltkit/testing': versionOf('@basaltkit/testing'),
+    // @basaltkit/testing's peer: fakeMailer() binds the app's own MAILER token,
+    // so the copy must be the app's (a package manager that skips peers would
+    // otherwise leave `@basaltkit/testing` unable to load).
+    '@basaltkit/mailer': versionOf('@basaltkit/mailer'),
     // The project commands (\`pnpm basalt update | add | doctor | info\`) — dev
     // tooling with no dependencies of its own, never imported by the app.
     'create-basalt': versionOf('create-basalt'),
@@ -791,9 +795,17 @@ model AuthApiKey {
   expiresAt  DateTime?
   lastUsedAt DateTime?
   revokedAt  DateTime?
+  // 3.0: API key lifecycle (migration \`add_api_key_lifecycle\`).
+  serviceId             String?
+  previousHash          String?   @unique
+  previousHashExpiresAt DateTime?
+  rotatedAt             DateTime?
+  allowedIps            String[]  @default([])
+  meta                  Json?
 
   @@index([tenantId])
   @@index([userId])
+  @@index([serviceId])
   @@map("auth_api_keys")
 }
 

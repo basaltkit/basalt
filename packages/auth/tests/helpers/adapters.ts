@@ -59,7 +59,17 @@ const parse = (text: string): unknown => {
   }
 }
 
-export async function boot(adapter: AdapterName, plugins: BasaltPlugin[], routes: BasaltRoute[]): Promise<Harness> {
+export interface BootOptions {
+  /** Extra options for the hono adapter plugin, e.g. `getClientIp` (`hono.request()` has no socket). */
+  hono?: Record<string, unknown>
+}
+
+export async function boot(
+  adapter: AdapterName,
+  plugins: BasaltPlugin[],
+  routes: BasaltRoute[],
+  options: BootOptions = {},
+): Promise<Harness> {
   if (adapter === 'fastify') {
     const app = await createApp({ plugins: [...plugins, fastifyPlugin({ routes })] }).boot()
     const server = app.container.get(FASTIFY)
@@ -78,7 +88,7 @@ export async function boot(adapter: AdapterName, plugins: BasaltPlugin[], routes
   }
   if (adapter === 'hono') {
     const mod = honoModule!
-    const app = await createApp({ plugins: [...plugins, mod['honoPlugin']({ routes })] }).boot()
+    const app = await createApp({ plugins: [...plugins, mod['honoPlugin']({ routes, ...options.hono })] }).boot()
     const hono = app.container.get(mod['HONO']) as { request(url: string, init: RequestInit): Promise<Response> }
     return {
       async call({ method, url, headers, payload }) {

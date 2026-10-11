@@ -23,14 +23,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@basaltkit/auth": "workspace:^",
     "@basaltkit/core": "workspace:^",
     "@basaltkit/http": "workspace:^"
   },
   "peerDependencies": {
+    "@basaltkit/auth": "workspace:^",
     "@node-saml/node-saml": "^5.1.0"
   },
   "devDependencies": {
+    "@basaltkit/auth": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@node-saml/node-saml": "^5.1.0",
     "@types/node": "^26.6.1",

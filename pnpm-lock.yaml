@@ -748,9 +748,6 @@ importers:
 
   packages/audit-viewer:
     dependencies:
-      '@basaltkit/audit':
-        specifier: workspace:^
-        version: link:../audit
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
@@ -758,6 +755,9 @@ importers:
         specifier: workspace:^
         version: link:../http
     devDependencies:
+      '@basaltkit/audit':
+        specifier: workspace:^
+        version: link:../audit
       '@basaltkit/auth':
         specifier: workspace:^
         version: link:../auth
@@ -835,9 +835,6 @@ importers:
 
   packages/auth-saml:
     dependencies:
-      '@basaltkit/auth':
-        specifier: workspace:^
-        version: link:../auth
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
@@ -845,6 +842,9 @@ importers:
         specifier: workspace:^
         version: link:../http
     devDependencies:
+      '@basaltkit/auth':
+        specifier: workspace:^
+        version: link:../auth
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -921,9 +921,6 @@ importers:
       '@basaltkit/http':
         specifier: workspace:^
         version: link:../http
-      '@basaltkit/subscriptions':
-        specifier: workspace:^
-        version: link:../subscriptions
     devDependencies:
       '@basaltkit/auth':
         specifier: workspace:^
@@ -931,6 +928,9 @@ importers:
       '@basaltkit/fastify':
         specifier: workspace:^
         version: link:../fastify
+      '@basaltkit/subscriptions':
+        specifier: workspace:^
+        version: link:../subscriptions
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy
@@ -1878,6 +1878,9 @@ importers:
         specifier: workspace:^
         version: link:../mcp-core
     devDependencies:
+      '@basaltkit/auth':
+        specifier: workspace:^
+        version: link:../auth
       '@basaltkit/express':
         specifier: workspace:^
         version: link:../express
@@ -1887,6 +1890,9 @@ importers:
       '@basaltkit/hono':
         specifier: workspace:^
         version: link:../hono
+      '@basaltkit/tenancy':
+        specifier: workspace:^
+        version: link:../tenancy
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -1938,10 +1944,10 @@ importers:
       '@basaltkit/http':
         specifier: workspace:^
         version: link:../http
+    devDependencies:
       '@basaltkit/mailer':
         specifier: workspace:^
         version: link:../mailer
-    devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -2764,9 +2770,6 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/mailer':
-        specifier: workspace:^
-        version: link:../mailer
       '@basaltkit/queue':
         specifier: workspace:^
         version: link:../queue
@@ -2783,6 +2786,9 @@ importers:
       '@basaltkit/http':
         specifier: workspace:^
         version: link:../http
+      '@basaltkit/mailer':
+        specifier: workspace:^
+        version: link:../mailer
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig

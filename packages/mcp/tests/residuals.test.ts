@@ -38,6 +38,9 @@ function identity(counter: { guards: number; visibility: number }): BasaltPlugin
         const bearer = request.headers['authorization']
         const id = typeof bearer === 'string' ? bearer.replace(/^Bearer /, '') : request.headers['x-user-id']
         if (typeof id === 'string') context.user = { id }
+        // A stand-in for apiKeysPlugin with a userless key: ctx().apiKey only.
+        const key = request.headers['x-api-key']
+        if (typeof key === 'string') (context as Record<string, unknown>)['apiKey'] = { id: `key-${key}`, scopes: ['*'] }
       }
       const guard: RouteGuard = ({ route: r, context }) => {
         if (r.meta?.['mcp']) counter.guards++
@@ -191,6 +194,17 @@ describe.each(['fastify', 'express', 'hono'] as const)('/mcp sessions on %s (FA-
     const del = await fetch(url, { method: 'DELETE', headers: { 'mcp-session-id': alice, 'x-user-id': 'alice' } })
     expect(del.status).toBe(204)
     expect((await post(list(), { 'mcp-session-id': alice, 'x-user-id': 'alice' })).status).toBe(404)
+  })
+
+  it('binds a session to a userless API key: another key, or no key, gets 404', async () => {
+    const { post, init } = await start(adapter, holdRoutes().routes, {})
+    const a = await init({ 'x-api-key': 'a' })
+    expect((await post(list(), { 'mcp-session-id': a, 'x-api-key': 'a' })).status).toBe(200)
+    // Both carry no Authorization header: before, both bound to the same anonymous fingerprint.
+    expect((await post(list(), { 'mcp-session-id': a, 'x-api-key': 'b' })).status).toBe(404)
+    expect((await post(list(), { 'mcp-session-id': a })).status).toBe(404)
+    const anon = await init()
+    expect((await post(list(), { 'mcp-session-id': anon, 'x-api-key': 'a' })).status).toBe(404)
   })
 
   it('sessions: false stays stateless (no header issued nor required)', async () => {

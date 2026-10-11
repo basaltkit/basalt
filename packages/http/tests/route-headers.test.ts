@@ -1,6 +1,13 @@
 import { Container } from '@basaltkit/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { assertRouteMetaValid, assertRoutesGuarded, route, runRoute } from '../src/index.js'
+import {
+  InvalidRouteHeadersError,
+  InvalidRouteMetaError,
+  assertRouteMetaValid,
+  assertRoutesGuarded,
+  route,
+  runRoute,
+} from '../src/index.js'
 import { routeHeadersProblems } from '../src/route-headers.js'
 import { FakeReply, makeRequest } from './support.js'
 
@@ -33,33 +40,44 @@ describe('BK-085 — meta.responseHeaders', () => {
     expect(routeHeadersProblems(withHeaders(headers)).join()).toContain(problem)
   })
 
-  it('warns once at boot and never refuses it (refused in the next major)', () => {
+  it('refuses the boot, through assertRoutesGuarded and assertRouteMetaValid alike, without a warning', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const container = new Container()
-    const routes = [withHeaders({ 'X-A': 'a\r\nb' })]
-    expect(() => assertRoutesGuarded(routes, container)).not.toThrow()
-    expect(() => assertRoutesGuarded(routes, container)).not.toThrow()
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(String(warn.mock.calls[0]?.[0])).toContain('GET /r')
-    expect(String(warn.mock.calls[0]?.[0])).toContain('next major')
-    // assertRouteMetaValid runs plugin validators only; with none it is a no-op, as before.
-    expect(() => assertRouteMetaValid(routes, new Container())).not.toThrow()
+    const routes = [withHeaders({ 'X-A': 'a\r\nb' }), withHeaders({ 'Set-Cookie': 'a=1' })]
+    // No plugin validator registered: the built-in check still runs.
+    expect(() => assertRouteMetaValid(routes, new Container())).toThrow(InvalidRouteMetaError)
+    try {
+      assertRoutesGuarded(routes, new Container())
+      expect.unreachable()
+    } catch (error) {
+      expect(error).toBeInstanceOf(InvalidRouteMetaError)
+      expect(error).toMatchObject({ code: 'HTTP_INVALID_ROUTE_META' })
+      expect((error as InvalidRouteMetaError).problems).toEqual([
+        { route: 'GET /r', problem: 'meta.responseHeaders["X-A"] contains a control character (CR, LF, NUL…)' },
+        { route: 'GET /r', problem: 'meta.responseHeaders: "Set-Cookie" cannot be set per route (it is managed by the adapter or the response)' },
+      ])
+    }
+    // A waiver for unclaimed keys never waives a malformed value.
+    expect(() => assertRoutesGuarded(routes, new Container(), true)).toThrow(InvalidRouteMetaError)
+    expect(warn).not.toHaveBeenCalled()
   })
 
-  it('does not throw at request time on a record that skipped the boot check', async () => {
-    const reply = new FakeReply()
-    await expect(runRoute(withHeaders({ 'X-A': 'a\r\nb' }), makeRequest(), reply)).resolves.toBe('ok')
+  it('throws InvalidRouteHeadersError at request time on a record that skipped the boot check', async () => {
+    const def = withHeaders({ 'X-A': 'a\r\nb' })
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // Never cached as valid: every request throws.
+      const reply = new FakeReply()
+      const running = runRoute(def, makeRequest(), reply)
+      await expect(running).rejects.toBeInstanceOf(InvalidRouteHeadersError)
+      await expect(running).rejects.toMatchObject({ code: 'HTTP_INVALID_ROUTE_HEADERS', status: 500 })
+      expect(reply.headers['x-a']).toBeUndefined()
+    }
   })
 
-  it('sets no header for a CRLF value', async () => {
+  it('sets no header of an invalid record, valid siblings included', async () => {
     const reply = new FakeReply()
-    await runRoute(withHeaders({ 'X-A': 'a\r\nb' }), makeRequest(), reply)
-    expect(reply.headers['x-a']).toBeUndefined()
-  })
-
-  it('ignores the whole record: a valid sibling header on the same route is not set either', async () => {
-    const reply = new FakeReply()
-    await runRoute(withHeaders({ 'X-Robots-Tag': 'noindex', 'Set-Cookie': 'a=1' }), makeRequest(), reply)
+    await expect(
+      runRoute(withHeaders({ 'X-Robots-Tag': 'noindex', 'Set-Cookie': 'a=1' }), makeRequest(), reply),
+    ).rejects.toBeInstanceOf(InvalidRouteHeadersError)
     expect(reply.headers['x-robots-tag']).toBeUndefined()
     expect(reply.headers['set-cookie']).toBeUndefined()
   })

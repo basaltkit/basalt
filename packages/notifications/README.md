@@ -19,10 +19,10 @@ This module introduces the concept of a **declarative notification**: with `defi
 ## Installation
 
 ```bash
-pnpm add @basaltkit/notifications
+pnpm add @basaltkit/notifications @basaltkit/mailer
 ```
 
-The package depends on `@basaltkit/mailer` (the email bridge is included). For data validation, also install `zod`.
+`@basaltkit/mailer` is a **peer dependency** (since 2.0): the email bridge reads the app's own `MAILER` binding, so it must be the copy your app installs and registers with `mailerPlugin` (a second copy would leave the `mail` channel silently unwired). The package also depends on `@basaltkit/core` and `@basaltkit/http` (3.x). For data validation, also install `zod`.
 
 ## Get started in 5 minutes
 
@@ -130,6 +130,12 @@ defineNotification({ name: 'security.alert', channels: ['mail'], via, mandatory:
 
 Order of decision: `mandatory` → inline `channelPreferences: false` → most
 specific stored preference → inline `true` → `defaults[channel]` (default `true`).
+
+The stored-preference step is `NotificationPreferences.preference()`, the only
+extension point: override it in a subclass (passed to `new Notifier({ preferences })`)
+for quiet hours or compliance blocks, returning `false`, `true` or `undefined`.
+`allowed()` was removed in 2.0; a preferences object that still defines it makes
+`new Notifier()` throw `LegacyAllowedOverrideError`.
 
 ### Digest (batching)
 

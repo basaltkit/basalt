@@ -212,7 +212,8 @@ async function probeAge(
 }
 
 /** Outcome of one registry lookup: a version, a definitive miss, or a transient failure. */
-type Lookup = { version: string; peers: Record<string, string> } | 'miss' | 'transient'
+type Found = { version: string; peers: Record<string, string>; optionalPeers: string[] }
+type Lookup = Found | 'miss' | 'transient'
 
 /** The `peerDependencies` of a `/latest` document (string values only). */
 function peersOf(body: { peerDependencies?: unknown } | null): Record<string, string> {
@@ -224,6 +225,15 @@ function peersOf(body: { peerDependencies?: unknown } | null): Record<string, st
     }
   }
   return peers
+}
+
+/** The peers `peerDependenciesMeta` marks `optional: true`. */
+function optionalPeersOf(body: { peerDependenciesMeta?: unknown } | null): string[] {
+  const raw = body?.peerDependenciesMeta
+  if (!raw || typeof raw !== 'object') return []
+  return Object.entries(raw as Record<string, unknown>)
+    .filter(([, meta]) => typeof meta === 'object' && meta !== null && (meta as { optional?: unknown }).optional === true)
+    .map(([name]) => name)
 }
 
 async function lookupLatest(
@@ -239,9 +249,11 @@ async function lookupLatest(
     })
     if (response.status >= 500 || response.status === 429) return 'transient'
     if (!response.ok) return 'miss'
-    const body = (await response.json()) as { version?: unknown; peerDependencies?: unknown } | null
+    const body = (await response.json()) as { version?: unknown; peerDependencies?: unknown; peerDependenciesMeta?: unknown } | null
     const version = body?.version
-    return typeof version === 'string' && STABLE_SEMVER.test(version) ? { version, peers: peersOf(body) } : 'miss'
+    return typeof version === 'string' && STABLE_SEMVER.test(version)
+      ? { version, peers: peersOf(body), optionalPeers: optionalPeersOf(body) }
+      : 'miss'
   } catch {
     // Network error, per-request timeout, or malformed JSON.
     return 'transient'
@@ -260,7 +272,7 @@ async function fetchLatest(
   name: string,
   timeoutMs: number,
   overall: AbortSignal,
-): Promise<{ version: string; peers: Record<string, string> } | undefined> {
+): Promise<Found | undefined> {
   for (let attempt = 0; attempt < 2 && !overall.aborted; attempt++) {
     const result = await lookupLatest(
       fetchImpl,
@@ -280,6 +292,8 @@ export interface LatestInfo {
   latest?: string
   /** `peerDependencies` declared by that latest version. */
   peers: Record<string, string>
+  /** The peers its `peerDependenciesMeta` marks optional (absent: none). */
+  optionalPeers?: string[]
   /**
    * Release age of `latest` against the window: `mature` (provably older, or
    * not probed), `recent` (inside the window) or `unknown` (could not prove it).
@@ -333,7 +347,7 @@ export async function lookupLatestVersions(
                 now,
                 AbortSignal.any([AbortSignal.timeout(timeoutMs), overall.signal]),
               )
-        results.set(name, { latest: found.version, peers: found.peers, age })
+        results.set(name, { latest: found.version, peers: found.peers, optionalPeers: found.optionalPeers, age })
       }
     }
     const pool = Math.max(1, Math.min(options.concurrency ?? CONCURRENCY, names.length))

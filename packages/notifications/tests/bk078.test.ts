@@ -4,6 +4,7 @@ import {
   channel,
   defineNotification,
   InAppChannel,
+  LegacyAllowedOverrideError,
   MemoryInAppStore,
   MemoryPreferenceStore,
   NotificationPreferences,
@@ -202,22 +203,23 @@ describe('BK-078 · defaults and mandatory channels', () => {
     expect(report.skipped).toEqual(['sms'])
   })
 
-  describe('a subclass that overrides allowed() keeps deciding (deprecated, minor-compatible)', () => {
+  describe('preference() is the only decision point (allowed() removed in 2.0)', () => {
     class QuietHours extends NotificationPreferences {
-      constructor(private readonly verdict: boolean) {
+      constructor(private readonly verdict: boolean | undefined) {
         super(new MemoryPreferenceStore())
       }
-      override async allowed(): Promise<boolean> {
+      override async preference(): Promise<boolean | undefined> {
         return this.verdict
       }
     }
-    class PreferenceOnly extends NotificationPreferences {
-      override async preference(_u: string, _n: string, channel: string): Promise<boolean | undefined> {
-        return channel === 'sms' ? true : undefined
+    /** A 1.x subclass that kept its logic in allowed(); no `override`, as plain JS would. */
+    class LegacyQuietHours extends NotificationPreferences {
+      async allowed(): Promise<boolean> {
+        return false
       }
     }
 
-    it('an allowed() returning false blocks the channel', async () => {
+    it('a preference() returning false blocks the channel', async () => {
       sent.length = 0
       const notifier = new Notifier({ channels: [sms, mail], preferences: new QuietHours(false) })
       const report = await notifier.notify({ id: 'u1' }, Digest)
@@ -225,7 +227,7 @@ describe('BK-078 · defaults and mandatory channels', () => {
       expect(sent).toEqual([])
     })
 
-    it('an allowed() returning true sends even when defaults[channel] is false', async () => {
+    it('a preference() returning true sends even when defaults[channel] is false', async () => {
       sent.length = 0
       const notifier = new Notifier({ channels: [sms, mail], preferences: new QuietHours(true) })
       const report = await notifier.notify({ id: 'u1' }, Digest)
@@ -233,30 +235,39 @@ describe('BK-078 · defaults and mandatory channels', () => {
       expect(sent).toEqual(['sms', 'mail'])
     })
 
-    it('a subclass overriding only preference() uses the new path', async () => {
+    it('a preference() returning undefined lets defaults decide', async () => {
       sent.length = 0
-      const notifier = new Notifier({
-        channels: [sms, mail],
-        preferences: new PreferenceOnly(new MemoryPreferenceStore()),
-      })
+      const notifier = new Notifier({ channels: [sms, mail], preferences: new QuietHours(undefined) })
       const report = await notifier.notify({ id: 'u1' }, Digest)
-      // sms: preference() says true over defaults.sms false; mail: undefined → default true.
-      expect(report.skipped).toEqual([])
-      expect(sent).toEqual(['sms', 'mail'])
+      // Digest: defaults.sms false, mail default true.
+      expect(report.skipped).toEqual(['sms'])
+      expect(sent).toEqual(['mail'])
     })
 
-    it('mandatory channels still bypass an allowed() override', async () => {
+    it('mandatory channels still bypass preference()', async () => {
       sent.length = 0
       const notifier = new Notifier({ channels: [sms, mail], preferences: new QuietHours(false) })
       const report = await notifier.notify({ id: 'u1' }, Reset)
       expect(report.sent).toEqual([{ channel: 'mail' }])
       expect(report.skipped).toEqual(['sms'])
     })
+
+    it('refuses a leftover allowed() override instead of silently ignoring it', () => {
+      expect(
+        () => new Notifier({ channels: [sms, mail], preferences: new LegacyQuietHours(new MemoryPreferenceStore()) }),
+      ).toThrow(LegacyAllowedOverrideError)
+      try {
+        new Notifier({ channels: [sms, mail], preferences: new LegacyQuietHours(new MemoryPreferenceStore()) })
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'NOTIFICATION_ALLOWED_OVERRIDE_REMOVED' })
+        expect((error as Error).message).toContain('preference()')
+      }
+    })
   })
 
-  it('leaves allowed() unchanged (default allow)', async () => {
+  it('NotificationPreferences no longer has allowed(); preference() states nothing by default', async () => {
     const { preferences } = setup()
-    expect(await preferences.allowed('u1', 'digest', 'sms')).toBe(true)
+    expect((preferences as unknown as { allowed?: unknown }).allowed).toBeUndefined()
     expect(await preferences.preference('u1', 'digest', 'sms')).toBeUndefined()
   })
 })

@@ -689,11 +689,22 @@ keys em conflito); se vierem primeiro, essa resposta chega ao cliente em vez do
 | `false` | corre sem tenant | corre no tenant |
 | `'never'` | corre sem tenant | `404 NOT_FOUND`, o handler não corre |
 
-Qualquer outro valor (`'none'`, `'false'`, `0`, `null`) cai no default da app,
-como sempre, e regista um aviso no arranque que nomeia as rotas: um erro de
-escrita de `'never'` serviria a rota em hosts de tenant. A próxima major recusa
-esse arranque com `HTTP_INVALID_ROUTE_META`. O `basalt ai doctor` avisa de rotas que
+Qualquer outro valor (`'none'`, `'optional'`, `'false'`, `0`, `null`) recusa o
+arranque com `HTTP_INVALID_ROUTE_META`, nomeando cada rota em falta, em todos
+os adapters: um erro de escrita de `'never'` cairia no default da app e serviria
+a rota em hosts de tenant. (O `@basaltkit/tenancy` 3.2 só
+avisava e caía no default.) O `basalt ai doctor` avisa de rotas que
 juntam `tenant: false` a uma permissão `platform:`.
+
+O `mcpPlugin` corre a mesma verificação sobre as rotas que expõe como tools
+MCP. Uma rota que a salte — um driver próprio que chama `runRoute()` sem
+`assertRouteMetaValid()` — falha fechada em cada pedido: o `isTenantRequired()`
+e o enricher do tenancy lançam `InvalidTenantMetaError`
+(`TENANCY_INVALID_ROUTE_META`, `500`) antes de resolver qualquer tenant, em vez
+de cair no `required`. O driver tem de passar os enrichers da app
+(`http:enrichers`) ao `runRoute()`, como todos os adapters fazem; passá-los sem
+`container` também é recusado (`HTTP_ENRICHERS_UNRUNNABLE`, `@basaltkit/http`
+3.0), por isso o enricher já não pode ser saltado em silêncio.
 
 Isentar um caminho levanta apenas a exigência de tenant. A autenticação, as
 verificações de subscrição e todas as outras proteções continuam a correr.

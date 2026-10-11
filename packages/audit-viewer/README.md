@@ -18,7 +18,7 @@
 pnpm add @basaltkit/audit-viewer @basaltkit/audit
 ```
 
-Depends on `@basaltkit/core`, `@basaltkit/audit`, and `@basaltkit/fastify`. Requires the `auditPlugin` to be registered (that's where the trail comes from).
+Depends on `@basaltkit/core` and `@basaltkit/http` (3.x) — not on any single adapter. `@basaltkit/audit` (3.x) is a **peer dependency**: the viewer reads the app's own `AUDIT` binding, so it must be the copy your app installs, with `auditPlugin` registered (that's where the trail comes from).
 
 ## Get started in 5 minutes
 

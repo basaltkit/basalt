@@ -24,7 +24,7 @@ It also includes, with nothing extra to install: account lockout after too many 
 pnpm add @basaltkit/auth
 ```
 
-Requirements: `@basaltkit/core` and `@basaltkit/fastify` (installed automatically as dependencies) and `zod` (peer dependency — install with `pnpm add zod`).
+Requirements: `@basaltkit/core` and `@basaltkit/http` (3.x; installed automatically as dependencies) and `zod` (peer dependency — install with `pnpm add zod`). The package is adapter-agnostic: serve its routes with `@basaltkit/fastify`, `@basaltkit/express` or `@basaltkit/hono` 3.x, which must run the same `@basaltkit/http` 3.
 
 ## Get started in 5 minutes
 
@@ -504,7 +504,7 @@ const app = await createApp({
     fastifyPlugin({
       routes: [
         ...authRoutes(),
-        ...apiKeyRoutes(), // POST/GET /apikeys, DELETE /apikeys/:id
+        ...apiKeyRoutes(), // POST/GET /apikeys, PATCH/DELETE /apikeys/:id, POST /apikeys/:id/rotate
         route({
           method: 'GET',
           url: '/reports',
@@ -547,7 +547,7 @@ error="invalid_token"` (default: the request continues as anonymous), and
 `touchEveryMs` (default 60 s; `0` = every request) throttles `lastUsedAt` writes.
 `auth:apikey_rejected` carries the display `prefix` and `ip` of an invalid key,
 never the secret; `@basaltkit/audit` does not record it by default. A refusal of
-a key that verified (`tenant_mismatch`, `not_allowed`, `scope`) is also emitted
+a key that verified (`ip_not_allowed`, `tenant_mismatch`, `not_allowed`, `scope`) is also emitted
 as `auth:apikey_refused` (`{ id, reason, tenantId? }`), which the audit records
 by default.
 
@@ -582,7 +582,7 @@ lock go (the memory bound is absolute).
 
 ### Hooks (events)
 
-The application can react to authentication events: `auth:registered`, `auth:register_existing_email`, `auth:register_refused` (a registration policy refused a new account: `{ email, tenantId?, source: 'register' | 'social' }`), `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`.
+The application can react to authentication events: `auth:registered`, `auth:register_existing_email`, `auth:register_refused` (a registration policy refused a new account: `{ email, tenantId?, source: 'register' | 'social' }`), `auth:login`, `auth:login_failed`, `auth:logout`, `auth:verify_requested`, `auth:email_verified`, `auth:password_reset_requested`, `auth:password_reset`, `auth:mfa_enabled`, `auth:mfa_disabled`, `auth:apikey_issued`, `auth:apikey_revoked`, `auth:apikey_rotated`, `auth:apikey_updated` (changed field names only).
 
 ## API reference
 
@@ -601,7 +601,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `refreshTtl` | `DurationInput` | No | `'30d'` | Refresh token validity. |
 | `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity (absolute). |
 | `sessionIdleTtl` | `DurationInput` | No | — | Idle timeout: a session unused for longer is refused and deleted. Needs a session store with `touch` (memory, auth-sqlite, auth-prisma with `trackSessionActivity`); fails at boot otherwise. |
-| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value is emitted as configured with a boot warning, and is refused from the next major (`AUTH_SESSION_COOKIE_INVALID`). |
+| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting `secure: false` or `__Host-` path refuses the boot (`AUTH_SESSION_COOKIE_INVALID`, `SessionCookieConfigError`) — use `name: isProd ? '__Host-sid' : 'sid'`. |
 | `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
 | `throttleStore` | `ThrottleStore` | No | in-memory, per process | Counters of the default login / per-IP / email-request throttles — `RedisThrottleStore` for one budget across replicas. |
 | `requireMfa` | `boolean \| (user, context) => boolean \| Promise<boolean>` | No | off | Plugin only. Require a sign-in with MFA on every authenticated route except `meta.mfa: false` ones. |
@@ -639,7 +639,8 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 
 - `authRoutes({ register?, password?, rateLimit? })`: `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/verify/request`, `POST /auth/verify`, `POST /auth/password/forgot`, `POST /auth/password/reset`. These are regular routes — you can omit or replace any of them. `POST /auth/logout` takes an optional `{ refreshToken }`: with none (or no body) it ends the cookie / `x-session-id` session and expires the cookie — a cross-site cookie-only logout is refused (`403 AUTH_CSRF_REJECTED`). `register: 'open' | 'closed' | RegisterPolicy` sets who may sign up (default: the plugin's `registerPolicy`, open without one): `'closed'` answers a static `404 AUTH_REGISTRATION_CLOSED`; a refusing policy answers the same `202` as a success and creates nothing.
 - Every `authRoutes()`, `mfaRoutes()` and `oauthRoutes()` route declares `meta.account: true` (about the caller, not a tenant's data — `@basaltkit/teams`' membership guard lets non-members through) and, except MFA disable, `meta.mfa: false` (reachable under `requireMfa`). `ACCOUNT_META` exports the pair for your own profile routes.
-- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds; expired keys are rejected and omitted from listings.
+- `apiKeyRoutes()`: `POST /apikeys`, `GET /apikeys[?includeExpired=true]`, `PATCH /apikeys/:id`, `POST /apikeys/:id/rotate`, `DELETE /apikeys/:id` (login session only — API keys are refused; scoped to the current tenant/user, anything else is 404). `POST /apikeys` accepts an optional `expiresAt` Unix timestamp in milliseconds, `allowedIps` (addresses/CIDRs) and `meta`; expired keys are rejected and omitted from listings unless `includeExpired=true`. `PATCH` changes `name`, `scopes`, `expiresAt` (`null` = never), `allowedIps` and `meta` in one write; rotate takes an optional `graceMs` (0 by default, at most 30 days) and returns the new key once. An expired or revoked key cannot be renewed or rotated. Service keys (`ApiKeys.issue({ serviceId })`, no user, scopes only) are programmatic-only.
+- **Idempotency and API keys.** `idempotencyPlugin` (from `@basaltkit/http`) scopes a replay by the raw bytes of the credential headers, not by the key's id: a `POST` retried after a rotation, or with the key moved from `x-api-key` to `Authorization: Bearer`, runs again instead of replaying. And when the client sends `Idempotency-Key`, the `201` of `POST /apikeys` and `POST /apikeys/:id/rotate`, which carries the plaintext key, is stored in the idempotency store for its `ttlMs` (24 h by default), so protect a shared store (Redis) as secret material, or mint keys without an idempotency key.
 - `mfaRoutes()`: `POST /auth/mfa/enroll`, `POST /auth/mfa/activate`, `GET /auth/mfa/status`, `POST /auth/mfa/disable`.
 - `oauthRoutes({ callbackBaseUrl, successRedirect?, bindingCookie?, rateLimit? })`: `GET /auth/oauth/:provider` and `GET /auth/oauth/:provider/callback` for each configured provider (rate-limited by default).
 

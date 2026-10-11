@@ -24,7 +24,9 @@ Duas camadas, uma direção de dependência:
 O canal `mail` faz a ponte entre as duas: quando o `mailerPlugin` está
 registado, o notifier entrega mail através dele automaticamente. Usa o mailer
 diretamente para fluxos transacionais que não são "notificações" (reset de
-password, magic links).
+password, magic links). O `@basaltkit/mailer` é peer do
+`@basaltkit/notifications` (desde a 2.0), por isso ambos leem o mesmo binding
+`MAILER`: instala-o na app (`pnpm add @basaltkit/notifications @basaltkit/mailer`).
 
 ## Definir uma notificação
 
@@ -277,16 +279,31 @@ O notifier decide cada canal por esta ordem: um canal `mandatory` é sempre
 enviado; um `channelPreferences: { x: false }` inline silencia-o; senão decide a
 preferência guardada mais específica; depois um `true` inline; e só quando o
 destinatário não disse nada se aplica `defaults[canal]` (por omissão `true`).
-`NotificationPreferences.allowed()` não muda (permite por omissão); o novo
-`preference()` devolve `undefined` quando nada corresponde.
+O `NotificationPreferences.preference()` é esse passo da preferência guardada:
+devolve o `enabled` da correspondência mais específica, ou `undefined` quando
+nada corresponde.
 
-Uma subclasse de `NotificationPreferences` que redefine `allowed()` (horas de
-silêncio, bloqueios de compliance, restrições por plano) continua a funcionar:
-o notifier detecta a redefinição e deixa-a decidir, como antes — a sua resposta
-é final, os `defaults` não se lhe aplicam, e os canais `mandatory` continuam a
-ignorá-la. Redefinir `allowed()` está obsoleto: redefine `preference()` (devolve
-`undefined` para «sem preferência declarada»). A próxima major deixa de
-consultar uma redefinição de `allowed()`.
+O `preference()` é o único ponto de extensão. Para horas de silêncio, bloqueios
+de compliance ou restrições por plano, cria uma subclasse de
+`NotificationPreferences` e redefine-o — devolve `false` para bloquear, `true`
+para enviar, `undefined` para deixar os `defaults` decidir; os canais
+`mandatory` continuam a ignorá-lo:
+
+```ts
+class QuietHours extends NotificationPreferences {
+  override async preference(userId: string, notification: string, channel: string) {
+    if (channel === 'sms' && isNight(userId)) return false
+    return super.preference(userId, notification, channel)
+  }
+}
+```
+
+O `allowed()` foi removido no `@basaltkit/notifications` 2.0. Um objecto de
+preferências que ainda o define (uma redefinição da 1.x) faz o `new Notifier()`
+lançar `LegacyAllowedOverrideError` (`NOTIFICATION_ALLOWED_OVERRIDE_REMOVED`) em
+vez de ignorar essa lógica em silêncio: passa-a para o `preference()`. Código
+que *chamava* o `allowed()` para perguntar «posso enviar?» pode usar
+`(await prefs.preference(userId, notification, channel)) ?? true`.
 
 ## A caixa in-app
 

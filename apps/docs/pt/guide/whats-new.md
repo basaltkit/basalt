@@ -34,6 +34,395 @@ cadeias de auditoria apagáveis, filtros de listagem nas políticas (onde um
 filtro de linhas ao nível do ORM foi considerado e rejeitado) e mail de
 entrada.
 
+## Desde a 1.13 (por publicar) {#since-1-13-unreleased}
+
+Entrou no `main` depois da publicação da 1.13 e sai na próxima versão. Ao
+contrário da 1.13, esta vaga **traz** majors: o `@basaltkit/http` 3.0 (com o
+`fastify`, o `express`, o `hono` e o `testing` 3.0) torna a idempotência
+estrita por omissão, o `@basaltkit/auth-prisma` 3.0 precisa de uma migração
+da base de dados, e as configurações de que a 1.13 só avisava passam a recusar
+o arranque ([`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0, `notifications`
+2.0](#warnings-now-refuse)). Os pacotes cujo peer ou dependência partilhada é
+uma dessas majors sobem uma major com ela, sem mudar a sua própria API
+([a lista](#majors-forced-by-dependencies)). O conjunto `@basaltkit/*` sobe
+**em bloco**: lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
+
+- **Ciclo de vida das API keys.** `ApiKeys.rotate()` substitui o segredo de uma
+  chave e mantém o id, com uma janela de tolerância opcional (até 30 dias) para o
+  segredo antigo; `update()` / `setExpiry()` alteram uma chave numa só escrita;
+  `list({ includeExpired })` mostra as chaves expiradas. As chaves podem agir
+  como um **serviço** (`serviceId`, só scopes, nunca `ctx().user`), ter uma
+  **allowlist de IPs** (`403 AUTH_APIKEY_IP_NOT_ALLOWED`, falha fechada, também
+  emitida como o `auth:apikey_refused` auditado) e `meta` plano.
+  `apiKeyRoutes()` acrescenta `PATCH /apikeys/:id` e `POST /apikeys/:id/rotate`,
+  em todos os adapters. *(`@basaltkit/auth` 5.0, `auth-sqlite` 3.0 — migração
+  automática; `auth-prisma` 3.0 — migração abaixo; o `create-basalt` 1.13 gera o
+  novo modelo.)* Vê [API keys](/pt/guide/auth#apikeys-rotation).
+- **Chamadores de serviço no trilho de auditoria.** `auditPlugin({ actor })`
+  resolve o `actorId` de um pedido, para atribuir uma chave de serviço no teu
+  próprio formato de id; a predefinição continua a ser `ctx().user?.id`.
+  *(`@basaltkit/audit` 3.2)*
+- **Sessões MCP ligadas a uma chave sem utilizador.** Uma sessão `/mcp` aberta
+  com uma API key sem utilizador fica ligada ao id dessa chave: um
+  `mcp-session-id` que vaze é recusado (404) para outra chave ou para um caller
+  anónimo. *(`@basaltkit/mcp` 6.0)*
+- **A idempotência é estrita por omissão.** Uma `Idempotency-Key` reutilizada
+  com um pedido diferente recebe `422`, e os replays correm depois dos guards.
+  *(`@basaltkit/http` 3.0)* Vê abaixo.
+- **Os avisos de arranque da 1.13 passam a recusas.** Um cookie de sessão com
+  prefixo que os browsers descartariam, um valor desconhecido de `meta.tenant`
+  e um `meta.responseHeaders` inválido deixam de arrancar, e o `Notifier` decide
+  só pelo `preference()`. *(`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0,
+  `notifications` 2.0)* Vê [abaixo](#warnings-now-refuse).
+
+### Atualização {#upgrading-since-1-13}
+
+**Atualiza o conjunto `@basaltkit/*` inteiro de uma vez.** Esta vaga não é um
+menu. Os pacotes partilham objetos vivos com a tua app — tokens do container,
+as classes de erro do adapter, o tipo `RouteMeta` que cada plugin aumenta — e um
+token do container é um símbolo local ao módulo, por isso uma segunda cópia de
+um pacote nunca encontra o binding da tua app. Os adapters 3.0 correm o
+`@basaltkit/http` 3, o `auth` 5 precisa de stores que implementem os novos
+métodos, e todos os pacotes que se ligam a eles sobem com eles. Misturar uma
+linha antiga com uma nova é recusado pelos ranges de peer onde o npm o vê, e
+parte no arranque ou no pedido onde não vê.
+
+O caminho mais curto é um comando, que atravessa todas as majors do framework
+de uma vez e mostra o link do CHANGELOG de cada pacote:
+
+```bash
+pnpm basalt update --dry          # o plano
+pnpm basalt update                # escreve, instala, corre os codemods
+npx create-basalt@latest update   # o mesmo, numa app sem o script basalt
+```
+
+Depois dá os passos que dependem de ti:
+
+1. **Idempotência** — clientes que repetem com um body ou query alterados
+   recebem `422`; vê [idempotência estrita por omissão](#idempotency-strict-by-default).
+2. **auth-prisma** — acrescenta as seis colunas das API keys antes de o novo
+   cliente servir tráfego; vê [Atualizar para o auth-prisma 3.0](#auth-prisma-3).
+3. **Recusas no arranque** — corrige o que a 1.13 avisava; vê
+   [avisos de arranque que passam a recusar](#warnings-now-refuse).
+4. **MCP** — as rotas de tool passadas ao `mcpPlugin({ routes })` passam a ter
+   as mesmas verificações de arranque que as rotas do adapter, e um cliente MCP
+   tem de enviar a mesma API key em todos os pedidos de uma sessão; vê
+   [Outras mudanças a ter em conta](#watch-since-1-13).
+5. **Peers partilhados** — o `@basaltkit/mailer` passa a ser peer do
+   `notifications` 2 e do `testing` 3, e o `@basaltkit/audit` peer do
+   `audit-viewer` 3.1: cada um lê ou regista o token de contentor desse pacote,
+   por isso tem de usar a cópia da tua app. O `pnpm basalt update`
+   (create-basalt 1.13) acrescenta um peer `@basaltkit/*` obrigatório que o teu
+   package.json não declara, na versão mais recente, ou avisa quando não
+   consegue; à mão é `pnpm add @basaltkit/mailer`. Não contes com o gestor de
+   pacotes para instalar os peers por ti: o yarn PnP, o
+   `auto-install-peers=false` e o `--legacy-peer-deps` não o fazem, e o
+   `pnpm basalt doctor` só vê o que está instalado.
+
+**Incompatibilidades intencionais.** Estas combinações não funcionam, por
+desenho:
+
+| Mantens | Ao lado de | O que acontece |
+| --- | --- | --- |
+| um adapter 2.x (`fastify` 2.6, `express`/`hono` 2.1) | `@basaltkit/http` 3 | duas cópias do http: o `idempotencyPlugin` fica com as predefinições da cópia de onde o importas, e os plugins feitos para o http 3 não reconhecem as classes de erro do adapter |
+| `@basaltkit/auth` 4.x | `auth-prisma` 3 / `auth-sqlite` 3 | range de peer recusado (`auth ^5`); as stores implementam `ApiKeyStore.update` e as colunas do ciclo de vida |
+| `auth-prisma` 2 / `auth-sqlite` 2 | `@basaltkit/auth` 5 | range de peer recusado; `rotate()`, `update()` e `setExpiry()` precisam do novo método da store |
+| `@basaltkit/tenancy` 3.x | `tenancy-prisma` 3 / `tenancy-sqlite` 2 | range de peer recusado |
+| `@basaltkit/notifications` 1.x | `notifications-prisma` 2 / `-sqlite` 2 | range de peer recusado |
+| `permissions` 4 / `subscriptions` 5 | `@basaltkit/http` 3 | os tipos de `meta.can` / `meta.subscribed` apontam para a outra cópia do http, e um `400` de validação do permissions passa a `500` (`instanceof` entre cópias) |
+| `auth-saml` 3 / `billing-ui` 1 | `auth` 5 / `subscriptions` 6 | traziam a sua própria cópia do `auth` / `subscriptions`; ler o binding `AUTH` / `SUBSCRIPTIONS` da app falha no arranque. A 4.0 / 2.0 tornam-no peer |
+| `@basaltkit/mcp` 5 | `@basaltkit/http` 3 | as chamadas de tool correm pelo pipeline do http 2 enquanto as rotas HTTP seguem as regras do http 3 |
+| `@basaltkit/prisma` 3 | `@basaltkit/http` 3 | range de peer recusado (os leases por pedido usam o `ctx().onDispose` do pipeline do http) |
+
+Os onze patches (`comments`, `files`, `drives`, `teams`, `teams-ui`,
+`api-keys-ui`, `inbound-mail`, `cli`, `activity`, `backup`, `dashboard`)
+funcionam em qualquer das linhas — só constroem rotas ou leem
+dados através de uma cópia privada — mas o `update` também os sobe, e é isso
+que testamos. As linhas misturadas (um patch no http 3 ao lado de um adapter
+2.x) só são verificadas em runtime, não por um typecheck: se o TypeScript
+recusar passar as rotas deles a um adapter 2.x, sobe o adapter com eles.
+
+**Mapa de publicação.** Todos os pacotes que esta vaga publica (do
+`changeset status`):
+
+| Pacote | Publicado | Próxima | Subida | Porquê |
+| --- | --- | --- | --- | --- |
+| `@basaltkit/http` | 2.8.0 | 3.0.0 | major | idempotência estrita; `meta.responseHeaders` inválido recusado no arranque; enrichers sem container falham fechados |
+| `@basaltkit/fastify` | 2.6.0 | 3.0.0 | major | precisa do http 3 |
+| `@basaltkit/express` | 2.1.0 | 3.0.0 | major | precisa do http 3 |
+| `@basaltkit/hono` | 2.1.0 | 3.0.0 | major | precisa do http 3 |
+| `@basaltkit/testing` | 2.0.3 | 3.0.0 | major | peers opcionais dos adapters passam a 3.x; o `@basaltkit/mailer` passa a peer |
+| `@basaltkit/auth` | 4.2.0 | 5.0.0 | major | cookie de sessão inválido recusado; ciclo de vida das API keys (`ApiKeyStore.update`) |
+| `@basaltkit/auth-prisma` | 2.1.0 | 3.0.0 | major | migração da base de dados (seis colunas) |
+| `@basaltkit/auth-sqlite` | 2.1.0 | 3.0.0 | major | peer auth `^5` (migra sozinho) |
+| `@basaltkit/auth-saml` | 3.0.0 | 4.0.0 | major | o `@basaltkit/auth` passa a peer |
+| `@basaltkit/tenancy` | 3.2.0 | 4.0.0 | major | `meta.tenant` desconhecido recusado no arranque e falha fechada por pedido |
+| `@basaltkit/tenancy-prisma` | 2.1.0 | 3.0.0 | major | peer tenancy `^4` |
+| `@basaltkit/tenancy-sqlite` | 1.3.0 | 2.0.0 | major | peer tenancy `^4` |
+| `@basaltkit/notifications` | 1.3.0 | 2.0.0 | major | `allowed()` removido; o `@basaltkit/mailer` passa a peer |
+| `@basaltkit/notifications-prisma` | 1.2.0 | 2.0.0 | major | peer notifications `^2` |
+| `@basaltkit/notifications-sqlite` | 1.1.0 | 2.0.0 | major | peer notifications `^2` |
+| `@basaltkit/prisma` | 3.1.0 | 4.0.0 | major | peer opcional http `^3` |
+| `@basaltkit/mcp` | 5.1.0 | 6.0.0 | major | pipeline do http 3; verificações de arranque nas rotas de tool; sessões ligadas a uma chave sem utilizador |
+| `@basaltkit/permissions` | 4.1.0 | 5.0.0 | major | partilha o http 3 da app |
+| `@basaltkit/permissions-prisma` | 2.1.0 | 3.0.0 | major | peer permissions `^5` |
+| `@basaltkit/permissions-sqlite` | 2.1.0 | 3.0.0 | major | peer permissions `^5` |
+| `@basaltkit/subscriptions` | 5.0.0 | 6.0.0 | major | partilha o http 3 da app |
+| `@basaltkit/subscriptions-prisma` | 3.0.0 | 4.0.0 | major | peer subscriptions `^6` |
+| `@basaltkit/subscriptions-sqlite` | 3.0.0 | 4.0.0 | major | peer subscriptions `^6` |
+| `@basaltkit/subscriptions-proxypay` | 2.1.5 | 3.0.0 | major | peer subscriptions `^6` |
+| `@basaltkit/subscriptions-pdf` | 0.1.5 | 0.2.0 | minor (rutura em 0.x) | peer subscriptions `^6` |
+| `@basaltkit/billing-ui` | 1.2.0 | 2.0.0 | major | o `@basaltkit/subscriptions` passa a peer |
+| `@basaltkit/audit` | 3.1.0 | 3.2.0 | minor | `auditPlugin({ actor })` |
+| `create-basalt` | 1.12.0 | 1.13.0 | minor | modelo `AuthApiKey` com ciclo de vida; ranges com piso na versão exata; o `update` acrescenta peers `@basaltkit/*` obrigatórios em falta |
+| `@basaltkit/activity` | 1.3.2 | 1.3.3 | patch | tenancy `^4` (cópia privada) |
+| `@basaltkit/api-keys-ui` | 1.4.0 | 1.4.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/audit-viewer` | 3.0.2 | 3.1.0 | minor | o `@basaltkit/audit` passa a peer `^3.0.0` (lê o binding `AUDIT` da app; o audit 3.0/3.1 continua a servir); http `^3` (cópia privada) |
+| `@basaltkit/backup` | 0.3.2 | 0.3.3 | patch | prisma `^4` (cópia privada) |
+| `@basaltkit/cli` | 1.4.0 | 1.4.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/comments` | 4.1.0 | 4.1.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/dashboard` | 1.4.5 | 1.4.6 | patch | subscriptions `^6` (só tipos) |
+| `@basaltkit/drives` | 0.4.0 | 0.4.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/files` | 6.1.0 | 6.1.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/inbound-mail` | 0.1.0 | 0.1.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/teams` | 4.1.0 | 4.1.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/teams-ui` | 1.2.0 | 1.2.1 | patch | http `^3` (cópia privada) |
+
+### Majors forçadas pelas dependências {#majors-forced-by-dependencies}
+
+Tirando o `mcp` (assinalado na sua linha), estes pacotes não mudam nenhuma API própria. Sobem uma major porque o pacote
+que têm de partilhar com a tua app subiu uma, por isso a linha antiga não corre
+ao lado da nova. Atualiza cada um junto com o pacote que acompanha.
+
+| Pacote | Próxima | Acompanha | Porque tem de coincidir |
+| --- | --- | --- | --- |
+| `@basaltkit/testing` | 3.0 | `fastify` / `express` / `hono` 3 | peers opcionais dos adapters (a 3.0 também torna o `@basaltkit/mailer` peer: o `fakeMailer()` regista o `MAILER` da app) |
+| `@basaltkit/prisma` | 4.0 | `http` 3 | peer opcional (leases por pedido) |
+| `@basaltkit/auth-sqlite` | 3.0 | `auth` 5 | peer; implementa `ApiKeyStore.update` |
+| `@basaltkit/tenancy-prisma`, `tenancy-sqlite` | 3.0, 2.0 | `tenancy` 4 | peer |
+| `@basaltkit/notifications-prisma`, `notifications-sqlite` | 2.0, 2.0 | `notifications` 2 | peer |
+| `@basaltkit/mcp` | 6.0 | `http` 3 | corre as tuas rotas pelo pipeline do http (a 6.0 também traz mudanças próprias: [verificações no arranque e sessões ligadas à chave](#watch-since-1-13)) |
+| `@basaltkit/permissions` | 5.0 | `http` 3 | aumenta o `RouteMeta` (`meta.can`); o seu `400` depende das classes de erro do adapter |
+| `@basaltkit/permissions-prisma`, `permissions-sqlite` | 3.0, 3.0 | `permissions` 5 | peer |
+| `@basaltkit/subscriptions` | 6.0 | `http` 3 | aumenta o `RouteMeta` (`meta.subscribed`, `meta.feature`) |
+| `@basaltkit/subscriptions-prisma`, `-sqlite`, `-proxypay` | 4.0, 4.0, 3.0 | `subscriptions` 6 | peer |
+| `@basaltkit/subscriptions-pdf` | 0.2 | `subscriptions` 6 | peer (0.x: o minor é a linha de rutura) |
+| `@basaltkit/auth-saml` | 4.0 | `auth` 5, `http` 3 | o `@basaltkit/auth` passa a **peer**: lê o binding `AUTH` da app |
+| `@basaltkit/billing-ui` | 2.0 | `subscriptions` 6, `http` 3 | o `@basaltkit/subscriptions` passa a **peer**: lê o binding `SUBSCRIPTIONS` da app |
+
+Os pacotes que só constroem rotas ou leem dados com o `@basaltkit/http`, o
+`tenancy`, o `prisma` ou o `subscriptions` como dependência normal
+(`comments`, `files`, `drives`, `teams`, `teams-ui`, `api-keys-ui`,
+`inbound-mail`, `cli`, `activity`, `backup`, `dashboard`) recebem um patch: as suas rotas correm em qualquer das linhas do http, por
+isso nada muda do teu lado.
+
+### Atualizar: idempotência estrita por omissão (`@basaltkit/http` 3) {#idempotency-strict-by-default}
+
+O `@basaltkit/http` 3.0 inverte as duas predefinições do `idempotencyPlugin` que
+a 2.x deixava desligadas. O `@basaltkit/fastify`, o `@basaltkit/express` e o
+`@basaltkit/hono` passam à 3.0 com ele (e o `@basaltkit/testing`, cujos
+intervalos de peer dos adapters acompanham); nenhum muda a sua própria API.
+
+**O que muda.**
+
+- Uma `Idempotency-Key` reutilizada com um pedido diferente — outros params da
+  rota (`/accounts/2/charge` depois de `/accounts/1/charge`), outra query string
+  ou outro corpo — é recusada com `422 IDEMPOTENCY_KEY_REUSED` em vez de
+  receber em silêncio o resultado do primeiro pedido. A nova predefinição
+  `fingerprint: 'request'` associa params, query e corpo; `'body'` mantém o
+  significado da 2.x (só o corpo).
+- A verificação corre depois dos guards da rota e da validação do pedido
+  (`replayAfterGuards: true`). Um caller cujo token foi revogado, ou cuja
+  permissão foi retirada, recebe o `401`/`403` do guard em vez do sucesso em
+  cache; os guards correm em cada replay.
+- Um pedido recusado por um guard ou pela validação deixa de reservar a chave.
+  A 1.13 já libertava essa recusa em vez de a repetir; agora uma repetição
+  concorrente também não recebe `409` enquanto o primeiro é recusado, e a nova
+  tentativa corrigida corre. As recusas levantadas pelo próprio handler mantêm
+  as regras da 1.13 (`408`, `425`, `429` e `5xx` libertados, os outros `4xx`
+  repetidos).
+
+**Quem é afetado.**
+
+- Clientes que põem campos voláteis no corpo ou na query de uma nova tentativa
+  (timestamps, nonces, cache-busters) passam a receber `422`. Retira esses campos
+  com uma função de fingerprint (abaixo), ou envia-os como headers.
+- Formulários que repetem uma submissão editada com a mesma chave passam a
+  receber `422`. Uma submissão nova precisa de uma chave nova.
+- Guards caros ou com efeitos secundários passam a correr em cada nova tentativa.
+- Um schema apertado entre a primeira tentativa e a seguinte (um deploy que
+  acrescenta um campo obrigatório) passa a responder `400` à nova tentativa, e
+  não o replay do primeiro sucesso. Os clientes não devem ler esse `400` como
+  "não foi cobrado" e voltar a submeter com uma chave nova.
+- Um rate limit feito por guard ([`meta.rateLimit`](/pt/guide/security#rate-limiting))
+  passa a contar as novas tentativas, por isso uma tempestade de retries pode
+  receber `429` onde a 2.x repetia o `201`.
+- As rotas `upload()` associam só params e query (o stream pertence ao handler e
+  não é lido); um ficheiro diferente sob a mesma chave continua a ser repetido.
+  Usa uma função de fingerprint para associar mais.
+- Uma função `fingerprint` que devolve um objeto ou array passa a ser
+  canonicalizada (chaves ordenadas em todos os níveis) em vez de ser hasheada
+  como `"[object Object]"` — igual para todos os objetos, uma colisão latente.
+
+**Manter o comportamento da 2.x.** As duas opções continuam suportadas:
+
+```ts
+idempotencyPlugin({ fingerprint: false, replayAfterGuards: false }) // predefinições da 2.x
+```
+
+Ou um eixo de cada vez: `fingerprint: 'body'` ignora params e query,
+`fingerprint: false` não associa nada, uma função associa o que escolheres (por
+exemplo o corpo sem um campo `sentAt`), e `replayAfterGuards: false` repõe a
+verificação antes dos guards.
+
+**Deploy gradual com um `RedisIdempotencyStore` partilhado.** Uma reserva com
+fingerprint é guardada como `pending:<fingerprint>`, e com a nova predefinição
+todas as reservas têm fingerprint. O `RedisIdempotencyStore` do
+`@basaltkit/fastify` 2.5 ou anterior não entende esse valor e responde `500` a
+uma repetição concorrente da mesma chave. Passa primeiro toda a frota para a
+última linha 2.x (`@basaltkit/http` 2.8 / `@basaltkit/fastify` 2.6) e só depois
+faz o deploy da 3.0.
+
+**Sobe o `@basaltkit/http` com o adapter.** Os três adapters estão na 3.0 e
+dependem do `@basaltkit/http` 3. Sobe o teu próprio intervalo de
+`@basaltkit/http` para `^3` na mesma alteração, ou a app pode ficar com duas
+cópias e com as predefinições daquela de onde importa o `idempotencyPlugin`. O
+`create-basalt update` resolve as versões mais recentes por ti.
+
+**Sem passo de dados.** Os hashes de scope não mudam, e os registos guardados
+pela 2.x não têm fingerprint, por isso nunca divergem: continuam a ser repetidos
+até expirarem. A exceção é um registo que a 2.x *já* tinha com fingerprint,
+num modo cujo hash muda com a atualização: uma app que retira um
+`fingerprint: 'body'` explícito para ficar com a predefinição `'request'`, ou
+uma função que devolve um objeto ou array. Uma nova tentativa que atravesse o
+deploy recebe então `422`; se isso importar, mantém a opção da 2.x até os
+registos expirarem (24 h por omissão).
+
+**Stores personalizados.** O contrato não muda, mas um `IdempotencyStore`
+personalizado tem de persistir `record.fingerprint` para que os registos
+concluídos sejam recusados com `422`. Um store que descarta o fingerprint na
+reserva responde `409` em vez de `422` a uma repetição concorrente com um pedido
+diferente.
+
+### Atualizar para o auth-prisma 3.0 {#auth-prisma-3}
+
+O `AuthApiKey` (`auth_api_keys`) ganha seis colunas, anuláveis ou vazias por
+omissão: `serviceId`, `previousHash` (única), `previousHashExpiresAt`,
+`rotatedAt`, `allowedIps` e `meta`. O Prisma seleciona todas as colunas de um
+modelo, por isso, depois de regenerar o cliente, **todas** as queries de API keys
+falham até a base de dados as ter. Copia o modelo de
+`@basaltkit/auth-prisma/schema.prisma` (ou `schema.mysql.prisma` em MySQL; o
+`basalt prisma:sync` nunca acrescenta campos a um modelo existente), corre
+`prisma generate` e depois `prisma migrate dev --name add_api_key_lifecycle` —
+com schema por tenant, em cada schema de tenant (`basalt tenant:migrate`).
+Requer o `@basaltkit/auth` 5.
+
+O `migrate dev` avisa que acrescentar a restrição única em `previousHash` pode
+falhar com duplicados; é seguro, porque a coluna é nova e todas as linhas têm
+`NULL`. Também se recusa a correr numa shell não interativa (CI, um contentor,
+um agente). Aí, escreve a migração e aplica-a:
+
+```bash
+mkdir -p prisma/migrations/20261011000000_add_api_key_lifecycle
+prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script \
+  > prisma/migrations/20261011000000_add_api_key_lifecycle/migration.sql
+prisma migrate deploy
+```
+
+(O `API_KEY_LIFECYCLE_MIGRATION_SQL.postgresql` / `.mysql` tem as mesmas
+instruções, se preferires colá-las.) Até as colunas existirem, os
+pedidos com API key falham com `AUTH_API_KEY_SCHEMA_OUTDATED`, cuja mensagem traz
+o SQL (também exportado como `API_KEY_LIFECYCLE_MIGRATION_SQL`). O
+`@basaltkit/auth-sqlite` migra sozinho no arranque. Vê
+[Atualizar para o auth-prisma 3.0](/pt/guide/auth#prisma-—-basaltkit-auth-prisma).
+
+### Atualizar: avisos de arranque que passam a recusar {#warnings-now-refuse}
+
+A 1.13 mostrava um aviso `[basalt] …` no arranque para as três primeiras
+destas configurações e mantinha o comportamento antigo, anunciando que a
+próxima major as recusaria
+([a lista da 1.13](#configurations-that-now-warn-at-boot-refused-in-the-next-major)),
+e tornou a quarta obsoleta. Esta vaga recusa as três e remove a quarta. Se a
+tua app arranca na 1.13 sem nenhum destes avisos e não redefine o `allowed()`,
+nada aqui muda para ti.
+
+- **`@basaltkit/auth` 5.0 — um cookie de sessão com prefixo que quebra a sua
+  regra.** Um `sessionCookie.name` que começa por `__Host-` ou `__Secure-`
+  (sem distinguir maiúsculas) com um `secure: false` explícito, ou um cookie
+  `__Host-` com um `path` diferente de `/`, lança `SessionCookieConfigError`
+  (`AUTH_SESSION_COOKIE_INVALID`) quando o `authPlugin` se regista. O culpado
+  habitual é `secure: process.env.NODE_ENV === 'production'` ao lado de um nome
+  `__Host-`. Muda antes o nome:
+
+  ```ts
+  authPlugin({ sessionCookie: { name: isProd ? '__Host-sid' : 'sid' } })
+  ```
+
+  O `Secure` implícito de um nome com prefixo e `secure` por definir, o seu
+  aviso único fora de produção e o aviso de `SameSite=None` não mudam. Vê
+  [Duração da sessão](/pt/guide/auth#session-hardening).
+- **`@basaltkit/tenancy` 4.0 — um `meta.tenant` desconhecido.** Um valor
+  diferente de `true`, `false`, `'never'` ou ausente (`'none'`, `'optional'`,
+  `'false'`, `null`) recusa o arranque com `HTTP_INVALID_ROUTE_META` em todos
+  os adapters, nomeando cada rota; deixa de cair no `required` da app. Usa
+  `'never'` para uma rota só central, `false` para uma que funciona com ou sem
+  tenant. Vê [Rotas só do plano central](/pt/guide/tenancy#rotas-so-do-plano-central-tenant-never).
+- **`@basaltkit/http` 3.0 — um `meta.responseHeaders` inválido.** Um registo
+  com um valor que não é string, um carácter de controlo, ou um cabeçalho que a
+  rota não pode definir (`set-cookie`, `content-type`, `content-length`,
+  `transfer-encoding`, cabeçalhos hop-by-hop, `x-request-id`) recusa o arranque
+  com `HTTP_INVALID_ROUTE_META` em todos os adapters; a 2.8 ignorava o registo
+  inteiro. Um driver próprio de `runRoute()` que salte o
+  `assertRouteMetaValid()` recebe antes o novo `InvalidRouteHeadersError`
+  (`500`) em cada pedido. Define cookies com `reply.header()` no handler. Vê
+  [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-responseheaders).
+- **`@basaltkit/notifications` 2.0 — o `allowed()` desaparece; decide o
+  `preference()`.** O `Notifier` deixa de detectar uma redefinição de
+  `allowed()`, e o próprio `NotificationPreferences.allowed()` é removido. Passa
+  a lógica de uma redefinição para o `preference()` — `false` bloqueia, `true`
+  envia, `undefined` deixa decidir as preferências guardadas e os `defaults` da
+  definição (ao contrário do `allowed()`, os `defaults` passam a aplicar-se).
+  Um objecto de preferências que ainda define o `allowed()` faz o
+  `new Notifier()` lançar `LegacyAllowedOverrideError`
+  (`NOTIFICATION_ALLOWED_OVERRIDE_REMOVED`) em vez de o ignorar em silêncio.
+  Quem chamava `prefs.allowed(…)` pode usar `(await prefs.preference(…)) ?? true`.
+  Vê [Preferências](/pt/guide/notifications#preferencias-e-digests).
+
+### Outras mudanças a ter em conta {#watch-since-1-13}
+
+- O `auth:apikey_rejected` e o `auth:apikey_refused` ganham a razão
+  `'ip_not_allowed'`; um `switch` exaustivo precisa de um caso novo.
+- O `ApiKeyInfo` também omite o `previousHash`, por isso nenhum hash chega a uma
+  listagem.
+- O `mcpPlugin` corre as verificações de arranque dos adapters sobre todas as
+  rotas que expõe como tool (`assertRoutesGuarded` com o container): uma rota
+  alcançável só pelo MCP com um `meta.tenant` desconhecido, um
+  `meta.responseHeaders` inválido ou meta de segurança que nenhum guard impõe
+  passa a recusar o arranque. O novo `mcpPlugin({ allowUnguardedMeta })` aceita
+  a mesma dispensa que os adapters. *(`@basaltkit/mcp` 6.0)* Vê
+  [MCP](/pt/guide/mcp#boot-checks).
+- Um cliente MCP com uma API key sem utilizador tem de enviar a **mesma chave**
+  em todos os pedidos de uma sessão `/mcp` (qualquer dos transportes,
+  `x-api-key` ou `Authorization: Bearer`); outra chave, ou nenhuma, recebe `404`
+  e tem de voltar a inicializar. Uma chave rodada mantém o id, por isso a
+  sessão sobrevive à rotação.
+- O `isTenantRequired()` lança `InvalidTenantMetaError` (`500`) para um
+  `meta.tenant` desconhecido em vez de devolver a predefinição da app, e o
+  enricher do tenancy recusa esse pedido antes de resolver um tenant — para um
+  driver próprio que saltou a verificação de arranque. *(`@basaltkit/tenancy` 4.0)*
+- Um pipeline de rota com enrichers mas sem container lança
+  `EnrichersWithoutContainerError` (`HTTP_ENRICHERS_UNRUNNABLE`, `500`) em vez de
+  os ignorar em silêncio, como os guards já faziam — por isso um driver próprio
+  não pode deixar cair o enricher do tenancy (e a recusa acima) por se esquecer
+  do container. Todos os adapters do kit e o `mcpPlugin` passam-no.
+  *(`@basaltkit/http` 3.0)*
+- As chaves de idempotência têm âmbito na credencial em bruto, e as respostas de
+  `POST /apikeys` e `POST /apikeys/:id/rotate` ficam guardadas durante a janela
+  de idempotência quando o cliente envia `Idempotency-Key`; vê
+  [API keys e idempotência](/pt/guide/auth#apikeys-idempotency).
+
+---
+
 ## Destaques
 
 ### Todos os adapters correm o mesmo pipeline de pedidos

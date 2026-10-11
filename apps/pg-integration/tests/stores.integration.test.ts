@@ -68,6 +68,24 @@ describe.skipIf(!url)('@basaltkit/*-prisma stores against real PostgreSQL', () =
     expect((await s.mfa.get(user.id))?.recoveryCodes).toEqual(['a', 'b'])
   })
 
+  it('auth: API key lifecycle — rotation grace, compare-and-set, String[]/Json columns (BK-083)', async () => {
+    const s = prismaAuthStores(prisma)
+    const update = s.apiKeys.update!.bind(s.apiKeys)
+    await s.apiKeys.create({
+      id: 'lk1', name: 'k', prefix: 'mk_live_aaaaaa', hash: 'lh1', scopes: ['*'], createdAt: Date.now(),
+      serviceId: 'erp-sync', allowedIps: ['10.0.0.0/8'], meta: { ticket: 'OPS-1' },
+    })
+    expect(await s.apiKeys.findById('lk1')).toMatchObject({ serviceId: 'erp-sync', allowedIps: ['10.0.0.0/8'], meta: { ticket: 'OPS-1' } })
+    expect(await update('lk1', { hash: 'lh2' }, { ifHash: 'stale' })).toBeNull()
+    expect(await update('lk1', { hash: 'lh2', previousHash: 'lh1', previousHashExpiresAt: Date.now() + 60_000 }, { ifHash: 'lh1' })).toMatchObject({ hash: 'lh2' })
+    expect((await s.apiKeys.findByHash('lh1'))?.id).toBe('lk1')
+    const cleared = await update('lk1', { previousHash: null, previousHashExpiresAt: null, allowedIps: null, meta: null })
+    expect(cleared?.allowedIps).toBeUndefined()
+    expect(cleared?.meta).toBeUndefined()
+    expect(await s.apiKeys.findByHash('lh1')).toBeNull()
+    expect((await s.apiKeys.list({ serviceId: 'erp-sync' })).map((k) => k.id)).toEqual(['lk1'])
+  })
+
   it('teams: memberships (compound id upsert) and invitations', async () => {
     const t = prismaTeamsStores(prisma)
     await t.memberships.add({ tenantId: 'acme', userId: 'u1', role: 'admin', createdAt: 1 })

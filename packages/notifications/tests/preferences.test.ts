@@ -22,21 +22,21 @@ const makeNotifier = () => {
 }
 
 describe('NotificationPreferences', () => {
-  it('is allowed by default, and honours channel-wide opt-out', async () => {
+  it('states nothing by default, and honours channel-wide opt-out', async () => {
     const prefs = new NotificationPreferences(new MemoryPreferenceStore())
-    expect(await prefs.allowed('u', 'invoice.paid', 'sms')).toBe(true)
+    expect(await prefs.preference('u', 'invoice.paid', 'sms')).toBeUndefined()
     await prefs.optOut('u', { channel: 'sms' })
-    expect(await prefs.allowed('u', 'invoice.paid', 'sms')).toBe(false)
-    expect(await prefs.allowed('u', 'invoice.paid', 'mail')).toBe(true)
+    expect(await prefs.preference('u', 'invoice.paid', 'sms')).toBe(false)
+    expect(await prefs.preference('u', 'invoice.paid', 'mail')).toBeUndefined()
   })
 
   it('the most specific preference wins (opt-in overrides a global opt-out)', async () => {
     const prefs = new NotificationPreferences(new MemoryPreferenceStore())
     await prefs.optOut('u', {}) // everything off
-    expect(await prefs.allowed('u', 'invoice.paid', 'sms')).toBe(false)
+    expect(await prefs.preference('u', 'invoice.paid', 'sms')).toBe(false)
     await prefs.optIn('u', { notification: 'invoice.paid', channel: 'sms' })
-    expect(await prefs.allowed('u', 'invoice.paid', 'sms')).toBe(true) // specific beats global
-    expect(await prefs.allowed('u', 'invoice.paid', 'mail')).toBe(false) // still off
+    expect(await prefs.preference('u', 'invoice.paid', 'sms')).toBe(true) // specific beats global
+    expect(await prefs.preference('u', 'invoice.paid', 'mail')).toBe(false) // still off
   })
 
   it('notify() skips channels the user opted out of', async () => {

@@ -316,7 +316,7 @@ run on every call.
 | `teamRole` | plugin-specific | `@basaltkit/teams` guard | Requires a team-membership rank. Boot-checked. |
 | `rateLimit` | `RouteRateLimits` — `{ limit; windowMs; key?: RateLimitKey; bucket? }` or an array of them | `securityPlugin` | Per-route bucket(s) at a stricter threshold, per IP (default), `'user'`, `'tenant'`, `'user+tenant'`, `'apiKey'` or `(ctx) => id`; `bucket` shares one across routes. |
 | `etag` | `true` | the shared pipeline | Strong `ETag` + `304` on `If-None-Match`, for `GET`/`HEAD`. |
-| `headers` | `Record<string, string>` | the shared pipeline | Static response headers set as soon as the route matches — on its errors (guard `401`, validation `400`, thrown `500`) too. Boot-checked: no control characters; not `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, hop-by-hop or `x-request-id`. |
+| `responseHeaders` | `Record<string, string>` | the shared pipeline | Static response headers set as soon as the route matches — on its errors (guard `401`, validation `400`, thrown `500`) too. No control characters; not `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, hop-by-hop or `x-request-id`. An invalid record refuses the boot (`HTTP_INVALID_ROUTE_META`); one that skipped the boot check (a bespoke `runRoute` driver) throws `InvalidRouteHeadersError` (500). `meta.headers` is app-owned data and never sent. |
 | `summary` · `description` · `tags` · `operationId` | `string` · `string` · `string[]` · `string` | `openapiPlugin` | Operation metadata in the generated document. |
 
 `meta.can` accepts a permission string (`'projects:delete'`) **or** a non-empty array of
@@ -848,8 +848,8 @@ createApp({
     expressPlugin({ routes }), // or fastifyPlugin / honoPlugin
     idempotencyPlugin({
       store: new RedisIdempotencyStore(new Redis(process.env.REDIS_URL!)), // default: in-memory
-      fingerprint: 'body',     // a different body under the same key → 422
-      replayAfterGuards: true, // a revoked caller gets 401/403, not the cached success
+      // By default each key is bound to its request (params, query, body: a different
+      // one → 422) and replays only after the guards (a revoked caller gets 401/403).
     }),
   ],
 })
@@ -870,33 +870,37 @@ Rules:
   `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`, `x-api-key`); the
   tenant part is only the raw `x-tenant-id` + `host` headers. Requests with none of the
   credential headers are skipped unless `allowAnonymous: true`.
+- By default (`fingerprint: 'request'`) the key is bound to the request: the route params,
+  the query and the body — canonical JSON (sorted keys) of a parsed body, the exact bytes
+  of a `rawBody()` route. A mismatch → `422 IDEMPOTENCY_KEY_REUSED`, also against a
+  request still in flight. `'body'` binds the body only; `false` binds nothing. `upload()`
+  routes bind only params and query; give them a function
+  (`fingerprint: ({ route, request }) => unknown` — an object or array is canonicalized
+  first, a string or other primitive is hashed as-is) to bind more.
 - **What the scope does not cover:** a tenant resolved another way (a path segment such as
-  `/t/:tenant/...`, a token claim) and the concrete path params. The same credential
-  reusing one key on `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and
-  `/orders/2/pay`, receives the **first** response. Have clients mint a fresh key per
-  operation (and per tenant), and bind the key to the URL with a fingerprint function so
-  such a reuse is refused with `422`:
-  `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
-- `fingerprint: 'body'` binds the key to the body: canonical JSON (sorted keys) of a parsed
-  body, the exact bytes of a `rawBody()` route — **not** the query string or the path
-  params. A mismatch → `422 IDEMPOTENCY_KEY_REUSED`, also against a request still in
-  flight. `upload()` routes need a function: `fingerprint: ({ route, request }) => string | undefined`.
-- By default the check runs after the enrichers and **before** the guards — so a replay is
-  decided after, e.g., tenant resolution: a suspended tenant gets its `403`, not the replay.
-  `replayAfterGuards: true` runs it after guards and validation, just before the handler.
-  A `rawBody()` route fingerprinted by `'body'` is always checked after the guards.
+  `/t/:tenant/...`, a token claim) and the concrete path params. The default `'request'`
+  fingerprint binds those params, so the same credential reusing one key on
+  `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and `/orders/2/pay`, is
+  refused with `422`. With `fingerprint: 'body'` or `false` that reuse receives the
+  **first** response — have clients mint a fresh key per operation (and per tenant).
+- By default (`replayAfterGuards: true`) the check runs after the guards and validation,
+  just before the handler: a revoked caller gets the guard's `401`/`403`, a suspended tenant
+  its `403`, never the replay. `replayAfterGuards: false` runs it after the enrichers and
+  **before** the guards; even then a `rawBody()` route fingerprinted by `'request'` or
+  `'body'` is checked after the guards.
 - An `Idempotency-Key` longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`.
 - The reservation is an **atomic** `setPending()` before the handler runs.
 - Only Basalt `route()` definitions are covered — not handlers registered on the
   underlying framework by hand. A raw `fastify.post(...)` (or `app.post(...)` on Express or
   Hono) is **not** protected: declare it with `route()` and pass it to the adapter plugin.
-- Rolling deploys: with `fingerprint` on, `RedisIdempotencyStore` writes in-flight
-  reservations as `pending:<fingerprint>`; an instance running a release older than this
-  one reads that as a completed record and fails the repeat. Roll out with `fingerprint`
-  off, then turn it on. Empty responses (`204`) are stored and replayed too.
+- Rolling deploys: with `fingerprint` on (the 3.x default), `RedisIdempotencyStore` writes
+  in-flight reservations as `pending:<fingerprint>`; an instance still on the Fastify-only
+  plugin (`@basaltkit/fastify` 2.5 or older) misreads that and fails the repeat. Move the
+  whole fleet onto `@basaltkit/http` 2.8 / `@basaltkit/fastify` 2.6 first, then upgrade to
+  3.x. Empty responses (`204`) are stored and replayed too.
 
-`fingerprint` and `replayAfterGuards` default to off so existing apps keep their
-behaviour; a future major turns them on.
+Upgrading from 2.x, where both defaults were off: see
+[idempotency is strict by default](https://basaltkit-docs.pages.dev/guide/whats-new#idempotency-strict-by-default).
 
 ### Advanced: `runRoute()` and the pipeline
 
@@ -913,7 +917,7 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 })
 ```
 
-Enrichers and guards need the container scope, so a pipeline that carries **guards but no container** throws `GuardsWithoutContainerError` (`HTTP_GUARDS_UNRUNNABLE`, 500) naming the route and how many guards could not run. Skipping them silently would let the request reach the handler unauthorized. A pipeline with no guards and no container runs normally.
+Enrichers and guards need the container scope, so a pipeline that carries **guards but no container** throws `GuardsWithoutContainerError` (`HTTP_GUARDS_UNRUNNABLE`, 500) naming the route and how many guards could not run. Skipping them silently would let the request reach the handler unauthorized. Since 3.0 the same rule holds for **enrichers but no container**: `EnrichersWithoutContainerError` (`HTTP_ENRICHERS_UNRUNNABLE`, 500). An enricher is where tenancy resolves (and refuses) the tenant and auth the user, so dropping it silently would run the handler unscoped. A pipeline with no enrichers, no guards and no container runs normally.
 
 ## API reference
 
@@ -1003,8 +1007,8 @@ readonly field — it is a boot failure, never an HTTP response.
 | `ttlMs` | `number` | `86_400_000` (24 h) | Retention of the default in-memory store. |
 | `credentialHeaders` | `string[]` | `authorization`, `x-session-id`, `cookie`, `x-api-key` | Headers folded into the replay scope. |
 | `allowAnonymous` | `boolean` | `false` | Also cache requests carrying none of the credential headers. |
-| `fingerprint` | `'body' \| false \| (input) => string \| undefined` | `false` | Bind a key to its request; a mismatch → `422 IDEMPOTENCY_KEY_REUSED`. |
-| `replayAfterGuards` | `boolean` | `false` | Run the check after guards and validation instead of before the guards. |
+| `fingerprint` | `'request' \| 'body' \| false \| (input) => unknown` | `'request'` (2.x: `false`) | Bind a key to its request (`'request'`: params + query + body; `'body'`: body only; a function: your own value, canonicalized when an object or array); a mismatch → `422 IDEMPOTENCY_KEY_REUSED`. |
+| `replayAfterGuards` | `boolean` | `true` (2.x: `false`) | Run the check after guards and validation; `false` runs it before the guards. |
 
 `idempotencyHeaderOf(container)` → `string | undefined`: the header the registered `idempotencyPlugin` reads the key from, lower-cased (`'idempotency-key'` unless `header` renames it), or `undefined` when the plugin is not registered. Use it instead of reading http's internal metadata (`@basaltkit/mcp` does, to never forward the key into a tool call). It caches nothing.
 
@@ -1012,8 +1016,9 @@ readonly field — it is a boot failure, never an HTTP response.
 `setPending(key, info?)` → `boolean` (**an atomic check-and-set** — Redis `SET NX`, or one
 synchronous step in-process; `info.fingerprint` may be kept on the reservation and returned
 as `{ pending: true, fingerprint }`); `complete(key, record)`; `release(key)`.
-`IdempotencyRecord` = `{ status, body, contentType?, fingerprint? }`. A store that ignores
-fingerprints keeps working; a concurrent repeat is then a `409` rather than a `422`.
+`IdempotencyRecord` = `{ status, body, contentType?, fingerprint? }`; a store must persist
+`record.fingerprint` for completed records to be refused with `422`. A store that drops the
+fingerprint on the reservation keeps working; a concurrent repeat is then a `409` rather than a `422`.
 `MemoryIdempotencyStore(ttlMs?, clock?, { maxEntries? })` is the in-process store (default
 10 000 entries, oldest evicted first). `RedisIdempotencyStore(redis, { prefix?, ttlMs? })`
 takes any ioredis-compatible `RedisIdempotencyClient` (`get`/`set`/`del`).

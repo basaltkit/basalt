@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto'
 import { createToken, ctx, definePlugin, type Container } from '@basaltkit/core'
-import { HttpError, route, type BasaltRoute, type HttpRequest } from '@basaltkit/http'
+import { HttpError, assertRoutesGuarded, route, type BasaltRoute, type HttpRequest } from '@basaltkit/http'
 import { z } from 'zod'
 import {
   dispatchPayload,
@@ -15,7 +15,7 @@ import {
   type McpToolDef,
   type McpToolResult,
 } from '@basaltkit/mcp-core'
-import { collectTools, type McpTool, type ToolCallContext, type ToolErrorOptions } from './tools.js'
+import { collectTools, exposedRoutes, type McpTool, type ToolCallContext, type ToolErrorOptions } from './tools.js'
 import { type JsonRpcRequest, type JsonRpcResponse } from './protocol.js'
 
 export interface McpServerInfo {
@@ -157,25 +157,48 @@ export interface McpPluginOptions extends ToolErrorOptions {
    * {@link reportMcpInternalError} (one line on stderr). `false` silences it.
    */
   onError?: McpInternalErrorHook | false
+  /**
+   * The same waiver the adapters take: security meta (`auth`, `can`, …) on an
+   * exposed route that no registered guard enforces refuses the boot unless
+   * waived here (`true`, or a list of keys). Never waives the route-meta
+   * validators (`meta.tenant`, `meta.responseHeaders`, …).
+   */
+  allowUnguardedMeta?: boolean | readonly string[]
 }
 
 /**
  * Registers the `MCP` server (built from the opted-in routes) in the container.
  * Pair it with `mcpRoutes()` for the HTTP transport, or `serveMcpStdio()` for
  * stdio. The AI/codegen layer stays dev-only — this is the runtime surface.
+ *
+ * At boot it runs the adapters' route checks over every route it exposes as a
+ * tool (`assertRoutesGuarded` with the container): security meta no guard
+ * enforces, and any value a plugin's `http:meta-validators` entry refuses
+ * (tenancy's `meta.tenant`, http's `meta.responseHeaders`), refuse the boot —
+ * a route reachable only through MCP gets the same checks as one an adapter
+ * serves. `new McpServer()` used directly does not: call `assertRoutesGuarded`
+ * yourself after boot.
  */
 export function mcpPlugin(options: McpPluginOptions) {
+  // `filter` runs once: the routes the boot checks validate are the very list
+  // the server exposes, even if the filter is not a pure function of the route.
+  let exposed: BasaltRoute[] | undefined
+  const exposedOnce = (): BasaltRoute[] => (exposed ??= exposedRoutes(options.routes, options.filter))
   return definePlugin({
     name: 'basalt:mcp',
+    boot({ container }) {
+      // Boot phase, not register: every plugin's guards and validators are
+      // registered by now, whatever the plugin order.
+      assertRoutesGuarded(exposedOnce(), container, options.allowUnguardedMeta)
+    },
     register({ container }) {
       container.singleton(
         MCP,
         () =>
           new McpServer({
-            routes: options.routes,
+            routes: exposedOnce(),
             container,
             ...(options.serverInfo ? { serverInfo: options.serverInfo } : {}),
-            ...(options.filter ? { filter: options.filter } : {}),
             ...(options.forwardHeaders ? { forwardHeaders: options.forwardHeaders } : {}),
             ...(options.redactErrorDetails !== undefined ? { redactErrorDetails: options.redactErrorDetails } : {}),
             ...(options.reportError !== undefined ? { reportError: options.reportError } : {}),
@@ -288,16 +311,23 @@ function isJsonContentType(request: HttpRequest): boolean {
 const PRINCIPAL_KEY = randomBytes(32)
 
 /**
- * The identity a session is bound to: the authenticated user (in its tenant),
- * or — without one — the request's `Authorization` header, fingerprinted. An
- * `x-api-key` that the auth plugins accepted already resolved a user; one they
- * didn't is not an identity, so it doesn't bind the session.
+ * The identity a session is bound to: the authenticated user (in its tenant);
+ * else the verified API key (`ctx().apiKey.id`, in its tenant), so two
+ * userless keys sent through `x-api-key` never share a session; else the
+ * request's `Authorization` header, fingerprinted. An unverified key is not an
+ * identity, so it doesn't bind the session.
  */
 function principalOf(context: Record<string, unknown>, request: HttpRequest): string {
   const user = context['user'] as { id?: unknown } | undefined
   const tenant = context['tenant'] as { id?: unknown } | undefined
   if (user && (typeof user.id === 'string' || typeof user.id === 'number')) {
     return `user:${JSON.stringify([tenant?.id ?? null, user.id])}`
+  }
+  // Read by duck-typing, like `user`: @basaltkit/auth sets it, mcp does not
+  // depend on it.
+  const apiKey = context['apiKey'] as { id?: unknown } | undefined
+  if (apiKey && typeof apiKey.id === 'string' && apiKey.id.length > 0) {
+    return `apikey:${JSON.stringify([tenant?.id ?? null, apiKey.id])}`
   }
   const authorization = headerValue(request.headers['authorization']) ?? ''
   return `anon:${createHmac('sha256', PRINCIPAL_KEY).update(authorization).digest('base64url')}`

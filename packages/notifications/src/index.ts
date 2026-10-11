@@ -41,6 +41,7 @@ export {
   Notifier,
   UnknownChannelError,
   MissingRendererError,
+  LegacyAllowedOverrideError,
   type Delivery,
   type DeliveryReport,
   type NotifierOptions,

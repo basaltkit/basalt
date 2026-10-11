@@ -41,3 +41,15 @@ the changelog entry for the change. Publishing uses npm with provenance.
 As of the `1.0` release the public API is stable: breaking changes only in a new
 **major**, features in a **minor**, fixes in a **patch**. Error codes, public
 events and config names are part of the API.
+
+Dependencies count too. A package moves a **major** when a package it must
+share with the app moves one: a peer dependency, or a dependency shared through
+the app's container (a token such as `AUTH`), its route types (a
+`declare module '@basaltkit/http'` augmentation) or its request pipeline
+(`@basaltkit/mcp` running routes, error classes the adapter matches with
+`instanceof`). Such a dependency should be a peer;
+`apps/beyond-saas/tests/shared-token-boundary.test.ts` fails the build when a
+package reads or binds a container token of a plain `@basaltkit/*` dependency. A package never ships as a
+patch or minor whose new range silently excludes the major line its previous
+version accepted. A plain dependency used as a private copy (routes built with
+`route()` and its `Symbol.for` markers, a pure helper) may move under a patch.
