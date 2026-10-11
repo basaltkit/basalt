@@ -2,8 +2,10 @@ import type { Container } from '@basaltkit/core'
 import { ensureMetadata } from '@basaltkit/core'
 import {
   httpErrorReporter,
+  idempotencyHeaderOf,
   isRouteVisible,
   redactSensitiveDetails,
+  RequestDisposers,
   runRoute,
   toErrorResponse,
   zodToJsonSchema,
@@ -38,6 +40,8 @@ export interface ToolCallContext {
  * `/mcp` (the route's Origin/Content-Type checks keep it CSRF-safe). Everything
  * else is dropped — `x-request-id`/`x-correlation-id` (the tool mints its own),
  * conditional headers (`if-none-match` would turn a tool result into a 304),
+ * the idempotency key (never forwarded, even via `forwardHeaders`: a replay
+ * would bypass the tool result's error redaction),
  * `content-length`/`content-type` (describe the JSON-RPC envelope, not the
  * tool's input), hop-by-hop and forwarding headers (the client ip travels as
  * `ip`). Extend it with `mcpPlugin({ forwardHeaders })`.
@@ -64,15 +68,31 @@ export function toolSignal(request: HttpRequest): AbortSignal | undefined {
   return signals.get(request)
 }
 
+/**
+ * The idempotency key header(s) of `container`: `idempotency-key`, plus the
+ * one `idempotencyPlugin({ header })` configured, if it differs. Never
+ * forwarded into a tool call, even when listed in `forwardHeaders`: the key
+ * identifies the JSON-RPC envelope, not one tool call, and a replay hands back
+ * the recorded response verbatim — an error body with its unredacted
+ * `details`, bypassing the tool result's redaction.
+ */
+function idempotencyHeaders(container: Container): ReadonlySet<string> {
+  const names = new Set(['idempotency-key'])
+  const header = idempotencyHeaderOf(container)
+  if (header) names.add(header)
+  return names
+}
+
 function filterHeaders(
   headers: Record<string, string | string[] | undefined> | undefined,
   allow: ReadonlySet<string>,
+  deny: ReadonlySet<string>,
 ): Record<string, string | string[] | undefined> {
   const out: Record<string, string | string[] | undefined> = {}
   if (!headers) return out
   for (const [name, value] of Object.entries(headers)) {
     const key = name.toLowerCase()
-    if (value !== undefined && allow.has(key)) out[key] = value
+    if (value !== undefined && allow.has(key) && !deny.has(key)) out[key] = value
   }
   return out
 }
@@ -327,7 +347,7 @@ function makeInvoke(
         method: route.method,
         url,
         routePattern: route.url,
-        headers: filterHeaders(callCtx?.headers, allow),
+        headers: filterHeaders(callCtx?.headers, allow, idempotencyHeaders(container)),
         params,
         query,
         body,
@@ -335,11 +355,23 @@ function makeInvoke(
         raw: null,
       }
       if (signal) signals.set(request, signal)
+      // The tool call's own disposer sink, wired to `reportError` like every
+      // other failure of this server. Disposers run when the pipeline settles
+      // — before the tool result is built, and on abort only once the
+      // abandoned handler has settled, never on the abort signal itself.
+      const disposers = new RequestDisposers((error) => {
+        try {
+          report?.({ error, status: 500, code: 'REQUEST_DISPOSER_FAILED', method: route.method, url })
+        } catch {
+          // A failing reporter must not break the tool call.
+        }
+      })
       const run = runRoute(route, request, reply, {
         container,
         enrichers: metadata.get<RequestEnricher>('http:enrichers'),
         guards: metadata.get<RouteGuard>('http:guards'),
-      })
+        onDispose: (disposer) => disposers.add(disposer),
+      }).finally(() => disposers.run()) // run() never throws; the route's own outcome is kept
       // The pipeline cannot be interrupted from outside, but the CALL can: on
       // abort, answer "cancelled" now; the handler sees `toolSignal(request)`.
       let onAbort: (() => void) | undefined

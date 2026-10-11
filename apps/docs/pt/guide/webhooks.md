@@ -857,8 +857,10 @@ Com [schema por tenant](/pt/guide/database-per-tenant) tens dois layouts.
 `prismaWebhookStore` o cliente central normal. Cada endpoint já guarda o seu
 `tenantId` e cada dispatch é delimitado por ele, por isso o isolamento não
 depende do schema — e tudo nesta página, incluindo o relay do outbox, funciona
-sem alterações. Prefere este layout, a não ser que precises dos endpoints de
-cada tenant dentro do seu próprio schema.
+sem alterações. Passa `webhooksPlugin({ runInTenant: false })` com este layout:
+a pesquisa não precisa do tenant, e o default entraria nele em cada dispatch fora
+do pedido ([o que isso custa](#run-in-tenant-costs)). Prefere este layout, a não
+ser que precises dos endpoints de cada tenant dentro do seu próprio schema.
 
 **Endpoints por tenant.** Dá ao store Prisma um cliente que se resolve a cada
 chamada em vez de um fixo — não é preciso nenhum modo especial do store:
@@ -922,6 +924,34 @@ await tenancy.run(job.tenantId, () =>
 Desativa com `webhooksPlugin({ runInTenant: false })`; sem `tenancyPlugin` (ou
 com um `@basaltkit/tenancy` anterior ao sinal `'tenancy:run'`) a pesquisa corre
 no contexto de quem chama, como antes.
+
+#### O `runInTenant` está ligado por defeito — o que custa {#run-in-tenant-costs}
+
+Com o `tenancyPlugin` registado, **todos** os dispatches delimitados por um
+`tenantId` explícito fora de um contexto de tenant fazem a pesquisa de endpoints
+dentro de `tenancy.run` — seja qual for o layout do store, incluindo schema
+partilhado e tabelas centrais. Por cada um desses dispatches:
+
+- **Um `TenantSource.find`.** Uma falha transitória (o directório de tenants não
+  responde) rejeita o dispatch; uma entrada do outbox é repetida como qualquer
+  entrega falhada.
+- **Os hooks `tenancy:switched` / `tenancy:exited` disparam**, por isso todos os
+  listeners correm. Em schema- ou database-per-tenant, o `prismaPlugin` faz o
+  lease do cliente do pool desse tenant durante a pesquisa — mesmo quando o store
+  de webhooks é central e nunca o usa. O lease pode abrir ou expulsar um slot do
+  pool, espera até `acquireTimeoutMs` quando o pool está saturado e depois falha
+  com `PRISMA_POOL_EXHAUSTED`.
+- **Um tenant desconhecido ou inválido rejeita antes de qualquer entrega** —
+  `TENANT_NOT_FOUND` para um tenant apagado, `TENANT_ID_INVALID` para um id que
+  não cumpre a gramática de ids de tenant. O relay repete a entrada e põe-na em
+  dead-letter depois de `maxAttempts`.
+
+Define `runInTenant: false` quando as tabelas de webhooks são centrais (schema
+partilhado, ou um cliente normal em schema- ou database-per-tenant): a pesquisa
+não precisa do tenant, e desligar remove o `find`, os hooks e o lease do pool. Os
+endpoints de um tenant apagado continuam então a receber entregas até os
+removeres. Mantém o default quando os endpoints vivem por tenant
+(`tenantClient()`).
 
 ### Qual backend?
 

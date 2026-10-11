@@ -271,7 +271,7 @@ them all. A route that is safe to cache sets its own `Cache-Control` header,
 which replaces the default — do so on `meta.etag` routes (e.g.
 `private, no-cache`), since `no-store` keeps browsers from revalidating.
 
-### Per-route headers — `meta.headers`
+### Per-route headers — `meta.responseHeaders`
 
 Some routes need headers the rest of the API does not: a public share link that
 search engines must not index, a download that must never be cached. Declare
@@ -281,7 +281,7 @@ them on the route:
 route({
   method: 'POST',
   url: '/s/:token',
-  meta: { headers: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  meta: { responseHeaders: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
   handler: /* … */,
 })
 ```
@@ -293,10 +293,16 @@ A header set by `reply.header()` would only reach the success path. They
 replace a global header of the same name (here `securityPlugin`'s
 `Cache-Control`), and a handler can still override one with `reply.header()`.
 
-The values are checked at boot (`InvalidRouteMetaError`): strings without CR,
-LF or other control characters, and never `Set-Cookie`, `Content-Type`,
+The values are checked at boot on every adapter: strings without CR, LF or
+other control characters, and never `Set-Cookie`, `Content-Type`,
 `Content-Length`, `Transfer-Encoding`, hop-by-hop headers or `X-Request-Id`,
-which belong to the response or the adapter. A request that never reaches the
+which belong to the response or the adapter. A route whose record breaks a rule
+gets one boot warning naming it, and its **whole** `responseHeaders` record is
+ignored — none of its headers is sent, valid siblings included, and the request
+never fails because of it. The next major refuses such a boot.
+
+The key is `responseHeaders`, not `headers`: route meta is also yours, and
+nothing reads or sends `meta.headers`. A request that never reaches the
 route — a `404`, a rate-limit `429` or a malformed body rejected by the
 framework's parser — carries only the global headers.
 
@@ -451,18 +457,31 @@ idempotencyPlugin()
   This holds for every handler shape — one that returns its payload is replayed
   exactly like one that calls `reply.send()`.
 - A repeat while the first is still in flight → `409 IDEMPOTENCY_CONFLICT`.
-- `5xx` responses, `stream()` downloads and `sse()` streams are **not** cached,
-  so genuine failures stay retryable. A client error the route throws (`4xx`)
-  is recorded and replayed like any other response.
-- Keys are scoped by **caller credentials + tenant + method + route**, hashed
-  with SHA-256 before they reach the store. The credentials are every header in
-  `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`,
-  `x-api-key`) and the tenant is `x-tenant-id` + `host`, so one user's cached
-  response can never be replayed to another (no cross-user/tenant leak). The
-  scope uses the method and the route *pattern* (`/accounts/:id/charge`), so
-  the same key on two different routes never collides; within one pattern, the
-  default `fingerprint` binds the concrete params, query and body (below). If
-  you authenticate with another header, add it to `credentialHeaders`.
+- Only the **handler's own** outcome is recorded. A refusal raised before the
+  handler ran — a guard's `401`/`403`, the rate limiter's `429`, a validation
+  `400` — releases the key, so a client that honours `Retry-After` (or signs in
+  again) gets its operation run on the retry.
+- `5xx` responses, the retry-later statuses `408`, `425` and `429` (even from
+  the handler), `stream()` downloads and `sse()` streams are **not** cached, so
+  genuine failures stay retryable. Any other client error the handler throws
+  (`4xx`) is recorded and replayed byte-for-byte.
+- Keys are scoped by **caller credentials + tenant headers + method + route
+  pattern**, hashed with SHA-256 before they reach the store. The credentials
+  are every header in `credentialHeaders` (default `authorization`,
+  `x-session-id`, `cookie`, `x-api-key`), so one credential's cached response is
+  never replayed to another credential. The route is its *pattern*
+  (`/accounts/:id/charge`), so the same key on two different routes never
+  collides. If you authenticate with another header, add it to
+  `credentialHeaders`.
+- **What the scope does not cover.** The tenant part is only the raw
+  `x-tenant-id` and `host` headers — not a tenant resolved from a path segment
+  (`/t/:tenant/...`) or a token claim — and the route is its *pattern*, not the
+  concrete path params. The default `fingerprint` (`'request'`, below) binds
+  those params, the query and the body, so the same credential reusing one key
+  on `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and
+  `/orders/2/pay`, is refused with `422`. With `fingerprint: 'body'` or `false`
+  that reuse receives the **first** response: have clients mint a fresh key per
+  operation (and per tenant).
 - Requests with **no** credential header are not cached or replayed by default
   (a stranger who guessed the key would otherwise get the response). Opt in with
   `allowAnonymous: true` only for public endpoints with nothing private in them.
@@ -470,7 +489,8 @@ idempotencyPlugin()
   `MemoryIdempotencyStore` sweeps expired entries and is capped by `maxEntries`
   (default 10 000). `RedisIdempotencyStore` shares replays across instances.
 - It covers the routes Basalt serves (`route()` definitions). A handler you
-  register on the underlying framework by hand is not covered.
+  register on the underlying framework by hand — a raw `fastify.post(...)` — is
+  not covered: declare it with `route()`.
 
 **The key is bound to the request — `fingerprint`.** A client that reuses a key
 for a *different* request (a bug, or a retry after the user edited the form)
@@ -492,6 +512,12 @@ running. The modes:
   or other primitive is hashed as-is. Return `undefined` to skip a request.
 - `false` — keys are not bound to a request.
 
+With `fingerprint` on, `RedisIdempotencyStore` writes in-flight reservations as
+`pending:<fingerprint>`, which an instance still on the Fastify-only plugin
+(`@basaltkit/fastify` 2.5 or older) misreads during a rolling deploy: move the
+whole fleet onto `@basaltkit/http` 2.8 / `@basaltkit/fastify` 2.6 first, then
+upgrade to 3.x.
+
 A function is how you drop volatile fields a client changes on every retry:
 
 ```ts
@@ -506,8 +532,9 @@ idempotencyPlugin({
 **Where the check runs — `replayAfterGuards`.** By default (`true`) the check
 runs after the route guards and request validation, just before the handler: a
 caller whose token was revoked since the first request gets the guard's
-`401`/`403` instead of the cached success, guards run on every replay, and a
-request that fails validation never reserves the key. `false` runs it after
+`401`/`403` instead of the cached success, guards run on every replay (a
+suspended tenant gets its `403`, not a replay), and a request that fails
+validation never reserves the key. `false` runs it after
 the enrichers and **before** the guards: a revoked caller presenting the same
 credential header then still receives the cached success. Even then, a
 `rawBody()` route fingerprinted by `'request'` or `'body'` is checked after the
@@ -991,7 +1018,13 @@ setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 
 `basalt routes` lists every route with the guards it **declares**: `auth`, `can`,
 `rateLimit`, `tenant` and the other guarded keys (`mfa`, `teamRole`, `scopes`,
-`subscribed`, `feature`). Two ways to turn that into a gate:
+`subscribed`, `feature`). The `tenant` column reads `required` (`meta.tenant: true`),
+`exempt` (`meta.tenant: false`), `central-only` (`meta.tenant: 'never'` — the route
+rejects any request that resolves a tenant), or is blank when the route inherits the
+app-wide default. The column reflects `meta.tenant` only: `meta.central: true` (the
+`@basaltkit/teams` membership bypass) shows in the guards column as `central`; assert on `row.tenant ===
+'central-only'` to pin a console route to the central plane. Two ways to turn that
+into a gate:
 
 ```bash
 # CI: exit 1 when a route does not declare both auth and can (explicit opt-outs pass)

@@ -1,8 +1,7 @@
 # Deploying the docs
 
-The repo is private, so GitHub Pages isn't available on the current plan. The
-docs are hosted on a free static host instead. VitePress is configured with
-`base: '/'`, so it serves from the domain root on any of these.
+The docs are hosted on **Cloudflare Pages** and deployed with `wrangler`.
+VitePress is configured with `base: '/'`, so it serves from the domain root.
 
 **Build output:** `apps/docs/.vitepress/dist`
 **Build command:** `pnpm --filter docs docs:build`
@@ -37,17 +36,13 @@ ALGOLIA_API_KEY=...     # search-only public key
 ALGOLIA_INDEX=...       # index name
 ```
 
-Pick one host. Each has two paths: a one-off **CLI deploy** (fastest — you run
-the login in this terminal with `!`), or **Git integration** (auto-deploys on
-every push; connect the repo in the host's dashboard using the build settings
-above).
+## Cloudflare Pages
 
-## Cloudflare Pages (recommended)
-
-Great free tier, works with private repos. No repo config file needed.
+No repo config file is needed. Deploys are run by hand with the CLI (you run the
+login in this terminal with `!`).
 
 ```bash
-# 1. build locally (or let CI do it)
+# 1. build locally
 pnpm --filter docs docs:build
 # 2. log in (opens a browser)
 ! npx wrangler login
@@ -59,27 +54,3 @@ pnpm --filter docs docs:build
 
 The docs are served at `https://basaltkit-docs.pages.dev`. (Recent `wrangler`
 versions no longer auto-create the project on first deploy — hence step 3.)
-
-## Netlify
-
-`netlify.toml` at the repo root already has the build settings.
-
-```bash
-! npx netlify-cli login
-! npx netlify-cli deploy --build --prod --dir apps/docs/.vitepress/dist
-```
-
-## Vercel
-
-`vercel.json` at the repo root already has the build settings.
-
-```bash
-! npx vercel login
-! npx vercel deploy --prod
-```
-
-## Switching back to GitHub Pages later
-
-If the repo is made public (or the plan upgraded), re-add the `push` trigger to
-`.github/workflows/docs.yml`, set `base: '/basalt/'` in
-`apps/docs/.vitepress/config.ts`, and enable Pages with source “GitHub Actions”.

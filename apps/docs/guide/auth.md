@@ -287,6 +287,9 @@ The unauthenticated routes that hash, mail or guess — `register`, `login`,
 `meta.rateLimit: { limit: 10, windowMs: 60_000 }` (per client ip and route),
 enforced when `securityPlugin`'s rate limiter is on. Override or drop it with
 `authRoutes({ rateLimit: { limit, windowMs } })` / `authRoutes({ rateLimit: false })`.
+Without `securityPlugin({ rateLimit })` nothing enforces it, and the adapter prints
+one `console.warn` at boot naming these routes (the boot is not refused) — register
+the limiter, or silence it with `allowUnguardedMeta: ['rateLimit']` on the adapter.
 Independently of that, `Auth` sends at most 3 reset and 3 verification emails per
 account every 15 minutes (`emailRequestThrottle`): extra requests still answer
 `200` but mint no token, so the endpoints can't mail-bomb a user or keep
@@ -408,9 +411,16 @@ way.
 
 The public `POST /auth/register` never creates a verified account: an
 `emailVerified` field in the body is ignored. A custom `UserSource` written
-before `create()` took the flag is patched through `update()`; with no
-`update()`, asking for a verified account fails with `UserUpdateUnsupportedError`
-instead of silently creating it unverified.
+before `create()` took the flag is patched through `update()`. A source that
+can do neither (no `update()`, a `create()` that ignores the flag) cannot record
+verification. `register(…, { emailVerified: true })` needs `update()` — the
+same requirement as email verification — and without it fails with
+`UserUpdateUnsupportedError` **before** writing anything, so a retry gets the
+same error and never `EmailTakenError`; a
+social login creates the account unverified, links it and signs the user in —
+it never fails half-way, which would leave an account every later login of that
+provider refuses. Persist `emailVerified` in `create()` (or implement
+`update()`) to get verified accounts.
 
 ## Refresh rotation with reuse detection
 
@@ -546,10 +556,27 @@ it, so it still holds the creation time. Expect sessions older than
 A cookie named `__Host-…` or `__Secure-…` must follow the browser's prefix
 rules, or the browser silently drops it and every login "succeeds" without a
 session. Basalt applies them: both prefixes imply `Secure` when `secure` is
-unset, and `__Host-` implies `Path=/` (Basalt never sets `Domain`). A
-contradicting `secure: false`, or a `__Host-` cookie with another `path`, fails
-at boot with `AUTH_SESSION_COOKIE_INVALID`. `__Host-` is the strongest choice
-for a session cookie: a sibling subdomain cannot set or shadow it.
+unset — in every environment, so it also works on `http://localhost` — and
+`__Host-` implies `Path=/` (Basalt never sets `Domain`). Outside production
+that implied `Secure` logs a one-time boot warning: cookie jars in test clients
+(supertest, tough-cookie) do not send a `Secure` cookie back over plain `http`,
+so use an unprefixed name outside production (`name: isProd ? '__Host-sid' :
+'sid'`) or set `secure: true` explicitly, which silences it.
+
+A contradicting `secure: false` (including `secure: process.env.NODE_ENV ===
+'production'` in dev and test), or a `__Host-` cookie with another `path`, still
+boots and the cookie is emitted as configured, but it logs a boot warning: the
+browser drops that cookie. The next major refuses it at boot with
+`AUTH_SESSION_COOKIE_INVALID`. `__Host-` is the strongest choice for a session
+cookie: a sibling subdomain cannot set or shadow it.
+
+The prefixes match case-insensitively, as in current browsers (`__host-sid` is
+a `__Host-` cookie). The warnings are independent and each is logged once per
+`sessionCookie` object: a `__Host-` cookie with `path: '/app'` and `secure`
+unset logs both the path warning and, outside production, the implied-`Secure`
+one. An unprefixed cookie with `sameSite: 'None'` and no `Secure` (the default
+outside production) also warns, because browsers drop `SameSite=None` without
+`Secure`; it is emitted unchanged.
 
 ### Account routes: `meta.account` and `meta.mfa` {#account-routes}
 
@@ -1068,7 +1095,8 @@ expire; expired keys are rejected by the server and omitted from listings
 [IP allowlist](#apikeys-allowlist).
 
 The plugin's guard enforces three boundaries on every key-authenticated request
-(`403` in each case, with an `auth:apikey_rejected` event):
+(`403` in each case, with an `auth:apikey_rejected` and an `auth:apikey_refused`
+event):
 
 - **Tenant binding.** A key created inside a tenant works only when the request
   resolves that same tenant — never in another one chosen through `x-tenant-id`,
@@ -1164,7 +1192,9 @@ Every refusal emits `auth:apikey_rejected`. For an invalid key the payload
 carries the presented key's display `prefix` (`mk_live_` plus six characters,
 what listings show — never the secret) and the client `ip`, so you can alert or
 throttle per caller. Because any anonymous client can trigger it, this hook is
-**not** recorded by `auditPlugin`'s defaults — see
+**not** recorded by `auditPlugin`'s defaults. A refusal of a key that verified
+(`tenant_mismatch`, `not_allowed`, `scope`) is also emitted as
+`auth:apikey_refused`, which **is** audited by default — see
 [which hooks are audited](/guide/persistence#which-hooks-are-audited).
 
 **A public API, end to end.** Machine clients often sit behind one address (an
@@ -1418,7 +1448,7 @@ the plugin supplies:
 | `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime (absolute) |
 | `sessionIdleTtl` | `DurationInput` | — (no idle timeout) | Refuse and delete a session unused for longer; needs a store with `touch` ([details](#session-hardening)) |
-| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value fails at boot |
+| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value warns at boot (refused in the next major) |
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
@@ -1517,7 +1547,7 @@ users in.
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` on an account whose MFA is on — disable it with a code first |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | A `meta.auth` route got a cross-site, cookie-only state-changing request |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
-| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset, and for creating a verified account when `create()` drops `emailVerified` |
+| `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset, and for `register(…, { emailVerified: true })` (refused before anything is written) |
 | `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, or a `registerPolicy` refused the first social / SSO login of an address |
 | `WeakJwtSecretError` | `AUTH_WEAK_SECRET` | boot | `secret` missing, or shorter than 32 chars outside an explicit `NODE_ENV=development`/`test` |
 | `ScopeRequiredError` | `AUTH_SCOPE_REQUIRED` | 403 | A `meta.scopes` route was called without an API key holding that scope (or `*`), or a key without `*` hit an identity-gated route that declares no `meta.scopes` |
@@ -1590,6 +1620,7 @@ users in.
 | `auth:apikey_rotated` | `{ id, tenantId?, userId?, serviceId?, graceUntil? }` | Audit trail — `graceUntil` is when the replaced secret stops working |
 | `auth:apikey_updated` | `{ id, tenantId?, userId?, serviceId?, changes }` | Audit trail — `changes` names the fields (`name`, `scopes`, `expiresAt`, `allowedIps`, `meta`), never their values |
 | `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alerting — `reason` is `invalid`, `ip_not_allowed`, `tenant_mismatch`, `not_allowed` or `scope`; `prefix` is the display prefix of an invalid key, never the key. Not audited by default |
+| `auth:apikey_refused` | `{ id, reason, tenantId? }` | A key that verified was refused (`tenant_mismatch`, `not_allowed`, `scope`); emitted right after `auth:apikey_rejected`. Audited by default |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
 | `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
 | `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials and account links were revoked |

@@ -13,8 +13,8 @@ pnpm add @basaltkit/inbound-mail
 O pacote é opt-in e sem estado: sem plugin, sem token, sem storage, sem
 migrações. O `inboundMailRoutes()` devolve rotas normais, como o
 [`driveRoutes()`](/pt/guide/drives#rotas), e elas correm sem alterações em
-Fastify, Express e Hono. O desenho está registado no RFC 0003
-(`docs/rfcs/0003-basaltkit-inbound-mail.md`).
+Fastify, Express e Hono. O desenho está registado no RFC 0004
+(`docs/rfcs/0004-basaltkit-inbound-mail.md`).
 
 [[toc]]
 
@@ -44,7 +44,7 @@ app. Guarda os dois secrets com `wrangler secret put`. O secret tem de ter pelo
 menos 16 caracteres (usa `generateWebhookSecret()` do `@basaltkit/webhooks`).
 
 ```js
-// Cloudflare Email Routing -> Basalt relay (wire format v1, RFC 0003).
+// Cloudflare Email Routing -> Basalt relay (wire format v1, RFC 0004).
 // Secrets: BASALT_INBOUND_URL and BASALT_INBOUND_SECRET (wrangler secret put).
 const MAX_BYTES = 10 * 1024 * 1024 // keep in step with signedDriver({ maxRequestBytes })
 const encoder = new TextEncoder()
@@ -153,7 +153,7 @@ header    = signPayload(canonical, secrets, t)
 O envelope está dentro da assinatura. Caso contrário, uma entrega capturada
 podia ser repetida para outro tenant editando um cabeçalho não assinado. Os
 endereços têm de ser únicos, em ASCII imprimível e ter no máximo 320
-caracteres. O formato está congelado por um vetor de referência no RFC 0003 e
+caracteres. O formato está congelado por um vetor de referência no RFC 0004 e
 nos testes. Os nomes dos cabeçalhos podem ser mudados com
 `signedDriver({ headers })` e `signInboundMail(…, { headers })`.
 
@@ -292,7 +292,7 @@ for (const attachment of parsed.attachments) {
 O `parsed.html` é HTML não confiável. O pacote nunca o renderiza, nunca vai
 buscar os seus recursos `cid:` ou remotos e nunca o sanitiza. Sanitiza-o antes
 de o mostrar, e serve qualquer página que o mostre com uma CSP estrita através
-de [cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-headers).
+de [cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-responseheaders).
 
 ## Idempotência
 

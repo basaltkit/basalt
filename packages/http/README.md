@@ -330,7 +330,7 @@ closed, loudly.
 `describeRoutes(entries)` normalises the `http:routes` bucket every adapter fills at
 boot into sorted `RouteRow`s — `{ method, url, auth, can, rateLimit, tenant, public, guards }`
 (`auth`/`can`/`rateLimit`/`tenant` are `null` when undeclared; `can: false` becomes
-`[]`; `rateLimit` reads `'10/1m per user'`, several budgets joined by `', '` and a shared bucket as `' [name]'`; `tenant` is `'required' | 'exempt' | 'central'`).
+`[]`; `rateLimit` reads `'10/1m per user'`, several budgets joined by `', '` and a shared bucket as `' [name]'`; `tenant` is `'required' | 'exempt' | 'central-only' | null`, read from `meta.tenant` only — `'central-only'` is `meta.tenant: 'never'`; `meta.central: true` is listed in `guards` as `'central'`; new values may be added in a minor, so switch with a `default` branch).
 `findUnguardedRoutes(rows, { require: ['auth', 'can'], allow? })` returns the rows that
 do not declare the required guards, treating `auth: false` / `public: true` (and
 `can: false`, for `can`) as intentional; only `auth: true` — the one value `authPlugin`
@@ -859,13 +859,17 @@ Rules:
 - Every handler shape is covered: one that returns its payload is replayed exactly like
   one that sends it through `reply.send()`. A replay carries `Idempotent-Replayed: true`.
 - A repeat while the first request is still in flight → `409 IDEMPOTENCY_CONFLICT`.
-- Responses `>= 500`, `stream()` and `sse()` responses are **not** stored. A client error
-  the route throws (`4xx`) is stored and replayed.
-- Keys are scoped by **caller credentials + tenant + method + route + key**; the store only
-  sees a SHA-256 of that scope. Credentials are every header in `credentialHeaders`
-  (default `authorization`, `x-session-id`, `cookie`, `x-api-key`), the tenant is
-  `x-tenant-id` + `host`. Requests with none of the credential headers are skipped unless
-  `allowAnonymous: true`.
+- Only the **handler's own** outcome is stored. A refusal raised before the handler ran —
+  a guard's `401`/`403`, the rate limiter's `429`, a validation `400`, an unreadable body —
+  releases the key, so the retry (after `Retry-After`, or once signed in) runs the operation.
+- Responses `>= 500`, the retry-later statuses `408`, `425` and `429` (even from the
+  handler), `stream()` and `sse()` responses are **not** stored. Any other client error the
+  handler throws or sends (`4xx`) is stored and replayed byte-for-byte.
+- Keys are scoped by **caller credentials + tenant headers + method + route pattern + key**;
+  the store only sees a SHA-256 of that scope. Credentials are every header in
+  `credentialHeaders` (default `authorization`, `x-session-id`, `cookie`, `x-api-key`); the
+  tenant part is only the raw `x-tenant-id` + `host` headers. Requests with none of the
+  credential headers are skipped unless `allowAnonymous: true`.
 - By default (`fingerprint: 'request'`) the key is bound to the request: the route params,
   the query and the body — canonical JSON (sorted keys) of a parsed body, the exact bytes
   of a `rawBody()` route. A mismatch → `422 IDEMPOTENCY_KEY_REUSED`, also against a
@@ -873,14 +877,27 @@ Rules:
   routes bind only params and query; give them a function
   (`fingerprint: ({ route, request }) => unknown` — an object or array is canonicalized
   first, a string or other primitive is hashed as-is) to bind more.
+- **What the scope does not cover:** a tenant resolved another way (a path segment such as
+  `/t/:tenant/...`, a token claim) and the concrete path params. The default `'request'`
+  fingerprint binds those params, so the same credential reusing one key on
+  `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and `/orders/2/pay`, is
+  refused with `422`. With `fingerprint: 'body'` or `false` that reuse receives the
+  **first** response — have clients mint a fresh key per operation (and per tenant).
 - By default (`replayAfterGuards: true`) the check runs after the guards and validation,
-  just before the handler. `replayAfterGuards: false` runs it after the enrichers and
+  just before the handler: a revoked caller gets the guard's `401`/`403`, a suspended tenant
+  its `403`, never the replay. `replayAfterGuards: false` runs it after the enrichers and
   **before** the guards; even then a `rawBody()` route fingerprinted by `'request'` or
   `'body'` is checked after the guards.
 - An `Idempotency-Key` longer than 255 characters → `400 IDEMPOTENCY_KEY_INVALID`.
 - The reservation is an **atomic** `setPending()` before the handler runs.
 - Only Basalt `route()` definitions are covered — not handlers registered on the
-  underlying framework by hand.
+  underlying framework by hand. A raw `fastify.post(...)` (or `app.post(...)` on Express or
+  Hono) is **not** protected: declare it with `route()` and pass it to the adapter plugin.
+- Rolling deploys: with `fingerprint` on (the 3.x default), `RedisIdempotencyStore` writes
+  in-flight reservations as `pending:<fingerprint>`; an instance still on the Fastify-only
+  plugin (`@basaltkit/fastify` 2.5 or older) misreads that and fails the repeat. Move the
+  whole fleet onto `@basaltkit/http` 2.8 / `@basaltkit/fastify` 2.6 first, then upgrade to
+  3.x. Empty responses (`204`) are stored and replayed too.
 
 Upgrading from 2.x, where both defaults were off: see
 [idempotency is strict by default](https://basaltkit-docs.pages.dev/guide/whats-new#idempotency-strict-by-default).
@@ -958,11 +975,12 @@ readonly field — it is a boot failure, never an HTTP response.
 |---|---|
 | `runRoute(definition, request, reply, pipeline?)` | Executes a request's full pipeline; returns the handler's value. |
 | `toErrorResponse(error)` → `ErrorResponse` | Converts any error into a standardized `{ status, body }`. |
-| `RequestEnricher` | `(info: { request, context, container, route? }) => void \| RequestDisposer \| Promise<void \| RequestDisposer>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. A returned disposer runs exactly once when the response has ended (sent, streamed out, failed or abandoned), on every adapter. |
+| `RequestEnricher` | `(info: { request, context, container, route?, reply? }) => void \| RequestDisposer \| Promise<void \| RequestDisposer>` — runs before the guards. Registered in the `'http:enrichers'` metadata bucket. An enricher that answers the request itself (`reply.send()`) ends it: the remaining enrichers, the guards and the handler do not run. A returned disposer runs exactly once when the response has ended (sent, streamed out, failed or abandoned) and the handler has settled — never while the handler still runs after a client abort — on every adapter. |
 | `RequestDisposer` | `() => void \| Promise<void>` — cleanup an enricher returns (e.g. releasing a leased database client). |
-| `RequestDisposers` | Per-request disposer list for adapter authors: `add(disposer)`, once-guarded `run()` (last-registered first; a disposer added after `run()` runs at once). |
+| `ctx().onDispose` | `readonly ((disposer: RequestDisposer) => void) \| undefined` — hands a disposer to the current request from outside an enricher's return value (a hook listener, a handler). Runs once the pipeline has settled and the response is complete (on Hono, a buffered response is complete when built: its disposers are awaited before the Response is returned). Set by `runRoute` on the request context only (non-enumerable and read-only, so a context copied by `tenancy.run()` does not inherit it); absent outside a request, in queue/scheduler contexts and before 2.8, which tells a plugin not to take what it cannot give back. Check for its presence, not `?.`: `ctx().onDispose?.(fn)` silently drops the cleanup where it is absent. |
+| `RequestDisposers` | Per-request disposer list for adapter authors and other `runRoute` callers (frozen semantics): `new RequestDisposers(onError?)`, `add(disposer)`, once-guarded `run()` that never throws (last-registered first, serially, each awaited; one failure never stops the others; a disposer added after `run()` runs at once); `onError` is never rethrown and a throwing `onError` is swallowed. |
 | `RouteGuard` | `(info: { route, request, context, container }) => void \| Promise<void>` — rejects by throwing. Bucket `'http:guards'`. |
-| `RoutePipeline` | `{ container?, enrichers?, guards?, onDispose? }`. `onDispose` receives the disposers enrichers return; an adapter passes it and runs them when the response ends. Without it, `runRoute` runs them itself when it returns or throws. |
+| `RoutePipeline` | `{ container?, enrichers?, guards?, onDispose? }`. `onDispose` receives the disposers enrichers return; an adapter passes it and runs them once `runRoute` has settled and the response has ended. Without it, `runRoute` runs them itself when it returns or throws, and reports a failing disposer to `console.error` (`REQUEST_DISPOSER_FAILED`). |
 | `assertRoutesGuarded(routes, claimed, allow?)` | The boot check every adapter runs. `claimed` is a `Set` of claimed keys or a booted `Container` (the keys are read from its `'http:guarded-meta'` bucket). |
 | `describeRoutes(entries)` → `RouteRow[]` · `findUnguardedRoutes(rows, { require, allow? })` | The route table with declared guards, and the routes missing required guards — see [The route table](#the-route-table--describeroutes--findunguardedroutes). Also at `@basaltkit/http/route-table`. |
 | `isJsonMediaType(contentType)` | `true` for `application/json` or a `+json` type, parameters and case ignored — never a substring match (`text/plain; application/json` is CORS-safelisted, not JSON). The rule every adapter parses bodies by. |
@@ -991,6 +1009,8 @@ readonly field — it is a boot failure, never an HTTP response.
 | `allowAnonymous` | `boolean` | `false` | Also cache requests carrying none of the credential headers. |
 | `fingerprint` | `'request' \| 'body' \| false \| (input) => unknown` | `'request'` (2.x: `false`) | Bind a key to its request (`'request'`: params + query + body; `'body'`: body only; a function: your own value, canonicalized when an object or array); a mismatch → `422 IDEMPOTENCY_KEY_REUSED`. |
 | `replayAfterGuards` | `boolean` | `true` (2.x: `false`) | Run the check after guards and validation; `false` runs it before the guards. |
+
+`idempotencyHeaderOf(container)` → `string | undefined`: the header the registered `idempotencyPlugin` reads the key from, lower-cased (`'idempotency-key'` unless `header` renames it), or `undefined` when the plugin is not registered. Use it instead of reading http's internal metadata (`@basaltkit/mcp` does, to never forward the key into a tool call). It caches nothing.
 
 `IdempotencyStore`: `get(key)` → `IdempotencyRecord | IdempotencyPending | 'pending' | undefined`;
 `setPending(key, info?)` → `boolean` (**an atomic check-and-set** — Redis `SET NX`, or one

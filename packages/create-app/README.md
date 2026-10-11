@@ -191,9 +191,12 @@ the next restart.
 pnpm create basalt my-app --prisma
 cd my-app && pnpm install     # postinstall runs `prisma generate`
 # .env already points MY_APP_DATABASE_URL at postgres://…@localhost:5432/my_app — start PostgreSQL or edit it
-pnpm db:migrate               # prisma migrate dev — creates the tables and seeds `demo`
+pnpm db:migrate               # prisma migrate dev — creates the tables
+pnpm db:seed                  # prisma db seed — the `demo` tenant
 pnpm dev
 ```
+
+After a schema change: `pnpm db:migrate --name <change>` writes and applies the migration (without `--name` Prisma prompts for one), then `pnpm db:generate` — Prisma 7's `migrate dev` does not regenerate the client.
 
 **Migrations, never `prisma db push`.** The generated app boots with
 `assertMigrated: true`, which refuses to start unless the database it reached has
@@ -340,7 +343,10 @@ default — `DATABASE_URL` with `--prisma`) that is set neither in the environme
 nor in `.env` — an error, with the fix (`cp .env.example .env`, set it, start
 PostgreSQL); a missing `.env` next to a `.env.example` (warning); whether the Prisma client is generated and
 migrations exist (whether they are *applied* needs a database —
-`prisma migrate status`); `.mcp.json` when `@basaltkit/ai-mcp` is installed; dev
+`prisma migrate status`); the `db:seed` script of create-basalt 1.8–1.11
+(`tsx prisma/seed.ts`, which loads no `.env` — a warning with the exact
+replacement, `"db:seed": "prisma db seed"`; `update` prints the same line and
+never rewrites the script); `.mcp.json` when `@basaltkit/ai-mcp` is installed; dev
 tooling declared as a runtime dependency; an outdated `bin/basalt.ts` or
 `src/dev.ts`; and, statically, the production path (a `start` running tsx while
 tsx is a devDependency, no `build` script, `dist/src/server.js` older than

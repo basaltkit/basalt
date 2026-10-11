@@ -278,6 +278,13 @@ antes de alguém estar autenticado, por isso registá-lo deixava qualquer client
 anónimo acrescentar entradas ao trilho (serializado e encadeado por hash) de um
 tenant tão depressa quanto conseguisse enviar pedidos.
 
+As recusas de uma chave que **foi** verificada — usada noutro tenant
+(`tenant_mismatch`), numa rota só de sessão (`not_allowed`) ou além dos seus
+scopes (`scope`) — continuam auditadas por padrão: o `apiKeysPlugin` emite-as
+uma segunda vez como `auth:apikey_refused` (`{ id, reason, tenantId? }`), que o
+`auth:**` regista. Só quem tem a chave as consegue causar, e a entrada identifica
+a chave, por isso uma sondagem cross-tenant com uma chave real deixa sempre rasto.
+
 `hooks` aceita uma lista (o conjunto de inclusão) ou `{ include, exclude }`. Um
 hook é registado quando corresponde a um padrão de `include` e a nenhum de
 `exclude`; sem `exclude`, aplicam-se as exclusões padrão
@@ -285,13 +292,48 @@ hook é registado quando corresponde a um padrão de `include` e a nenhum de
 sempre registado — é assim que voltas a incluir um:
 
 ```ts
-auditPlugin({ hooks: ['auth:**', 'auth:apikey_rejected'] })               // regista também as recusas
+auditPlugin({ hooks: ['auth:**', 'auth:apikey_rejected'] })               // regista também todas as rejeições
 auditPlugin({ hooks: { include: ['auth:**', 'billing:**'], exclude: ['auth:login'] } })
 auditPlugin({ hooks: { include: ['auth:**'], exclude: [] } })             // sem exclusões padrão
 ```
 
-Se registares `auth:apikey_rejected`, limita-o tu (o payload traz o `prefix` de
-apresentação da chave e o `ip` do cliente para isso).
+Voltar a incluir `auth:apikey_rejected` regista duas vezes a recusa de uma chave
+válida (com os dois nomes) e uma vez cada chave desconhecida. Em vez de registar
+esse ruído, observa-o: o payload de uma chave inválida traz o `prefix` de
+apresentação e o `ip` do cliente, o suficiente para um sinal agregado como este:
+
+```ts
+import { definePlugin } from '@basaltkit/core'
+import { AUDIT } from '@basaltkit/audit'
+
+const WINDOW_MS = 60_000
+const THRESHOLD = 20
+
+// Uma entrada de auditoria por chamador por minuto quando passa o limiar —
+// nunca uma por pedido. Em processo: com várias instâncias, conta num store
+// partilhado (Redis).
+export const apiKeyBurstAlert = definePlugin({
+  name: 'app:apikey-burst',
+  register({ hooks, container }) {
+    let windowStart = Date.now()
+    let counts = new Map<string, number>()
+    hooks.on('auth:apikey_rejected', async ({ reason, ip, prefix }) => {
+      if (reason !== 'invalid') return // recusas de chaves válidas: auth:apikey_refused, já auditado
+      const now = Date.now()
+      if (now - windowStart >= WINDOW_MS) {
+        windowStart = now
+        counts = new Map()
+      }
+      const caller = ip ?? prefix ?? 'unknown'
+      const count = (counts.get(caller) ?? 0) + 1
+      counts.set(caller, count)
+      if (count === THRESHOLD) {
+        await container.get(AUDIT).record('security:apikey_invalid_burst', { ip, prefix, count, windowMs: WINDOW_MS })
+      }
+    })
+  },
+})
+```
 
 ### Trilho de auditoria verificável
 
@@ -917,6 +959,7 @@ plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
 | `EventValidationError` | `EVENT_INVALID` | O schema do evento rejeitou o payload antes de qualquer listener (incluindo a captura do outbox) correr |
 | `UnknownTokenError` | `DI_UNKNOWN_TOKEN` | O `OUTBOX` (ou qualquer token de store) foi resolvido sem o plugin que o regista |
 | `ERR_UNKNOWN_BUILTIN_MODULE` no `import 'node:sqlite'` | — | Um pacote `*-sqlite` em Node 22.x sem `--experimental-sqlite`. Usa Node 24, ou acrescenta a flag; os pacotes declaram `engines.node >= 22.5.0` |
+| `TenantPoolExhaustedError` (503, o corpo diz só "Service unavailable.") | `PRISMA_POOL_EXHAUSTED` | Base de dados por tenant: todos os `max` clientes do pool ficaram em uso durante `acquireTimeoutMs`. As contagens `leased`/`recentlyUsed` ficam no log do servidor, nunca na resposta. Sobe `max` para os tenants distintos activos em poucos segundos — vê [Base de dados por tenant](/pt/guide/database-per-tenant) |
 
 - **"Funcionava em dev e esqueceu tudo depois do deploy"** — um store continua na
   sua predefinição em memória. As predefinições são silenciosas por design; procura
@@ -939,6 +982,15 @@ plugin que o consome — vê [Auth](/pt/guide/auth), [Teams](/pt/guide/teams),
   durável, não encaminhado por tenant. Para base de dados por tenant tens de o
   encaminhar através do cliente do tenant ativo; vê
   [Base de dados por tenant](/pt/guide/database-per-tenant).
+- **Base de dados por tenant: uma query falha, ou as ligações acumulam-se,
+  depois de a resposta ter sido enviada** — trabalho que sobrevive ao pedido
+  continua a usar `ctx().db`, cujo lease terminou com a resposta. Faz `await`
+  antes de responder, ou corre-o em `tenancy.run()` / `DB_POOL.use()`.
+- **Base de dados por tenant: todos os pedidos estão lentos e a base de dados
+  vê um fluxo de ligações novas** — mais tenants distintos do que `max`
+  revezam-se, por isso o pool fecha e abre um cliente por pedido (já não
+  responde 503). Sobe `max` e vê com que frequência a tua factory `forTenant`
+  corre.
 
 ## O que fazer antes de ir para produção
 

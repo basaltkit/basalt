@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, ctx, type BasaltApp, type BasaltPlugin } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin, route } from '@basaltkit/fastify'
 import { headerResolver, MemoryTenantSource, TENANCY, tenancyPlugin } from '@basaltkit/tenancy'
@@ -200,15 +200,70 @@ describe('prismaPlugin leases the tenant client per tenancy.run (BK-077)', () =>
     expect(counts.released).toBe(counts.acquired)
   })
 
-  it('falls back to the time-based get() for a switch that never says when it ends', async () => {
-    app = await createApp({ plugins: [prisma()] }).boot()
+  it('falls back to a 30s time-based hand-out for a switch that never says when it ends', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      app = await createApp({ plugins: [prisma()] }).boot()
+      const counts = instrument(app.container.get(DB_POOL))
+      const { runWithContext } = await import('@basaltkit/core')
+      await runWithContext({ tenant: { id: 't1' } }, async () => {
+        await app!.hooks.emit('tenancy:switched', { tenant: { id: 't1' } } as never)
+        expect((ctx().db as { tenantId: string }).tenantId).toBe('t1')
+      })
+      // An older @basaltkit/tenancy (no `via`, no 'tenancy:exited'): held for
+      // the 30s `get()` used to give — not the plugin's 1s grace window —
+      // then returned on its own.
+      expect(counts.acquired).toBe(1)
+      vi.advanceTimersByTime(29_000)
+      expect(counts.released).toBe(0)
+      vi.advanceTimersByTime(1_001)
+      expect(counts.released).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('never parks a lease in a request slot that already closed (switch after the response ended)', async () => {
+    let captured: object | undefined
+    app = await createApp({
+      plugins: [
+        prisma(),
+        fastifyPlugin({
+          routes: [
+            route({
+              method: 'GET',
+              url: '/capture',
+              handler: () => {
+                captured = ctx()
+                return { ok: true }
+              },
+            }),
+          ],
+        }),
+      ],
+    }).boot()
     const counts = instrument(app.container.get(DB_POOL))
-    const { runWithContext } = await import('@basaltkit/core')
-    await runWithContext({ tenant: { id: 't1' } }, async () => {
-      await app!.hooks.emit('tenancy:switched', { tenant: { id: 't1' } } as never)
-      expect((ctx().db as { tenantId: string }).tenantId).toBe('t1')
-    })
-    expect(counts.acquired).toBe(0)
-    expect(counts.gets).toBe(1)
+    const server = app.container.get(FASTIFY)
+    expect((await server.inject({ method: 'GET', url: '/capture' })).statusCode).toBe(200)
+    // Let the request's disposer sink settle: it has run, so a disposer added
+    // now is invoked synchronously, on the spot.
+    await new Promise((resolve) => setImmediate(resolve))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const { runWithContext } = await import('@basaltkit/core')
+      // A hand-rolled switch (no `via`) on the finished request's context — a
+      // timer the handler left behind, a hook fired late.
+      await runWithContext(captured as never, async () => {
+        await app!.hooks.emit('tenancy:switched', { tenant: { id: 't1' } } as never)
+        expect((ctx().db as { tenantId: string }).tenantId).toBe('t1')
+      })
+      expect(counts.acquired).toBe(1)
+      expect(counts.released).toBe(0)
+      // Held for the legacy window, then returned — not leaked in an orphan slot.
+      vi.advanceTimersByTime(30_001)
+      expect(counts.released).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

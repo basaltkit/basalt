@@ -262,13 +262,22 @@ export interface SessionCookieOptions {
    * Whether to require HTTPS. Defaults to true unless `NODE_ENV` is explicitly
    * `development` or `test` (an unset NODE_ENV counts as production).
    *
-   * A `__Host-` or `__Secure-` name implies `true` when unset, and refuses
-   * `false`: browsers silently drop such a cookie without `Secure`.
+   * A `__Host-` or `__Secure-` name (matched case-insensitively) implies
+   * `true` when unset (in every environment): browsers silently drop such a
+   * cookie without `Secure`. An
+   * explicit `false` is kept as given but warns at boot; it is refused from
+   * the next major.
    */
   secure?: boolean
 }
 
-/** The session cookie options violate the rules of the cookie name's prefix. */
+/**
+ * The session cookie options violate the rules of the cookie name's prefix.
+ *
+ * Exported ahead of time: today such a configuration only warns at boot (the
+ * cookie is emitted as configured, as before); from the next major it is
+ * thrown with code `AUTH_SESSION_COOKIE_INVALID`.
+ */
 export class SessionCookieConfigError extends BasaltError {
   readonly status = 500
   constructor(message: string) {
@@ -285,34 +294,70 @@ export class SessionIdleConfigError extends BasaltError {
 }
 
 /**
- * Resolves the session cookie options, enforcing the cookie-prefix rules
+ * Session cookie options already warned about. Keyed on the `sessionCookie`
+ * object, not on the `Auth` instance: `authPlugin` validates the options at
+ * registration and the `AUTH` singleton resolves them again with the same
+ * `sessionCookie` reference, so one configuration warns once.
+ */
+const warnedSessionCookies = new WeakSet<SessionCookieOptions>()
+
+/**
+ * Resolves the session cookie options against the cookie-prefix rules
  * browsers apply (RFC 6265bis): `__Secure-` needs `Secure`; `__Host-` needs
- * `Secure` and `Path=/` (and no `Domain`, which Basalt never sets). A
- * violating cookie is not an error in the browser, it is silently dropped, so
- * every login would "succeed" without a session. Unset values take the
- * required ones; contradicting values fail at construction.
+ * `Secure` and `Path=/` (and no `Domain`, which Basalt never sets). Prefixes
+ * match case-insensitively, as in current browsers. A violating cookie is not
+ * an error in the browser, it is silently dropped, so every login would
+ * "succeed" without a session.
+ *
+ * An unset `secure` on a prefixed name takes `true`. Contradicting values
+ * (`secure: false`, a `__Host-` path other than `/`) are emitted as given and
+ * warn once at boot; they are refused from the next major.
+ *
+ * Warnings are independent, each emitted once per `sessionCookie` object:
+ * - the cookie is dropped by browsers because of its prefix (refused next major);
+ * - Secure is implied by the prefix where it was not before (outside
+ *   production, so the emission differs from earlier versions);
+ * - `SameSite=None` without `Secure`, which browsers also drop.
  */
 function resolveSessionCookie(options: SessionCookieOptions | undefined): Required<SessionCookieOptions> {
   const name = options?.name ?? 'basalt_session'
-  const host = name.startsWith('__Host-')
-  const prefixed = host || name.startsWith('__Secure-')
-  if (prefixed && options?.secure === false) {
-    throw new SessionCookieConfigError(
-      `sessionCookie: "${name}" requires secure: true — browsers drop a ${host ? '__Host-' : '__Secure-'} cookie without Secure.`,
-    )
-  }
-  if (host && options?.path !== undefined && options.path !== '/') {
-    throw new SessionCookieConfigError(
-      `sessionCookie: "${name}" requires path "/" (got "${options.path}") — browsers drop a __Host- cookie with any other path.`,
-    )
-  }
-  return {
+  const lowerName = name.toLowerCase()
+  const host = lowerName.startsWith('__host-')
+  const prefixed = host || lowerName.startsWith('__secure-')
+  const production = isProductionEnvironment()
+  const resolved: Required<SessionCookieOptions> = {
     name,
     path: options?.path ?? '/',
     httpOnly: options?.httpOnly ?? true,
     sameSite: options?.sameSite ?? 'Lax',
-    secure: prefixed ? true : (options?.secure ?? isProductionEnvironment()),
+    secure: options?.secure ?? (prefixed ? true : production),
   }
+  if (options && !warnedSessionCookies.has(options)) {
+    const warnings: string[] = []
+    const problems: string[] = []
+    if (prefixed && !resolved.secure) problems.push('secure: true')
+    if (host && resolved.path !== '/') problems.push('path "/"')
+    if (problems.length > 0) {
+      warnings.push(
+        `[basalt] sessionCookie: "${name}" requires ${problems.join(' / ')} - browsers drop it; this will refuse to boot in the next major.`,
+      )
+    }
+    if (prefixed && options.secure === undefined && !production) {
+      warnings.push(
+        `[basalt] sessionCookie "${name}": Secure is implied by the prefix (it was not before outside production). Test clients over plain http will not send it back; use an unprefixed name outside production, or set secure explicitly (secure: true silences this).`,
+      )
+    }
+    if (!prefixed && resolved.sameSite === 'None' && !resolved.secure) {
+      warnings.push(
+        `[basalt] sessionCookie "${name}": SameSite=None without Secure - browsers drop it; set secure: true or use SameSite "Lax".`,
+      )
+    }
+    if (warnings.length > 0) {
+      warnedSessionCookies.add(options)
+      for (const warning of warnings) console.warn(warning)
+    }
+  }
+  return resolved
 }
 
 /** Longest gap between two `touch` writes of one session: one minute. */
@@ -554,8 +599,16 @@ export class Auth {
    * verified; `auth:registered` then carries the final state, so a mail hook
    * can decide "unverified → send the verification link" on its own. Never
    * forward this option from a request body.
+   *
+   * `emailVerified: true` needs a `UserSource` with `update()` — the same
+   * requirement as email verification. Without it this throws
+   * {@link UserUpdateUnsupportedError} **before** anything is written: whether
+   * `create()` persists the flag can only be learnt by writing the row, and a
+   * row that cannot be fixed afterwards would be a half-done registration
+   * (an unverified account that a retry reports as `EmailTakenError`).
    */
   async register(rawEmail: string, password: string, opts: { emailVerified?: boolean } = {}): Promise<PublicUser> {
+    if (opts.emailVerified === true && typeof this.users.update !== 'function') throw new UserUpdateUnsupportedError()
     const email = canonicalEmail(rawEmail)
     if (await this.users.findByEmail(email)) throw new EmailTakenError()
     const user = await this.createUser(email, await this.hasher.hash(password), opts.emailVerified === true)
@@ -566,15 +619,32 @@ export class Auth {
   /**
    * Creates the row with the requested verification state. A custom
    * `UserSource` written before `create()` took `emailVerified` may drop the
-   * flag: it is then set through `update()`, and with no `update()` the call
-   * fails loudly rather than leave a provider-verified account unverified.
+   * flag: it is then set through `update()`.
+   *
+   * When the source can do neither (no `update()` and a `create()` that drops
+   * the flag), `onUnsupported` decides: `'throw'` fails loudly with
+   * {@link UserUpdateUnsupportedError} (trusted `register`, whose caller asked
+   * for a verified account and must hear it did not get one — `register`
+   * refuses a source without `update()` before calling this, so here it only
+   * fires for an `update()` that does not persist the flag); `'keep'` returns
+   * the row as it really is, unverified (social login — the row was just
+   * created by this call with an unusable password, so it is provably ours and
+   * must be linked and used, never left behind as an orphan that locks the
+   * provider account out on every later login).
    */
-  private async createUser(email: string, passwordHash: string, emailVerified: boolean): Promise<AuthUser> {
+  private async createUser(
+    email: string,
+    passwordHash: string,
+    emailVerified: boolean,
+    onUnsupported: 'throw' | 'keep' = 'throw',
+  ): Promise<AuthUser> {
+    // Decided before anything is written, so the outcome never depends on
+    // how far a half-done create got.
+    const canPatch = typeof this.users.update === 'function'
     let user = await this.users.create(emailVerified ? { email, passwordHash, emailVerified: true } : { email, passwordHash })
     if (emailVerified && user.emailVerified !== true) {
-      if (!this.users.update) throw new UserUpdateUnsupportedError()
-      user = (await this.users.update(user.id, { emailVerified: true })) ?? user
-      if (user.emailVerified !== true) throw new UserUpdateUnsupportedError()
+      if (canPatch) user = (await this.users.update!(user.id, { emailVerified: true })) ?? user
+      if (user.emailVerified !== true && onUnsupported === 'throw') throw new UserUpdateUnsupportedError()
     }
     return user
   }
@@ -658,11 +728,16 @@ export class Auth {
         throw new RegistrationClosedError()
       }
       // Created with its final verification state, so `auth:registered`
-      // reports what the account really is.
+      // reports what the account really is. A source that cannot record the
+      // verification (no `update()`, a `create()` that drops the flag) keeps
+      // the account unverified rather than fail after the row exists: a
+      // half-done first login would leave an unlinked, unverified row that
+      // every later login refuses to adopt (`AUTH_SOCIAL_LINK_REFUSED`).
       user = await this.createUser(
         email,
         await this.hasher.hash(randomBytes(32).toString('hex')),
         options.emailVerified === true,
+        'keep',
       )
       created = true
       await this.hooks?.emit('auth:registered', { user: publicUser(user) })

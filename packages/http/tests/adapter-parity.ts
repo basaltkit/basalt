@@ -19,6 +19,7 @@ import {
   HttpError,
   idempotencyPlugin,
   InvalidRouteMetaError,
+  MemoryRateLimitStore,
   META_VALIDATORS_BUCKET,
   metricsPlugin,
   openapiPlugin,
@@ -540,6 +541,23 @@ export function rateLimitBucketsParitySuite(adapter: string, driver: ParityDrive
       await expect(boot([route({ method: 'GET', url: '/a', meta: { rateLimit: [] }, handler: ok })])).rejects.toBeInstanceOf(
         InvalidRouteMetaError,
       )
+    })
+
+    it('a legacy object without a string bucket keeps its lenient parse (bucket: null, unknown key, bad limit)', async () => {
+      send = await boot([
+        route({ method: 'GET', url: '/n1', meta: { rateLimit: { limit: 1, windowMs: 60_000, bucket: null } as never }, handler: ok }),
+        route({ method: 'GET', url: '/n2', meta: { rateLimit: { limit: 1, windowMs: 60_000, bucket: null } as never }, handler: ok }),
+        route({ method: 'GET', url: '/unknown-key', meta: { rateLimit: { limit: 5, windowMs: 60_000, key: 'unknown' } as never }, handler: ok }),
+        route({ method: 'GET', url: '/bad-limit', meta: { rateLimit: { limit: 'x' } as never }, handler: ok }),
+        route({ method: 'GET', url: '/arr', meta: { rateLimit: [{ limit: 5, windowMs: 60_000, bucket: null }] as never }, handler: ok }),
+      ])
+      // bucket: null is enforced per route with the legacy key, exactly as before this release.
+      expect((await call('/n1')).status).toBe(200)
+      expect((await call('/n1')).status).toBe(429)
+      expect((await call('/n2')).status).toBe(200)
+      expect((await call('/unknown-key')).status).toBe(200)
+      expect((await call('/bad-limit')).status).toBe(200)
+      expect((await call('/arr')).status).toBe(200)
     })
 
     it('a path prefix lifts the global per-IP ceiling for its family of paths', async () => {
@@ -1082,7 +1100,51 @@ export function enricherReplyParitySuite(adapter: string, driver: ParityDriver):
         ensureMetadata(container).add('http:enrichers', enricher)
       },
     })
-    const ok = route({ method: 'GET', url: '/thing', handler: () => ({ ok: true }) })
+    let handled = 0
+    const ok = route({
+      method: 'GET',
+      url: '/thing',
+      handler: () => {
+        handled += 1
+        return { ok: true }
+      },
+    })
+    const answering = definePlugin({
+      name: 'test:answering-enricher',
+      register({ container }) {
+        const enricher: RequestEnricher = ({ request, reply }) => {
+          if (request.headers['x-moved'] !== 'yes') return
+          reply?.code(451).header('x-answered-by', 'enricher').send({ blocked: true })
+        }
+        ensureMetadata(container).add('http:enrichers', enricher)
+      },
+    })
+    const guardRuns: string[] = []
+    const watching = definePlugin({
+      name: 'test:watching-guard',
+      register({ container }) {
+        const guard: RouteGuard = ({ route: r }) => {
+          guardRuns.push(r.url)
+        }
+        ensureMetadata(container).add('http:guards', guard)
+      },
+    })
+
+    it('an enricher that sends the reply ends the request: no guard, no handler (I2)', async () => {
+      handled = 0
+      guardRuns.length = 0
+      const send = await driver.boot([ok], [answering, watching])
+      const moved = await send({ method: 'GET', url: '/thing', headers: { 'x-moved': 'yes' } })
+      expect(moved.status).toBe(451)
+      expect(moved.headers['x-answered-by']).toBe('enricher')
+      expect(moved.json).toEqual({ blocked: true })
+      expect(handled).toBe(0)
+      expect(guardRuns).toEqual([])
+      const fine = await send({ method: 'GET', url: '/thing' })
+      expect(fine.status).toBe(200)
+      expect(handled).toBe(1)
+      expect(guardRuns).toEqual(['/thing'])
+    })
 
     it('keeps the header set before the throw, with the standard error body', async () => {
       const send = await driver.boot([ok], [refusing])
@@ -1437,12 +1499,14 @@ export function routeTableParitySuite(adapter: string, driver: ParityDriver): vo
           }),
           route({ method: 'GET', url: '/pricing', meta: { auth: false, tenant: false }, handler }),
           route({ method: 'GET', url: '/open', handler }),
+          route({ method: 'GET', url: '/console', meta: { auth: true, can: false, tenant: 'never' }, handler }),
         ],
         [guards],
       )
       expect((await send({ method: 'GET', url: '/livez' })).status).toBe(200)
       const rows = describeRoutes(bucket)
       expect(rows).toEqual([
+        { method: 'GET', url: '/console', auth: true, can: [], rateLimit: null, tenant: 'central-only', public: false, guards: [] },
         { method: 'GET', url: '/open', auth: null, can: null, rateLimit: null, tenant: null, public: false, guards: [] },
         { method: 'GET', url: '/pricing', auth: false, can: null, rateLimit: null, tenant: 'exempt', public: true, guards: [] },
         { method: 'GET', url: '/projects', auth: true, can: ['projects:read'], rateLimit: null, tenant: null, public: false, guards: [] },
@@ -1468,13 +1532,19 @@ export function routeTableParitySuite(adapter: string, driver: ParityDriver): vo
  * must run it exactly once — after a buffered reply, an error, a fully read
  * stream, an event stream the client closed, a download the client abandoned,
  * and when a later enricher rejects the request — and never while the body is
- * still being sent.
+ * still being sent, nor while the handler is still running after the client
+ * went away.
  */
 export function disposerParitySuite(adapter: string, driver: ParityDriver): void {
   describe(`${adapter}: request disposer parity (BK-077)`, () => {
     const disposed: string[] = []
     const sources: { big?: CountingSource } = {}
     let streamDone = false
+    // The slow handler: started, released by the test, and what it saw.
+    const slow: { started: boolean; release?: () => void; aliveAfterAbort?: boolean; finished: boolean } = {
+      started: false,
+      finished: false,
+    }
 
     const disposing = definePlugin({
       name: 'test:disposing',
@@ -1482,6 +1552,8 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
         const take: RequestEnricher = ({ request }) => {
           const path = request.url.split('?')[0]
           const label = `${request.method} ${path}`
+          // The /late routes register their only disposer themselves.
+          if (path?.startsWith('/late')) return undefined
           return () => {
             // A stream's disposer must not run before its body was sent.
             if (path === '/stream') disposed.push(streamDone ? label : `${label} (early)`)
@@ -1533,6 +1605,42 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
         url: '/events',
         handler: () => sse((events) => new Promise<void>((resolve) => events.onClose(resolve))),
       }),
+      route({
+        method: 'GET',
+        url: '/late',
+        handler() {
+          // The request's FIRST disposer, registered after the reply went out
+          // (a timer the handler left behind): it must still run, at once.
+          const onDispose = ctx().onDispose!
+          setTimeout(() => onDispose(() => void disposed.push('GET /late (late)')), 50)
+          return { ok: true }
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/late-events',
+        handler() {
+          const onDispose = ctx().onDispose!
+          return sse((events) => {
+            // First registered while the stream is open: it waits for the close.
+            onDispose(() => void disposed.push('GET /late-events (late)'))
+            return new Promise<void>((resolve) => events.onClose(resolve))
+          })
+        },
+      }),
+      route({
+        method: 'GET',
+        url: '/slow',
+        async handler() {
+          slow.started = true
+          await new Promise<void>((resolve) => (slow.release = resolve))
+          // Still using its resource after the client went away: the
+          // disposer must not have run yet.
+          slow.aliveAfterAbort = !disposed.includes('GET /slow')
+          slow.finished = true
+          return { ok: true }
+        },
+      }),
     ]
 
     let send: Send
@@ -1540,6 +1648,10 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
       disposed.length = 0
       streamDone = false
       delete sources.big
+      slow.started = false
+      slow.finished = false
+      delete slow.release
+      delete slow.aliveAfterAbort
       send = await driver.boot(routes, [disposing])
     }
     afterEach(() => driver.close())
@@ -1584,6 +1696,41 @@ export function disposerParitySuite(adapter: string, driver: ParityDriver): void
       expect(disposed).toEqual([])
       controller.abort()
       expect(await settled()).toEqual(['GET /big'])
+    })
+
+    it('runs once, only after the handler settled, when the client aborts mid-handler', async () => {
+      await boot()
+      const controller = new AbortController()
+      const pending = send.raw({ method: 'GET', url: '/slow', signal: controller.signal }).catch(() => undefined)
+      await until(() => slow.started, 'the handler to start')
+      controller.abort()
+      // Long enough for the server to see the connection close. (Not awaiting
+      // `pending`: an in-process driver only settles once the handler has.)
+      await settle(100)
+      expect(disposed).toEqual([])
+      slow.release!()
+      await pending
+      expect(await settled()).toEqual(['GET /slow'])
+      expect(slow.finished).toBe(true)
+      expect(slow.aliveAfterAbort).toBe(true)
+    })
+
+    it('runs a disposer first registered after the response ended, at once', async () => {
+      await boot()
+      expect((await send({ method: 'GET', url: '/late' })).status).toBe(200)
+      expect(await settled()).toEqual(['GET /late (late)'])
+    })
+
+    it('holds a disposer first registered while an event stream is open until it closes', async () => {
+      await boot()
+      const controller = new AbortController()
+      const res = await send.raw({ method: 'GET', url: '/late-events', signal: controller.signal })
+      expect(res.status).toBe(200)
+      await settle(50)
+      expect(disposed).toEqual([])
+      controller.abort()
+      await res.body?.cancel().catch(() => {})
+      expect(await settled()).toEqual(['GET /late-events (late)'])
     })
 
     it('runs once, only when the client closes an event stream', async () => {
@@ -1786,6 +1933,49 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
         },
       }),
     ]
+    routes.push(
+      route({
+        method: 'POST',
+        url: '/limited',
+        // The array form is charged in the route guard on every adapter.
+        meta: { rateLimit: [{ limit: 1, windowMs: 1_000 }] },
+        handler: ({ reply }) => {
+          runs += 1
+          reply.code(201)
+          return { charge: runs }
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/sold-out',
+        meta: { signedIn: true },
+        handler: () => {
+          runs += 1
+          throw new HttpError(409, 'OUT_OF_STOCK', 'Sold out.', { details: { sku: 'A-1', left: 0 } })
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/busy',
+        handler: () => {
+          runs += 1
+          if (runs === 1) throw new HttpError(429, 'UPSTREAM_BUSY', 'Try again shortly.')
+          return { charge: runs }
+        },
+      }),
+      route({
+        method: 'POST',
+        url: '/attach',
+        body: upload({ maxBytes: 16 * 1024, maxFiles: 1 }),
+        meta: { signedIn: true },
+        async handler({ body }) {
+          runs += 1
+          let size = 0
+          for await (const file of body.files) for await (const chunk of file.stream) size += (chunk as Buffer).length
+          return { charge: runs, size }
+        },
+      }),
+    )
     const json = (value: unknown) => Buffer.from(JSON.stringify(value))
     const headers = (key: string, extra: Record<string, string> = {}) => ({
       authorization: 'Bearer user-1',
@@ -1913,7 +2103,7 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
       expect(legacy.headers['idempotent-replayed']).toBe('true')
     })
 
-    it('by default a request that fails validation does not reserve the key; replayAfterGuards: false records it', async () => {
+    it('by default a request that fails validation does not reserve the key; replayAfterGuards: false releases it', async () => {
       let send = await boot()
       const invalid = await send({ method: 'POST', url: '/charge', headers: headers('kv'), body: json({ amount: 'x' }) })
       expect(invalid.status).toBe(400)
@@ -1923,12 +2113,15 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
       expect(runs).toBe(1)
       await driver.close()
 
+      // Before the guards the key is reserved, then released by the refusal
+      // (pre-handler refusals are never recorded): the corrected retry runs.
       send = await boot({ replayAfterGuards: false, fingerprint: false })
-      await send({ method: 'POST', url: '/charge', headers: headers('kv2'), body: json({ amount: 'x' }) })
-      const replayed = await send({ method: 'POST', url: '/charge', headers: headers('kv2'), body: json({ amount: 10 }) })
-      expect(replayed.status).toBe(400)
-      expect(replayed.headers['idempotent-replayed']).toBe('true')
-      expect(runs).toBe(0)
+      const refused = await send({ method: 'POST', url: '/charge', headers: headers('kv2'), body: json({ amount: 'x' }) })
+      expect(refused.status).toBe(400)
+      const retried = await send({ method: 'POST', url: '/charge', headers: headers('kv2'), body: json({ amount: 10 }) })
+      expect(retried.status).toBe(201)
+      expect(retried.headers['idempotent-replayed']).toBeUndefined()
+      expect(runs).toBe(1)
     })
 
     it('a keyed POST without a body replays under the defaults', async () => {
@@ -1968,6 +2161,113 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
       // The server is still serving after the unread replays.
       const fresh = await up('ku2', file('xyz'))
       expect(fresh.json).toEqual({ charge: 2, size: 3 })
+    })
+
+    // Pre-handler refusals are released wherever the check runs: after the
+    // guards (the 3.x default) they never reserve the key; before them
+    // (`replayAfterGuards: false`) the reservation is released.
+    for (const replayAfterGuards of [true, false]) {
+      const placement = replayAfterGuards ? 'after the guards' : 'before the guards'
+      it(`a rate limiter's 429 is not recorded: the retry after the window runs the operation (W3, ${placement})`, async () => {
+        runs = 0
+        revoked.clear()
+        let now = 1_000_000
+        const store = new MemoryRateLimitStore(() => now)
+        const send = await driver.boot(routes, [
+          idempotencyPlugin({ replayAfterGuards }),
+          auth,
+          securityPlugin({ rateLimit: { limit: 1_000, windowMs: 60_000, store }, headers: false }),
+        ])
+        const first = await send({ method: 'POST', url: '/limited', headers: headers('rl-a') })
+        expect(first.status).toBe(201)
+        const limited = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+        expect(limited.status).toBe(429)
+        expect(limited.headers['idempotent-replayed']).toBeUndefined()
+        now += 1_001 // the client honours Retry-After
+        const retry = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+        expect(retry.status).toBe(201)
+        expect(retry.json).toEqual({ charge: 2 })
+        expect(retry.headers['idempotent-replayed']).toBeUndefined()
+        // Its outcome is now recorded: a repeat replays it. After the guards the
+        // rate limiter counts the repeat too, so it waits for the window first.
+        if (replayAfterGuards) {
+          const throttled = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+          expect(throttled.status).toBe(429)
+          now += 1_001
+        }
+        const repeat = await send({ method: 'POST', url: '/limited', headers: headers('rl-b') })
+        expect(repeat.status).toBe(201)
+        expect(repeat.headers['idempotent-replayed']).toBe('true')
+        expect(runs).toBe(2)
+      })
+
+      it(`a guard's 401 is not recorded: the authenticated retry runs the handler (W3, ${placement})`, async () => {
+        const send = await boot({ replayAfterGuards })
+        revoked.add('Bearer user-1')
+        const refused = await send({ method: 'POST', url: '/charge', headers: headers('auth-1'), body: json({ amount: 10 }) })
+        expect(refused.status).toBe(401)
+        revoked.delete('Bearer user-1')
+        const retry = await send({ method: 'POST', url: '/charge', headers: headers('auth-1'), body: json({ amount: 10 }) })
+        expect(retry.status).toBe(201)
+        expect(retry.headers['idempotent-replayed']).toBeUndefined()
+        expect(runs).toBe(1)
+      })
+
+      it(`a validation 400 before the handler is not recorded either (W3, ${placement})`, async () => {
+        const send = await boot({ replayAfterGuards })
+        const invalid = await send({ method: 'POST', url: '/charge', headers: headers('val-1'), body: json({ amount: 'ten' }) })
+        expect(invalid.status).toBe(400)
+        const fixed = await send({ method: 'POST', url: '/charge', headers: headers('val-1'), body: json({ amount: 10 }) })
+        expect(fixed.status).toBe(201)
+        expect(fixed.headers['idempotent-replayed']).toBeUndefined()
+        expect(runs).toBe(1)
+      })
+    }
+
+    it("the handler's own 4xx is still recorded and replayed byte-for-byte", async () => {
+      const send = await boot()
+      const first = await send({ method: 'POST', url: '/sold-out', headers: headers('h4xx') })
+      const again = await send({ method: 'POST', url: '/sold-out', headers: headers('h4xx') })
+      expect(first.status).toBe(409)
+      expect(codeOf(first)).toBe('OUT_OF_STOCK')
+      expect(again.status).toBe(409)
+      expect(again.headers['idempotent-replayed']).toBe('true')
+      expect(again.headers['content-type']).toMatch(/^application\/json/)
+      expect(again.bytes.equals(first.bytes)).toBe(true)
+      expect(runs).toBe(1)
+    })
+
+    it('an upload() refused while the handler streams it (413) is not recorded: the retry runs the handler', async () => {
+      const send = await boot()
+      const file = (bytes: number) =>
+        multipart([{ name: 'doc', filename: 'a.bin', type: 'application/octet-stream', data: Buffer.alloc(bytes, 1) }])
+      const uploadHeaders = (key: string) => ({ ...headers(key), 'content-type': contentType() })
+      // Streamed without a Content-Length: refused on the bytes received, after
+      // the handler started reading.
+      const oversize = await send({ method: 'POST', url: '/attach', headers: uploadHeaders('up-1'), body: chunked(file(40 * 1024), 8 * 1024) })
+      expect(oversize.status).toBe(413)
+      expect(codeOf(oversize)).toBe('PAYLOAD_TOO_LARGE')
+      const retry = await send({ method: 'POST', url: '/attach', headers: uploadHeaders('up-1'), body: file(10) })
+      expect(retry.status).toBe(200)
+      expect(retry.headers['idempotent-replayed']).toBeUndefined()
+      expect(retry.json).toEqual({ charge: 2, size: 10 })
+      // The same refusal from a declared Content-Length (before the handler)
+      // was already released; both paths now agree.
+      const declared = await send({ method: 'POST', url: '/attach', headers: uploadHeaders('up-2'), body: file(40 * 1024) })
+      expect(declared.status).toBe(413)
+      const again = await send({ method: 'POST', url: '/attach', headers: uploadHeaders('up-2'), body: file(10) })
+      expect(again.status).toBe(200)
+      expect(again.headers['idempotent-replayed']).toBeUndefined()
+    })
+
+    it("a retry-later status (429) is never recorded, even from the handler", async () => {
+      const send = await boot()
+      const busy = await send({ method: 'POST', url: '/busy', headers: headers('busy-1') })
+      expect(busy.status).toBe(429)
+      const retry = await send({ method: 'POST', url: '/busy', headers: headers('busy-1') })
+      expect(retry.status).toBe(200)
+      expect(retry.json).toEqual({ charge: 2 })
+      expect(retry.headers['idempotent-replayed']).toBeUndefined()
     })
 
     it('does not cache a 5xx: the retry runs the handler again', async () => {
@@ -2017,12 +2317,12 @@ export function idempotencyParitySuite(adapter: string, driver: ParityDriver): v
 }
 
 /**
- * Route-scoped static headers (BK-085): `meta.headers` is set as soon as the
+ * Route-scoped static headers (BK-085): `meta.responseHeaders` is set as soon as the
  * route matches, so it is on every response the route produces — success and
  * the errors raised by guards, validation or the handler — on every adapter.
  */
 export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): void {
-  describe(`${adapter}: route meta.headers parity (BK-085)`, () => {
+  describe(`${adapter}: route meta.responseHeaders parity (BK-085)`, () => {
     afterEach(() => driver.close())
     const shareHeaders = { 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store' }
     const routes = [
@@ -2031,13 +2331,13 @@ export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): 
         url: '/share/:id',
         params: z.object({ id: z.string() }),
         body: z.object({ password: z.string() }),
-        meta: { signedIn: true, headers: shareHeaders },
+        meta: { signedIn: true, responseHeaders: shareHeaders },
         handler: ({ params }) => ({ id: params.id }),
       }),
       route({
         method: 'GET',
         url: '/share/boom',
-        meta: { headers: shareHeaders },
+        meta: { responseHeaders: shareHeaders },
         handler: () => {
           throw new Error('kaboom')
         },
@@ -2045,7 +2345,7 @@ export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): 
       route({
         method: 'GET',
         url: '/share/override',
-        meta: { headers: shareHeaders },
+        meta: { responseHeaders: shareHeaders },
         handler: ({ reply }) => {
           reply.header('Cache-Control', 'private, max-age=60')
           return { ok: true }
@@ -2094,17 +2394,37 @@ export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): 
       expect(plain.headers['x-robots-tag']).toBeUndefined()
     })
 
-    it('an invalid meta.headers refuses the boot', async () => {
-      const bad = [
-        route({ method: 'GET', url: '/crlf', meta: { headers: { 'X-Note': 'a\r\nSet-Cookie: x=1' } }, handler: () => 'x' }),
-        route({ method: 'GET', url: '/cookie', meta: { headers: { 'Set-Cookie': 'a=1' } }, handler: () => 'x' }),
-        route({ method: 'GET', url: '/number', meta: { headers: { 'X-Count': 1 } }, handler: () => 'x' }),
-      ]
-      const booting = driver.boot(bad, [])
-      await expect(booting).rejects.toBeInstanceOf(InvalidRouteMetaError)
-      await booting.catch((error: InvalidRouteMetaError) => {
-        expect(error.problems.map((p) => p.route)).toEqual(['GET /crlf', 'GET /cookie', 'GET /number'])
-      })
+    it('an invalid meta.responseHeaders boots, warns once, and none of its headers is sent', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const bad = [
+          route({ method: 'GET', url: '/crlf', meta: { responseHeaders: { 'X-Note': 'a\r\nSet-Cookie: x=1', 'X-Ok': 'fine' } }, handler: () => 'x' }),
+          route({ method: 'GET', url: '/cookie', meta: { responseHeaders: { 'Set-Cookie': 'a=1' } }, handler: () => 'x' }),
+          route({ method: 'GET', url: '/number', meta: { responseHeaders: { 'X-Count': 1 } as never }, handler: () => 'x' }),
+          // The old name is app-owned data: never sent, never validated.
+          route({ method: 'GET', url: '/old-name', meta: { headers: { 'x-a': 'b' } }, handler: () => 'x' }),
+        ]
+        const send = await driver.boot(bad, [])
+        const warnings = warn.mock.calls.map((call) => String(call[0])).filter((m) => m.includes('meta.responseHeaders'))
+        expect(warnings).toHaveLength(1)
+        for (const name of ['GET /crlf', 'GET /cookie', 'GET /number']) expect(warnings[0]).toContain(name)
+        expect(warnings[0]).not.toContain('/old-name')
+        const crlf = await send({ method: 'GET', url: '/crlf' })
+        expect(crlf.status).toBe(200)
+        expect(crlf.headers['x-note']).toBeUndefined()
+        expect(crlf.headers['x-ok']).toBeUndefined()
+        const cookie = await send({ method: 'GET', url: '/cookie' })
+        expect(cookie.status).toBe(200)
+        expect(cookie.headers['set-cookie']).toBeUndefined()
+        const number = await send({ method: 'GET', url: '/number' })
+        expect(number.status).toBe(200)
+        expect(number.headers['x-count']).toBeUndefined()
+        const old = await send({ method: 'GET', url: '/old-name' })
+        expect(old.status).toBe(200)
+        expect(old.headers['x-a']).toBeUndefined()
+      } finally {
+        warn.mockRestore()
+      }
     })
   })
 }

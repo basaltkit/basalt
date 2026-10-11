@@ -26,7 +26,7 @@ export interface InboundParseLimits {
 
 export interface ParseInboundOptions extends InboundParseLimits, AuthTrustOptions {}
 
-/** The defaults {@link parseInbound} applies, as documented in RFC 0003 §4. */
+/** The defaults {@link parseInbound} applies, as documented in RFC 0004 §4. */
 export const DEFAULT_INBOUND_PARSE_LIMITS: Readonly<Required<InboundParseLimits>> = Object.freeze({
   maxRawBytes: 10 * MiB,
   maxHeaderBytes: 64 * 1024,

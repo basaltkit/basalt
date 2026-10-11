@@ -1,5 +1,44 @@
 # @basaltkit/drives
 
+## 0.4.0
+
+### Minor Changes
+
+- 5351734: Connection health: `DriveConnection` / `DriveConnectionView` gain optional `lastSucceededAt`, `lastFailedAt` and `lastErrorCode` (an error code, never a message). They are stamped by a sync that persisted a page, by a failed sync (a best-effort compare-and-set against the run's own revision, skipped for an abort), by the refresh that marks a grant invalid (inside the same compare-and-set write), and by the new `drives.check(connectionId, { tenantId })` probe, which lists one item at the root and returns `{ ok, code? }`. No write is added to ordinary successful calls.
+  
+  Opt-in per store: `DriveConnectionStore` gains an optional `persistsHealth` flag, and the engine puts the three keys in an `update()` patch only when it is `true` (`MemoryDriveConnectionStore` sets it). An existing durable store keeps working unchanged after the upgrade: it never receives the new keys, its connections report no health, and `check()` still returns its answer without writing. To enable health on a durable store, add the three nullable columns and migrate first, then set `persistsHealth = true` — a store that spreads the patch onto Prisma would otherwise fail with `Unknown argument`. The contract suite (`runDriveStoreContract`) checks the round-trip only for a store that declares the flag.
+- a32981d: `disconnect()` now emits a `drive:disconnecting` hook before anything is revoked or deleted, while the row still exists. A throwing handler vetoes the disconnect (no revoke, row kept, error propagated); `disconnect(id, { force: true })` proceeds anyway and reports the handler's error to the new `onHookError` option (`process.emitWarning` by default). The fixed order — disconnecting → revoke → unwatch → delete → disconnected — is now documented.
+- e2b8d16: Per-call listing mode: `DriveListOptions.recursive?: boolean` (`listItems(id, { recursive })`). `true` lists the subtree, `false` a folder's direct children; omitted, each adapter keeps its constructor default exactly as before. Google honours both (`recursive: false` on an unscoped connection lists the account root's children), Dropbox passes it to `list_folder`, and Microsoft — which has no recursive listing — refuses `recursive: true` with `DRIVE_UNSUPPORTED` (`recursiveList`) instead of silently returning one level. An explicit mode is bound into the engine's page cursor (new `bkl2` envelope; default-mode cursors keep `bkl1`): a continuation that omits `recursive` keeps the cursor's mode, one that changes it is refused.
+- 6d966c1: Provider error explanations are no longer thrown away. `DriveProviderError`, `DriveAccessDeniedError` and `DriveCredentialsInvalidError` accept an optional `{ providerMessage }`, carried only on the non-enumerable, log-only `internalDetails` channel (read by `@basaltkit/http`'s error reporter and `internalDetailsOf()`), never in `message`, `details`, hook payloads or the response body. The adapters fill it from allow-listed fields only — Google/Graph `error.message` / `error_description`, Dropbox `user_message.text`, a `missing_scope` error's `required_scope`, or a Dropbox `400 text/plain` body — through the new `providerMessageOf()` helper, which strips control/bidi characters, redacts URL/bearer/JWT/token-shaped text and truncates to 500 characters.
+- 16069ab: Add `drives.rotateSecrets({ tenantIds? })`, which re-seals every stored credential still on a retired key (including dormant connections that never refresh) with a compare-and-set per row, and returns `{ resealed, skippedConflicts, remainingOnOldKeys }`. Tenant ids come from the app — the store contract gains no cross-tenant listing. The docs now warn that a tenant id is bound into every sealed secret and must never be renamed, and describe the full key-rotation runbook.
+- 6a76048: Add `runDriveStoreContract()` on the test-only `@basaltkit/drives/testing` subpath: a runner-agnostic conformance suite for a durable `DriveConnectionStore` / `DriveImportLedger` (compare-and-set on `expectedRevision`, revision bump, `undefined` clears a column, tenant isolation, ledger idempotency). The docs no longer reference the non-existent `prismaDriveConnectionStore` / `prismaDriveImportLedger` factories; a new "Writing a durable store" guide section shows a Prisma reference implementation instead.
+
+### Patch Changes
+
+- 7a3fd88: BK-027: one AEAD for secrets at rest. `@basaltkit/core/secret-box` (a new subpath, not re-exported from the main entry) exports `createSecretBox({ keys, info, version, aadFields })` — AES-256-GCM with HKDF-SHA256 keys from a key ring, AAD binding to ordered context fields, no plaintext path — and `SecretBoxError`.
+  
+  `@basaltkit/auth`'s `SecretBox` (`bka2`) and `@basaltkit/drives`' `DriveSecretBox` (`bkd1`) are now thin wrappers over it. Their public APIs, error classes and codes are unchanged, and existing ciphertexts stay byte-compatible (pinned by golden vectors sealed with the previous implementations). One hardening in drives: `DriveSecretBox.reseal` now authenticates an envelope already on the active key before returning `null`, as auth's box always did, so a tampered current blob is reported instead of vouched for.
+- 870075a: `createDriveFetch` is now a thin wrapper over `@basaltkit/webhooks`' public `createGuardedFetch` (no behaviour change: same allowlist, SSRF guard, pinning, redirect, cap, timeout and rate-limit handling, same `DRIVE_*` errors). `GuardedResponse` gains `arrayBuffer()`; `hostAllowed` is re-exported from `@basaltkit/webhooks`.
+- 3740447: Document that `driveRoutes()` needs the adapter's `@basaltkit/http` at 2.7.1 or later (the cross-copy `rawBody()` marker fix), and that mounting it without `notifications` gives a connect-only setup.
+- Updated dependencies [0353877]
+- Updated dependencies [7a3fd88]
+- Updated dependencies [eeb90bb]
+- Updated dependencies [e600b0a]
+- Updated dependencies [e74b21b]
+- Updated dependencies [3ce3446]
+- Updated dependencies [f029638]
+- Updated dependencies [3740447]
+- Updated dependencies [8b76628]
+- Updated dependencies [36b800c]
+- Updated dependencies [500edef]
+- Updated dependencies [870075a]
+- Updated dependencies [194931a]
+- Updated dependencies [1868e07]
+- Updated dependencies [bbb8463]
+  - @basaltkit/http@2.8.0
+  - @basaltkit/core@1.6.0
+  - @basaltkit/webhooks@4.1.0
+
 ## 0.3.1
 
 ### Patch Changes

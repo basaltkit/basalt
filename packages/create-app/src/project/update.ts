@@ -12,6 +12,7 @@ import {
 import { BASALT_PROJECT_SCRIPT } from '../templates.js'
 import type { ProjectContext } from './context.js'
 import { planProductionPath } from './production.js'
+import { legacySeedScriptFix } from './seed-script.js'
 import { extendManifest, MANIFEST_PATH, serializeManifest } from './manifest.js'
 import {
   DEPENDENCY_SECTIONS,
@@ -357,6 +358,11 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
     }
     toolingNotes.push(...production.notes)
     manual.push(...production.manual)
+
+    // db:seed from create-basalt 1.8–1.11 does not load .env: printed, never
+    // rewritten — package.json scripts are the app's.
+    const seedFix = legacySeedScriptFix(ctx.packageJson, await readOptional(join(ctx.dir, 'prisma.config.ts')))
+    if (seedFix !== undefined) manual.push(seedFix)
 
     if (ctx.manifest && Object.keys(patched).length > 0) {
       files[MANIFEST_PATH] = {

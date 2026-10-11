@@ -336,9 +336,14 @@ interface ChargePlan {
   scope: string
 }
 
-/** True for the forms charged through {@link ChargePlan}s: an array, or an object carrying `bucket`. */
+/**
+ * True for the forms charged through {@link ChargePlan}s: an array, or an
+ * object carrying a STRING `bucket`. A legacy object with `bucket: null` (say
+ * `cond ? 'name' : null`) or another non-string bucket keeps the legacy
+ * lenient parse, enforced per route as before this release.
+ */
 const isMultiForm = (value: unknown): boolean =>
-  Array.isArray(value) || (isObject(value) && (value as { bucket?: unknown }).bucket !== undefined)
+  Array.isArray(value) || (isObject(value) && typeof (value as { bucket?: unknown }).bucket === 'string')
 
 /**
  * The plans for a route's `meta.rateLimit` in a new form, in declared order.
@@ -371,7 +376,8 @@ function entryProblems(entry: unknown, at: string): string[] {
   if (key !== undefined && typeof key !== 'function' && !(typeof key === 'string' && RATE_LIMIT_KEYS.has(key))) {
     problems.push(`${at}.key ${JSON.stringify(key)} is not one of ${[...RATE_LIMIT_KEYS].map((k) => `'${k}'`).join(', ')} or a function`)
   }
-  if (bucket !== undefined && !(typeof bucket === 'string' && BUCKET_NAME.test(bucket))) {
+  // `bucket: null` counts as absent (`[{ …, bucket: cond ? 'x' : null }]`).
+  if (bucket != null && !(typeof bucket === 'string' && BUCKET_NAME.test(bucket))) {
     problems.push(`${at}.bucket ${JSON.stringify(bucket)} must match ${String(BUCKET_NAME)}`)
   }
   return problems
@@ -379,7 +385,7 @@ function entryProblems(entry: unknown, at: string): string[] {
 
 /**
  * Boot-time shape check of `meta.rateLimit` in its new forms (an array, or an
- * object with `bucket`). Stateless and per route, as a RouteMetaValidator
+ * object with a string `bucket`). Stateless and per route, as a RouteMetaValidator
  * must be; whether the declarations of one shared bucket agree across routes
  * is checked at `app:booted`. The legacy single object stays lenient (a
  * malformed one gets no limit, an unknown key the IP bucket) so apps that boot

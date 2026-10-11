@@ -1,5 +1,32 @@
 # @basaltkit/express
 
+## 2.1.0
+
+### Minor Changes
+
+- e600b0a: Request disposers (BK-077). A `RequestEnricher` may now return a `RequestDisposer` — cleanup for the end of its request, such as releasing a leased database client. Every adapter (Fastify, Express, Hono) runs it exactly once, after `runRoute` has settled and the response is complete — on Fastify/Express once it was sent or abandoned by the client; on Hono a buffered response is complete when it is built, so its disposers are awaited before it is handed to the runtime: after a buffered reply, after a `stream()` download or an `sse()` stream finished, after an error response, when a later enricher or guard rejected the request, or when the client went away. A disposer never runs while the handler is still running: on a client abort mid-handler it waits until `runRoute` has settled, so the handler keeps a live resource (identical on all three adapters). A disposer registered after that point — even the request's first one, e.g. from a timer the handler left behind or a hook on the finished request context — runs at once; one first registered while a `stream()`/`sse()` body is still open waits for its last byte or abort (identical on all three adapters). Disposers run last-registered first, one at a time, each awaited (no timeout: keep them short — one that never settles holds back every disposer registered before it, including `prismaPlugin`'s lease release). Disposer failures are reported on every path: through the adapter's `onError`, through `@basaltkit/mcp`'s `reportError`, and through `console.error` for `runRoute` callers that pass no `onDispose` — always as `REQUEST_DISPOSER_FAILED`, never changing the response. Routes without a disposer pay nothing (listeners are attached lazily).
+  
+  The same sink is reachable as `ctx().onDispose(disposer)` for cleanup taken outside an enricher's return value (a hook listener, a handler). `runRoute` sets it on the request context only — non-enumerable and read-only (typed `readonly`), so a context copied with a spread (`tenancy.run()`) does not inherit it — and its presence tells a plugin that the running pipeline honours disposers (`@basaltkit/prisma` leases only then).
+  
+  New exports from `@basaltkit/http`: `RequestDisposer`, `RequestDisposers`, `RoutePipeline.onDispose` and the `RequestContext.onDispose` augmentation. `runRoute` called without `onDispose` (custom adapters) runs the disposers itself when it returns or throws. Because `onDispose` is absent outside a request (inside `tenancy.run()`, in queue/scheduler contexts, on older pipelines), check for it instead of calling `ctx().onDispose?.(…)`, which silently drops the cleanup there. Additive: enrichers returning nothing behave exactly as before.
+- 8b76628: `idempotencyPlugin` from `@basaltkit/http` now works on this adapter (BK-084e) — replays, `409` conflicts, the release of a key refused before the handler (guard `401`/`403`, rate-limit `429`, validation `400`) and the opt-in `fingerprint` / `replayAfterGuards` options behave exactly as on Fastify, held to the shared adapter-parity suite.
+
+### Patch Changes
+
+- Updated dependencies [0353877]
+- Updated dependencies [7a3fd88]
+- Updated dependencies [eeb90bb]
+- Updated dependencies [e600b0a]
+- Updated dependencies [e74b21b]
+- Updated dependencies [3ce3446]
+- Updated dependencies [f029638]
+- Updated dependencies [3740447]
+- Updated dependencies [8b76628]
+- Updated dependencies [36b800c]
+- Updated dependencies [500edef]
+  - @basaltkit/http@2.8.0
+  - @basaltkit/core@1.6.0
+
 ## 2.0.0
 
 ### Major Changes

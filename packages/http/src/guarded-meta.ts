@@ -1,6 +1,6 @@
 import { ensureMetadata, type Container } from '@basaltkit/core'
 import type { BasaltRoute } from './route.js'
-import { routeHeadersProblems } from './route-headers.js'
+import { warnInvalidRouteHeaders } from './route-headers.js'
 
 /**
  * The security-relevant route-meta keys the framework knows about. Each is
@@ -108,6 +108,9 @@ export function assertRoutesGuarded(
   if (allow !== true) assertClaimed(routes, claimed as ReadonlySet<string>, allow)
   if (container) {
     warnUnenforcedRateLimits(routes, container, claimed as ReadonlySet<string>, allow)
+    // Built in: `meta.responseHeaders` is read by the shared pipeline itself.
+    // An invalid record warns and is ignored whole (refused in the next major).
+    warnInvalidRouteHeaders(routes, container)
     assertRouteMetaValid(routes, container)
   }
 }
@@ -198,19 +201,17 @@ export class InvalidRouteMetaError extends Error {
 
 /**
  * Runs every {@link RouteMetaValidator} registered in
- * {@link META_VALIDATORS_BUCKET} over `routes` — plus the built-in check of
- * `meta.headers` — and throws one
+ * {@link META_VALIDATORS_BUCKET} over `routes` and throws one
  * {@link InvalidRouteMetaError} listing every problem found. The adapters run
  * it at boot (through {@link assertRoutesGuarded}); call it yourself when you
  * drive `runRoute()` without an adapter.
  */
 export function assertRouteMetaValid(routes: readonly BasaltRoute[], container: Container): void {
   const validators = ensureMetadata(container).get<RouteMetaValidator>(META_VALIDATORS_BUCKET)
+  if (validators.length === 0) return
   const problems: { route: string; problem: string }[] = []
   for (const route of routes) {
     const name = `${route.method} ${route.url}`
-    // Built in: `meta.headers` is read by the shared pipeline itself.
-    for (const problem of routeHeadersProblems(route)) problems.push({ route: name, problem })
     for (const validate of validators) {
       let result: string | readonly string[] | undefined | void
       try {

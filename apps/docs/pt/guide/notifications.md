@@ -280,6 +280,14 @@ destinatário não disse nada se aplica `defaults[canal]` (por omissão `true`).
 `NotificationPreferences.allowed()` não muda (permite por omissão); o novo
 `preference()` devolve `undefined` quando nada corresponde.
 
+Uma subclasse de `NotificationPreferences` que redefine `allowed()` (horas de
+silêncio, bloqueios de compliance, restrições por plano) continua a funcionar:
+o notifier detecta a redefinição e deixa-a decidir, como antes — a sua resposta
+é final, os `defaults` não se lhe aplicam, e os canais `mandatory` continuam a
+ignorá-la. Redefinir `allowed()` está obsoleto: redefine `preference()` (devolve
+`undefined` para «sem preferência declarada»). A próxima major deixa de
+consultar uma redefinição de `allowed()`.
+
 ## A caixa in-app
 
 `inAppRoutes()` serve o sino do utilizador **autenticado** — o destinatário é

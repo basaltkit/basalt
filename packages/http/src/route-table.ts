@@ -52,16 +52,24 @@ export interface RouteRow {
    */
   rateLimit: string | null
   /**
-   * The route's tenancy declaration: `'required'` (`meta.tenant: true`),
-   * `'exempt'` (`meta.tenant: false`), `'central'` (`meta.central: true`), or
-   * `null` when the route leaves it to the app-wide default.
+   * The route's tenancy declaration, read from `meta.tenant` only:
+   * `'required'` (`true`), `'exempt'` (`false`), `'central-only'` (`'never'`
+   * — the central plane only: a request that resolves a tenant is rejected),
+   * or `null` when the route leaves it to the app-wide default (or declares a
+   * value tenancy does not know). `meta.central` is not a tenancy declaration
+   * (it is the `@basaltkit/teams` membership bypass) and is listed in
+   * {@link RouteRow.guards} instead.
+   *
+   * New values may be added in a minor release: switch over it with a
+   * `default` branch.
    */
-  tenant: 'required' | 'exempt' | 'central' | null
+  tenant: 'required' | 'exempt' | 'central-only' | null
   /** The route explicitly opts out of authentication (`meta.auth: false` or `meta.public: true`). */
   public: boolean
   /**
    * The other guarded keys the route declares (`mfa`, `teamRole`, `scopes`,
-   * `subscribed`, `feature`), as `key` or `key=value`.
+   * `subscribed`, `feature`), as `key` or `key=value`, plus `central` for
+   * `meta.central: true` (the `@basaltkit/teams` membership bypass).
    */
   guards: string[]
 }
@@ -106,9 +114,12 @@ function describeRoute(route: RouteTableEntry): RouteRow {
     rateLimit: rateLimitOf(meta['rateLimit']),
     tenant: tenantOf(meta),
     public: auth === false || meta['public'] === true,
-    guards: GUARDED_META_KEYS.filter((key) => !ALREADY_SHOWN.has(key))
-      .filter((key) => meta[key] !== undefined && meta[key] !== false)
-      .map((key) => (meta[key] === true ? key : `${key}=${display(meta[key])}`)),
+    guards: [
+      ...GUARDED_META_KEYS.filter((key) => !ALREADY_SHOWN.has(key))
+        .filter((key) => meta[key] !== undefined && meta[key] !== false)
+        .map((key) => (meta[key] === true ? key : `${key}=${display(meta[key])}`)),
+      ...(meta['central'] === true ? ['central'] : []),
+    ],
   }
 }
 
@@ -160,7 +171,7 @@ function formatWindow(ms: number): string {
 }
 
 function tenantOf(meta: Record<string, unknown>): RouteRow['tenant'] {
-  if (meta['central'] === true) return 'central'
+  if (meta['tenant'] === 'never') return 'central-only'
   if (meta['tenant'] === true) return 'required'
   if (meta['tenant'] === false) return 'exempt'
   return null

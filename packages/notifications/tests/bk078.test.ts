@@ -202,6 +202,58 @@ describe('BK-078 · defaults and mandatory channels', () => {
     expect(report.skipped).toEqual(['sms'])
   })
 
+  describe('a subclass that overrides allowed() keeps deciding (deprecated, minor-compatible)', () => {
+    class QuietHours extends NotificationPreferences {
+      constructor(private readonly verdict: boolean) {
+        super(new MemoryPreferenceStore())
+      }
+      override async allowed(): Promise<boolean> {
+        return this.verdict
+      }
+    }
+    class PreferenceOnly extends NotificationPreferences {
+      override async preference(_u: string, _n: string, channel: string): Promise<boolean | undefined> {
+        return channel === 'sms' ? true : undefined
+      }
+    }
+
+    it('an allowed() returning false blocks the channel', async () => {
+      sent.length = 0
+      const notifier = new Notifier({ channels: [sms, mail], preferences: new QuietHours(false) })
+      const report = await notifier.notify({ id: 'u1' }, Digest)
+      expect(report.skipped).toEqual(['sms', 'mail'])
+      expect(sent).toEqual([])
+    })
+
+    it('an allowed() returning true sends even when defaults[channel] is false', async () => {
+      sent.length = 0
+      const notifier = new Notifier({ channels: [sms, mail], preferences: new QuietHours(true) })
+      const report = await notifier.notify({ id: 'u1' }, Digest)
+      expect(report.skipped).toEqual([])
+      expect(sent).toEqual(['sms', 'mail'])
+    })
+
+    it('a subclass overriding only preference() uses the new path', async () => {
+      sent.length = 0
+      const notifier = new Notifier({
+        channels: [sms, mail],
+        preferences: new PreferenceOnly(new MemoryPreferenceStore()),
+      })
+      const report = await notifier.notify({ id: 'u1' }, Digest)
+      // sms: preference() says true over defaults.sms false; mail: undefined → default true.
+      expect(report.skipped).toEqual([])
+      expect(sent).toEqual(['sms', 'mail'])
+    })
+
+    it('mandatory channels still bypass an allowed() override', async () => {
+      sent.length = 0
+      const notifier = new Notifier({ channels: [sms, mail], preferences: new QuietHours(false) })
+      const report = await notifier.notify({ id: 'u1' }, Reset)
+      expect(report.sent).toEqual([{ channel: 'mail' }])
+      expect(report.skipped).toEqual(['sms'])
+    })
+  })
+
   it('leaves allowed() unchanged (default allow)', async () => {
     const { preferences } = setup()
     expect(await preferences.allowed('u1', 'digest', 'sms')).toBe(true)

@@ -95,11 +95,13 @@ export interface RouteMeta {
    * Static response headers for this route (e.g. `X-Robots-Tag`,
    * `Cache-Control`), set as soon as the route matches — so they are on its
    * error responses too (a guard's `401`, a validation `400`, a thrown `500`),
-   * not only on success. Validated at boot: string values without control
+   * not only on success. Checked at boot: string values without control
    * characters, and never `set-cookie`, `content-type`, `content-length`,
-   * `transfer-encoding`, hop-by-hop headers or `x-request-id`.
+   * `transfer-encoding`, hop-by-hop headers or `x-request-id`. An invalid
+   * record warns at boot and none of its headers is sent (refused from the
+   * next major).
    */
-  headers?: Record<string, string>
+  responseHeaders?: Record<string, string>
 }
 
 export interface BasaltRoute {

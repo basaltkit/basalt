@@ -188,7 +188,7 @@ dados:
 O `MY_SAAS_DATABASE_URL` passa a ser uma variável **obrigatória** (`src/env.ts`)
 e o `.env.example` inclui-a já sem comentário. Os scripts do `package.json` são
 `db:migrate` (`prisma migrate dev`), `db:deploy` (`prisma migrate deploy`),
-`db:generate` e `db:seed`; o `postinstall` corre `prisma generate` para que o
+`db:generate` e `db:seed` (`prisma db seed`); o `postinstall` corre `prisma generate` para que o
 `pnpm typecheck` tenha os tipos do cliente logo a seguir à instalação. O cliente
 é gerado em `generated/prisma` — **fora** do `src/`, para que o `pnpm build` nunca
 o tenha de copiar — e o `src/db.ts` importa-o como `#db/client.js` através do
@@ -203,9 +203,18 @@ pede pelo nome, e o `pnpm-workspace.yaml` aprova os scripts de build do `prisma`
 pnpm create basalt my-saas --prisma
 cd my-saas && pnpm install
 # o .env aponta MY_SAAS_DATABASE_URL para postgres://…@localhost:5432/my_saas — arranca o PostgreSQL ou edita-o
-pnpm db:migrate          # cria as tabelas e semeia o tenant demo
+pnpm db:migrate          # cria as tabelas
+pnpm db:seed             # o tenant demo
 pnpm dev
 ```
+
+Depois de alterares o `prisma/schema.prisma`, o `pnpm db:migrate --name <alteração>`
+escreve a migração **e** aplica-a na base de dados de desenvolvimento (o Prisma
+cria e apaga para isso uma base de dados shadow temporária, por isso o
+utilizador da base de dados precisa de `CREATEDB`); sem `--name` pede um nome,
+por isso num script passa-o sempre. Depois corre `pnpm db:generate`: o
+`migrate dev` do Prisma 7 já não regenera o cliente (nem corre o seed). Em
+produção, o `pnpm db:deploy` aplica as migrações versionadas.
 
 ::: warning Migrações, nunca `db push`
 O `src/app.ts` gerado arranca com `assertMigrated: true`, que recusa arrancar a
