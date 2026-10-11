@@ -28,8 +28,9 @@ export const RESPONSE_HEADERS_META_KEY = 'responseHeaders'
 
 /**
  * What is wrong with a route's `meta.responseHeaders`, or `[]`. Checked at
- * boot by every adapter (through `assertRoutesGuarded`, which warns) and at
- * request time by {@link applyRouteHeaders} (which then sets none of them).
+ * boot by every adapter (through `assertRoutesGuarded` →
+ * `assertRouteMetaValid`, which refuses the boot) and at request time by
+ * {@link applyRouteHeaders} (which throws).
  */
 export function routeHeadersProblems(route: BasaltRoute): string[] {
   const headers = route.meta?.[RESPONSE_HEADERS_META_KEY]
@@ -51,9 +52,11 @@ export function routeHeadersProblems(route: BasaltRoute): string[] {
 }
 
 /**
- * An invalid `meta.responseHeaders`. Not thrown in this major: an invalid
- * record warns at boot and is ignored whole. From the next major the boot
- * refuses it and a bespoke `runRoute` driver gets this error (500).
+ * An invalid `meta.responseHeaders` reached a request. The adapters refuse
+ * such a route at boot (`HTTP_INVALID_ROUTE_META`), so only a route that
+ * skipped that check — a bespoke `runRoute` driver that never called
+ * `assertRouteMetaValid` — gets this error (500). None of the record's
+ * headers is sent.
  */
 export class InvalidRouteHeadersError extends Error {
   readonly code = 'HTTP_INVALID_ROUTE_HEADERS'
@@ -64,7 +67,6 @@ export class InvalidRouteHeadersError extends Error {
   }
 }
 
-const NO_HEADERS: readonly (readonly [string, string])[] = []
 const resolved = new WeakMap<BasaltRoute, readonly (readonly [string, string])[]>()
 
 /**
@@ -75,41 +77,17 @@ const resolved = new WeakMap<BasaltRoute, readonly (readonly [string, string])[]
  * override any of them with `reply.header()`.
  *
  * A record with any problem (a CRLF value, a denylisted or malformed name, a
- * non-string value) is ignored WHOLE — none of its headers, valid siblings
- * included, is ever sent — and never throws. The boot warns about it.
+ * non-string value) throws {@link InvalidRouteHeadersError} before any of its
+ * headers is set — on every request, it is never cached as valid.
  */
 export function applyRouteHeaders(route: BasaltRoute, reply: HttpReply): void {
   if (route.meta?.[RESPONSE_HEADERS_META_KEY] === undefined) return
   let pairs = resolved.get(route)
   if (!pairs) {
-    pairs =
-      routeHeadersProblems(route).length > 0
-        ? NO_HEADERS
-        : Object.entries(route.meta[RESPONSE_HEADERS_META_KEY] as Record<string, string>)
+    const problems = routeHeadersProblems(route)
+    if (problems.length > 0) throw new InvalidRouteHeadersError(route, problems)
+    pairs = Object.entries(route.meta[RESPONSE_HEADERS_META_KEY] as Record<string, string>)
     resolved.set(route, pairs)
   }
   for (const [name, value] of pairs) reply.header(name, value)
-}
-
-/** Containers already warned about invalid `meta.responseHeaders`. */
-const responseHeadersWarned = new WeakSet<object>()
-
-/**
- * Warns once per container about routes whose `meta.responseHeaders` is
- * invalid; those records are ignored whole at request time. Never throws:
- * the next major refuses the boot instead.
- */
-export function warnInvalidRouteHeaders(routes: readonly BasaltRoute[], container: object): void {
-  if (responseHeadersWarned.has(container)) return
-  const offenders: string[] = []
-  for (const route of routes) {
-    for (const problem of routeHeadersProblems(route)) offenders.push(`${route.method} ${route.url}: ${problem}`)
-  }
-  if (offenders.length === 0) return
-  responseHeadersWarned.add(container)
-  const shown = offenders.slice(0, 10).join('; ') + (offenders.length > 10 ? `; … (+${offenders.length - 10})` : '')
-  console.warn(
-    `[basalt] invalid meta.responseHeaders - ${shown}. These routes' meta.responseHeaders are ignored; ` +
-      `this will refuse to boot in the next major.`,
-  )
 }

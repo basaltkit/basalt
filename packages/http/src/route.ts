@@ -98,8 +98,8 @@ export interface RouteMeta {
    * not only on success. Checked at boot: string values without control
    * characters, and never `set-cookie`, `content-type`, `content-length`,
    * `transfer-encoding`, hop-by-hop headers or `x-request-id`. An invalid
-   * record warns at boot and none of its headers is sent (refused from the
-   * next major).
+   * record refuses the boot (`HTTP_INVALID_ROUTE_META`); one that skipped the
+   * boot check throws `InvalidRouteHeadersError` (500) at request time.
    */
   responseHeaders?: Record<string, string>
 }

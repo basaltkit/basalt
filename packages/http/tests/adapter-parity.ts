@@ -2394,37 +2394,30 @@ export function routeHeadersParitySuite(adapter: string, driver: ParityDriver): 
       expect(plain.headers['x-robots-tag']).toBeUndefined()
     })
 
-    it('an invalid meta.responseHeaders boots, warns once, and none of its headers is sent', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      try {
-        const bad = [
-          route({ method: 'GET', url: '/crlf', meta: { responseHeaders: { 'X-Note': 'a\r\nSet-Cookie: x=1', 'X-Ok': 'fine' } }, handler: () => 'x' }),
-          route({ method: 'GET', url: '/cookie', meta: { responseHeaders: { 'Set-Cookie': 'a=1' } }, handler: () => 'x' }),
-          route({ method: 'GET', url: '/number', meta: { responseHeaders: { 'X-Count': 1 } as never }, handler: () => 'x' }),
-          // The old name is app-owned data: never sent, never validated.
-          route({ method: 'GET', url: '/old-name', meta: { headers: { 'x-a': 'b' } }, handler: () => 'x' }),
-        ]
-        const send = await driver.boot(bad, [])
-        const warnings = warn.mock.calls.map((call) => String(call[0])).filter((m) => m.includes('meta.responseHeaders'))
-        expect(warnings).toHaveLength(1)
-        for (const name of ['GET /crlf', 'GET /cookie', 'GET /number']) expect(warnings[0]).toContain(name)
-        expect(warnings[0]).not.toContain('/old-name')
-        const crlf = await send({ method: 'GET', url: '/crlf' })
-        expect(crlf.status).toBe(200)
-        expect(crlf.headers['x-note']).toBeUndefined()
-        expect(crlf.headers['x-ok']).toBeUndefined()
-        const cookie = await send({ method: 'GET', url: '/cookie' })
-        expect(cookie.status).toBe(200)
-        expect(cookie.headers['set-cookie']).toBeUndefined()
-        const number = await send({ method: 'GET', url: '/number' })
-        expect(number.status).toBe(200)
-        expect(number.headers['x-count']).toBeUndefined()
-        const old = await send({ method: 'GET', url: '/old-name' })
-        expect(old.status).toBe(200)
-        expect(old.headers['x-a']).toBeUndefined()
-      } finally {
-        warn.mockRestore()
-      }
+    it('an invalid meta.responseHeaders refuses the boot, naming every offending route', async () => {
+      const bad = [
+        route({ method: 'GET', url: '/crlf', meta: { responseHeaders: { 'X-Note': 'a\r\nSet-Cookie: x=1', 'X-Ok': 'fine' } }, handler: () => 'x' }),
+        route({ method: 'GET', url: '/cookie', meta: { responseHeaders: { 'Set-Cookie': 'a=1' } }, handler: () => 'x' }),
+        route({ method: 'GET', url: '/number', meta: { responseHeaders: { 'X-Count': 1 } as never }, handler: () => 'x' }),
+        route({ method: 'GET', url: '/array', meta: { responseHeaders: ['X-A'] as never }, handler: () => 'x' }),
+      ]
+      const booting = driver.boot(bad, [])
+      await expect(booting).rejects.toBeInstanceOf(InvalidRouteMetaError)
+      await booting.catch((error: InvalidRouteMetaError) => {
+        expect(error.code).toBe('HTTP_INVALID_ROUTE_META')
+        expect(error.problems.map((p) => p.route)).toEqual(['GET /crlf', 'GET /cookie', 'GET /number', 'GET /array'])
+      })
+    })
+
+    it('the old meta.headers name is app-owned data: it boots and is never sent', async () => {
+      const send = await driver.boot(
+        [route({ method: 'GET', url: '/old-name', meta: { headers: { 'x-a': 'b', 'Set-Cookie': 'a=1' } }, handler: () => 'x' })],
+        [],
+      )
+      const old = await send({ method: 'GET', url: '/old-name' })
+      expect(old.status).toBe(200)
+      expect(old.headers['x-a']).toBeUndefined()
+      expect(old.headers['set-cookie']).toBeUndefined()
     })
   })
 }

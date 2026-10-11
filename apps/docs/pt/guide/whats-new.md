@@ -41,7 +41,7 @@ contrário da 1.13, esta vaga **traz** majors: o `@basaltkit/http` 3.0 (com o
 `fastify`, o `express`, o `hono` e o `testing` 3.0) torna a idempotência
 estrita por omissão, o `@basaltkit/auth-prisma` 3.0 precisa de uma migração
 da base de dados, e as configurações de que a 1.13 só avisava passam a recusar
-o arranque ([`@basaltkit/auth` 5.0, `tenancy` 4.0](#warnings-now-refuse)). Tudo o resto é
+o arranque ([`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0](#warnings-now-refuse)). Tudo o resto é
 minor. Lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
 
 - **Ciclo de vida das API keys.** `ApiKeys.rotate()` substitui o segredo de uma
@@ -67,9 +67,9 @@ minor. Lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
   com um pedido diferente recebe `422`, e os replays correm depois dos guards.
   *(`@basaltkit/http` 3.0)* Vê abaixo.
 - **Os avisos de arranque da 1.13 passam a recusas.** Um cookie de sessão com
-  prefixo que os browsers descartariam, e um valor desconhecido de
-  `meta.tenant`, deixam de arrancar. *(`@basaltkit/auth` 5.0, `tenancy` 4.0)*
-  Vê [abaixo](#warnings-now-refuse).
+  prefixo que os browsers descartariam, um valor desconhecido de `meta.tenant`
+  e um `meta.responseHeaders` inválido deixam de arrancar. *(`@basaltkit/auth`
+  5.0, `tenancy` 4.0, `http` 3.0)* Vê [abaixo](#warnings-now-refuse).
 
 ### Atualização {#upgrading-since-1-13}
 
@@ -210,6 +210,15 @@ nada aqui muda para ti.
   os adapters, nomeando cada rota; deixa de cair no `required` da app. Usa
   `'never'` para uma rota só central, `false` para uma que funciona com ou sem
   tenant. Vê [Rotas só do plano central](/pt/guide/tenancy#rotas-so-do-plano-central-tenant-never).
+- **`@basaltkit/http` 3.0 — um `meta.responseHeaders` inválido.** Um registo
+  com um valor que não é string, um carácter de controlo, ou um cabeçalho que a
+  rota não pode definir (`set-cookie`, `content-type`, `content-length`,
+  `transfer-encoding`, cabeçalhos hop-by-hop, `x-request-id`) recusa o arranque
+  com `HTTP_INVALID_ROUTE_META` em todos os adapters; a 2.8 ignorava o registo
+  inteiro. Um driver próprio de `runRoute()` que salte o
+  `assertRouteMetaValid()` recebe antes o novo `InvalidRouteHeadersError`
+  (`500`) em cada pedido. Define cookies com `reply.header()` no handler. Vê
+  [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-responseheaders).
 
 ### Outras mudanças a ter em conta {#watch-since-1-13}
 
