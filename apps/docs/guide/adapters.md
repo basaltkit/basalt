@@ -592,6 +592,7 @@ native extras.
 | `UnguardedRouteMetaError` at boot | a route declares security meta no registered guard enforces | register the enforcing plugin, or `allowUnguardedMeta` (see [Security](/guide/security)) |
 | `InvalidRouteMetaError` at boot | a plugin's route-meta validator refused a value (e.g. an unknown `meta.teamRole`) | fix the value; `allowUnguardedMeta` does not waive it (see [Security](/guide/security)) |
 | `500 HTTP_GUARDS_UNRUNNABLE` | the route pipeline carries guards but no container, so none of them could run | pass `container` to the pipeline — every shipped adapter does; only hand-built pipelines can hit this |
+| `500 HTTP_ENRICHERS_UNRUNNABLE` | the route pipeline carries enrichers (tenancy, auth…) but no container, so none of them could run (since http 3.0; it used to skip them silently) | pass `container` to the pipeline — every shipped adapter does; only hand-built pipelines can hit this |
 | `400 HTTP_VALIDATION` | body/query/params failed the route's Zod schema | the response lists the part and per-field issues |
 | `404 { code: 'NOT_FOUND' }` on a route you defined | the route wasn't registered on this adapter instance | check it is in `routes: [...]` of the adapter plugin that booted |
 | `413 PAYLOAD_TOO_LARGE` | body exceeded the body limit (1 MiB by default on all three) | raise `bodyLimit` (`fastify: { bodyLimit }` on Fastify) deliberately |

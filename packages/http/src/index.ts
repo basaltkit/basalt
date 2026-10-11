@@ -8,6 +8,7 @@ export {
   type HttpReply,
 } from './route.js'
 export {
+  EnrichersWithoutContainerError,
   GuardsWithoutContainerError,
   HttpError,
   RequestValidationError,

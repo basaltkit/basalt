@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { BasaltError, Container, tryCtx } from '@basaltkit/core'
-import { GuardsWithoutContainerError, HttpError, route, runRoute, toErrorResponse, type HttpReply, type HttpRequest } from '../src/index.js'
+import { EnrichersWithoutContainerError, GuardsWithoutContainerError, HttpError, route, runRoute, toErrorResponse, type HttpReply, type HttpRequest } from '../src/index.js'
 
 class CaptureReply implements HttpReply {
   private _status = 200
@@ -124,6 +124,10 @@ describe('toErrorResponse', () => {
       status: 500,
       body: { error: { code: 'HTTP_GUARDS_UNRUNNABLE', message: 'Internal server error.' } },
     })
+    expect(toErrorResponse(new EnrichersWithoutContainerError('GET /x', 1))).toEqual({
+      status: 500,
+      body: { error: { code: 'HTTP_ENRICHERS_UNRUNNABLE', message: 'Internal server error.' } },
+    })
 
     class SecretKeyUnknownError extends BasaltError {
       readonly status = 500
@@ -209,6 +213,31 @@ describe('🟢 guards that cannot run must not be skipped', () => {
 
   it('a pipeline with no guards and no container still runs (the common case)', async () => {
     const result = await runRoute(guarded, makeRequest(), new CaptureReply(), {})
+    expect(result).toEqual({ ok: true })
+  })
+
+  it('fails closed when the pipeline has enrichers but no container: the handler never runs', async () => {
+    let entered = false
+    const open = route({
+      method: 'GET',
+      url: '/tenant-data',
+      handler: async () => {
+        entered = true
+        return { secret: 1 }
+      },
+    })
+    const error = await runRoute(open, makeRequest(), new CaptureReply(), {
+      enrichers: [async () => {}, async () => {}],
+    }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(EnrichersWithoutContainerError)
+    expect(error).toMatchObject({ code: 'HTTP_ENRICHERS_UNRUNNABLE', status: 500 })
+    expect((error as Error).message).toContain('GET /tenant-data')
+    expect((error as Error).message).toContain('2 request enricher(s)')
+    expect(entered).toBe(false)
+  })
+
+  it('an empty enricher list with no container still runs', async () => {
+    const result = await runRoute(guarded, makeRequest(), new CaptureReply(), { enrichers: [], guards: [] })
     expect(result).toEqual({ ok: true })
   })
 })

@@ -687,7 +687,10 @@ route that skips it — a custom driver calling `runRoute()` without
 `assertRouteMetaValid()` — fails closed on each request: `isTenantRequired()`
 and the tenancy enricher throw `InvalidTenantMetaError`
 (`TENANCY_INVALID_ROUTE_META`, `500`) before resolving any tenant, instead of
-falling back to `required`.
+falling back to `required`. The driver must pass the app's enrichers
+(`http:enrichers`) to `runRoute()`, as every adapter does; passing them without
+a `container` is refused too (`HTTP_ENRICHERS_UNRUNNABLE`, `@basaltkit/http`
+3.0), so the enricher can no longer be skipped in silence.
 
 Exempting a path only lifts the tenant requirement. Auth, subscription checks
 and every other guard still run.

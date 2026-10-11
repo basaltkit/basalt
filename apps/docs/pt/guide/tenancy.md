@@ -701,7 +701,10 @@ MCP. Uma rota que a salte — um driver próprio que chama `runRoute()` sem
 `assertRouteMetaValid()` — falha fechada em cada pedido: o `isTenantRequired()`
 e o enricher do tenancy lançam `InvalidTenantMetaError`
 (`TENANCY_INVALID_ROUTE_META`, `500`) antes de resolver qualquer tenant, em vez
-de cair no `required`.
+de cair no `required`. O driver tem de passar os enrichers da app
+(`http:enrichers`) ao `runRoute()`, como todos os adapters fazem; passá-los sem
+`container` também é recusado (`HTTP_ENRICHERS_UNRUNNABLE`, `@basaltkit/http`
+3.0), por isso o enricher já não pode ser saltado em silêncio.
 
 Isentar um caminho levanta apenas a exigência de tenant. A autenticação, as
 verificações de subscrição e todas as outras proteções continuam a correr.
