@@ -9,7 +9,7 @@ import { expressPlugin, EXPRESS } from '@basaltkit/express'
 import { honoPlugin, HONO } from '@basaltkit/hono'
 import { MemoryTenantSource, headerResolver, tenancyPlugin } from '@basaltkit/tenancy'
 import { ApiKeys, MemoryApiKeyStore, apiKeysPlugin } from '@basaltkit/auth'
-import { mcpPlugin, mcpRoutes } from '../src/index.js'
+import { MCP, mcpPlugin, mcpRoutes } from '../src/index.js'
 
 /**
  * mcpPlugin next to the REAL plugins (tenancy, apiKeysPlugin), not stand-ins,
@@ -110,6 +110,29 @@ describe.each(adapters)('mcpPlugin boot checks on %s', (adapter) => {
       plugins: [tenancy(true), mcpPlugin({ routes, filter: (r) => r.url !== '/filtered' }), adapterPlugin(adapter, mcpRoutes())],
     }).boot()
     await app.shutdown()
+  })
+})
+
+describe('mcpPlugin filter', () => {
+  it('runs once: the server exposes exactly the routes the boot checks validated, even for an impure filter', async () => {
+    const routes = [
+      route({ method: 'GET', url: '/ok', meta: { mcp: true, tenant: 'never' }, handler: () => ({}) }),
+      route({ method: 'GET', url: '/late', meta: { mcp: true, tenant: 'none' }, handler: () => ({}) }),
+    ]
+    // Excludes `/late` while the boot checks run, then lets everything through:
+    // a second evaluation would expose a route that was never validated.
+    let calls = 0
+    const filter = (r: BasaltRoute) => {
+      calls++
+      return calls > routes.length || r.url !== '/late'
+    }
+    const app = await createApp({ plugins: [tenancy(true), mcpPlugin({ routes, filter })] }).boot()
+    try {
+      expect(app.container.get(MCP).listTools().map((tool) => tool.name)).toEqual(['get_ok'])
+      expect(calls).toBe(routes.length)
+    } finally {
+      await app.shutdown()
+    }
   })
 })
 

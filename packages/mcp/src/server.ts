@@ -180,22 +180,25 @@ export interface McpPluginOptions extends ToolErrorOptions {
  * yourself after boot.
  */
 export function mcpPlugin(options: McpPluginOptions) {
+  // `filter` runs once: the routes the boot checks validate are the very list
+  // the server exposes, even if the filter is not a pure function of the route.
+  let exposed: BasaltRoute[] | undefined
+  const exposedOnce = (): BasaltRoute[] => (exposed ??= exposedRoutes(options.routes, options.filter))
   return definePlugin({
     name: 'basalt:mcp',
     boot({ container }) {
       // Boot phase, not register: every plugin's guards and validators are
       // registered by now, whatever the plugin order.
-      assertRoutesGuarded(exposedRoutes(options.routes, options.filter), container, options.allowUnguardedMeta)
+      assertRoutesGuarded(exposedOnce(), container, options.allowUnguardedMeta)
     },
     register({ container }) {
       container.singleton(
         MCP,
         () =>
           new McpServer({
-            routes: options.routes,
+            routes: exposedOnce(),
             container,
             ...(options.serverInfo ? { serverInfo: options.serverInfo } : {}),
-            ...(options.filter ? { filter: options.filter } : {}),
             ...(options.forwardHeaders ? { forwardHeaders: options.forwardHeaders } : {}),
             ...(options.redactErrorDetails !== undefined ? { redactErrorDetails: options.redactErrorDetails } : {}),
             ...(options.reportError !== undefined ? { reportError: options.reportError } : {}),

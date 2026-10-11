@@ -108,6 +108,9 @@ adapter — is checked like any other:
   (tenancy), an invalid `meta.responseHeaders` (http), an unknown
   `meta.teamRole` (teams) — refuses it with `HTTP_INVALID_ROUTE_META`.
 
+`filter` is evaluated once, at boot: the server exposes exactly the list the
+checks validated, even if the filter reads something that changes later.
+
 `mcpPlugin({ allowUnguardedMeta })` takes the same waiver as the adapter option
 (`true`, or a list of keys) for protection enforced at an outer edge; it never
 waives the validators. Building `new McpServer({ routes, container })` yourself
