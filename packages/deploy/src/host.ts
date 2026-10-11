@@ -39,6 +39,8 @@ export interface Host {
   httpGet(url: string, options?: { host?: string; timeoutMs?: number }): Promise<{ status: number } | { error: string }>
   /** The environment the deploy itself was started with (answers for non-interactive runs). */
   env: Readonly<Record<string, string | undefined>>
+  /** Whether a person can answer a prompt (a terminal, not CI). */
+  interactive(): boolean
   uid(): number
   out: Output
 }
@@ -97,6 +99,7 @@ export function nodeHost(output: Output = consoleOutput()): Host {
     out: output,
     env: process.env,
     uid: () => (typeof process.getuid === 'function' ? process.getuid() : -1),
+    interactive: () => Boolean(process.stdin.isTTY) && !process.env['CI'],
     now: () => new Date(),
     randomHex: (bytes) => randomBytes(bytes).toString('hex'),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

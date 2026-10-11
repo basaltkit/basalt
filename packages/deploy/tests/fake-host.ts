@@ -32,6 +32,7 @@ export class FakeHost implements Host {
   http: (url: string, host?: string) => { status: number } | { error: string } = () => ({ status: 200 })
   env: Record<string, string | undefined> = { USER: 'deployer' }
   userId = 1000
+  tty = false
   clock = new Date('2026-10-11T12:00:00Z').getTime()
   private counter = 0
 
@@ -129,6 +130,7 @@ export class FakeHost implements Host {
   }
   async httpGet(url: string, options: { host?: string } = {}) { return this.http(url, options.host) }
   uid() { return this.userId }
+  interactive() { return this.tty }
 }
 
 export const DIR = '/srv/lexfirma'

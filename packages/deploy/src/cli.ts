@@ -13,7 +13,8 @@ export const USAGE = `basalt-deploy — deploy this Basalt app on this server (R
   basalt-deploy env               the .env and the dedicated infra only (first setup)
   basalt-deploy rollback [--to=<sha>]   back to the last healthy release (code only)
   basalt-deploy status            the last releases and the process
-  sudo basalt-deploy install --user=<name>   once per server: vhost, state directory
+  sudo node node_modules/@basaltkit/deploy/dist/bin.js install --user=<name>
+                                  once per server, as root: vhost, state directory
 
 Options:
   --config=<file>     default deploy.config.ts
