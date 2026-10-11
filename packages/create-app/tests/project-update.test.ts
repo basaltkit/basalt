@@ -272,6 +272,54 @@ describe('update — release age, majors gating, peers', () => {
     expect(await runProjectCommand(['update', '--dry'], h.deps)).toBe(0)
     expect(h.output()).toMatch(/@basaltkit\/core@\S+ expects zod \^5\.0\.0, but the app will have \^4\.\S+ — re-run with --major/)
   })
+
+  /** An app scaffolded by create-basalt <= 1.12: @basaltkit/testing 2, no @basaltkit/mailer. */
+  async function legacyTestingApp(name: string): Promise<string> {
+    const dir = await scaffold(name)
+    const pkg = JSON.parse(await read(dir, 'package.json'))
+    delete pkg.devDependencies['@basaltkit/mailer']
+    delete pkg.dependencies?.['@basaltkit/mailer']
+    pkg.devDependencies['@basaltkit/testing'] = '^2.0.3'
+    await write(dir, 'package.json', `${JSON.stringify(pkg, null, 2)}\n`)
+    return dir
+  }
+  const testing3: FakePackage = {
+    version: '3.0.0',
+    peerDependencies: { '@basaltkit/fastify': '^3.0.0', '@basaltkit/hono': '^3.0.0', '@basaltkit/mailer': '^2.1.0' },
+    peerDependenciesMeta: { '@basaltkit/fastify': { optional: true }, '@basaltkit/hono': { optional: true } },
+  }
+
+  it('adds a required @basaltkit peer the app never listed (testing 3 → mailer), not the optional ones', async () => {
+    const dir = await legacyTestingApp('legacy-peer-app')
+    const pkgBefore = JSON.parse(await read(dir, 'package.json'))
+    const hadHono = pkgBefore.dependencies?.['@basaltkit/hono'] !== undefined || pkgBefore.devDependencies?.['@basaltkit/hono'] !== undefined
+    const h = harness(dir, {
+      fetch: await registryFor(dir, { '@basaltkit/testing': testing3, '@basaltkit/mailer': { version: '2.1.0' } }),
+    })
+    expect(await runProjectCommand(['update', '--yes', '--no-install'], h.deps)).toBe(0)
+    const pkg = JSON.parse(await read(dir, 'package.json'))
+    expect(pkg.devDependencies['@basaltkit/testing']).toBe('^3.0.0')
+    expect(pkg.devDependencies['@basaltkit/mailer']).toBe('^2.1.0')
+    expect(pkg.dependencies?.['@basaltkit/mailer']).toBeUndefined()
+    // Optional peers are never added.
+    if (!hadHono) {
+      expect(pkg.dependencies?.['@basaltkit/hono']).toBeUndefined()
+      expect(pkg.devDependencies?.['@basaltkit/hono']).toBeUndefined()
+    }
+    expect(h.output()).toContain('Required peers the app did not list (added):')
+    expect(h.output()).toMatch(/@basaltkit\/mailer\S* \^2\.1\.0 \(devDependencies\) — required by @basaltkit\/testing@3\.0\.0/)
+  })
+
+  it('warns instead of adding when the missing peer cannot be resolved in range', async () => {
+    const dir = await legacyTestingApp('legacy-peer-warn')
+    const h = harness(dir, {
+      fetch: await registryFor(dir, { '@basaltkit/testing': testing3, '@basaltkit/mailer': { version: '1.9.0' } }),
+    })
+    expect(await runProjectCommand(['update', '--yes', '--no-install'], h.deps)).toBe(0)
+    const pkg = JSON.parse(await read(dir, 'package.json'))
+    expect(pkg.devDependencies['@basaltkit/mailer']).toBeUndefined()
+    expect(h.output()).toMatch(/@basaltkit\/testing@3\.0\.0 requires @basaltkit\/mailer \^2\.1\.0, which package\.json does not list — add it \(pnpm add -D @basaltkit\/mailer\)/)
+  })
 })
 
 describe('update — project tooling', () => {

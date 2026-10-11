@@ -369,6 +369,12 @@ Aplica a **mesma política de um scaffold novo** (é o mesmo código de registry
 - Quando uma release da framework declara um intervalo de peer que a app não
   cumpriria (por exemplo `zod ^5` com o zod retido no 4), o plano avisa antes de
   escrever o que quer que seja.
+- Quando uma release da framework exige um peer `@basaltkit/*` que o
+  `package.json` da app não declara (o `@basaltkit/testing` 3 precisa do
+  `@basaltkit/mailer`), o plano acrescenta-o na versão mais recente — em
+  `dependencies` quando uma dependência de runtime precisa dele, senão em
+  `devDependencies` — ou avisa quando não consegue. Os peers opcionais nunca são
+  acrescentados.
 
 ```text
 4 update(s):
