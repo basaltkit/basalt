@@ -25,3 +25,6 @@ apps/docs/reference/packages/
 apps/docs/typedoc.json
 apps/docs/typedoc.tsconfig.json
 packages/create-app/.scaffold-typecheck/
+
+# Local git worktrees created by Claude Code agents — never commit
+.claude/worktrees/
