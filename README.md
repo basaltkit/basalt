@@ -136,6 +136,7 @@ the `saas` keyword on npm.
 | `@basaltkit/queue-sqs` | Amazon SQS driver for `@basaltkit/queue` — native delay, retries with backoff, dead-letter queue |
 | `@basaltkit/storage` · `@basaltkit/mailer` | S3/MinIO/local storage, typed mail |
 | `@basaltkit/cli` | The `basalt` command framework |
+| `@basaltkit/deploy` | `basalt-deploy` — one deploy pipeline on a single server: `.env`, dedicated Docker infra, PM2, Apache, backup, health check, rollback |
 
 **SaaS domain**
 

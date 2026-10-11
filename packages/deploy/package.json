@@ -1,0 +1,51 @@
+{
+  "name": "@basaltkit/deploy",
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "description": "One deploy pipeline for a Basalt app on a single server: .env management, dedicated Docker infra, PM2, Apache, pre-migration backup, health check and rollback.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "bin": {
+    "basalt-deploy": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@basaltkit/tsconfig": "workspace:^",
+    "@types/node": "^26.6.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/basaltkit/basalt.git",
+    "directory": "packages/deploy"
+  },
+  "homepage": "https://github.com/basaltkit/basalt/tree/main/packages/deploy#readme",
+  "bugs": "https://github.com/basaltkit/basalt/issues",
+  "keywords": [
+    "basalt",
+    "deploy",
+    "pm2",
+    "apache",
+    "docker"
+  ]
+}

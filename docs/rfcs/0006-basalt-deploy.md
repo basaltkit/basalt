@@ -1,6 +1,6 @@
 # RFC 0006 — `basalt deploy`: one deploy pipeline for Basalt apps on a single server
 
-- **Status:** Draft — open questions decided 2026-10-11 (§11)
+- **Status:** Accepted — phase 1 implemented in `packages/deploy` (§12)
 - **Author:** Marcio Zebedeu
 - **Date:** 2026-10-11
 - **Affects:** new package `@basaltkit/deploy`; `create-basalt` (the `bin/basalt.ts` prelude forwards `deploy`); no change to any runtime package
@@ -340,7 +340,7 @@ to end with a fake host — including each incident in §A as a regression test.
 | Phase | Delivers | Adopted by |
 |---|---|---|
 | 0 | This RFC | — |
-| 1 | Package, config, pipeline, `.env` step, checks C1–C10, `pm2` + `apache`/`none`, `dockerInfra`, backup, health, rollback, state | LexFirma: `deploy.sh` becomes `pnpm basalt deploy run` |
+| 1 ✅ | Package, config, pipeline, `.env` step, checks C1–C10, `pm2` + `apache`/`none`, `dockerInfra`, backup, health, rollback, state | LexFirma: `deploy.sh` becomes `pnpm exec basalt-deploy run` |
 | 2 | `compose` runtime (SHA images, one-off migrate container), `caddy`, adopting containers created by a script | Mukanda: `deploy-prod.sh` keeps `bootstrap`, the rest delegates |
 | 3 | Previews (§7), `subdomainResolver({ suffix })` in `@basaltkit/tenancy` (minor), `APP_TENANT_HOST_TEMPLATE` in both apps | both |
 | — | A Rust agent | only if phase 3 grows into a long-running service across several servers |
@@ -388,3 +388,35 @@ Decided 2026-10-11 by the product owner.
    rootless Docker for the app user and refuses to add it to the `docker` group.
    Mukanda's existing rootful containers are adopted in phase 2 — migrating them
    to rootless is a data move and is planned there, not assumed.
+
+## 12. Phase 1 as built — where it differs from the design
+
+1. **Entry point.** `pnpm exec basalt-deploy <command>` (the package's own bin),
+   not yet `pnpm basalt deploy`. The `bin/basalt.ts` prelude loads `.env` into
+   the process — the opposite of what validation needs (§6.2: a child that sees
+   only the file). Forwarding `deploy` before that load is a `create-basalt`
+   change (template + legacy hashes) and comes separately.
+2. **No sudoers file.** In phase 1 `run` needs no root at all: it never writes
+   the vhost and so never reloads Apache. Writing `/etc/sudoers.d/basalt-<app>`
+   anyway would grant a privilege nothing uses; it is added by the first step
+   that needs it (the Caddy reload, phase 2).
+3. **Rootless Docker is not set up by `install`.** It refuses nothing and adds
+   nobody to the `docker` group; it warns when the app user already is in it
+   (root-equivalent) and prints the rootless steps otherwise. The server
+   LexFirma runs on keeps its containers in rootful volumes; moving them is the
+   data move §11.4 plans for phase 2, done once for both apps.
+4. **`dockerInfra(app, options)`** takes the app name, so the names it owns —
+   `<app>-pg`, `<app>-redis`, `<app>-minio`, volumes `<app>_<app>-*-data` — are
+   visible in the config. They match what LexFirma's
+   `docker-compose.server.yml` (project `lexfirma`) already created, so the
+   first run adopts them, credentials read back from the containers.
+5. **`pm2({ script })`** runs a package.json script (default `start`) rather than
+   an entry file: the app already says how it starts.
+6. **C8 is a warning.** The deploy cannot fix a certificate, and a hotfix must
+   not wait for one.
+7. **Rollback on the first recorded deploy** goes to the commit that deploy
+   started from (there is no earlier healthy release in the state file yet).
+8. **PM2 gets a minimal environment** (`NODE_ENV`, `PORT`, `HOST`), not the
+   `.env`: `pm2 save` writes the process environment to `~/.pm2/dump.pm2`, so
+   passing the file would copy every secret there. The app loads its own
+   `.env` (LexFirma: `import 'dotenv/config'` in `src/server.ts`).
