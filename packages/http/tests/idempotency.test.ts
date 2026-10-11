@@ -10,6 +10,7 @@ import {
   HttpError,
   idempotencyPlugin,
   MemoryIdempotencyStore,
+  rawBody,
   RedisIdempotencyStore,
   route,
   runRoute,
@@ -18,6 +19,7 @@ import {
   type IdempotencyStore,
   type RedisIdempotencyClient,
 } from '../src/index.js'
+import { IdempotencyStage } from '../src/idempotency.js'
 import { FakeReply, makeRequest } from './support.js'
 
 async function bootStage(options: Parameters<typeof idempotencyPlugin>[0] = {}) {
@@ -150,7 +152,9 @@ describe('idempotency stage', () => {
     expect(retry.headers['idempotent-replayed']).toBeUndefined()
   })
 
-  it('a guard refusal releases the key and is not masked by a failing store', async () => {
+  // The check runs before the guards only under `replayAfterGuards: false`;
+  // that is where a guard refusal has a reservation to release.
+  it('a guard refusal releases the key and is not masked by a failing store (replayAfterGuards: false)', async () => {
     const released: string[] = []
     const store: IdempotencyStore = {
       get: () => undefined,
@@ -161,7 +165,7 @@ describe('idempotency stage', () => {
         throw new Error('store down')
       },
     }
-    const container = await bootStage({ store })
+    const container = await bootStage({ store, replayAfterGuards: false })
     const def = route({ method: 'POST', url: '/guarded', handler: () => ({ ok: true }) })
     const refuse = () => {
       throw new HttpError(403, 'FORBIDDEN', 'No.')
@@ -171,8 +175,132 @@ describe('idempotency stage', () => {
     expect(released).toHaveLength(1)
   })
 
+  it('by default a guard refusal never reserves the key', async () => {
+    const touched: string[] = []
+    const store: IdempotencyStore = {
+      get: () => undefined,
+      setPending: (key) => {
+        touched.push(`setPending:${key}`)
+        return true
+      },
+      complete: (key) => {
+        touched.push(`complete:${key}`)
+      },
+      release: (key) => {
+        touched.push(`release:${key}`)
+      },
+    }
+    const container = await bootStage({ store })
+    const def = route({ method: 'POST', url: '/guarded', handler: () => ({ ok: true }) })
+    const refuse = () => {
+      throw new HttpError(403, 'FORBIDDEN', 'No.')
+    }
+    const request = makeRequest({ method: 'POST', url: '/guarded', headers: auth, body: {} })
+    await expect(runRoute(def, request, new FakeReply(), { container, guards: [refuse] })).rejects.toMatchObject({ status: 403 })
+    expect(touched).toEqual([])
+  })
+
   it('refuses an invalid fingerprint option', () => {
     expect(() => idempotencyPlugin({ fingerprint: 'headers' as never })).toThrow(TypeError)
+  })
+
+  it('refuses a non-boolean replayAfterGuards', () => {
+    expect(() => idempotencyPlugin({ replayAfterGuards: 'false' as never })).toThrow(TypeError)
+    expect(() => idempotencyPlugin({ replayAfterGuards: 0 as never })).toThrow(/must be a boolean/)
+  })
+
+  it("defaults: replay after the guards, and 'request' fingerprinting", () => {
+    const keyed = makeRequest({ method: 'POST', headers: { 'idempotency-key': 'k' } })
+    const json = route({ method: 'POST', url: '/j', handler: () => ({}) })
+    const hook = route({ method: 'POST', url: '/h', body: rawBody({ maxBytes: 64 }), handler: () => ({}) })
+
+    const strict = new IdempotencyStage()
+    expect(strict.replayAfterGuards).toBe(true)
+    expect(strict.placement(json, keyed)).toBe('beforeHandler')
+    expect(strict.placement(json, makeRequest({ method: 'POST' }))).toBeUndefined()
+
+    const legacy = new IdempotencyStage({ replayAfterGuards: false })
+    expect(legacy.replayAfterGuards).toBe(false)
+    expect(legacy.placement(json, keyed)).toBe('beforeGuards')
+    // A rawBody() route's bytes are never read before the guards have passed.
+    expect(legacy.placement(hook, keyed)).toBe('beforeHandler')
+    expect(new IdempotencyStage({ replayAfterGuards: false, fingerprint: 'body' }).placement(hook, keyed)).toBe('beforeHandler')
+    expect(new IdempotencyStage({ replayAfterGuards: false, fingerprint: false }).placement(hook, keyed)).toBe('beforeGuards')
+  })
+
+  it("'request' binds params and query; 'body' binds the body only", async () => {
+    const def = route({ method: 'POST', url: '/a/:id', handler: ({ request }) => ({ id: request.params['id'] }) })
+    const send = async (container: Awaited<ReturnType<typeof bootStage>>, params: Record<string, string>, query: unknown) => {
+      const reply = new FakeReply()
+      try {
+        const result = await runRoute(def, makeRequest({ method: 'POST', url: '/a', headers: auth, params, query, body: { n: 1 } }), reply, { container })
+        if (!reply.sent) reply.send(result)
+      } catch (error) {
+        reply.code(toErrorResponse(error).status).send(undefined)
+      }
+      return reply
+    }
+    const strict = await bootStage()
+    expect((await send(strict, { id: '1' }, { a: '1', b: '2' })).statusCode).toBe(200)
+    expect((await send(strict, { id: '1' }, { b: '2', a: '1' })).headers['idempotent-replayed']).toBe('true')
+    expect((await send(strict, { id: '2' }, { a: '1', b: '2' })).statusCode).toBe(422)
+    expect((await send(strict, { id: '1' }, { a: '9', b: '2' })).statusCode).toBe(422)
+
+    const bodyOnly = await bootStage({ fingerprint: 'body' })
+    await send(bodyOnly, { id: '1' }, {})
+    expect((await send(bodyOnly, { id: '2' }, { a: '1' })).headers['idempotent-replayed']).toBe('true')
+  })
+
+  it('a fingerprint function returning an object is canonicalized, nested fields included', async () => {
+    let runs = 0
+    const container = await bootStage({
+      fingerprint: ({ request }) => {
+        const { sentAt: _sentAt, ...rest } = (request.body ?? {}) as Record<string, unknown>
+        return { params: request.params, body: rest }
+      },
+    })
+    const def = route({ method: 'POST', url: '/cart', handler: () => ({ run: ++runs }) })
+    await call(container, def, auth, { a: 1, items: [{ sku: 'x', qty: 1 }], sentAt: 1 })
+    // Key order and the volatile field do not matter…
+    const replay = await call(container, def, auth, { items: [{ qty: 1, sku: 'x' }], sentAt: 2, a: 1 })
+    expect(replay.headers['idempotent-replayed']).toBe('true')
+    // …but a nested difference does (it once collapsed to "[object Object]").
+    const otherCart = await call(container, def, auth, { a: 1, items: [{ sku: 'x', qty: 2 }], sentAt: 1 })
+    expect(otherCart.statusCode).toBe(422)
+    expect(runs).toBe(1)
+  })
+
+  it('a fingerprint function returning a primitive is hashed by its string form, as in 2.x (bigint included)', async () => {
+    let runs = 0
+    const container = await bootStage({
+      fingerprint: ({ request }) => BigInt((request.body as { n: number }).n),
+    })
+    const def = route({ method: 'POST', url: '/big', handler: () => ({ run: ++runs }) })
+    expect((await call(container, def, auth, { n: 1 })).statusCode).toBe(200)
+    expect((await call(container, def, auth, { n: 1 })).headers['idempotent-replayed']).toBe('true')
+    expect((await call(container, def, auth, { n: 2 })).statusCode).toBe(422)
+    expect(runs).toBe(1)
+
+    // A record fingerprinted by a 2.x string-returning function still matches.
+    const store = new MemoryIdempotencyStore()
+    const numeric = route({ method: 'POST', url: '/num', handler: () => ({ run: ++runs }) })
+    const byNumber = await bootStage({ store, fingerprint: () => 42 })
+    await call(byNumber, numeric, auth, {})
+    const byString = await bootStage({ store, fingerprint: () => '42' })
+    expect((await call(byString, numeric, auth, {})).headers['idempotent-replayed']).toBe('true')
+  })
+
+  it('records stored without a fingerprint keep replaying after the upgrade (no flush needed)', async () => {
+    let runs = 0
+    const store = new MemoryIdempotencyStore()
+    const def = route({ method: 'POST', url: '/legacy', handler: () => ({ run: ++runs }) })
+    const before = await bootStage({ store, fingerprint: false, replayAfterGuards: false })
+    await call(before, def, auth, { amount: 10 })
+    const after = await bootStage({ store })
+    const replay = await call(after, def, auth, { amount: 99 })
+    expect(replay.statusCode).toBe(200)
+    expect(replay.headers['idempotent-replayed']).toBe('true')
+    expect(runs).toBe(1)
   })
 
   it('the memory store keeps the fingerprint on the reservation', () => {

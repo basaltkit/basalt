@@ -13,6 +13,8 @@ import {
   assertValidTenantId,
   isValidTenantId,
   CentralOnlyRouteError,
+  InvalidTenantMetaError,
+  tenantMetaProblem,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -34,6 +36,8 @@ export {
   assertValidTenantId,
   isValidTenantId,
   CentralOnlyRouteError,
+  InvalidTenantMetaError,
+  tenantMetaProblem,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -547,7 +551,9 @@ export const TENANCY = createToken<Tenancy>('tenancy')
  * Whether this request must carry a tenant.
  *
  * Exported for tests; the path is compared without its query string, so
- * `/health` still matches `/health?probe=1`.
+ * `/health` still matches `/health?probe=1`. Throws
+ * {@link InvalidTenantMetaError} (500) for a `meta.tenant` other than `true`,
+ * `false`, `'never'` or absent — never a silent fallback to `required`.
  */
 export function isTenantRequired(
   required: TenancyPluginOptions['required'],
@@ -558,6 +564,11 @@ export function isTenantRequired(
   // sits next to the handler, so a central route stays central through a
   // rename, and a reviewer sees the decision without opening the app config.
   const declared = meta?.['tenant']
+  // Fail closed on a value tenancy does not know. The boot validator refuses
+  // such a route on every adapter and in mcpPlugin; this guards a custom
+  // driver that skipped `assertRouteMetaValid()` — falling back to `required`
+  // would serve a typo of 'never' (a central-only route) on tenant hosts.
+  if (tenantMetaProblem(declared) !== undefined) throw new InvalidTenantMetaError(declared)
   // 'never' is stricter than `false`: a central-only route not only runs
   // without a tenant, it refuses one (enforced by the enricher, not here).
   if (declared === false || declared === 'never') return false
@@ -645,8 +656,7 @@ export interface TenancyPluginOptions {
    *   and without entering the tenant's context. Use it on the SaaS owner's
    *   console (`/platform/*`): plans, tenant approval, operator roles.
    *
-   * Any other value falls back to the app-wide default and warns at boot;
-   * it refuses the boot from the next major.
+   * Any other value refuses the boot with `HTTP_INVALID_ROUTE_META`.
    */
   required?: boolean | { except: (string | RegExp)[] }
   /**
@@ -799,6 +809,16 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
           }),
       )
       registerTenantCommands(container, options)
+      // Boot-time check of `meta.tenant` (every adapter runs the
+      // `http:meta-validators` bucket over its routes). A typo such as
+      // `tenant: 'none'` or `tenant: 'false'` would otherwise silently fall
+      // back to the app-wide default — for a central-only route, that means
+      // serving tenant hosts. Structural signature: no @basaltkit/http import.
+      ensureMetadata(container).add(
+        'http:meta-validators',
+        ({ route }: { route: { meta?: Record<string, unknown> | undefined } }): string | undefined =>
+          tenantMetaProblem(route.meta?.['tenant']),
+      )
       // Marker other plugins read to adopt tenant-safe defaults (e.g.
       // @basaltkit/cache fails closed on a missing tenant scope when this app
       // is multi-tenant). String-keyed metadata — no package coupling.
@@ -826,6 +846,10 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
           container: unknown
           route?: { meta?: Record<string, unknown> | undefined }
         }) => {
+          // Fail closed BEFORE resolving: an unknown meta.tenant (a route that
+          // skipped the boot validator) must not run with or without a tenant.
+          const declared = route?.meta?.['tenant']
+          if (tenantMetaProblem(declared) !== undefined) throw new InvalidTenantMetaError(declared)
           const tenancy = container.get(TENANCY)
           const tenant = await tenancy.resolve({
             headers: request.headers ?? {},
@@ -856,48 +880,7 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
         },
       )
     },
-    boot({ container, hooks }) {
-      // Boot-time check of `meta.tenant`, read from the `http:routes` bucket
-      // every adapter publishes before `app:booted` (adapter-agnostic, no
-      // @basaltkit/http import). A typo such as `tenant: 'none'` falls back
-      // to the app-wide default, as it always did; it warns today and
-      // refuses the boot from the next major.
-      hooks.on('app:booted', () => warnInvalidTenantMeta(container))
-    },
   })
-}
-
-/** Containers already warned about invalid `meta.tenant` values. */
-const tenantMetaWarned = new WeakSet<Container>()
-
-/** At most this many routes are named in the `meta.tenant` warning. */
-const TENANT_META_WARN_LIMIT = 10
-
-/**
- * Warns once per container about routes whose `meta.tenant` is not
- * `undefined`, `true`, `false` or `'never'`. Such a value falls back to the
- * app-wide `required` default (see `isTenantRequired`).
- */
-function warnInvalidTenantMeta(container: Container): void {
-  if (tenantMetaWarned.has(container)) return
-  const routes = ensureMetadata(container).get<{ method?: unknown; url?: unknown; meta?: Record<string, unknown> }>(
-    'http:routes',
-  )
-  const invalid: string[] = []
-  for (const route of routes) {
-    const declared = route.meta?.['tenant']
-    if (declared === undefined || declared === true || declared === false || declared === 'never') continue
-    const method = Array.isArray(route.method) ? route.method.join(',') : String(route.method ?? '?')
-    invalid.push(`meta.tenant ${JSON.stringify(declared) ?? String(declared)} on ${method} ${String(route.url ?? '?')}`)
-  }
-  if (invalid.length === 0) return
-  tenantMetaWarned.add(container)
-  const shown = invalid.slice(0, TENANT_META_WARN_LIMIT)
-  const more = invalid.length > shown.length ? ` (and ${invalid.length - shown.length} more)` : ''
-  console.warn(
-    `[basalt] ${shown.join('; ')}${more} is not valid (expected true, false or 'never'; if you meant central-only, ` +
-      `the value is 'never') - falling back to the app-wide default; this will refuse to boot in the next major.`,
-  )
 }
 
 type Io = {

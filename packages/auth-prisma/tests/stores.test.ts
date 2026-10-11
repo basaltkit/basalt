@@ -292,6 +292,7 @@ describe('PrismaApiKeyStore · un-migrated auth_api_keys (auth-prisma 1.5.0 adde
     ['list', (s) => s.list({ tenantId: 't1' })],
     ['touch', (s) => s.touch('k1', 1)],
     ['revoke', (s) => s.revoke('k1', 1)],
+    ['update', (s) => s.update('k1', { name: 'x' })],
   ]
 
   // The shape of PrismaClientKnownRequestError for a missing column.
@@ -314,8 +315,8 @@ describe('PrismaApiKeyStore · un-migrated auth_api_keys (auth-prisma 1.5.0 adde
     expectOutdated(err, original)
     const message = (err as Error).message
     expect(message).toContain('1.5.0')
-    expect(message).toContain('auth_api_keys.expiresAt')
-    expect(message).toContain('ALTER TABLE "auth_api_keys" ADD COLUMN "expiresAt" TIMESTAMP(3);')
+    expect(message).toContain('expiresAt (since 1.5.0)')
+    expect(message).toContain('"expiresAt" TIMESTAMP(3)')
     expect(message).toContain('EVERY tenant schema')
     expect(message).toContain('basalt tenant:migrate')
   })

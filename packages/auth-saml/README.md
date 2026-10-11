@@ -26,6 +26,11 @@ as any other login. **This deliberately does not hand-roll SAML crypto.**
 pnpm add @basaltkit/auth-saml @node-saml/node-saml   # node-saml >= 5.1.0 is a peer dependency
 ```
 
+`@basaltkit/auth` (5.x) is a peer dependency too: `samlPlugin` signs users in
+through the app's own `Auth` (the `AUTH` binding `authPlugin` registers), so it
+must be the same copy your app installs. It also depends on `@basaltkit/http`
+3.x, the line your adapter runs.
+
 ## Usage
 
 ```ts

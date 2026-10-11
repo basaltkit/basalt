@@ -81,6 +81,14 @@ await createApp({
   (`reply.code(4xx).send(body)`) is its response contract and is not redacted.
 - **Cancellation**: `notifications/cancelled` answers the call as cancelled at
   once; a handler can stop early by checking `toolSignal(request)?.aborted`.
+- **Boot checks**: at boot `mcpPlugin` runs the adapters' checks
+  (`assertRoutesGuarded` with the container) over every route it exposes, so a
+  route reachable only through MCP is refused like an adapter route: security
+  meta no guard enforces (`HTTP_UNGUARDED_ROUTE_META`; waive with
+  `mcpPlugin({ allowUnguardedMeta })`, as on the adapter) and any value a
+  plugin's meta validator refuses — an unknown `meta.tenant`, an invalid
+  `meta.responseHeaders` (`HTTP_INVALID_ROUTE_META`, never waived).
+  `new McpServer()` used directly skips them: call `assertRoutesGuarded`.
 
 ### Browser safety and endpoint auth
 
@@ -100,8 +108,10 @@ without it; **404** for an unknown, expired or foreign session — the client
 re-initializes), and `DELETE /mcp` with it ends the session. All POSTs of a
 session share one cancellation scope, so a `notifications/cancelled` sent while a
 call runs cancels it; another session never can. A session is bound to the
-caller that opened it (`ctx().user` + tenant; anonymous: a keyed fingerprint
-of `Authorization`), expires after 30 min idle, and at most 1000 live at
+caller that opened it (`ctx().user` + tenant; a verified userless API key:
+its id + tenant, so the client must send the same key on every request of the
+session — a rotation keeps the id; anonymous: a keyed fingerprint of
+`Authorization`), expires after 30 min idle, and at most 1000 live at
 once (LRU eviction): `mcpRoutes({ sessions: { ttlMs, maxSessions } })`. Sessions
 are in-process memory — behind replicas use sticky sessions, or
 `mcpRoutes({ sessions: false })` to run stateless. `HttpClientTransport` carries

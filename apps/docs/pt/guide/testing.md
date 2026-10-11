@@ -156,6 +156,15 @@ parametrizado é o teste de conformidade mais barato para tudo o que é escrito
 contra o contrato neutro do `@basaltkit/http` — vê
 [Adaptadores HTTP](/pt/guide/adapters).
 
+O `@basaltkit/mailer` é um peer obrigatório (desde o `@basaltkit/testing` 3.0):
+o `fakeMailer()` regista o token `MAILER` da própria app, por isso tem de ser a
+cópia que a tua app e o `@basaltkit/notifications` usam. As apps do
+`create-basalt` declaram-no em `devDependencies`; noutros casos instala os dois:
+
+```bash
+pnpm add -D @basaltkit/testing @basaltkit/mailer
+```
+
 ::: warning Aviso: `app.server()` é só para Fastify, e é assíncrono
 O `await app.server()` resolve o token `FASTIFY`. Em `'express'` / `'hono'` lança
 `DI_UNKNOWN_TOKEN` — resolve antes `EXPRESS` / `HONO` a partir de

@@ -96,3 +96,22 @@ export class GuardsWithoutContainerError extends BasaltError {
     )
   }
 }
+
+/**
+ * A route pipeline carried enrichers but no container, so the enrichers could not
+ * run. Enrichers are where the request context is established — tenancy resolves
+ * (and refuses) the tenant there, auth the user — so skipping them silently is the
+ * same fail-open shape as skipping guards: the handler would run with no tenant
+ * and no user checks. Every shipped adapter wires both, so this only fires on a
+ * hand-built pipeline; it fails closed.
+ */
+export class EnrichersWithoutContainerError extends BasaltError {
+  readonly status = 500
+  constructor(route: string, count: number) {
+    super(
+      'HTTP_ENRICHERS_UNRUNNABLE',
+      `${route}: ${count} request enricher(s) are registered but the pipeline has no container, so none of them can run. ` +
+        'Pass `container` to the pipeline (every Basalt adapter does), or register no enrichers.',
+    )
+  }
+}

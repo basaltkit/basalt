@@ -278,8 +278,8 @@ antes de alguém estar autenticado, por isso registá-lo deixava qualquer client
 anónimo acrescentar entradas ao trilho (serializado e encadeado por hash) de um
 tenant tão depressa quanto conseguisse enviar pedidos.
 
-As recusas de uma chave que **foi** verificada — usada noutro tenant
-(`tenant_mismatch`), numa rota só de sessão (`not_allowed`) ou além dos seus
+As recusas de uma chave que **foi** verificada — usada fora da sua allowlist de
+IPs (`ip_not_allowed`), noutro tenant (`tenant_mismatch`), numa rota só de sessão (`not_allowed`) ou além dos seus
 scopes (`scope`) — continuam auditadas por padrão: o `apiKeysPlugin` emite-as
 uma segunda vez como `auth:apikey_refused` (`{ id, reason, tenantId? }`), que o
 `auth:**` regista. Só quem tem a chave as consegue causar, e a entrada identifica
@@ -543,6 +543,25 @@ sem ator — a não ser que lhe dês um:
   `scope.actorId`) diferente lança um `TypeError` em vez de escrever na cadeia de
   outro tenant. Ambos os valores têm de ser strings imprimíveis não vazias com no
   máximo 256 caracteres. Nunca reencaminhes input do cliente para ele.
+
+#### Atribuir chamadores não humanos {#attributing-non-human-callers}
+
+Dentro de um pedido, o ator é `ctx().user?.id`, por isso um chamador sem
+utilizador (uma [API key de serviço](/pt/guide/auth#apikeys-service), por
+exemplo) não regista ator. A opção `actor` resolve-o à tua maneira, no formato de
+id da tua app:
+
+```ts
+auditPlugin({
+  store,
+  actor: (c) => c?.user?.id ?? (c?.apiKey?.serviceId ? `svc:${c.apiKey.serviceId}` : undefined),
+})
+```
+
+O valor resolvido é o ator do pedido em todo o lado, por isso um `record()`
+manual cujo `scope.actorId` seja diferente lança um erro, exatamente como para
+um utilizador. A opção só muda o que as entradas **novas** registam; as entradas
+existentes e a cadeia ficam intactas, e sem ela nada muda.
 
 ## Tenancy — `@basaltkit/tenancy-sqlite` / `@basaltkit/tenancy-prisma`
 

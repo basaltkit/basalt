@@ -229,6 +229,9 @@ curl /v1/export                                                  # 403 AUTH_SCOP
 Only the SHA-256 hash and a short display prefix are stored; a leaked database
 yields no usable keys. `GET /apikeys` lists them (no hash, no plaintext);
 `DELETE /apikeys/:id` revokes. `*` in a key's scopes grants everything.
+`POST /apikeys/:id/rotate` replaces a leaked secret and `PATCH /apikeys/:id`
+changes its name, scopes, expiry or [IP allowlist](/guide/auth#apikeys-allowlist) —
+see [Rotating a key](/guide/auth#apikeys-rotation).
 
 ## 7. Team invitations
 

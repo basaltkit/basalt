@@ -18,7 +18,10 @@ A self-contained HTML **subscription** page for [`@basaltkit/subscriptions`](htt
 pnpm add @basaltkit/billing-ui @basaltkit/subscriptions
 ```
 
-Depends on `@basaltkit/core`, `@basaltkit/fastify`, and `@basaltkit/subscriptions`.
+Depends on `@basaltkit/core` and `@basaltkit/http` (3.x) — not on any single
+adapter. `@basaltkit/subscriptions` (6.x) is a **peer dependency**: the routes
+read the app's own `SUBSCRIPTIONS` binding, so it must be the copy your app
+installs.
 
 ## Get started in 5 minutes
 

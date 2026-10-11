@@ -19,7 +19,7 @@ without owning your schema or connection. It's the production counterpart to
 backend.
 
 ```bash
-pnpm add @basaltkit/auth-prisma   # peer: @basaltkit/auth ; you already have @prisma/client
+pnpm add @basaltkit/auth-prisma   # peer: @basaltkit/auth 5.x ; you already have @prisma/client
 ```
 
 ## 1. Add the models
@@ -38,7 +38,7 @@ model AuthUser {
 model AuthSession        { id String @id  userId String  expiresAt DateTime  lastSeenAt DateTime?  @@index([userId]) @@map("auth_sessions") }
 model AuthRefreshToken   { token String @id  familyId String  userId String  expiresAt DateTime  usedAt DateTime?  @@index([familyId]) @@index([userId]) @@map("auth_refresh_tokens") }
 model AuthToken          { token String @id  userId String  purpose String  expiresAt DateTime  usedAt DateTime?  @@index([userId, purpose]) @@map("auth_tokens") }
-model AuthApiKey         { id String @id  name String  prefix String  hash String @unique  tenantId String?  userId String?  scopes String[]  createdAt DateTime  expiresAt DateTime?  lastUsedAt DateTime?  revokedAt DateTime?  @@map("auth_api_keys") }
+model AuthApiKey         { id String @id  name String  prefix String  hash String @unique  tenantId String?  userId String?  scopes String[]  createdAt DateTime  expiresAt DateTime?  lastUsedAt DateTime?  revokedAt DateTime?  serviceId String?  previousHash String? @unique  previousHashExpiresAt DateTime?  rotatedAt DateTime?  allowedIps String[] @default([])  meta Json?  @@index([serviceId]) @@map("auth_api_keys") }
 model AuthMfa            { userId String @id  secret String  enabled Boolean @default(false)  recoveryCodes String[]  lastUsedStep Int?  @@map("auth_mfa") }
 model AuthTokenVersion   { userId String @id  version Int @default(0)  @@map("auth_token_versions") }
 model AuthAccountLink    { id String @id  provider String  subject String  userId String  email String  createdAt DateTime  @@index([userId]) @@map("auth_account_links") }
@@ -73,6 +73,87 @@ Sessions written before `trackSessionActivity` was on (`lastSeenAt` null) start
 their idle clock on their next use. Rows written with it on record their
 creation time, and nothing updates it while `sessionIdleTtl` is off, so turning
 the idle timeout on later signs out sessions older than the window once.
+
+## Upgrading to 3.0
+
+3.0.0 stores the API key lifecycle of `@basaltkit/auth` 5.0: rotation with a
+grace window, service keys, a per-key IP allowlist and metadata. It requires
+`@basaltkit/auth` 5 (peer `^5.0.0`) and the six new columns in the database;
+upgrade both in the same change (`create-basalt update` does). `AuthApiKey`
+gains six columns: `serviceId`, `previousHash` (unique), `previousHashExpiresAt`,
+`rotatedAt`, `allowedIps` and `meta`. `PrismaApiKeyStore` now implements the
+optional `ApiKeyStore.update`, and `findByHash` also looks a key up by its
+previous hash.
+
+This is a major because the database **and** the generated client must both
+have the columns. Prisma selects every column of the model, so a client
+generated from the new schema fails every API-key query until the database is
+migrated. A client generated from the old schema fails the new
+`previousHash` lookup. Copy the model from the reference schema by hand,
+`@basaltkit/auth-prisma/schema.prisma` (or `schema.mysql.prisma` on MySQL;
+`basalt prisma:sync` only adds missing models, never new fields to an existing
+one), run
+`prisma generate`, then create the migration:
+
+```bash
+prisma migrate dev --name add_api_key_lifecycle
+```
+
+`migrate dev` warns that a unique constraint on `previousHash` will be added and
+may fail on duplicate values. That is safe here: the column is new, so every
+existing row holds `NULL`, and `NULL`s never collide. `migrate dev` also refuses
+to run in a non-interactive shell (CI, a container, an agent). There, generate
+the SQL and apply it with `migrate deploy`:
+
+```bash
+mkdir -p prisma/migrations/20261011000000_add_api_key_lifecycle
+prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script \
+  > prisma/migrations/20261011000000_add_api_key_lifecycle/migration.sql
+prisma migrate deploy
+```
+
+`--to-schema` is your app's schema file, whatever the database. Or paste
+`API_KEY_LIFECYCLE_MIGRATION_SQL.postgresql` (or `.mysql`) into that
+`migration.sql` — it is the same statements as below.
+
+On PostgreSQL the generated migration is:
+
+```sql
+ALTER TABLE "auth_api_keys" ADD COLUMN "allowedIps" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN "meta" JSONB,
+ADD COLUMN "previousHash" TEXT,
+ADD COLUMN "previousHashExpiresAt" TIMESTAMP(3),
+ADD COLUMN "rotatedAt" TIMESTAMP(3),
+ADD COLUMN "serviceId" TEXT;
+CREATE UNIQUE INDEX "auth_api_keys_previousHash_key" ON "auth_api_keys"("previousHash");
+CREATE INDEX "auth_api_keys_serviceId_idx" ON "auth_api_keys"("serviceId");
+```
+
+On MySQL (`schema.mysql.prisma`):
+
+```sql
+ALTER TABLE `auth_api_keys` ADD COLUMN `allowedIps` JSON NULL,
+  ADD COLUMN `meta` JSON NULL,
+  ADD COLUMN `previousHash` VARCHAR(191) NULL,
+  ADD COLUMN `previousHashExpiresAt` DATETIME(3) NULL,
+  ADD COLUMN `rotatedAt` DATETIME(3) NULL,
+  ADD COLUMN `serviceId` VARCHAR(191) NULL;
+CREATE UNIQUE INDEX `auth_api_keys_previousHash_key` ON `auth_api_keys`(`previousHash`);
+CREATE INDEX `auth_api_keys_serviceId_idx` ON `auth_api_keys`(`serviceId`);
+```
+
+All the new columns are nullable (or default to an empty list), so existing keys
+keep working unchanged. **Schema-per-tenant:** add the migration to your tenant
+migrations and run `basalt tenant:migrate`, so every tenant schema gets the
+columns. Until they exist, `PrismaApiKeyStore` throws `ApiKeySchemaOutdatedError`
+(`AUTH_API_KEY_SCHEMA_OUTDATED`) with this SQL, keeping the original Prisma error
+as `cause`. That covers both a P2022 "column does not exist" and a stale
+client's "Unknown argument `previousHash`". The SQL is also exported as
+`API_KEY_LIFECYCLE_MIGRATION_SQL`.
+
+`columnLimits: 'mysql'` also bounds `serviceId` and `previousHash` (VARCHAR(191)).
+A cleared allowlist is stored as `[]` and cleared metadata as `{}`; both read
+back as absent.
 
 ## Upgrading to 2.0
 

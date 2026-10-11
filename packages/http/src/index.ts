@@ -8,6 +8,7 @@ export {
   type HttpReply,
 } from './route.js'
 export {
+  EnrichersWithoutContainerError,
   GuardsWithoutContainerError,
   HttpError,
   RequestValidationError,
@@ -183,6 +184,7 @@ export {
   type RouteVisibilityCheck,
 } from './route-visibility.js'
 export { redactUrl, REDACTED } from './redact-url.js'
+export { InvalidRouteHeadersError } from './route-headers.js'
 export {
   describeRoutes,
   findUnguardedRoutes,

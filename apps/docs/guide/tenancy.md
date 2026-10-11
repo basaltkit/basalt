@@ -675,11 +675,22 @@ the route exists. Put `tenancyPlugin` ahead of them in
 | `false` | runs without a tenant | runs in the tenant |
 | `'never'` | runs without a tenant | `404 NOT_FOUND`, handler not run |
 
-Any other value (`'none'`, `'false'`, `0`, `null`) falls back to the app-wide
-default, as it always did, and logs one boot warning naming the routes: a typo
-for `'never'` would otherwise serve the route on tenant hosts. The next major
-refuses such a boot with `HTTP_INVALID_ROUTE_META`. `basalt ai doctor` warns
+Any other value (`'none'`, `'optional'`, `'false'`, `0`, `null`) refuses the
+boot with `HTTP_INVALID_ROUTE_META`, naming every offending route, on every
+adapter: a typo for `'never'` would otherwise fall back to the app-wide default
+and serve the route on tenant hosts. (`@basaltkit/tenancy` 3.2 only
+warned and fell back.) `basalt ai doctor` warns
 about routes that pair `tenant: false` with a `platform:` permission.
+
+`mcpPlugin` runs the same check over the routes it exposes as MCP tools. A
+route that skips it — a custom driver calling `runRoute()` without
+`assertRouteMetaValid()` — fails closed on each request: `isTenantRequired()`
+and the tenancy enricher throw `InvalidTenantMetaError`
+(`TENANCY_INVALID_ROUTE_META`, `500`) before resolving any tenant, instead of
+falling back to `required`. The driver must pass the app's enrichers
+(`http:enrichers`) to `runRoute()`, as every adapter does; passing them without
+a `container` is refused too (`HTTP_ENRICHERS_UNRUNNABLE`, `@basaltkit/http`
+3.0), so the enricher can no longer be skipped in silence.
 
 Exempting a path only lifts the tenant requirement. Auth, subscription checks
 and every other guard still run.

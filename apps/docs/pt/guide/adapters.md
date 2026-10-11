@@ -608,6 +608,7 @@ nativos da sua framework.
 | `UnguardedRouteMetaError` no boot | uma rota declara meta de segurança que nenhum guard registado aplica | regista o plugin que a aplica, ou `allowUnguardedMeta` (vê [Segurança](/pt/guide/security)) |
 | `InvalidRouteMetaError` no boot | o validador de meta de rota de um plugin recusou um valor (ex.: um `meta.teamRole` desconhecido) | corrige o valor; o `allowUnguardedMeta` não o dispensa (vê [Segurança](/pt/guide/security)) |
 | `500 HTTP_GUARDS_UNRUNNABLE` | o pipeline da rota tem guards mas não tem container, por isso nenhum deles pôde correr | passa `container` ao pipeline — todos os adapters do kit passam; só pipelines feitos à mão chegam aqui |
+| `500 HTTP_ENRICHERS_UNRUNNABLE` | o pipeline da rota tem enrichers (tenancy, auth…) mas não tem container, por isso nenhum deles pôde correr (desde o http 3.0; antes eram ignorados em silêncio) | passa `container` ao pipeline — todos os adapters do kit passam; só pipelines feitos à mão chegam aqui |
 | `400 HTTP_VALIDATION` | o body/query/params falhou o schema Zod da rota | a resposta lista a parte e as issues por campo |
 | `404 { code: 'NOT_FOUND' }` numa rota que definiste | a rota não foi registada nesta instância do adapter | confirma que está em `routes: [...]` do plugin do adapter que arrancou |
 | `413 PAYLOAD_TOO_LARGE` | o body excedeu o limite de corpo (1 MiB por omissão nos três) | sobe o `bodyLimit` (`fastify: { bodyLimit }` no Fastify) deliberadamente |
@@ -637,6 +638,5 @@ createApp({
 ```
 
 O `idempotencyPlugin` também é neutro: corre dentro do pipeline de rotas
-partilhado, por isso replays, conflitos e as opções `fingerprint` /
-`replayAfterGuards` comportam-se de forma idêntica nos três adapters — vê
+partilhado, por isso replays, conflitos, as suas predefinições e opções comportam-se de forma idêntica nos três adapters — vê
 [Mutações idempotentes](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin).

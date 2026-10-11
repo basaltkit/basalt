@@ -296,10 +296,12 @@ replace a global header of the same name (here `securityPlugin`'s
 The values are checked at boot on every adapter: strings without CR, LF or
 other control characters, and never `Set-Cookie`, `Content-Type`,
 `Content-Length`, `Transfer-Encoding`, hop-by-hop headers or `X-Request-Id`,
-which belong to the response or the adapter. A route whose record breaks a rule
-gets one boot warning naming it, and its **whole** `responseHeaders` record is
-ignored — none of its headers is sent, valid siblings included, and the request
-never fails because of it. The next major refuses such a boot.
+which belong to the response or the adapter. A record that breaks a rule
+refuses the boot with `HTTP_INVALID_ROUTE_META`, naming every offending route
+(`@basaltkit/http` 2.8 only warned and sent none of its headers). If you drive
+`runRoute()` yourself without `assertRouteMetaValid()`, such a route throws
+`InvalidRouteHeadersError` (`500`, `HTTP_INVALID_ROUTE_HEADERS`) on each request
+before any of its headers is set.
 
 The key is `responseHeaders`, not `headers`: route meta is also yours, and
 nothing reads or sends `meta.headers`. A request that never reaches the
@@ -447,10 +449,10 @@ card twice. It runs inside the shared route pipeline, so it behaves the same on
 ```ts
 import { idempotencyPlugin } from '@basaltkit/http' // also re-exported by @basaltkit/fastify
 
-idempotencyPlugin({
-  fingerprint: 'body',     // a different body under the same key → 422
-  replayAfterGuards: true, // a revoked caller gets 401/403, not the cached success
-}) // guards POST by default
+// Guards POST by default. Each key is bound to its request (params, query and
+// body: a different one → 422), and replays happen only after the route guards
+// and validation (a revoked caller gets 401/403, not the cached success).
+idempotencyPlugin()
 ```
 
 - Repeat with the same key → the cached response, with `Idempotent-Replayed: true`.
@@ -469,17 +471,31 @@ idempotencyPlugin({
   pattern**, hashed with SHA-256 before they reach the store. The credentials
   are every header in `credentialHeaders` (default `authorization`,
   `x-session-id`, `cookie`, `x-api-key`), so one credential's cached response is
-  never replayed to another credential. If you authenticate with another header,
-  add it to `credentialHeaders`.
+  never replayed to another credential. The route is its *pattern*
+  (`/accounts/:id/charge`), so the same key on two different routes never
+  collides. If you authenticate with another header, add it to
+  `credentialHeaders`.
 - **What the scope does not cover.** The tenant part is only the raw
   `x-tenant-id` and `host` headers — not a tenant resolved from a path segment
   (`/t/:tenant/...`) or a token claim — and the route is its *pattern*, not the
-  concrete path params. The same credential reusing one key on
-  `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and
-  `/orders/2/pay`, receives the **first** response. Have clients mint a fresh
-  key per operation (and per tenant), and bind the key to the URL so such a
-  reuse is refused with `422`:
-  `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
+  concrete path params. The default `fingerprint` (`'request'`, below) binds
+  those params, the query and the body, so the same credential reusing one key
+  on `/t/acme/orders` and `/t/globex/orders`, or on `/orders/1/pay` and
+  `/orders/2/pay`, is refused with `422`. With `fingerprint: 'body'` or `false`
+  that reuse receives the **first** response: have clients mint a fresh key per
+  operation (and per tenant).
+- **The credential part is raw bytes.** A retry whose credential headers
+  differ in any byte is a different caller to the plugin: after an API key
+  [rotation](/guide/auth#apikeys-rotation), after switching from `x-api-key` to
+  `Authorization: Bearer` (or back), or after the `cookie` header changed, the
+  retry finds no record and **runs the operation again**. It never replays to
+  another caller; it can duplicate. Retry with the credential the first attempt
+  used. See [API keys and idempotency](/guide/auth#apikeys-idempotency).
+- **The recorded response is stored as sent**, for `ttlMs` (24 h by default),
+  in the configured store. A response that carries a secret — `POST /apikeys`
+  and `POST /apikeys/:id/rotate` return the plaintext key — sits in that store
+  (process memory, or Redis) when the client sent `Idempotency-Key`. Protect a
+  shared store like any secret store.
 - Requests with **no** credential header are not cached or replayed by default
   (a stranger who guessed the key would otherwise get the response). Opt in with
   `allowAnonymous: true` only for public endpoints with nothing private in them.
@@ -490,38 +506,62 @@ idempotencyPlugin({
   register on the underlying framework by hand — a raw `fastify.post(...)` — is
   not covered: declare it with `route()`.
 
-**Bind the key to the request — `fingerprint`.** Without it, a client that
-reuses a key for a *different* request (a bug, or a retry after the user edited
-the form) silently receives the first request's result. `fingerprint: 'body'`
-stores a SHA-256 of the body with the record — canonical JSON with sorted keys
-for a parsed body, the exact bytes for a [`rawBody()`](/guide/adapters#raw-request-bodies-webhook-signatures)
-route — and answers a mismatch with `422 IDEMPOTENCY_KEY_REUSED`, also while
-the first request is still running. `'body'` covers the body only, not the
-query string or the path params. `upload()` routes are not fingerprinted by
-`'body'`; pass a function (`({ route, request }) => string | undefined`) to
-fingerprint them, or anything else (the URL, a header), your way.
+**The key is bound to the request — `fingerprint`.** A client that reuses a key
+for a *different* request (a bug, or a retry after the user edited the form)
+would otherwise silently receive the first request's result. The fingerprint is
+a SHA-256 stored with the record; a repeat whose fingerprint differs is refused
+with `422 IDEMPOTENCY_KEY_REUSED`, also while the first request is still
+running. The modes:
 
-During a rolling deploy with `fingerprint` on, `RedisIdempotencyStore` writes
-in-flight reservations as `pending:<fingerprint>`, which an instance still on an
-older release misreads: roll the new release out first, then turn `fingerprint`
-on.
+- `'request'` (default) — the route params, the query and the body: canonical
+  JSON with sorted keys for a parsed body, the exact bytes for a
+  [`rawBody()`](/guide/adapters#raw-request-bodies-webhook-signatures) route.
+  The same key on `/accounts/1/charge` and then `/accounts/2/charge` is a
+  `422`, even with an identical body. `upload()` routes bind only params and
+  query: their stream belongs to the handler and is not read.
+- `'body'` — the body only (canonical JSON, or the raw bytes); params and query
+  are not bound, and `upload()` routes are not fingerprinted.
+- a function `({ route, request }) => unknown` — your own fingerprint. An
+  object or array is canonicalized first, so key order never matters; a string
+  or other primitive is hashed as-is. Return `undefined` to skip a request.
+- `false` — keys are not bound to a request.
 
-**Where the check runs — `replayAfterGuards`.** By default the check runs after
-the enrichers and **before** the route guards. Running after the enrichers means
-the tenant is resolved first: a suspended tenant gets its `403`, not a replay.
-Running before the guards means a caller whose token was revoked since the first
-request still receives the cached success, as long as it presents the same
-credential header. With `replayAfterGuards: true` it runs
-after the guards and request validation, just before the handler — the revoked
-caller gets the guard's `401`/`403`, and a request that fails validation never
-reserves the key. A `rawBody()` route fingerprinted by `'body'` is always
-checked after the guards, since its bytes are never read before they pass.
+With `fingerprint` on, `RedisIdempotencyStore` writes in-flight reservations as
+`pending:<fingerprint>`, which an instance still on the Fastify-only plugin
+(`@basaltkit/fastify` 2.5 or older) misreads during a rolling deploy: move the
+whole fleet onto `@basaltkit/http` 2.8 / `@basaltkit/fastify` 2.6 first, then
+upgrade to 3.x.
 
-Both options are off by default so existing apps keep their behaviour; a
-future major will turn them on. A custom `IdempotencyStore` keeps working
-unchanged — to answer a concurrent repeat with `422` instead of `409` it can
-also keep the `fingerprint` passed to `setPending(key, { fingerprint })` and
-return `{ pending: true, fingerprint }` from `get()`, as both bundled stores do.
+A function is how you drop volatile fields a client changes on every retry:
+
+```ts
+idempotencyPlugin({
+  fingerprint: ({ request }) => {
+    const { sentAt, ...rest } = (request.body ?? {}) as Record<string, unknown>
+    return { params: request.params, body: rest } // canonicalized: key order is irrelevant
+  },
+})
+```
+
+**Where the check runs — `replayAfterGuards`.** By default (`true`) the check
+runs after the route guards and request validation, just before the handler: a
+caller whose token was revoked since the first request gets the guard's
+`401`/`403` instead of the cached success, guards run on every replay (a
+suspended tenant gets its `403`, not a replay), and a request that fails
+validation never reserves the key. `false` runs it after
+the enrichers and **before** the guards: a revoked caller presenting the same
+credential header then still receives the cached success. Even then, a
+`rawBody()` route fingerprinted by `'request'` or `'body'` is checked after the
+guards, since its bytes are never read before they pass.
+
+To keep the `@basaltkit/http` 2.x behaviour, pass
+`idempotencyPlugin({ fingerprint: false, replayAfterGuards: false })` — see
+[Upgrading: idempotency is strict by default](/guide/whats-new#idempotency-strict-by-default).
+A custom `IdempotencyStore` must persist `record.fingerprint` for a completed
+record to be refused with `422`; to answer a concurrent repeat with `422`
+instead of `409` it also keeps the `fingerprint` passed to
+`setPending(key, { fingerprint })` and returns `{ pending: true, fingerprint }`
+from `get()`, as both bundled stores do.
 
 ## Revoking access tokens
 

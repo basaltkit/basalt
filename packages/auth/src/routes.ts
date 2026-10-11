@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { AUTH, CsrfRejectedError, isCsrfRejected } from './plugin.js'
 import { RegistrationClosedError, type RegisterPolicy } from './auth.js'
 import { API_KEYS } from './apikeys-plugin.js'
+import { ApiKeyNotFoundError } from './apikeys.js'
 
 /**
  * How strong a password has to be.
@@ -250,18 +251,30 @@ export function authRoutes(options: AuthRoutesOptions = {}): BasaltRoute[] {
   ]
 }
 
-class ApiKeyForbiddenError extends BasaltError {
-  readonly status = 404
-  constructor() {
-    super('AUTH_APIKEY_NOT_FOUND', 'API key not found.')
-  }
-}
+/** `?includeExpired=true|false` — a query string is text, so coerce it explicitly. */
+const queryBoolean = z
+  .enum(['true', 'false'])
+  .optional()
+  .transform((value) => value === 'true')
 
 /**
- * CRUD routes for API keys, all requiring a logged-in user (`meta.auth`). Keys
- * are scoped to the caller's tenant (`ctx().tenant`) and user; a caller only
- * ever sees or revokes keys within that scope. Register alongside
- * {@link authRoutes} and pair with `apiKeysPlugin`.
+ * Self-service routes for API keys, all requiring a logged-in user
+ * (`meta.auth`) and refusing API keys (`meta.apiKey: false`, so a key can never
+ * mint, extend, rotate or unrestrict a key). Keys are scoped to the caller's
+ * tenant (`ctx().tenant`) and user; a caller only ever sees or changes keys
+ * within that scope, anything else is 404 `AUTH_APIKEY_NOT_FOUND`. Service keys
+ * (`serviceId`) have no user, so they are never reachable here: mint and manage
+ * them with `ApiKeys` behind the app's own permission check.
+ *
+ * - `POST /apikeys` issues a key (the plaintext `key` is returned once);
+ * - `GET /apikeys[?includeExpired=true]` lists live keys;
+ * - `PATCH /apikeys/:id` changes `name`, `scopes`, `expiresAt` (`null` = never),
+ *   `allowedIps` and `meta` in one write;
+ * - `POST /apikeys/:id/rotate` replaces the secret (`graceMs` keeps the old one
+ *   working that long) and returns the new `key` once;
+ * - `DELETE /apikeys/:id` revokes.
+ *
+ * Register alongside {@link authRoutes} and pair with `apiKeysPlugin`.
  */
 export function apiKeyRoutes(): BasaltRoute[] {
   // `tenant` is set by @basaltkit/tenancy when present; read it without a hard
@@ -274,6 +287,16 @@ export function apiKeyRoutes(): BasaltRoute[] {
     }
   }
 
+  /** The key, when it is within the caller's scope; otherwise 404. */
+  const owned = async (id: string) => {
+    const record = await apiKeys().get(id)
+    const { tenantId, userId } = scope()
+    if (!record || record.tenantId !== tenantId || record.userId !== userId) throw new ApiKeyNotFoundError()
+    return record
+  }
+
+  const meta = z.record(z.string(), z.string())
+
   return [
     route({
       method: 'POST',
@@ -285,6 +308,8 @@ export function apiKeyRoutes(): BasaltRoute[] {
         name: z.string().min(1).max(100),
         scopes: z.array(z.string().min(1)).optional(),
         expiresAt: z.number().int().positive().optional(),
+        allowedIps: z.array(z.string()).optional(),
+        meta: meta.optional(),
       }),
       async handler({ body, reply }) {
         const { record, key } = await apiKeys().issue({ ...body, ...scope() })
@@ -299,8 +324,41 @@ export function apiKeyRoutes(): BasaltRoute[] {
       // Session-only: a key must never mint, list or revoke keys (a narrow or
       // expiring key could otherwise mint a permanent '*' key).
       meta: { auth: true, apiKey: false },
-      async handler() {
-        return apiKeys().list(scope())
+      query: z.object({ includeExpired: queryBoolean }),
+      async handler({ query }) {
+        return apiKeys().list({ ...scope(), includeExpired: query.includeExpired })
+      },
+    }),
+
+    route({
+      method: 'PATCH',
+      url: '/apikeys/:id',
+      meta: { auth: true, apiKey: false },
+      params: z.object({ id: z.string() }),
+      body: z.object({
+        name: z.string().min(1).max(100).optional(),
+        scopes: z.array(z.string().min(1)).optional(),
+        expiresAt: z.number().int().positive().nullable().optional(),
+        allowedIps: z.array(z.string()).nullable().optional(),
+        meta: meta.nullable().optional(),
+      }),
+      async handler({ params, body }) {
+        await owned(params.id)
+        return apiKeys().update(params.id, body)
+      },
+    }),
+
+    route({
+      method: 'POST',
+      url: '/apikeys/:id/rotate',
+      meta: { auth: true, apiKey: false },
+      params: z.object({ id: z.string() }),
+      body: z.object({ graceMs: z.number().int().min(0).optional() }).optional(),
+      async handler({ params, body, reply }) {
+        await owned(params.id)
+        const { record, key } = await apiKeys().rotate(params.id, { graceMs: body?.graceMs })
+        // The new `key` is returned exactly once.
+        return reply.code(201).send({ ...record, key })
       },
     }),
 
@@ -310,12 +368,8 @@ export function apiKeyRoutes(): BasaltRoute[] {
       meta: { auth: true, apiKey: false },
       params: z.object({ id: z.string() }),
       async handler({ params, reply }) {
-        const record = await apiKeys().get(params.id)
-        const { tenantId, userId } = scope()
         // Only expose/act on keys within the caller's scope; otherwise 404.
-        if (!record || record.tenantId !== tenantId || record.userId !== userId) {
-          throw new ApiKeyForbiddenError()
-        }
+        await owned(params.id)
         await apiKeys().revoke(params.id)
         return reply.code(204).send()
       },

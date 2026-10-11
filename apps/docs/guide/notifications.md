@@ -23,6 +23,9 @@ Two layers, one direction of dependency:
 The `mail` channel bridges the two: when `mailerPlugin` is registered, the
 notifier delivers mail through it automatically. Use the mailer directly for
 transactional flows that aren't "notifications" (password reset, magic links).
+`@basaltkit/mailer` is a peer of `@basaltkit/notifications` (since 2.0), so
+both read the same `MAILER` binding: install it in the app
+(`pnpm add @basaltkit/notifications @basaltkit/mailer`).
 
 ## Define a notification
 
@@ -270,15 +273,30 @@ The notifier decides each channel in this order: a `mandatory` channel is always
 sent; an inline `channelPreferences: { x: false }` mutes it; otherwise the most
 specific stored preference decides; then an inline `true`; and only when the
 recipient stated nothing does `defaults[channel]` (default `true`) apply.
-`NotificationPreferences.allowed()` is unchanged (default allow); the new
-`preference()` returns `undefined` when nothing matches.
+`NotificationPreferences.preference()` is that stored-preference step: it
+returns the most specific match's `enabled`, or `undefined` when nothing
+matches.
 
-A `NotificationPreferences` subclass that overrides `allowed()` (quiet hours,
-compliance blocks, plan gating) keeps working: the notifier detects the
-override and lets it decide, as before — its answer is final, `defaults` do not
-apply to it, and `mandatory` channels still bypass it. Overriding `allowed()`
-is deprecated: override `preference()` instead (return `undefined` for "no
-stated preference"). The next major stops consulting an `allowed()` override.
+`preference()` is the only extension point. For quiet hours, compliance blocks
+or plan gating, subclass `NotificationPreferences` and override it — return
+`false` to block, `true` to send, `undefined` to let `defaults` decide;
+`mandatory` channels still bypass it:
+
+```ts
+class QuietHours extends NotificationPreferences {
+  override async preference(userId: string, notification: string, channel: string) {
+    if (channel === 'sms' && isNight(userId)) return false
+    return super.preference(userId, notification, channel)
+  }
+}
+```
+
+`allowed()` was removed in `@basaltkit/notifications` 2.0. A preferences object
+that still defines it (a 1.x override) makes `new Notifier()` throw
+`LegacyAllowedOverrideError` (`NOTIFICATION_ALLOWED_OVERRIDE_REMOVED`) instead
+of silently ignoring the logic: move it into `preference()`. Code that *called*
+`allowed()` to ask "may I send?" can use
+`(await prefs.preference(userId, notification, channel)) ?? true`.
 
 ## The in-app inbox
 

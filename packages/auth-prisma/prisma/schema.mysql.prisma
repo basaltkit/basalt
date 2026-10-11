@@ -76,9 +76,17 @@ model AuthApiKey {
   expiresAt  DateTime?
   lastUsedAt DateTime?
   revokedAt  DateTime?
+  // 3.0: API key lifecycle (migration `add_api_key_lifecycle`).
+  serviceId             String?
+  previousHash          String?   @unique
+  previousHashExpiresAt DateTime?
+  rotatedAt             DateTime?
+  allowedIps            Json?
+  meta                  Json?
 
   @@index([tenantId])
   @@index([userId])
+  @@index([serviceId])
   @@map("auth_api_keys")
 }
 

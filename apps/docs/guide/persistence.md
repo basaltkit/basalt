@@ -272,8 +272,8 @@ fires for every request that presents a dead API key, before anyone is
 authenticated, so recording it let any anonymous client append to a tenant's
 (serialized, hash-chained) trail as fast as it could send requests.
 
-Refusals of a key that **did** verify — used in another tenant
-(`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond its
+Refusals of a key that **did** verify — used from outside its IP allowlist
+(`ip_not_allowed`), in another tenant (`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond its
 scopes (`scope`) — are still audited by default: `apiKeysPlugin` emits them a
 second time as `auth:apikey_refused` (`{ id, reason, tenantId? }`), which `auth:**`
 records. Only a key holder can cause one, and the entry names the key, so a
@@ -526,6 +526,24 @@ actor — unless you give it one:
   user), a different `scope.tenantId` (or `scope.actorId`) throws a `TypeError`
   rather than writing into another tenant's chain. Both values must be non-empty
   printable strings of at most 256 characters. Never forward client input into it.
+
+#### Attributing non-human callers {#attributing-non-human-callers}
+
+Inside a request the actor is `ctx().user?.id`, so a caller without a user (a
+[service API key](/guide/auth#apikeys-service), for one) records no actor. The
+`actor` option resolves it your way, in your app's own id format:
+
+```ts
+auditPlugin({
+  store,
+  actor: (c) => c?.user?.id ?? (c?.apiKey?.serviceId ? `svc:${c.apiKey.serviceId}` : undefined),
+})
+```
+
+The resolved value is the request actor everywhere, so a manual `record()` whose
+`scope.actorId` differs from it throws, exactly as it does for a user. The option
+only changes what **new** entries record; existing entries and the chain are
+untouched, and without it nothing changes.
 
 ## Tenancy — `@basaltkit/tenancy-sqlite` / `@basaltkit/tenancy-prisma`
 

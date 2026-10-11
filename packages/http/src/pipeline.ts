@@ -7,7 +7,13 @@ import {
   type ErrorDetails,
   type ErrorDetailsRedactor,
 } from './error-details.js'
-import { HttpError, RequestValidationError, type ValidationIssue, GuardsWithoutContainerError } from './errors.js'
+import {
+  EnrichersWithoutContainerError,
+  HttpError,
+  RequestValidationError,
+  type ValidationIssue,
+  GuardsWithoutContainerError,
+} from './errors.js'
 import { computeEtag, ifNoneMatchSatisfied } from './etag.js'
 // Cycle with error-report.ts (it imports clientErrorOf from here): runtime-safe,
 // both sides use the other only inside function bodies.
@@ -289,7 +295,15 @@ export async function runRoute(
       // carries them — a guard's 401, a validation 400 and a thrown 500 too.
       applyRouteHeaders(definition, reply)
       const scoped = context.container
-      // Fail closed: guards that cannot run must never be silently skipped.
+      // Fail closed: enrichers and guards that cannot run must never be silently
+      // skipped. An enricher is where tenancy resolves (and refuses) the tenant
+      // and auth the user; dropping it would run the handler unscoped.
+      if (!scoped && (pipeline.enrichers?.length ?? 0) > 0) {
+        throw new EnrichersWithoutContainerError(
+          `${definition.method} ${definition.url}`,
+          pipeline.enrichers?.length ?? 0,
+        )
+      }
       if (!scoped && (pipeline.guards?.length ?? 0) > 0) {
         throw new GuardsWithoutContainerError(
           `${definition.method} ${definition.url}`,

@@ -12,6 +12,14 @@ a API pública é **estável**: breaking changes apenas num novo **major**, nova
 funcionalidades num **minor**, e correções num **patch**. Podes depender de um
 intervalo `^1` e obter funcionalidades e correções sem quebras até ao próximo major.
 
+Um pacote também sobe um **major** quando sobe um pacote que tem de partilhar
+com a tua app: uma peer dependency (o pacote de funcionalidade de um adapter
+de armazenamento, os adapters do `testing`), ou uma dependência que partilha
+através do container da app, dos seus tipos de rota ou do seu pipeline de
+pedidos. Nunca sai como um patch que exige em silêncio a nova major de outro
+pacote. Uma dependência normal usada como cópia privada (rotas construídas com
+`route()`, um helper puro) recebe um patch.
+
 ## Versões dos pacotes & a release do Basalt
 
 O versionamento funciona em dois níveis, de propósito:
