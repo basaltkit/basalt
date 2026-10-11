@@ -64,25 +64,14 @@ export class NotificationPreferences {
   }
 
   /**
-   * Whether a (notification, channel) may be sent to a user — the most
-   * specific preference decides; default allowed.
-   *
-   * The `Notifier` decides through {@link preference} and the notification's
-   * `defaults`. A subclass that overrides this method is still honoured by
-   * the `Notifier` (its answer is final, `defaults` do not apply).
-   *
-   * @deprecated as an extension point: override {@link preference} instead.
-   * The `Notifier` stops consulting an `allowed()` override in the next major.
-   * Calling it stays supported.
-   */
-  async allowed(userId: string, notification: string, channel: string): Promise<boolean> {
-    return (await this.preference(userId, notification, channel)) ?? true
-  }
-
-  /**
    * The user's stated choice for a (notification, channel): the `enabled` of
    * the most specific matching preference, or `undefined` when none matches —
    * which lets the caller apply a notification's own default instead.
+   *
+   * The only decision point the `Notifier` consults (after `mandatory` and an
+   * inline opt-out, before the definition's `defaults`). Override it for
+   * quiet hours, compliance blocks or plan gating: return `false` to block,
+   * `true` to send, `undefined` for "no stated preference".
    */
   async preference(userId: string, notification: string, channel: string): Promise<boolean | undefined> {
     let best: { rank: number; enabled: boolean } | undefined
