@@ -420,3 +420,139 @@ Decided 2026-10-11 by the product owner.
    `.env`: `pm2 save` writes the process environment to `~/.pm2/dump.pm2`, so
    passing the file would copy every secret there. The app loads its own
    `.env` (LexFirma: `import 'dotenv/config'` in `src/server.ts`).
+
+## 13. Phase 2 — the `compose` runtime, and Mukanda
+
+Mukanda deploys with `scripts/deploy-prod.sh` (843 lines, run with `sudo`):
+three images built per commit, a compose file with five services on four
+networks, Postgres/Redis/MinIO started by the script outside compose, two
+database roles (an owner that migrates, an app role without DDL), migrations
+through its own `scripts/db.ts deploy`, bucket versioning and expiry rules,
+ClamAV signatures seeded into a volume, two env files under `/etc/mukanda`,
+and health checks that go beyond `/readyz`.
+
+What is common to any Basalt app on Compose goes into the package; what only
+Mukanda does stays in Mukanda, called at fixed points of the pipeline.
+
+### 13.1 Every step of `deploy-prod.sh`, and where it goes
+
+| `deploy-prod.sh` | Phase 2 |
+|---|---|
+| `bootstrap` (apt, Docker, swap, ufw, Node) | stays in the script — provisioning is a non-goal (§1) |
+| `preflight`, `validate_deploy_config` | package preflight (C1–C11) |
+| `ensure_vm_infra` (Postgres + roles + grants) | `hooks.infra` → `scripts/deploy/infra.sh` (Mukanda) |
+| `build_images` (3 × `docker build -t name:sha`) | `compose({ images })` — built once per commit, skipped when the tag exists |
+| `write_env_files` (api.env, copied to worker.env) | the `.env` step, `env.file` absolute + `env.mirror` |
+| `migrate_db` (`tsx scripts/db.ts deploy` with host URLs) | `migrate.command` + `migrate.env` (a function of the `.env`) |
+| `compose_up` (networks, Redis/MinIO, buckets, ILM, clamav seed, `up -d`) | `hooks.infra` for the Mukanda-only parts; `compose up -d` by the runtime |
+| `record_sha` (`/etc/mukanda/current-sha`) | `releases.json` (§8) |
+| `build_web` | `build.web` |
+| `configure_proxy` (Caddy; `PROXY=none` on the server) | `apache({ managed: false })` — checked, never written (§13.4) |
+| `healthcheck` 1–2 (api healthy, nothing restarting) | the compose runtime's health |
+| `healthcheck` 3–4 (ingest-worker reaches Redis, migrations in the image) | `hooks.verify` (Mukanda) |
+| `healthcheck` 5–6 (loopback and public `/readyz`) | the package health (`health.path: '/readyz'`) |
+| `rollback` (previous images, no rebuild) | the package rollback; images of earlier releases are kept |
+
+### 13.2 The `compose` runtime
+
+```ts
+runtime: compose({
+  file: 'docker/compose.prod.yml',
+  images: [                                   // tag must start with the app name (C4)
+    { tag: 'mukanda', dockerfile: 'docker/app/Dockerfile', env: 'MUKANDA_IMAGE' },
+    { tag: 'mukanda-ingest', dockerfile: 'docker/ingest/Dockerfile', env: 'MUKANDA_INGEST_IMAGE' },
+    { tag: 'mukanda-clamd', dockerfile: 'docker/clamav/Dockerfile', context: 'docker/clamav', env: 'MUKANDA_CLAMD_IMAGE' },
+  ],
+  upstream: { service: 'api', port: 3001 },   // what the proxy reaches, on 127.0.0.1
+  env: { MUKANDA_API_HOST_PORT: '3001' },     // compose interpolation, never secrets
+  keepImages: 3,                              // releases whose images stay for rollback
+})
+```
+
+- **build**: `docker build -t <tag>:<sha>` per image, skipped when that tag
+  already exists (a re-run, or a rollback to a commit already built).
+- **release**: `docker compose -p <app> -f <file> up -d` with each image
+  variable set to `<tag>:<sha>`. Compose itself recreates only what changed.
+- **health**: the upstream service's container reports `healthy` (its own
+  healthcheck), no service of the project is `restarting`, then the package's
+  loopback and public checks.
+- **rollback**: the previous commit's tags — no rebuild, the images exist.
+- **retention**: after a healthy release, tags of these images that belong to
+  none of the last `keepImages` releases are removed. Only `<tag>:<sha>` of the
+  configured tags; nothing else is ever pruned.
+- **C1 under compose**: the upstream port is published by `docker-proxy` (root),
+  so a listener without a visible pid is not by itself foreign here: it is ours
+  when `docker compose ps` shows the upstream service publishing that port.
+
+### 13.3 Hooks — what only the app knows
+
+```ts
+hooks: {
+  infra: [['bash', 'scripts/deploy/infra.sh']],          // after the .env, before the build
+  verify: [['bash', 'scripts/deploy/verify.sh']],        // after the health check
+}
+```
+
+Commands, run in the checkout as the deploy user, with the `.env` values and
+`DEPLOY_SHA`, `DEPLOY_APP` in their environment. `infra` failing stops the
+deploy before anything is built (and puts the code back). `verify` failing is a
+failed release: rolled back like a failed health check. They must be
+idempotent — they run on every deploy.
+
+Hooks are commands, not functions in `deploy.config.ts`: what they do must
+also run by hand when something is being diagnosed at 3 a.m.
+
+### 13.4 Apache, checked but not owned
+
+`apache({ managed: false, vhosts: ['mukanda-app.conf', 'mukanda-share.conf'] })`:
+C2 (each vhost linked, not copied — the incident that hid Mukanda's wildcard
+certificate) and C1 (every `ProxyPass` to 127.0.0.1 targets the upstream port)
+run on every deploy; nothing is rendered, diffed or written, and `install`
+leaves Apache alone. For apps whose vhosts are more than one site.
+
+### 13.5 The `.env` outside the checkout
+
+`env.file: '/etc/mukanda/api.env'`, `env.mirror: ['/etc/mukanda/worker.env']`:
+the mirror is rewritten as an exact copy (0600) whenever the file changes, and
+a mirror that differs from the file is a C10 error — two env files that
+disagree are two configurations.
+
+**Ownership (decision).** Deploys run as the app user, never root (§11.4), so
+the user must read and write these files. `install` takes them over:
+`chown <user>: /etc/mukanda/*.env`, mode 0600 unchanged. Today they are
+root-owned and the script runs under `sudo`. The Docker-group caveat of §11.4
+applies unchanged to Mukanda.
+
+### 13.6 Migrations by command
+
+```ts
+migrate: {
+  command: ['./node_modules/.bin/tsx', 'scripts/db.ts', 'deploy'],
+  // the .env speaks to containers by name; the host reaches them on 127.0.0.1
+  env: (v) => ({
+    MUKANDA_OWNER_DATABASE_URL: v.get('MUKANDA_OWNER_DATABASE_URL')!.replace('@mukanda-postgres:', '@127.0.0.1:'),
+    MUKANDA_DATABASE_URL: v.get('MUKANDA_DATABASE_URL')!.replace('@mukanda-postgres:', '@127.0.0.1:'),
+  }),
+}
+```
+
+The pre-migration dump uses `backup.urlKey` (here the owner URL), rewritten the
+same way.
+
+### 13.7 Not in phase 2
+
+- **Caddy.** No deployed app uses it; it follows when one does.
+- **Rootless Docker** for Mukanda and LexFirma (§11.4) — a data move of every
+  volume, planned separately.
+- **Provisioning** (`bootstrap`) stays in the script.
+
+### 13.8 Adoption
+
+1. Package: the runtime, hooks, `managed: false`, `env.file`/`mirror`,
+   `migrate.command`, image retention — with the fake-host tests of phase 1.
+2. Mukanda: `deploy.config.ts`, `scripts/deploy/{infra,verify}.sh` carved out
+   of `deploy-prod.sh` unchanged in behaviour, `deploy-prod.sh` reduced to
+   `bootstrap` plus a call to the package.
+3. On the server, as for LexFirma: `plan` first — it must show the existing
+   containers and env files adopted, nothing created — then `install` (env
+   ownership), then `run`.
