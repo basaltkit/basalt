@@ -162,7 +162,7 @@ function single(headers: InboundMailDriverInput['headers'], name: string): strin
  * envelope, in the framework's `t=…,v1=…` webhook signature format.
  *
  * Any relay can produce it: the Cloudflare Email Routing Worker in the docs, an
- * IMAP poller, a Lambda, or the app's own MTA. See RFC 0003 for the framing and
+ * IMAP poller, a Lambda, or the app's own MTA. See RFC 0004 for the framing and
  * its golden vector.
  */
 export function signedDriver(options: SignedDriverOptions): InboundMailDriver {
