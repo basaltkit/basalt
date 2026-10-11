@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { vhostName, type ApacheProxy } from './config.js'
-import { DeployError, type DeployContext, type Finding } from './context.js'
+import { DeployError, INSTALL_COMMAND, type DeployContext, type Finding } from './context.js'
 import { lineDiff } from './diff.js'
 
 /**
@@ -81,7 +81,7 @@ export async function apachePreflight(ctx: DeployContext, port: number): Promise
   const enabled = await host.stat(paths.enabled)
   const available = await host.readFile(paths.available)
   if (!enabled && available === undefined) {
-    return [{ id: 'proxy', level: 'error', message: `no Apache vhost ${paths.file} yet`, fix: 'sudo pnpm exec basalt-deploy install (once per server)' }]
+    return [{ id: 'proxy', level: 'error', message: `no Apache vhost ${paths.file} yet`, fix: `${INSTALL_COMMAND} (once per server)` }]
   }
   if (!enabled) {
     findings.push({ id: 'proxy', level: 'error', message: `${paths.file} is in sites-available but not enabled`, fix: `sudo a2ensite ${paths.file} && sudo systemctl reload apache2` })
@@ -95,7 +95,7 @@ export async function apachePreflight(ctx: DeployContext, port: number): Promise
       id: 'C2',
       level: 'error',
       message: `sites-enabled/${paths.file} is a regular file, not a link to sites-available — ${same ? 'identical today, but edits to sites-available will not be served' : 'and it DIFFERS from sites-available: Apache serves the copy'}`,
-      fix: 'sudo pnpm exec basalt-deploy install (replaces it with a link, after showing the diff)',
+      fix: `${INSTALL_COMMAND} (replaces it with a link, after showing the diff)`,
     })
   } else if (enabled.kind === 'symlink') {
     const target = await host.readlink(paths.enabled)
@@ -114,7 +114,7 @@ export async function apachePreflight(ctx: DeployContext, port: number): Promise
           id: 'C1',
           level: 'error',
           message: `the vhost proxies to 127.0.0.1:${proxied}, but the app listens on ${port}`,
-          fix: 'sudo pnpm exec basalt-deploy install (shows the diff and rewrites it)',
+          fix: `${INSTALL_COMMAND} (shows the diff and rewrites it)`,
         })
       }
     }
@@ -124,7 +124,7 @@ export async function apachePreflight(ctx: DeployContext, port: number): Promise
         id: 'vhost',
         level: 'warning',
         message: `the installed vhost differs from what install would write (not changed — audit only):\n${diff.map((l) => `        ${l}`).join('\n')}`,
-        fix: 'to apply: sudo pnpm exec basalt-deploy install',
+        fix: `to apply: ${INSTALL_COMMAND}`,
       })
     }
   }

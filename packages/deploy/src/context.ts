@@ -23,6 +23,12 @@ export interface Finding {
   fix?: string
 }
 
+/**
+ * How an administrator runs `install`. `node` on the file, not `pnpm exec`:
+ * root often has no pnpm on its PATH (a per-user install, corepack).
+ */
+export const INSTALL_COMMAND = 'sudo node node_modules/@basaltkit/deploy/dist/bin.js install --user="$USER"'
+
 export const errors = (findings: Finding[]) => findings.filter((f) => f.level === 'error')
 
 export function report(host: Host, findings: Finding[]): void {
