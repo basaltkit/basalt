@@ -94,3 +94,49 @@ export async function toolingFindings(ctx: DeployContext): Promise<Finding[]> {
   }
   return findings
 }
+
+/** The pnpm version the lockfile records for `packageManager` (`packageManagerDependencies`), if any. */
+export function lockedPnpm(lockfile: string): string | undefined {
+  const at = lockfile.indexOf('packageManagerDependencies:')
+  if (at === -1) return undefined
+  const match = /\n\s+pnpm:\s*\n\s+specifier:\s*['"]?([^\s'"]+)/.exec(lockfile.slice(at, at + 2000))
+  return match?.[1]
+}
+
+/**
+ * C11 — a `packageManager` the lockfile does not record. pnpm 12 writes the
+ * pnpm it runs as into the lockfile (`packageManagerDependencies`) and its
+ * frozen install refuses a lockfile without it, or with another version:
+ * ERR_PNPM_FROZEN_LOCKFILE_WITH_OUTDATED_LOCKFILE, half-way through a deploy.
+ * It happened twice on the first day: `packageManager: pnpm@12.3.4` was
+ * committed with a lockfile written by pnpm 11.
+ *
+ * Checked when it can bite: pnpm declared at 12 or later, or a lockfile that
+ * already records a version (which must then be the declared one).
+ */
+export async function lockfileFindings(ctx: DeployContext): Promise<Finding[]> {
+  if (ctx.pm !== 'pnpm') return []
+  let declared: string | undefined
+  try {
+    const pkg = JSON.parse((await ctx.host.readFile(join(ctx.dir, 'package.json'))) ?? '{}') as { packageManager?: string }
+    const match = /^pnpm@(\d+[^+\s]*)/.exec(pkg.packageManager ?? '')
+    declared = match?.[1]
+  } catch {
+    return []
+  }
+  if (!declared) return []
+  const lockfile = await ctx.host.readFile(join(ctx.dir, 'pnpm-lock.yaml'))
+  if (lockfile === undefined) return []
+  const locked = lockedPnpm(lockfile)
+  if (locked === undefined && Number(declared.split('.')[0]) < 12) return []
+  if (locked === declared) return []
+  return [{
+    id: 'C11',
+    level: 'error',
+    message: locked === undefined
+      ? `package.json declares pnpm@${declared}, but pnpm-lock.yaml does not record it (packageManagerDependencies): pnpm's frozen install will refuse the lockfile`
+      : `package.json declares pnpm@${declared}, but pnpm-lock.yaml records pnpm ${locked}: pnpm's frozen install will refuse the lockfile`,
+    fix: `run pnpm install --lockfile-only with pnpm ${declared} and commit pnpm-lock.yaml`,
+  }]
+}
+
