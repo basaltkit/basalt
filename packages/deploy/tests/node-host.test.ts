@@ -72,3 +72,70 @@ describe('the real host', () => {
     expect((await host.exec('basalt-no-such-command', [])).code).toBe(127)
   })
 })
+
+describe('the real host: files, network, terminal', () => {
+  it('copies, links, lists, stats and removes', async () => {
+    const host = nodeHost(quiet)
+    const sub = join(dir, 'fs')
+    await host.mkdir(sub, 0o700)
+    await host.writeFile(join(sub, 'a'), 'x', 0o644)
+    await host.copyFile(join(sub, 'a'), join(sub, 'b'), 0o600)
+    await host.symlink('a', join(sub, 'link'))
+    expect((await host.list(sub)).sort()).toEqual(['a', 'b', 'link'])
+    expect(await host.stat(join(sub, 'link'))).toEqual({ kind: 'symlink', size: expect.any(Number) })
+    expect((await host.stat(sub))?.kind).toBe('dir')
+    expect(await host.readlink(join(sub, 'link'))).toBe('a')
+    expect(await host.readlink(join(sub, 'a'))).toBeUndefined()
+    expect(await host.readFile(join(sub, 'missing'))).toBeUndefined()
+    expect(await host.stat(join(sub, 'missing'))).toBeUndefined()
+    expect(await host.exists(join(sub, 'b'))).toBe(true)
+    await host.remove(join(sub, 'b'))
+    expect(await host.exists(join(sub, 'b'))).toBe(false)
+    expect(await host.list(join(sub, 'missing'))).toEqual([])
+    expect(host.randomHex(4)).toMatch(/^[0-9a-f]{8}$/)
+    expect(host.now()).toBeInstanceOf(Date)
+    expect(typeof host.uid()).toBe('number')
+    await host.sleep(1)
+  })
+
+  it('GETs with an explicit Host header and never throws', async () => {
+    const { createServer } = await import('node:http')
+    const seen: string[] = []
+    const server = createServer((req, res) => { seen.push(String(req.headers.host)); res.statusCode = 204; res.end() })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const host = nodeHost(quiet)
+      expect(await host.httpGet(`http://127.0.0.1:${port}/health`, { host: 'lexfirma.aipro.ao' })).toEqual({ status: 204 })
+      expect(seen).toEqual(['lexfirma.aipro.ao'])
+    } finally {
+      server.close()
+    }
+    expect(await nodeHost(quiet).httpGet(`http://127.0.0.1:${port}/health`, { timeoutMs: 500 })).toHaveProperty('error')
+  })
+
+  it('reports a TLS endpoint that does not answer instead of throwing', async () => {
+    expect(await nodeHost(quiet).tlsCertificate('basalt-deploy.invalid')).toHaveProperty('error')
+  })
+
+  it('without a terminal: prompts return nothing, confirmations are no', async () => {
+    const host = nodeHost(quiet)
+    const tty = process.stdin.isTTY
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true })
+    try {
+      expect(await host.prompt('token', { secret: true })).toBeUndefined()
+      expect(await host.confirm('sure?')).toBe(false)
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true })
+    }
+  })
+
+  it('prints steps and findings to its stream, uncoloured when it is not a terminal', async () => {
+    const { consoleOutput } = await import('../src/host.js')
+    const lines: string[] = []
+    const stream = { isTTY: false, write: (s: string) => { lines.push(s); return true } } as unknown as NodeJS.WriteStream
+    const out = consoleOutput(stream)
+    out.step('preflight'); out.info('i'); out.ok('o'); out.warn('w'); out.error('e')
+    expect(lines.join('')).toBe('\n==> preflight\n    i\n    ok o\n    warning w\n    error e\n')
+  })
+})

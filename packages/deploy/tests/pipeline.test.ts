@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { renderVhost } from '../src/apache.js'
 import { DeployError } from '../src/context.js'
-import { plan, rollback, run } from '../src/pipeline.js'
+import { dockerInfra } from '../src/config.js'
+import { envCommand, install, plan, rollback, run, status } from '../src/pipeline.js'
 import { readReleases } from '../src/state.js'
 import { context, DIR, FakeHost, fail, jlist, lexfirmaConfig, ok } from './fake-host.js'
 
@@ -176,5 +177,89 @@ describe('basalt-deploy rollback', () => {
     expect(head()).toBe(NEW)
     expect(await rollback(ctx)).toBe(0)
     expect(head()).toBe(OLD)
+  })
+})
+
+describe('basalt-deploy env', () => {
+  it('writes the .env, validates it, and needs nothing else', async () => {
+    const { host } = server({ env: 'PROXYPAY_FAKE=0\n' })
+    host.answers = ['', 'tok-FROM-PROMPT']
+    const ctx = context(host, config())
+    expect(await envCommand(ctx)).toBe(0)
+    expect(host.file(ENV)).toMatch(/^PORT=3002$/m)
+    expect(host.file(ENV)).not.toContain('PROXYPAY_FAKE')
+    expect(host.transcript).toContain('.env ready')
+    expect(host.transcript).not.toContain('tok-FROM-PROMPT')
+  })
+
+  it('stops on a broken line before writing anything', async () => {
+    const { host } = server({ env: 'A="open\n' })
+    await expect(envCommand(context(host, config()))).rejects.toThrow(DeployError)
+    expect(host.file(ENV)).toBe('A="open\n')
+  })
+
+  it('lists the answers it could not get without a terminal', async () => {
+    const { host } = server({ env: '' })
+    await expect(envCommand(context(host, config()))).rejects.toThrow(/no answer for PROXYPAY_SECRET_TOKEN/)
+  })
+})
+
+describe('basalt-deploy install', () => {
+  const installable = () => {
+    const { host } = server()
+    host.files.delete('/etc/apache2/sites-available/lexfirma.conf')
+    host.files.delete('/etc/apache2/sites-enabled/lexfirma.conf')
+    host.userId = 0
+    host
+      .on(({ command }) => (['chown', 'a2enmod', 'apachectl', 'systemctl'].includes(command) ? ok() : undefined))
+      .on(({ command }) => (command === 'id' ? ok('deployer docker sudo\n') : undefined))
+    return host
+  }
+
+  it('refuses without root, without a user, as root, and before the .env has a PORT', async () => {
+    const { host } = server()
+    await expect(install(context(host), 'deployer')).rejects.toThrow(/needs root/)
+    host.userId = 0
+    await expect(install(context(host), undefined)).rejects.toThrow(/--user/)
+    await expect(install(context(host), 'root')).rejects.toThrow(/never root/)
+    host.put(ENV, 'A=1\n')
+    await expect(install(context(host), 'deployer')).rejects.toThrow(/no PORT/)
+  })
+
+  it('creates the state directory for the app user, installs the vhost, and warns about the docker group', async () => {
+    const host = installable()
+    host.put(`${DIR}/.basalt/releases.json`, '[]\n')
+    const ctx = context(host, lexfirmaConfig({ infra: dockerInfra('lexfirma') }))
+    expect(await install(ctx, 'deployer')).toBe(0)
+    expect(host.commands('chown')).toEqual(['chown -R deployer: /var/lib/basalt/lexfirma'])
+    expect(host.file('/var/lib/basalt/lexfirma/releases.json')).toBe('[]\n')
+    expect(host.file('/etc/basalt/lexfirma.json')).toBe('{}\n')
+    expect(await host.readlink('/etc/apache2/sites-enabled/lexfirma.conf')).toBe('../sites-available/lexfirma.conf')
+    expect(host.transcript).toMatch(/deployer is in the docker group: that is root/)
+    expect(host.commands('usermod')).toEqual([])
+  })
+
+  it('points at rootless Docker when the user is not in the docker group', async () => {
+    const host = installable()
+    host.handlers.unshift(({ command }) => (command === 'id' ? ok('deployer\n') : undefined))
+    expect(await install(context(host, lexfirmaConfig({ infra: dockerInfra('lexfirma') })), 'deployer')).toBe(0)
+    expect(host.transcript).toContain("rootless Docker")
+  })
+
+  it('reports a chown that fails', async () => {
+    const host = installable()
+    host.handlers.unshift(({ command }) => (command === 'chown' ? fail('invalid user') : undefined))
+    await expect(install(context(host), 'nobody-here')).rejects.toThrow(/chown nobody-here/)
+  })
+})
+
+describe('basalt-deploy status', () => {
+  it('lists the recorded releases and the process', async () => {
+    const { host } = server()
+    const ctx = context(host, lexfirmaConfig({ backup: { beforeMigrate: false } }))
+    await run(ctx)
+    expect(await status(ctx)).toBe(0)
+    expect(host.transcript).toMatch(/bbbbbbb\s+ok/)
+    expect(host.transcript).toContain(`pm2 lexfirma-api: online (pid 4242, ${DIR})`)
   })
 })

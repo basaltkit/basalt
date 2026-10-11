@@ -7,3 +7,7 @@
 # (inline `trufflehog:ignore` cannot cover commits already in history).
 # Only this directory is excluded; everything else is still scanned.
 ^packages/prisma/tests/
+# Same reason for the deploy tests: they assert that database passwords are
+# read back from containers and never reach a command line, so they hold fake
+# `postgresql://user:password@127.0.0.1/…` URLs. The package's src/ is scanned.
+^packages/deploy/tests/
