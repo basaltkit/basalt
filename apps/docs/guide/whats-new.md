@@ -33,10 +33,10 @@ major. Three deferred designs got their own RFC first: erasable audit chains,
 policy list filters (where an ORM-level row filter was considered and rejected)
 and inbound mail.
 
-## Since 1.13 (unreleased) {#since-1-13-unreleased}
+## Since 1.13: the majors wave {#since-1-13}
 
-Shipped to `main` after the 1.13 release; it goes out with the next one.
-Unlike 1.13, this wave **does** carry majors: `@basaltkit/http` 3.0 (with
+Published to npm on 2026-10-11, after the 1.13 release (the umbrella
+version stays 1.13). Unlike the 1.13 minors, this wave **does** carry majors: `@basaltkit/http` 3.0 (with
 `fastify`, `express`, `hono` and `testing` 3.0) makes idempotency strict by
 default, `@basaltkit/auth-prisma` 3.0 needs a database migration, and the
 configurations 1.13 only warned about now refuse to boot
