@@ -1,6 +1,6 @@
 # RFC 0006 — `basalt deploy`: one deploy pipeline for Basalt apps on a single server
 
-- **Status:** Draft
+- **Status:** Draft — open questions decided 2026-10-11 (§11)
 - **Author:** Marcio Zebedeu
 - **Date:** 2026-10-11
 - **Affects:** new package `@basaltkit/deploy`; `create-basalt` (the `bin/basalt.ts` prelude forwards `deploy`); no change to any runtime package
@@ -105,6 +105,7 @@ So, like `update | add | doctor | info`, `deploy` is forwarded by the
 
 ```
 pnpm basalt deploy [plan|run|rollback|status|env] [--config=…] [--yes]
+sudo pnpm basalt deploy install      # once per server, by an administrator (§11.4)
 ```
 
 It lives in **`@basaltkit/deploy`**, a devDependency of the app, not in
@@ -208,7 +209,7 @@ warnings are printed and listed again at the end.
 | Id | Check | From |
 |---|---|---|
 | C1 | The upstream port is free **or** owned by this app's process (`ss -ltnp` → pid → PM2 name / container label). Never a port owned by anything else — including the proxy itself. | incident 1 |
-| C2 | Apache: the vhost in `sites-enabled/` is a symlink to `sites-available/`. A regular file is an error with the `diff` and the `a2ensite` fix. | 2 |
+| C2 | Apache: the vhost in `sites-enabled/` is a symlink to `sites-available/`. A regular file is an error with the `diff` and the `a2ensite` fix. The installed vhost is compared with what `install` would write today; a difference is printed as a diff (warning) and **never** written (§11.3). | 2 |
 | C3 | PM2: the process named `<app>-api` runs from this directory; otherwise it is recreated (not restarted). | 3 |
 | C4 | Ownership: the runtime only names processes, containers and volumes prefixed with `app`; any operation on another name is refused at plan time, not at run time. There is no "all". | 4 |
 | C5 | `.env` syntax: every non-comment line is `KEY=value`; values needing quotes are quoted. Reported by line number, never by value. | 5 |
@@ -250,7 +251,12 @@ from defaults.
 
 `basalt deploy preview up <branch>` / `down <branch>` / `list`, on the same server:
 
-- process `<app>-pv-<slug>`, a free port, a vhost for `<slug>.preview.<domain>`;
+- process `<app>-pv-<slug>` on a free loopback port, reached through **one**
+  `*.preview.<domain>` vhost written by `install` (§11.4) — `up`/`down` never
+  touch Apache: the vhost routes by host through
+  `RewriteMap previews "txt:/var/lib/basalt/<app>/previews.map"` (slug → port,
+  owned by the app user, re-read by Apache when it changes), and its rule only
+  ever proxies to `127.0.0.1:<digits>`, so the map cannot point anywhere else;
 - its own **database** in the app's Postgres (`<app>_pv_<slug>`), migrated and
   seeded with the app's demo seed — never a copy of production data;
 - `.env` derived from production's with every external integration (mailer,
@@ -258,11 +264,39 @@ from defaults.
   the other way round;
 - a TTL; `down` drops the database and the bucket prefix.
 
-**Open problem — tenant hosts.** A certificate wildcard covers one label:
-`*.preview.domain` serves `pr12.preview.domain` but not
-`acme.pr12.preview.domain`. Options: `acme--pr12.preview.domain` with a resolver
-that understands the separator, a per-preview wildcard certificate (rate limits),
-or the header resolver behind an auth wall. To be decided before phase 3.
+### 7.1 Tenant hosts in a preview (decided)
+
+A certificate wildcard covers one label: `*.preview.domain` serves
+`pr12.preview.domain` but not `acme.pr12.preview.domain`. A Let's Encrypt
+certificate per preview or per tenant is ruled out (rate limits, issuance in the
+critical path). The tenant is placed by the app's own resolver:
+
+- **Apps that resolve the tenant from the path** (`routeResolver`,
+  `/t/:tenant/…`): `pr12.preview.domain/t/acme/…`. Nothing preview-specific.
+- **Apps that resolve it from the host** (`subdomainResolver`) — Mukanda and
+  LexFirma today: **`acme--pr12.preview.domain`**, served by the one
+  `*.preview.domain` certificate. Moving these apps to paths in a preview is
+  rejected: production keeps the session cookie host-only so that one company's
+  session never reaches another's host; on a single preview host every tenant
+  would share it, and the preview would run a resolver production never runs.
+
+For the double-hyphen form, `subdomainResolver` gains one option, so the preview
+runs the same resolver as production rather than a parallel one:
+
+```ts
+subdomainResolver({ base: 'preview.domain', suffix: '--pr12' })
+// acme--pr12.preview.domain → { id: 'acme' }; anything not ending in --pr12 → no tenant
+```
+
+The split is on the **configured** suffix, not on the first or last `--`: tenant
+ids may legally contain `--` (`/^[a-z0-9][a-z0-9_-]{0,62}$/`), the preview slug
+may not (`/^[a-z0-9]{1,12}$/`). A tenant id whose label would exceed 63
+characters with the suffix is refused when the preview is seeded, with the reason.
+
+Apps build tenant URLs from one template — `{tenant}.{base}` in production,
+`{tenant}--pr12.preview.domain` in a preview — written by `deploy` into `.env`
+(`APP_TENANT_HOST_TEMPLATE`). Mukanda's `canonicalDomainFor` and the web
+client's host parsing read it instead of concatenating `${id}.${base}`.
 
 ## 8. State and rollback
 
@@ -308,16 +342,49 @@ to end with a fake host — including each incident in §A as a regression test.
 | 0 | This RFC | — |
 | 1 | Package, config, pipeline, `.env` step, checks C1–C10, `pm2` + `apache`/`none`, `dockerInfra`, backup, health, rollback, state | LexFirma: `deploy.sh` becomes `pnpm basalt deploy run` |
 | 2 | `compose` runtime (SHA images, one-off migrate container), `caddy`, adopting containers created by a script | Mukanda: `deploy-prod.sh` keeps `bootstrap`, the rest delegates |
-| 3 | Previews (§7), after the tenant-host question is decided | both |
+| 3 | Previews (§7), `subdomainResolver({ suffix })` in `@basaltkit/tenancy` (minor), `APP_TENANT_HOST_TEMPLATE` in both apps | both |
 | — | A Rust agent | only if phase 3 grows into a long-running service across several servers |
 
-## 11. Open questions
+## 11. Decisions
 
-1. `deploy.config.ts` vs. a plain `deploy.json` validated by a schema — TS reads
-   better and types the targets; JSON needs no loader on the server. Proposed: TS,
-   loaded with the `tsx` the app already has.
-2. Should `deploy` own Apache vhost **creation**, or only check it (C1, C2) and
-   print the vhost? Proposed: create on first run, check afterwards, never rewrite
-   a vhost that differs from what it would write — print the diff instead.
-3. Where `pnpm basalt deploy` runs as root vs. as the app user. Proposed: the app
-   user, with a narrow sudoers entry for `apachectl`/`systemctl reload apache2`.
+Decided 2026-10-11 by the product owner.
+
+1. **Tenant hosts in previews:** path (`/t/:tenant`) for apps that already
+   resolve by route; `<tenant>--<slug>.preview.<domain>` for apps that resolve by
+   host, under one `*.preview.<domain>` certificate. No certificate per preview or
+   per tenant. Details and why the path form does not apply to Mukanda and
+   LexFirma in §7.1.
+
+2. **Config format:** `deploy.config.ts`, typed with `defineDeploy`, loaded with
+   the `tsx` the app already has. It may import BasaltKit helpers; it must not
+   import the app (the app is not bootable at that point, §2) and holds no secrets.
+
+3. **Apache vhost:** written **only** by `install` (first time on a server).
+   Every `run` compares the installed vhost with what `install` would write now
+   and prints a diff for audit; it never overwrites a vhost in production. A
+   change the operator wants is applied by running `install` again, which shows
+   the same diff and asks.
+
+4. **Who runs the deploy:** a dedicated, unprivileged app user (e.g. `basalt`),
+   never root. Root is needed exactly once, by an administrator, for
+   `sudo pnpm basalt deploy install`, which:
+   - writes the vhost (writing Apache config is root-equivalent:
+     `CustomLog "|cmd"` runs a command as root — so it can never be delegated);
+   - creates `/var/lib/basalt/<app>/` and `/etc/basalt/<app>.json` owned by the
+     app user;
+   - writes `/etc/sudoers.d/basalt-<app>` (validated with `visudo -cf`) with
+     only fixed command lines, no wildcards in arguments:
+
+   ```
+   basalt ALL=(root) NOPASSWD: /usr/sbin/apachectl configtest, /usr/bin/systemctl reload apache2
+   ```
+
+   (`reload caddy` instead for the Caddy target; nothing for `none`.)
+
+   **Docker is the limit of this model.** Access to the Docker socket is root on
+   the host (a container can mount `/`), so for `dockerInfra` and the `compose`
+   runtime an unprivileged user is only real with **rootless Docker** for that
+   user. Phase 1 (PM2) needs Docker only for `dockerInfra`; `install` sets up
+   rootless Docker for the app user and refuses to add it to the `docker` group.
+   Mukanda's existing rootful containers are adopted in phase 2 — migrating them
+   to rootless is a data move and is planned there, not assumed.
