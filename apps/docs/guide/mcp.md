@@ -94,6 +94,26 @@ error body as an unauthenticated HTTP request, carried in the tool result with
 the `POST /mcp` request; over stdio, pass static `headers` to `serveMcpStdio`.
 :::
 
+### Boot checks {#boot-checks}
+
+`mcpPlugin` runs the adapters' boot checks over every route it exposes as a
+tool (opted in with `meta.mcp` and kept by `filter`), so a route reachable
+**only** through MCP — passed to `mcpPlugin({ routes })` but not to the
+adapter — is checked like any other:
+
+- security meta (`auth`, `can`, `teamRole`, `scopes`, `subscribed`, `feature`,
+  `mfa`) that no registered guard enforces refuses the boot with
+  `HTTP_UNGUARDED_ROUTE_META`;
+- a value a plugin's route-meta validator refuses — an unknown `meta.tenant`
+  (tenancy), an invalid `meta.responseHeaders` (http), an unknown
+  `meta.teamRole` (teams) — refuses it with `HTTP_INVALID_ROUTE_META`.
+
+`mcpPlugin({ allowUnguardedMeta })` takes the same waiver as the adapter option
+(`true`, or a list of keys) for protection enforced at an outer edge; it never
+waives the validators. Building `new McpServer({ routes, container })` yourself
+skips these checks: call `assertRoutesGuarded(routes, app.container)` from
+`@basaltkit/http` after boot.
+
 ### What the model sees when a tool fails {#what-the-model-sees-when-a-tool-fails}
 
 The MCP client is a language model — and anyone who can read or steer its
@@ -296,7 +316,10 @@ different session, even one that guesses the request id, never can. A session
 is **bound to the caller that opened it**: the authenticated `ctx().user` (in
 its tenant); for a verified API key without a user (a service key, sent in
 `Authorization` or `x-api-key`), that key's id in its tenant; otherwise a keyed
-fingerprint of the `Authorization` header. The same id presented by anyone else is a 404. Sessions
+fingerprint of the `Authorization` header. The same id presented by anyone else is a 404.
+A client using a userless key must therefore send the **same key** on every
+request of the session (either carrier is fine); a rotated key keeps its id, so
+the session survives a rotation. Sessions
 expire after 30 minutes idle, and at most 1000 live at once (the least recently
 used is evicted — its client just re-initializes):
 `mcpRoutes({ sessions: { ttlMs, maxSessions } })`.
@@ -369,6 +392,7 @@ The tables below are the complete public options of the four entry points.
 | `redactErrorDetails` | `ErrorDetailsRedactor \| false` | `redactSensitiveDetails` | Filters a thrown error's public `details` before they enter a tool result (see [What the model sees](#what-the-model-sees-when-a-tool-fails)); `false` sends them as HTTP would. A route overrides it with `meta.mcp.redactErrorDetails` |
 | `reportError` | `HttpErrorReporter \| false` | console reporter | Receives every error a tool call throws, `internalDetails` included; `false` reports nothing |
 | `onError` | `(error, message) => void \| false` | `reportMcpInternalError` (one line on stderr) | Receives an error that escaped a tool's own handling — the client only gets `INTERNAL_ERROR` / `Internal error`. Never stdout, which carries the stdio protocol; `false` silences it |
+| `allowUnguardedMeta` | `boolean \| string[]` | `false` | Waives the [boot check](#boot-checks) of security meta no guard enforces, like the adapter option; never waives the route-meta validators |
 
 ### `mcpRoutes(options)`
 
@@ -411,6 +435,7 @@ Protocol errors use JSON-RPC codes:
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Boot throws `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) | A route declares `meta.auth`/`meta.can`/`meta.teamRole` and no plugin enforces it | Register `authPlugin` / `permissionsPlugin` / `teamsPlugin` — see [Security](/guide/security) |
+| Boot throws `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`) naming a tool route | A plugin's validator refused its meta (an unknown `meta.tenant`, an invalid `meta.responseHeaders`…) — `mcpPlugin` checks the routes it exposes, even those the adapter does not serve | Fix the value it names — see [Boot checks](#boot-checks) |
 | `isError: true` with an `UNAUTHORIZED`/`FORBIDDEN` body | The tool's route is guarded and the call carried no (or bad) credentials | Send `Authorization`/tenant headers with `POST /mcp`, or `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Tool name not registered — route missing `meta.mcp`, excluded by `filter`, or renamed | Check `tools/list`; remember overrides via `meta.mcp.name` |
 | JSON-RPC `-32602` ``tools/call `arguments` must be an object`` | The client sent `arguments` as an array, string, number or `null` | Send an object of named arguments matching the tool's input schema |

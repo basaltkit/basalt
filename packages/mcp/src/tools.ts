@@ -137,6 +137,14 @@ export interface McpTool {
 type McpMetaObject = { name?: string; description?: string; redactErrorDetails?: ErrorDetailsRedactor | false }
 type McpMeta = true | McpMetaObject
 
+/**
+ * The routes `collectTools` turns into tools: opted in with `meta.mcp` and kept
+ * by `filter`. `mcpPlugin` validates exactly this list at boot.
+ */
+export function exposedRoutes(routes: readonly BasaltRoute[], filter?: (route: BasaltRoute) => boolean): BasaltRoute[] {
+  return routes.filter((route) => mcpMeta(route) !== undefined && (!filter || filter(route)))
+}
+
 function mcpMeta(route: BasaltRoute): McpMeta | undefined {
   const value = route.meta?.['mcp']
   if (value === true) return true
