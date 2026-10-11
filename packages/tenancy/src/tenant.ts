@@ -267,8 +267,10 @@ export class CentralOnlyRouteError extends BasaltError {
  * A request reached a route whose `meta.tenant` is not one of `true`, `false`,
  * `'never'` or absent. `tenancyPlugin` refuses such a route at boot through the
  * `http:meta-validators` bucket every adapter (and `mcpPlugin`) runs, so only a
- * route that skipped that check — a custom driver calling `runRoute()` without
- * `assertRouteMetaValid()` — gets this error. 500 and fail-closed: the request
+ * route that skipped that check — a custom driver that calls `runRoute()` with
+ * the app's enrichers but without `assertRouteMetaValid()` — gets this error
+ * (`@basaltkit/http` 3 refuses enrichers without a container, so they cannot
+ * be skipped). 500 and fail-closed: the request
  * never runs, rather than falling back to the app-wide `required` default
  * (which for a typo of `'never'` would serve a central route on a tenant host).
  */

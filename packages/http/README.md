@@ -917,7 +917,7 @@ const result = await runRoute(definition, neutralRequest, neutralReply, {
 })
 ```
 
-Enrichers and guards need the container scope, so a pipeline that carries **guards but no container** throws `GuardsWithoutContainerError` (`HTTP_GUARDS_UNRUNNABLE`, 500) naming the route and how many guards could not run. Skipping them silently would let the request reach the handler unauthorized. A pipeline with no guards and no container runs normally.
+Enrichers and guards need the container scope, so a pipeline that carries **guards but no container** throws `GuardsWithoutContainerError` (`HTTP_GUARDS_UNRUNNABLE`, 500) naming the route and how many guards could not run. Skipping them silently would let the request reach the handler unauthorized. Since 3.0 the same rule holds for **enrichers but no container**: `EnrichersWithoutContainerError` (`HTTP_ENRICHERS_UNRUNNABLE`, 500). An enricher is where tenancy resolves (and refuses) the tenant and auth the user, so dropping it silently would run the handler unscoped. A pipeline with no enrichers, no guards and no container runs normally.
 
 ## API reference
 

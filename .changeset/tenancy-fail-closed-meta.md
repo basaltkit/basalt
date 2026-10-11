@@ -10,4 +10,6 @@ The boot validator already refuses such a route on every adapter and in `mcpPlug
 - `tenancyPlugin`'s enricher throws the same error before resolving a tenant, so the request never runs, with or without a tenant.
 - `tenantMetaProblem(value)` is exported: the check the boot validator and the request-time check share.
 
+This holds for a driver that passes the app's enrichers (`http:enrichers`) to `runRoute()`, as every adapter does; `@basaltkit/http` 3.0 refuses enrichers without a `container` (`HTTP_ENRICHERS_UNRUNNABLE`) instead of skipping them, so the enricher cannot be dropped in silence.
+
 **Migrating.** Nothing to do for an app that boots: such routes are already refused at boot.

@@ -6,6 +6,7 @@
 import type { AddressInfo } from 'node:net'
 import { createApp, ensureMetadata, type BasaltApp } from '@basaltkit/core'
 import { FASTIFY, fastifyPlugin } from '@basaltkit/fastify'
+import { route, runRoute, type HttpReply, type RequestEnricher } from '../../http/src/index.js'
 import { describe, expect, it } from 'vitest'
 import { httpFetcher, sendWith, type ParityDriver } from '../../http/tests/adapter-parity.js'
 import {
