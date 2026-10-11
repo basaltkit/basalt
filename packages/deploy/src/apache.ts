@@ -71,10 +71,55 @@ ${alias}
 
 /** The ports a vhost proxies to on this machine. */
 export function proxiedPorts(vhost: string): number[] {
-  return [...vhost.matchAll(/^\s*ProxyPass\s+\S+\s+(?:https?|wss?):\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)/gim)].map((m) => Number(m[1]))
+  // Path and URL may be quoted (`ProxyPass "/api/" "http://127.0.0.1:3001/"`):
+  // unquoted-only matching found no port in that form and C1 passed in silence.
+  return [...vhost.matchAll(/^\s*ProxyPass\s+(?:"[^"]*"|\S+)\s+"?(?:https?|wss?):\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)/gim)].map((m) => Number(m[1]))
+}
+
+/**
+ * `managed: false` (RFC 0006 §13.4): the app's own vhosts, checked — each one
+ * linked into sites-enabled (C2) and every local ProxyPass on the upstream
+ * port (C1) — and never rendered, diffed or written.
+ */
+async function unmanagedPreflight(ctx: DeployContext, port: number): Promise<Finding[]> {
+  const proxy = apacheOf(ctx)
+  const root = proxy.root ?? '/etc/apache2'
+  const findings: Finding[] = []
+  for (const file of proxy.vhosts ?? []) {
+    const available = join(root, 'sites-available', file)
+    const enabled = join(root, 'sites-enabled', file)
+    const stat = await ctx.host.stat(enabled)
+    if (!stat) {
+      findings.push({ id: 'proxy', level: 'error', message: `sites-enabled/${file} does not exist`, fix: `sudo a2ensite ${file} && sudo apachectl configtest && sudo systemctl reload apache2` })
+      continue
+    }
+    if (stat.kind === 'file') {
+      const copy = await ctx.host.readFile(enabled)
+      const original = await ctx.host.readFile(available)
+      findings.push({
+        id: 'C2',
+        level: 'error',
+        message: `sites-enabled/${file} is a regular file, not a link to sites-available — ${copy === original ? 'identical today, but edits to sites-available will not be served' : 'and it DIFFERS from sites-available: Apache serves the copy'}`,
+        fix: `after merging any difference into sites-available/${file}: sudo rm ${enabled} && sudo a2ensite ${file} && sudo apachectl configtest && sudo systemctl reload apache2`,
+      })
+    } else if (stat.kind === 'symlink') {
+      const target = await ctx.host.readlink(enabled)
+      if (target !== `../sites-available/${file}` && target !== available) {
+        findings.push({ id: 'C2', level: 'error', message: `sites-enabled/${file} links to ${target}, not to sites-available/${file}` })
+      }
+    }
+    const served = await ctx.host.readFile(enabled)
+    for (const proxied of proxiedPorts(served ?? '')) {
+      if (proxied !== port) {
+        findings.push({ id: 'C1', level: 'error', message: `${file} proxies to 127.0.0.1:${proxied}, but the app is reached on ${port}`, fix: `edit the ProxyPass lines of sites-available/${file}, then sudo apachectl configtest && sudo systemctl reload apache2` })
+      }
+    }
+  }
+  return findings
 }
 
 export async function apachePreflight(ctx: DeployContext, port: number): Promise<Finding[]> {
+  if (apacheOf(ctx).managed === false) return unmanagedPreflight(ctx, port)
   const { host } = ctx
   const paths = vhostPaths(ctx)
   const findings: Finding[] = []

@@ -30,11 +30,29 @@ export interface DeployConfig {
    * for the pre-migration dump instead (RFC 0006 §8).
    */
   destructive?: string[]
+  /**
+   * Commands only this app needs, run at fixed points (RFC 0006 §13.3): in the
+   * checkout, as the deploy user, with the `.env` values plus `DEPLOY_SHA` and
+   * `DEPLOY_APP` in their environment. Idempotent — they run on every deploy.
+   */
+  hooks?: HooksConfig
+}
+
+export interface HooksConfig {
+  /** After the `.env` and the infra, before the build. Failing stops the deploy (code put back). */
+  infra?: string[][]
+  /** After the health check. Failing is a failed release (rolled back). */
+  verify?: string[][]
 }
 
 export interface EnvConfig {
-  /** Relative to the app directory. Written 0600, backed up before every change. */
+  /**
+   * Relative to the app directory, or absolute (e.g. `/etc/mukanda/api.env`).
+   * Written 0600, backed up before every change, in its own directory.
+   */
   file?: string
+  /** Exact copies of the file (0600), rewritten with it; one that differs is a C10 error. */
+  mirror?: string[]
   /** The module whose import runs the app's `defineEnv(...)`, e.g. `src/env.ts`. */
   schema?: string
   /** Always these values — a different one in the file is corrected. */
@@ -123,6 +141,17 @@ export interface MigrateConfig {
   central?: boolean
   /** `<pm> basalt tenant:migrate` (or the given package.json script arguments). */
   tenants?: boolean | string[]
+  /**
+   * The app's own migration command, run in the checkout instead of
+   * `central`/`tenants` (e.g. `['./node_modules/.bin/tsx', 'scripts/db.ts', 'deploy']`).
+   */
+  command?: string[]
+  /**
+   * Values that override the `.env` for the migration and the pre-migration
+   * dump — e.g. URLs that name a container (`@mukanda-postgres:`) rewritten to
+   * reach it from the host (`@127.0.0.1:`).
+   */
+  env?: (values: ReadonlyMap<string, string>) => Record<string, string>
 }
 
 export interface BackupConfig {
@@ -134,7 +163,31 @@ export interface BackupConfig {
   urlKey?: string
 }
 
-export type RuntimeConfig = Pm2Runtime
+export type RuntimeConfig = Pm2Runtime | ComposeRuntime
+
+/** A Docker Compose project, its images built per commit (RFC 0006 §13.2). */
+export interface ComposeRuntime {
+  kind: 'compose'
+  /** The compose file, relative to the checkout. */
+  file: string
+  /** Built as `<tag>:<sha>`; each tag must start with the app name (C4). */
+  images: ComposeImage[]
+  /** What the proxy reaches on 127.0.0.1: the service and its published port. */
+  upstream: { service: string; port: number }
+  /** Compose interpolation values (never secrets: they are not in a 0600 file). */
+  env: Record<string, string>
+  /** Releases whose images are kept for a rollback without a rebuild. */
+  keepImages: number
+}
+
+export interface ComposeImage {
+  tag: string
+  dockerfile: string
+  /** Build context, relative to the checkout. Default `.`. */
+  context?: string
+  /** The compose variable that receives `<tag>:<sha>`. */
+  env: string
+}
 
 export interface Pm2Runtime {
   kind: 'pm2'
@@ -151,6 +204,15 @@ export type ProxyConfig = ApacheProxy | NoProxy
 
 export interface ApacheProxy {
   kind: 'apache'
+  /**
+   * `false`: the app writes its own vhosts (more than one site, special
+   * rules). They are checked on every deploy — C2 (linked, not copied) and C1
+   * (every ProxyPass to 127.0.0.1 targets the upstream port) — and never
+   * rendered, diffed or written; `install` leaves Apache alone (§13.4).
+   */
+  managed?: boolean
+  /** With `managed: false`: the vhost file names to check. */
+  vhosts?: string[]
   /** File name under `sites-available/`. Default `<app>.conf`. */
   vhost?: string
   /** Directory served as the site's root, relative to the app directory. */
@@ -201,13 +263,30 @@ export const pm2 = (options: { name?: string; script?: string; port?: number | '
   avoid: options.avoid ?? [],
 })
 
-export const apache = (options: { vhost?: string; webRoot?: string; apiPrefix?: string; certName?: string; root?: string } = {}): ApacheProxy => ({
+export const apache = (options: { vhost?: string; webRoot?: string; apiPrefix?: string; certName?: string; root?: string; managed?: boolean; vhosts?: string[] } = {}): ApacheProxy => ({
   kind: 'apache',
+  ...(options.managed === undefined ? {} : { managed: options.managed }),
+  ...(options.vhosts === undefined ? {} : { vhosts: options.vhosts }),
   ...(options.vhost === undefined ? {} : { vhost: options.vhost }),
   webRoot: options.webRoot ?? 'web/dist',
   apiPrefix: options.apiPrefix ?? '/api',
   ...(options.certName === undefined ? {} : { certName: options.certName }),
   ...(options.root === undefined ? {} : { root: options.root }),
+})
+
+export const compose = (options: {
+  file: string
+  images: ComposeImage[]
+  upstream: { service: string; port: number }
+  env?: Record<string, string>
+  keepImages?: number
+}): ComposeRuntime => ({
+  kind: 'compose',
+  file: options.file,
+  images: options.images,
+  upstream: options.upstream,
+  env: options.env ?? {},
+  keepImages: options.keepImages ?? 3,
 })
 
 export const none = (): NoProxy => ({ kind: 'none' })
@@ -260,7 +339,9 @@ export class DeployConfigError extends Error {
   }
 }
 
-export const processName = (config: DeployConfig) => config.runtime.name ?? `${config.app}-api`
+/** The PM2 process name (`<app>-api` by default). Compose names its own containers. */
+export const processName = (config: DeployConfig) =>
+  config.runtime.kind === 'pm2' ? (config.runtime.name ?? `${config.app}-api`) : config.app
 export const vhostName = (config: DeployConfig) =>
   config.proxy?.kind === 'apache' ? (config.proxy.vhost ?? `${config.app}.conf`) : undefined
 
@@ -270,9 +351,34 @@ export function validateConfig(config: DeployConfig): DeployConfig {
   if (!DOMAIN.test(config.domain)) problems.push(`domain "${config.domain}" is not a lowercase host name`)
   // C4: the deploy only ever names what carries the app's label. `pm2 restart
   // all` once was one keystroke away from a production app that is not ours.
-  const name = processName(config)
-  if (!name.startsWith(`${config.app}-`)) problems.push(`runtime.name "${name}" must start with "${config.app}-" — the deploy only touches what the app owns`)
-  if (!/^[a-z0-9-]+$/.test(name)) problems.push(`runtime.name "${name}" may only use a-z, 0-9 and -`)
+  if (config.runtime.kind === 'pm2') {
+    const name = processName(config)
+    if (!name.startsWith(`${config.app}-`)) problems.push(`runtime.name "${name}" must start with "${config.app}-" — the deploy only touches what the app owns`)
+    if (!/^[a-z0-9-]+$/.test(name)) problems.push(`runtime.name "${name}" may only use a-z, 0-9 and -`)
+  } else {
+    const rt = config.runtime
+    if (rt.images.length === 0) problems.push('runtime.images: at least one image')
+    for (const image of rt.images) {
+      // C4: an image tag outside the app's name could prune another app's images.
+      if (image.tag !== config.app && !image.tag.startsWith(`${config.app}-`)) problems.push(`runtime image "${image.tag}" must be "${config.app}" or start with "${config.app}-" — the deploy only touches what the app owns`)
+      if (!/^[a-z0-9][a-z0-9._-]*$/.test(image.tag)) problems.push(`runtime image "${image.tag}" is not a plain image name (no registry, no tag)`)
+      if (!/^[A-Z_][A-Z0-9_]*$/.test(image.env)) problems.push(`runtime image env "${image.env}" is not a variable name`)
+    }
+    if (new Set(rt.images.map((i) => i.tag)).size !== rt.images.length) problems.push('runtime.images: each tag once')
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(rt.upstream.service)) problems.push(`runtime.upstream.service "${rt.upstream.service}" is not a compose service name`)
+    if (!Number.isInteger(rt.upstream.port) || rt.upstream.port < 1 || rt.upstream.port > 65535) problems.push('runtime.upstream.port must be a port number')
+    if (!Number.isInteger(rt.keepImages) || rt.keepImages < 1) problems.push('runtime.keepImages must be a whole number ≥ 1')
+    for (const key of Object.keys(rt.env)) if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) problems.push(`runtime.env key "${key}" is not a variable name`)
+  }
+  if (config.proxy?.kind === 'apache' && config.proxy.managed === false) {
+    const vhosts = config.proxy.vhosts ?? []
+    if (vhosts.length === 0) problems.push('proxy.vhosts: name the vhost files to check when managed is false')
+    for (const v of vhosts) if (!/^[a-z0-9.-]+\.conf$/.test(v)) problems.push(`proxy.vhosts "${v}" must be a plain *.conf file name`)
+  }
+  for (const hook of [...(config.hooks?.infra ?? []), ...(config.hooks?.verify ?? [])]) {
+    if (!Array.isArray(hook) || hook.length === 0 || hook.some((part) => typeof part !== 'string')) problems.push('hooks: each hook is a non-empty array of strings (a command and its arguments)')
+  }
+  if (config.migrate?.command && config.migrate.command.length === 0) problems.push('migrate.command must not be empty')
   const vhost = vhostName(config)
   if (vhost !== undefined && !/^[a-z0-9.-]+\.conf$/.test(vhost)) problems.push(`proxy.vhost "${vhost}" must be a plain *.conf file name`)
   const keys = [
@@ -313,7 +419,11 @@ export function applyOverrides(config: DeployConfig, overrides: ServerOverrides)
   const next: DeployConfig = { ...config }
   if (overrides.domain !== undefined) next.domain = overrides.domain
   if (overrides.branch !== undefined) next.branch = overrides.branch
-  if (overrides.port !== undefined) next.runtime = { ...config.runtime, port: overrides.port }
+  if (overrides.port !== undefined) {
+    next.runtime = config.runtime.kind === 'pm2'
+      ? { ...config.runtime, port: overrides.port }
+      : { ...config.runtime, upstream: { ...config.runtime.upstream, port: overrides.port } }
+  }
   if (overrides.infra && config.infra?.kind === 'docker') {
     const infra: DockerInfra = { ...config.infra }
     const o = overrides.infra

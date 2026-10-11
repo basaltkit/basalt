@@ -3,6 +3,7 @@ export {
   secret,
   ask,
   pm2,
+  compose,
   apache,
   none,
   external,
@@ -30,6 +31,9 @@ export {
   type BackupConfig,
   type RuntimeConfig,
   type Pm2Runtime,
+  type ComposeRuntime,
+  type ComposeImage,
+  type HooksConfig,
   type ProxyConfig,
   type ApacheProxy,
   type NoProxy,
@@ -38,7 +42,7 @@ export {
 } from './config.js'
 export { main, loadConfig, createContext, USAGE } from './cli.js'
 export { nodeHost, consoleOutput, type Host, type ExecOptions, type ExecResult, type Output, type TlsCertificate } from './host.js'
-export { DeployError, type DeployContext, type Finding } from './context.js'
+export { DeployError, INSTALL_COMMAND, RUN_COMMAND, type DeployContext, type Finding } from './context.js'
 export { parseEnv, applyEnvChanges, formatValue, envValues, UnwritableValueError, type EnvDocument, type EnvChange } from './dotenv.js'
 export { renderVhost, proxiedPorts } from './apache.js'
 export { renderCompose } from './infra.js'

@@ -1,4 +1,4 @@
-import { processName } from './config.js'
+import { processName, type Pm2Runtime } from './config.js'
 import { DeployError, type DeployContext, type Finding } from './context.js'
 import { freePort, listeners } from './ports.js'
 
@@ -29,8 +29,15 @@ export async function pm2List(ctx: DeployContext): Promise<Pm2Process[] | undefi
 
 const PORT_FROM = 3000
 
+const pm2Of = (ctx: DeployContext): Pm2Runtime => {
+  if (ctx.config.runtime.kind !== 'pm2') throw new Error('not a pm2 runtime')
+  return ctx.config.runtime
+}
+
+/** The port the app listens on: the compose upstream's, or PM2's (`auto` picks a free one). */
 export async function resolvePort(ctx: DeployContext, values: Map<string, string>): Promise<number> {
-  const runtime = ctx.config.runtime
+  if (ctx.config.runtime.kind === 'compose') return ctx.config.runtime.upstream.port
+  const runtime = pm2Of(ctx)
   if (typeof runtime.port === 'number') return runtime.port
   const current = Number(values.get('PORT'))
   if (Number.isInteger(current) && current > 0) return current
@@ -105,11 +112,11 @@ export async function pm2Release(ctx: DeployContext, env: Map<string, string>): 
     await must(ctx, ['restart', name, '--update-env'], options)
     done = `${name} restarted`
   } else {
-    await must(ctx, ['start', ctx.pm, '--name', name, '--cwd', ctx.dir, '--', 'run', ctx.config.runtime.script], options)
+    await must(ctx, ['start', ctx.pm, '--name', name, '--cwd', ctx.dir, '--', 'run', pm2Of(ctx).script], options)
     done = ours ? `${name} re-created in ${ctx.dir}` : `${name} started`
   }
   await must(ctx, ['save'], options)
-  return `${done} (${ctx.pm} run ${ctx.config.runtime.script}, port ${env.get('PORT') ?? '?'})`
+  return `${done} (${ctx.pm} run ${pm2Of(ctx).script}, port ${env.get('PORT') ?? '?'})`
 }
 
 async function must(ctx: DeployContext, args: string[], options: { cwd: string; env: Record<string, string>; inheritEnv: boolean }) {

@@ -78,7 +78,7 @@ export async function createContext(host: Host, dir: string, config: DeployConfi
     dir,
     host,
     pm: await detectPackageManager(host, dir),
-    envPath: join(dir, config.env.file ?? '.env'),
+    envPath: resolve(dir, config.env.file ?? '.env'),
     stateDir: await resolveStateDir(host, config, dir),
   }
 }

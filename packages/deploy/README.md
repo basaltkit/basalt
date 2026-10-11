@@ -87,9 +87,63 @@ every deploy checks it.
 
 `--skip=fetch,backup,tls`, `--config=<file>`, `--overrides=<file>`.
 
+## Docker Compose apps
+
+```ts
+runtime: compose({
+  file: 'docker/compose.prod.yml',
+  images: [
+    { tag: 'myapp', dockerfile: 'docker/app/Dockerfile', env: 'MYAPP_IMAGE' },
+    { tag: 'myapp-worker', dockerfile: 'docker/worker/Dockerfile', env: 'MYAPP_WORKER_IMAGE' },
+  ],
+  upstream: { service: 'api', port: 3001 },   // published on 127.0.0.1 by the compose file
+  env: { MYAPP_API_HOST_PORT: '3001' },       // compose interpolation — never secrets
+  keepImages: 3,
+}),
+```
+
+- Each image is built once per commit as `<tag>:<7-char sha>` and skipped when it
+  exists; `compose up -d` gets the tags through the `env` variable of each image.
+- Health: the upstream service healthy by its own healthcheck, **no service of
+  the project restarting**, then the loopback and public URLs.
+- Rollback starts the previous commit's images again — no rebuild. After a
+  healthy release, `<sha>` tags of these images outside the last `keepImages`
+  releases are removed; nothing else is ever pruned.
+- Image tags must be `<app>` or `<app>-…` (C4).
+
+**The env file outside the checkout:** `env: { file: '/etc/myapp/api.env', mirror: ['/etc/myapp/worker.env'] }`.
+Mirrors are rewritten as exact copies; one that differs is a C10 error. `install`
+gives the files — and `/etc/myapp` itself, when its name contains the app's —
+to the deploy user.
+
+**Migrations by command**, with values that override the `.env` for them and for
+the pre-migration dump (a container name the host cannot resolve):
+
+```ts
+migrate: {
+  command: ['./node_modules/.bin/tsx', 'scripts/db.ts', 'deploy'],
+  env: (v) => ({ DATABASE_URL: v.get('DATABASE_URL')!.replace('@myapp-postgres:', '@127.0.0.1:') }),
+},
+```
+
+**Hooks** — what only your app does, as commands that also run by hand:
+
+```ts
+hooks: {
+  infra: [['bash', 'scripts/deploy/infra.sh']],    // after the .env and infra, before the build
+  verify: [['bash', 'scripts/deploy/verify.sh']],  // after the health check; failing rolls back
+},
+```
+
+They run in the checkout as the deploy user with the `.env` values, the image
+variables, `DEPLOY_SHA` and `DEPLOY_APP`. They run on every deploy: idempotent.
+
+**Apache you write yourself:** `apache({ managed: false, vhosts: ['myapp.conf'] })`
+checks C2 and C1 on each vhost on every deploy and never writes them.
+
 ## What runs by default
 
-- `prisma migrate deploy` — when `build.prisma` lists a config, or `migrate.central: true`.
+- `prisma migrate deploy` — when `build.prisma` lists a config, or `migrate.central: true`; not with a `migrate.command` unless `central: true`.
 - `tenant:migrate` — only with `migrate.tenants`.
 - The dump before migrating — when something is migrated and there is a
   Postgres to dump (dedicated, or a `postgres://` URL in the `.env`);

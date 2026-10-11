@@ -101,7 +101,7 @@ describe('Prisma and Postgres steps run by default only when the app has them', 
     expect(host.commands('pnpm').some((c) => c.includes('prisma'))).toBe(false)
     expect(host.commands().some((c) => c.includes('pg_dump'))).toBe(false)
     expect(host.transcript).toContain('skipped: nothing to migrate')
-    expect(host.transcript).toContain('nothing to migrate (no build.prisma, no migrate.tenants)')
+    expect(host.transcript).toContain('nothing to migrate (no build.prisma, no migrate.tenants, no migrate.command)')
   })
 
   it('plan says why the backup is skipped', async () => {

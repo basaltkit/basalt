@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { DeployContext, Finding } from './context.js'
 import { applyEnvChanges, envValues, formatValue, parseEnv, UnwritableValueError, type EnvChange, type EnvDocument } from './dotenv.js'
 
@@ -18,7 +18,11 @@ export interface EnvPlan {
   findings: Finding[]
 }
 
-export const envFile = (ctx: DeployContext) => join(ctx.dir, ctx.config.env.file ?? '.env')
+/** The `.env`: relative to the checkout, or absolute (`/etc/<app>/api.env`). */
+export const envFile = (ctx: DeployContext) => resolve(ctx.dir, ctx.config.env.file ?? '.env')
+
+/** Its exact copies (`env.mirror`), resolved the same way. */
+export const envMirrors = (ctx: DeployContext) => (ctx.config.env.mirror ?? []).map((m) => resolve(ctx.dir, m))
 
 export async function readEnv(ctx: DeployContext): Promise<EnvDocument> {
   return parseEnv((await ctx.host.readFile(envFile(ctx))) ?? '')
@@ -46,7 +50,9 @@ export function planEnv(ctx: DeployContext, document: EnvDocument, port: number,
     pending.set(key, value)
   }
 
-  set('PORT', String(port), 'the port the process listens on')
+  // PM2 runs the app on the host: PORT is where it listens. Under compose the
+  // port inside the container is the compose file's business, not the .env's.
+  if (config.runtime.kind === 'pm2') set('PORT', String(port), 'the port the process listens on')
   for (const [key, value] of Object.entries(config.env.fixed ?? {})) set(key, value, 'fixed in deploy.config.ts')
   for (const [key, spec] of Object.entries(config.env.generate ?? {})) {
     if (!pending.get(key)) set(key, ctx.host.randomHex(spec.bytes), 'generated')
@@ -118,13 +124,42 @@ export async function writeEnv(ctx: DeployContext, plan: EnvPlan): Promise<void>
   if (await host.exists(file)) {
     const stamp = host.now().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '')
     await host.copyFile(file, `${file}.bak-${stamp}`, 0o600)
-    const base = file.slice(file.lastIndexOf('/') + 1)
-    const dir = file.slice(0, file.lastIndexOf('/'))
+    const base = basename(file)
+    const dir = dirname(file)
     const backups = (await host.list(dir)).filter((name) => name.startsWith(`${base}.bak-`)).sort()
     for (const old of backups.slice(0, -5)) await host.remove(join(dir, old))
   }
   await host.writeFile(file, text, 0o600)
+  await writeMirrors(ctx, text)
   plan.document = parseEnv(text)
   plan.values = envValues(plan.document)
   plan.changes = []
 }
+
+/** Rewrites every mirror as an exact copy of the file (0600). */
+export async function writeMirrors(ctx: DeployContext, text: string): Promise<void> {
+  for (const mirror of envMirrors(ctx)) {
+    if ((await ctx.host.readFile(mirror)) === text) continue
+    await ctx.host.writeFile(mirror, text, 0o600)
+  }
+}
+
+/** C10 — a mirror that is not an exact copy: two env files that disagree are two configurations. */
+export async function mirrorFindings(ctx: DeployContext): Promise<Finding[]> {
+  const mirrors = envMirrors(ctx)
+  if (mirrors.length === 0) return []
+  const text = await ctx.host.readFile(envFile(ctx))
+  const findings: Finding[] = []
+  for (const mirror of mirrors) {
+    const copy = await ctx.host.readFile(mirror)
+    if (text === undefined || copy === text) continue
+    findings.push({
+      id: 'C10',
+      level: 'error',
+      message: copy === undefined ? `${mirror} (env.mirror) does not exist` : `${mirror} (env.mirror) differs from ${envFile(ctx)}`,
+      fix: `cp -p ${envFile(ctx)} ${mirror} — after checking which one is right; the deploy rewrites the mirror from the file`,
+    })
+  }
+  return findings
+}
+
