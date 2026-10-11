@@ -499,6 +499,20 @@ idempotencyPlugin()
   `/orders/1/pay` e `/orders/2/pay`, é recusada com `422`. Com
   `fingerprint: 'body'` ou `false` essa reutilização recebe a **primeira**
   resposta: faz os clientes gerarem uma chave nova por operação (e por tenant).
+- **A parte da credencial são bytes em bruto.** Uma repetição cujos headers de
+  credencial diferem num só byte é outro caller para o plugin: depois de uma
+  [rotação](/pt/guide/auth#apikeys-rotation) de API key, depois de passar de
+  `x-api-key` para `Authorization: Bearer` (ou o inverso), ou depois de o header
+  `cookie` mudar, a repetição não encontra registo e **corre a operação outra
+  vez**. Nunca faz replay para outro caller; pode duplicar. Repete com a
+  credencial que a primeira tentativa usou. Vê
+  [API keys e idempotência](/pt/guide/auth#apikeys-idempotency).
+- **A resposta registada é guardada tal como foi enviada**, durante o `ttlMs`
+  (24 h por omissão), na store configurada. Uma resposta que traz um segredo —
+  `POST /apikeys` e `POST /apikeys/:id/rotate` devolvem a chave em texto
+  simples — fica nessa store (memória do processo, ou Redis) quando o cliente
+  enviou `Idempotency-Key`. Protege uma store partilhada como qualquer store de
+  segredos.
 - Pedidos **sem** nenhum header de credencial não são colocados em cache nem
   replicados por omissão (senão um estranho que adivinhasse a chave receberia a
   resposta). Ativa com `allowAnonymous: true` apenas em endpoints públicos sem

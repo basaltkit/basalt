@@ -152,9 +152,17 @@ webauthnPlugin({ config, verifier, credentials: s.passkeys }) // needs the AuthP
 `previousHashExpiresAt`, `rotatedAt`, `allowedIps` and `meta`. Prisma selects
 every column of a model, so once the client is regenerated **every** API-key
 query fails until the database has the columns. Copy the model from
-`@basaltkit/auth-prisma/schema.prisma` by hand (`basalt prisma:sync` only adds
-missing models, never new fields to an existing one), run `prisma generate`, then `prisma migrate dev --name add_api_key_lifecycle` — with
-schema-per-tenant, in every tenant schema (`basalt tenant:migrate`). All the new
+`@basaltkit/auth-prisma/schema.prisma` (or `schema.mysql.prisma` on MySQL) by
+hand (`basalt prisma:sync` only adds missing models, never new fields to an
+existing one), run `prisma generate`, then `prisma migrate dev --name
+add_api_key_lifecycle` — with schema-per-tenant, in every tenant schema
+(`basalt tenant:migrate`). Its warning about the unique constraint on
+`previousHash` is safe: the column is new, so every row holds `NULL`. In a
+non-interactive shell (CI, a container) `migrate dev` refuses to run; write the
+SQL with `prisma migrate diff --from-config-datasource --to-schema
+prisma/schema.prisma --script` (or `API_KEY_LIFECYCLE_MIGRATION_SQL`) into a new
+`prisma/migrations/<timestamp>_add_api_key_lifecycle/migration.sql` and apply it
+with `prisma migrate deploy`. Requires `@basaltkit/auth` 5. All the new
 columns are nullable or default to an empty list, so existing keys keep working.
 Until the columns exist, API-key requests fail with
 `AUTH_API_KEY_SCHEMA_OUTDATED`, whose message carries the exact PostgreSQL and
@@ -1255,6 +1263,31 @@ Over HTTP, `POST /apikeys/:id/rotate` with an optional `{ "graceMs": 3600000 }`
 answers `201` with the key info plus the new `key`. The event is
 `auth:apikey_rotated` (with `graceUntil` when a window was given), which
 `auditPlugin`'s defaults record.
+
+### API keys and idempotency {#apikeys-idempotency}
+
+Two consequences of how [`idempotencyPlugin`](/guide/security#idempotent-mutations-—-idempotencyplugin)
+scopes a key, worth knowing before you rotate:
+
+- **The scope is the raw credential, not the key's id.** A replay is found by
+  the exact bytes of the credential headers (`authorization`, `x-api-key`,
+  `cookie`, `x-session-id`). A client that retries a `POST` after its key was
+  rotated — or that switches carrier, from `x-api-key: mk_…` to
+  `Authorization: Bearer mk_…` — presents different bytes, finds no record, and
+  **the operation runs again**. Never a replay to the wrong caller; a possible
+  duplicate. Finish (or abandon) in-flight retries before switching a client to
+  the new secret, and keep each client on one carrier.
+- **The new plaintext is stored for the idempotency window.** When the client
+  sends `Idempotency-Key`, the `201` of `POST /apikeys` and of
+  `POST /apikeys/:id/rotate` — whose body carries the plaintext `key` — is
+  recorded in the idempotency store for its `ttlMs` (24 h by default), so a
+  retry by the same session gets the same key back. In `MemoryIdempotencyStore`
+  that is process memory; in `RedisIdempotencyStore` it is Redis. Treat that
+  store as secret material (private network, auth, no persistence you do not
+  need), or have the dashboard that mints keys send no `Idempotency-Key`. A
+  replay goes only to the same session in the same tenant, and since
+  `@basaltkit/http` 3 only after the guards, so a revoked session gets `401`,
+  not the key.
 
 ### Expiry and expired keys {#apikeys-expiry}
 

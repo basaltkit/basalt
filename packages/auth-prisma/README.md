@@ -19,7 +19,7 @@ without owning your schema or connection. It's the production counterpart to
 backend.
 
 ```bash
-pnpm add @basaltkit/auth-prisma   # peer: @basaltkit/auth ; you already have @prisma/client
+pnpm add @basaltkit/auth-prisma   # peer: @basaltkit/auth 5.x ; you already have @prisma/client
 ```
 
 ## 1. Add the models
@@ -76,8 +76,10 @@ the idle timeout on later signs out sessions older than the window once.
 
 ## Upgrading to 3.0
 
-3.0.0 stores the API key lifecycle of `@basaltkit/auth` 4.2: rotation with a
-grace window, service keys, a per-key IP allowlist and metadata. `AuthApiKey`
+3.0.0 stores the API key lifecycle of `@basaltkit/auth` 5.0: rotation with a
+grace window, service keys, a per-key IP allowlist and metadata. It requires
+`@basaltkit/auth` 5 (peer `^5.0.0`) and the six new columns in the database;
+upgrade both in the same change (`create-basalt update` does). `AuthApiKey`
 gains six columns: `serviceId`, `previousHash` (unique), `previousHashExpiresAt`,
 `rotatedAt`, `allowedIps` and `meta`. `PrismaApiKeyStore` now implements the
 optional `ApiKeyStore.update`, and `findByHash` also looks a key up by its
@@ -87,13 +89,32 @@ This is a major because the database **and** the generated client must both
 have the columns. Prisma selects every column of the model, so a client
 generated from the new schema fails every API-key query until the database is
 migrated. A client generated from the old schema fails the new
-`previousHash` lookup. Copy the model from the reference schema by hand (`basalt prisma:sync` only
-adds missing models, never new fields to an existing one), run
+`previousHash` lookup. Copy the model from the reference schema by hand,
+`@basaltkit/auth-prisma/schema.prisma` (or `schema.mysql.prisma` on MySQL;
+`basalt prisma:sync` only adds missing models, never new fields to an existing
+one), run
 `prisma generate`, then create the migration:
 
 ```bash
 prisma migrate dev --name add_api_key_lifecycle
 ```
+
+`migrate dev` warns that a unique constraint on `previousHash` will be added and
+may fail on duplicate values. That is safe here: the column is new, so every
+existing row holds `NULL`, and `NULL`s never collide. `migrate dev` also refuses
+to run in a non-interactive shell (CI, a container, an agent). There, generate
+the SQL and apply it with `migrate deploy`:
+
+```bash
+mkdir -p prisma/migrations/20261011000000_add_api_key_lifecycle
+prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script \
+  > prisma/migrations/20261011000000_add_api_key_lifecycle/migration.sql
+prisma migrate deploy
+```
+
+`--to-schema` is your app's schema file, whatever the database. Or paste
+`API_KEY_LIFECYCLE_MIGRATION_SQL.postgresql` (or `.mysql`) into that
+`migration.sql` — it is the same statements as below.
 
 On PostgreSQL the generated migration is:
 

@@ -153,11 +153,18 @@ O 3.0 guarda o [ciclo de vida das API keys](#apikeys-rotation): `AuthApiKey`
 `previousHashExpiresAt`, `rotatedAt`, `allowedIps` e `meta`. O Prisma seleciona
 todas as colunas de um modelo, por isso, assim que o cliente é regenerado,
 **todas** as consultas de API keys falham até a base de dados ter as colunas.
-Copia o modelo de `@basaltkit/auth-prisma/schema.prisma` à mão (o
-`basalt prisma:sync` só acrescenta modelos em falta, nunca campos novos a um
-modelo existente), corre `prisma generate` e depois
-`prisma migrate dev --name add_api_key_lifecycle` — com schema-per-tenant, em
-todos os schemas de tenant (`basalt tenant:migrate`). Todas as colunas novas são
+Copia o modelo de `@basaltkit/auth-prisma/schema.prisma` (ou
+`schema.mysql.prisma` em MySQL) à mão (o `basalt prisma:sync` só acrescenta
+modelos em falta, nunca campos novos a um modelo existente), corre
+`prisma generate` e depois `prisma migrate dev --name add_api_key_lifecycle` —
+com schema-per-tenant, em todos os schemas de tenant (`basalt tenant:migrate`).
+O aviso sobre a restrição única em `previousHash` é seguro: a coluna é nova, por
+isso todas as linhas têm `NULL`. Numa shell não interativa (CI, um contentor) o
+`migrate dev` recusa-se a correr; escreve o SQL com `prisma migrate diff
+--from-config-datasource --to-schema prisma/schema.prisma --script` (ou
+`API_KEY_LIFECYCLE_MIGRATION_SQL`) num novo
+`prisma/migrations/<timestamp>_add_api_key_lifecycle/migration.sql` e aplica-o
+com `prisma migrate deploy`. Requer o `@basaltkit/auth` 5. Todas as colunas novas são
 anuláveis ou têm por padrão uma lista vazia, por isso as chaves existentes
 continuam a funcionar. Enquanto as colunas não existirem, os pedidos com API key
 falham com `AUTH_API_KEY_SCHEMA_OUTDATED`, cuja mensagem traz os `ALTER TABLE`
@@ -1263,6 +1270,32 @@ Por HTTP, `POST /apikeys/:id/rotate` com um `{ "graceMs": 3600000 }` opcional
 responde `201` com a informação da chave mais a nova `key`. O evento é
 `auth:apikey_rotated` (com `graceUntil` quando foi dada uma janela), que os
 padrões do `auditPlugin` registam.
+
+### API keys e idempotência {#apikeys-idempotency}
+
+Duas consequências de como o [`idempotencyPlugin`](/pt/guide/security#mutacoes-idempotentes-—-idempotencyplugin)
+delimita uma chave, a saber antes de rodar:
+
+- **O âmbito é a credencial em bruto, não o id da chave.** Um replay é
+  encontrado pelos bytes exatos dos headers de credencial (`authorization`,
+  `x-api-key`, `cookie`, `x-session-id`). Um cliente que repete um `POST` depois
+  de a sua chave ter sido rodada — ou que muda de transporte, de
+  `x-api-key: mk_…` para `Authorization: Bearer mk_…` — apresenta bytes
+  diferentes, não encontra registo, e **a operação corre outra vez**. Nunca um
+  replay para o caller errado; um possível duplicado. Termina (ou abandona) as
+  repetições em curso antes de passar um cliente para o novo segredo, e mantém
+  cada cliente num só transporte.
+- **O novo texto simples fica guardado durante a janela de idempotência.**
+  Quando o cliente envia `Idempotency-Key`, o `201` de `POST /apikeys` e de
+  `POST /apikeys/:id/rotate` — cujo corpo traz a `key` em texto simples — fica
+  registado na store de idempotência durante o seu `ttlMs` (24 h por omissão),
+  para que uma repetição da mesma sessão receba a mesma chave. No
+  `MemoryIdempotencyStore` isso é memória do processo; no
+  `RedisIdempotencyStore` é o Redis. Trata essa store como material secreto
+  (rede privada, autenticação, nenhuma persistência de que não precises), ou faz
+  com que o painel que emite chaves não envie `Idempotency-Key`. Um replay só vai
+  para a mesma sessão no mesmo tenant e, desde o `@basaltkit/http` 3, só depois
+  dos guards, por isso uma sessão revogada recebe `401`, não a chave.
 
 ### Expiração e chaves expiradas {#apikeys-expiry}
 
