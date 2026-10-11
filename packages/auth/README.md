@@ -24,7 +24,7 @@ It also includes, with nothing extra to install: account lockout after too many 
 pnpm add @basaltkit/auth
 ```
 
-Requirements: `@basaltkit/core` and `@basaltkit/fastify` (installed automatically as dependencies) and `zod` (peer dependency — install with `pnpm add zod`).
+Requirements: `@basaltkit/core` and `@basaltkit/http` (3.x; installed automatically as dependencies) and `zod` (peer dependency — install with `pnpm add zod`). The package is adapter-agnostic: serve its routes with `@basaltkit/fastify`, `@basaltkit/express` or `@basaltkit/hono` 3.x, which must run the same `@basaltkit/http` 3.
 
 ## Get started in 5 minutes
 

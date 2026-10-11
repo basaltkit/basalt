@@ -18,7 +18,7 @@ A comment system involves more than storing text: threads with replies, extracti
 pnpm add @basaltkit/comments
 ```
 
-Depends on `@basaltkit/core` and `@basaltkit/fastify` (routes). No database required: the default store is in-memory (`CommentStore` contract for production).
+Depends on `@basaltkit/core` and `@basaltkit/http` (3.x; routes served by any adapter). No database required: the default store is in-memory (`CommentStore` contract for production).
 
 ## Get started in 5 minutes
 

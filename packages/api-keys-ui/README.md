@@ -18,7 +18,7 @@ Self-contained HTML page to **manage API keys** for [`@basaltkit/auth`](https://
 pnpm add @basaltkit/api-keys-ui
 ```
 
-Depends on `@basaltkit/core` and `@basaltkit/fastify`. Requires your app to mount the API key routes from `@basaltkit/auth` (`apiKeysPlugin` + `apiKeyRoutes`).
+Depends on `@basaltkit/core` and `@basaltkit/http` (3.x) — not on any single adapter. Requires your app to mount the API key routes from `@basaltkit/auth` (`apiKeysPlugin` + `apiKeyRoutes`).
 
 ## Getting started in 5 minutes
 
