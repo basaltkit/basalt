@@ -313,9 +313,9 @@ describe('isTenantRequired with route meta', () => {
     expect(isTenantRequired(false, '/anything', { other: 'meta' })).toBe(false)
   })
 
-  it('ignores a non-boolean meta.tenant rather than guessing', () => {
-    // `meta` is free-form, so another plugin could put anything under this key.
-    expect(isTenantRequired(true, '/anything', { tenant: 'yes' })).toBe(true)
-    expect(isTenantRequired(false, '/anything', { tenant: 'no' })).toBe(false)
+  it('fails closed on an unknown meta.tenant rather than falling back to `required`', () => {
+    // The boot validator refuses these; a driver that skipped it gets a 500.
+    expect(() => isTenantRequired(true, '/anything', { tenant: 'yes' })).toThrow(/meta\.tenant "yes" is not valid/)
+    expect(() => isTenantRequired(false, '/anything', { tenant: 'no' })).toThrow(/meta\.tenant "no" is not valid/)
   })
 })

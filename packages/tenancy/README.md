@@ -267,7 +267,7 @@ route({ method: 'GET', url: '/pricing', meta: { tenant: false }, handler })
 route({ method: 'GET', url: '/platform/plans', meta: { tenant: 'never', auth: true, can: 'platform:plans.read' }, handler })
 ```
 
-Any other `meta.tenant` value (`'none'`, `'optional'`, `null`…) refuses the boot with `HTTP_INVALID_ROUTE_META`, naming the routes, on every adapter.
+Any other `meta.tenant` value (`'none'`, `'optional'`, `null`…) refuses the boot with `HTTP_INVALID_ROUTE_META`, naming the routes, on every adapter. `mcpPlugin` runs the same check over the routes it exposes as tools. A route that skipped it (a custom driver calling `runRoute()` without `assertRouteMetaValid()`) fails closed per request: `isTenantRequired()` and the enricher throw `InvalidTenantMetaError` (`TENANCY_INVALID_ROUTE_META`, 500) instead of falling back to `required`.
 
 The check runs in the tenancy enricher, and enrichers run in plugin order: list `tenancyPlugin` before `authPlugin` / `apiKeysPlugin`, whose enrichers can refuse a request themselves (an invalid bearer) — that answer would otherwise reach the caller instead of the 404.
 

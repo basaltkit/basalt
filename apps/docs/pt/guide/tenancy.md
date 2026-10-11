@@ -696,6 +696,13 @@ a rota em hosts de tenant. (O `@basaltkit/tenancy` 3.2 só
 avisava e caía no default.) O `basalt ai doctor` avisa de rotas que
 juntam `tenant: false` a uma permissão `platform:`.
 
+O `mcpPlugin` corre a mesma verificação sobre as rotas que expõe como tools
+MCP. Uma rota que a salte — um driver próprio que chama `runRoute()` sem
+`assertRouteMetaValid()` — falha fechada em cada pedido: o `isTenantRequired()`
+e o enricher do tenancy lançam `InvalidTenantMetaError`
+(`TENANCY_INVALID_ROUTE_META`, `500`) antes de resolver qualquer tenant, em vez
+de cair no `required`.
+
 Isentar um caminho levanta apenas a exigência de tenant. A autenticação, as
 verificações de subscrição e todas as outras proteções continuam a correr.
 
