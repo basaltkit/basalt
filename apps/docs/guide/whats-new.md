@@ -40,7 +40,7 @@ Unlike 1.13, this wave **does** carry majors: `@basaltkit/http` 3.0 (with
 `fastify`, `express`, `hono` and `testing` 3.0) makes idempotency strict by
 default, `@basaltkit/auth-prisma` 3.0 needs a database migration, and the
 configurations 1.13 only warned about now refuse to boot
-([`@basaltkit/auth` 5.0](#warnings-now-refuse)). Everything else is a minor.
+([`@basaltkit/auth` 5.0, `tenancy` 4.0](#warnings-now-refuse)). Everything else is a minor.
 Read [Upgrading](#upgrading-since-1-13) before you bump.
 
 - **API key lifecycle.** `ApiKeys.rotate()` replaces a key's secret and keeps its
@@ -64,8 +64,8 @@ Read [Upgrading](#upgrading-since-1-13) before you bump.
   different request gets `422`, and replays run after the guards.
   *(`@basaltkit/http` 3.0)* See below.
 - **1.13's boot warnings become refusals.** A prefixed session cookie that
-  browsers would drop no longer boots. *(`@basaltkit/auth` 5.0)* See
-  [below](#warnings-now-refuse).
+  browsers would drop, and an unknown `meta.tenant` value, no longer boot.
+  *(`@basaltkit/auth` 5.0, `tenancy` 4.0)* See [below](#warnings-now-refuse).
 
 ### Upgrading {#upgrading-since-1-13}
 
@@ -196,6 +196,12 @@ nothing here changes for you.
   The implied `Secure` of a prefixed name with `secure` unset, its one-time
   warning outside production, and the `SameSite=None` warning are unchanged.
   See [Session lifetime](/guide/auth#session-hardening).
+- **`@basaltkit/tenancy` 4.0 — an unknown `meta.tenant`.** A value other than
+  `true`, `false`, `'never'` or absent (`'none'`, `'optional'`, `'false'`,
+  `null`) refuses the boot with `HTTP_INVALID_ROUTE_META` on every adapter,
+  naming each route; it no longer falls back to the app-wide `required`. Use
+  `'never'` for a central-only route, `false` for one that works with or
+  without a tenant. See [Central-only routes](/guide/tenancy#central-only-routes-tenant-never).
 
 ### Other changes to watch {#watch-since-1-13}
 

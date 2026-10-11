@@ -119,40 +119,48 @@ export function centralOnlyParitySuite(adapter: string, driver: ParityDriver): v
       expect(switched).toEqual(['acme'])
     })
 
-    it('boots on a meta.tenant value it does not know, warns once, and falls back to the app-wide default', async () => {
+    it('refuses to boot on a meta.tenant value it does not know', async () => {
       const bad = [
         ...routes,
         { method: 'GET', url: '/typo', meta: { tenant: 'none' }, handler: () => 'x' },
         { method: 'POST', url: '/stringly', meta: { tenant: 'false' }, handler: () => 'x' },
+        { method: 'GET', url: '/nullish', meta: { tenant: null }, handler: () => 'x' },
       ] as BasaltRoute[]
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      try {
-        // required: true — the typo needs a tenant, exactly as before.
-        const send = await driver.boot(bad, [tenancy(), signIn])
-        const tenantWarnings = warn.mock.calls.map((call) => String(call[0])).filter((m) => m.includes('meta.tenant'))
-        expect(tenantWarnings).toHaveLength(1)
-        expect(tenantWarnings[0]).toContain('meta.tenant "none" on GET /typo')
-        expect(tenantWarnings[0]).toContain('meta.tenant "false" on POST /stringly')
-        expect(tenantWarnings[0]).toContain('next major')
+      const hint = "(expected true, false or 'never'; if you meant central-only, the value is 'never')"
+      const boot = driver.boot(bad, [tenancy(), signIn])
+      await expect(boot).rejects.toMatchObject({
+        code: 'HTTP_INVALID_ROUTE_META',
+        problems: [
+          { route: 'GET /typo', problem: `meta.tenant "none" is not valid ${hint}` },
+          { route: 'POST /stringly', problem: `meta.tenant "false" is not valid ${hint}` },
+          { route: 'GET /nullish', problem: `meta.tenant null is not valid ${hint}` },
+        ],
+      })
+    })
 
-        const noTenant = await send({ method: 'GET', url: '/typo' })
-        expect(noTenant.status).toBe(404)
-        expect(noTenant.json).toMatchObject({ error: { code: 'TENANCY_NOT_RESOLVED' } })
-        const withTenant = await send({ method: 'GET', url: '/typo', headers: { 'x-tenant-id': 'acme' } })
-        expect(withTenant.status).toBe(200)
-        await driver.close()
-
-        // required: false — the typo runs without a tenant.
-        const lenient = await driver.boot(bad, [
-          tenancyPlugin({
-            source: new MemoryTenantSource().add({ id: 'acme', name: 'Acme' }),
-            resolvers: [headerResolver()],
-            required: false,
-          }),
+    it('refuses whatever the app-wide default is (no fallback to required)', async () => {
+      const bad = [...routes, { method: 'GET', url: '/typo', meta: { tenant: 'optional' }, handler: () => 'x' }] as BasaltRoute[]
+      for (const required of [true, false]) {
+        const boot = driver.boot(bad, [
+          tenancyPlugin({ source: new MemoryTenantSource().add({ id: 'acme', name: 'Acme' }), resolvers: [headerResolver()], required }),
           signIn,
         ])
-        const open = await lenient({ method: 'GET', url: '/typo' })
-        expect(open.status).toBe(200)
+        await expect(boot).rejects.toMatchObject({ code: 'HTTP_INVALID_ROUTE_META' })
+      }
+    })
+
+    it('boots the four valid forms without a warning', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const valid = [
+          ...routes,
+          { method: 'GET', url: '/t', meta: { tenant: true }, handler: () => 'x' },
+          { method: 'GET', url: '/f', meta: { tenant: false }, handler: () => 'x' },
+          { method: 'GET', url: '/n', meta: { tenant: 'never' }, handler: () => 'x' },
+          { method: 'GET', url: '/u', handler: () => 'x' },
+        ] as BasaltRoute[]
+        await driver.boot(valid, [tenancy(), signIn])
+        expect(warn.mock.calls.filter((call) => String(call[0]).includes('meta.tenant'))).toEqual([])
       } finally {
         warn.mockRestore()
       }
