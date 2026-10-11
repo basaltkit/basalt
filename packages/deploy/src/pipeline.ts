@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { apacheInstall, apachePreflight, vhostPaths } from './apache.js'
 import { backupDatabase, restoreCommand } from './backup.js'
-import { tlsFindings, toolingFindings } from './checks.js'
+import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { processName } from './config.js'
 import { DeployError, errors, INSTALL_COMMAND, report, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
@@ -58,6 +58,7 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
   const findings: Finding[] = [...syntaxFindings(document, ctx.config.env.file ?? '.env')]
   const port = await resolvePort(ctx, values)
   findings.push(...await toolingFindings(ctx))
+  findings.push(...await lockfileFindings(ctx))
   findings.push(...await pm2Preflight(ctx, port))
   if (ctx.config.proxy?.kind === 'apache') findings.push(...await apachePreflight(ctx, port))
   if (!options.skip?.includes('tls')) findings.push(...await tlsFindings(ctx))
@@ -299,6 +300,8 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
   let values = checked.values
   let infra: InfraPlan = { services: [], env: [], findings: [], secrets: {} }
   try {
+    // Again on the code the fetch brought: preflight saw the commit before it.
+    if (sha !== previous) stopOnErrors(ctx, await lockfileFindings(ctx), `the incoming commit ${sha.slice(0, 7)}`)
     const prepared = await step(ctx, 'env', () => prepareEnv(ctx, port))
     infra = prepared.infra
     stopOnErrors(ctx, infra.findings, 'infra')
