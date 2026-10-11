@@ -13,8 +13,8 @@ pnpm add @basaltkit/inbound-mail
 The package is opt-in and stateless: no plugin, no token, no storage, no
 migrations. `inboundMailRoutes()` returns ordinary routes, like
 [`driveRoutes()`](/guide/drives#routes), and they run unchanged on Fastify,
-Express and Hono. The design is recorded in RFC 0003
-(`docs/rfcs/0003-basaltkit-inbound-mail.md`).
+Express and Hono. The design is recorded in RFC 0004
+(`docs/rfcs/0004-basaltkit-inbound-mail.md`).
 
 [[toc]]
 
@@ -43,7 +43,7 @@ secrets with `wrangler secret put`. The secret must be at least 16 characters
 (use `generateWebhookSecret()` from `@basaltkit/webhooks`).
 
 ```js
-// Cloudflare Email Routing -> Basalt relay (wire format v1, RFC 0003).
+// Cloudflare Email Routing -> Basalt relay (wire format v1, RFC 0004).
 // Secrets: BASALT_INBOUND_URL and BASALT_INBOUND_SECRET (wrangler secret put).
 const MAX_BYTES = 10 * 1024 * 1024 // keep in step with signedDriver({ maxRequestBytes })
 const encoder = new TextEncoder()
@@ -151,7 +151,7 @@ header    = signPayload(canonical, secrets, t)
 The envelope is inside the signature. Otherwise a captured delivery could be
 replayed to another tenant by editing an unsigned header. Addresses must be
 single, printable-ASCII addresses of at most 320 characters. The format is
-frozen by a golden vector in RFC 0003 and in the tests. The header names can be
+frozen by a golden vector in RFC 0004 and in the tests. The header names can be
 changed through `signedDriver({ headers })` and `signInboundMail(…, { headers })`.
 
 To rotate the secret, configure `secret: [next, current]` on the server first,

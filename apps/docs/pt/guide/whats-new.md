@@ -180,7 +180,7 @@ entrada.
   `verify()` verifica a entrada redigida através dela. O opt-in
   `integrity: { mode: 'hash-chain', erasable: true }` escreve hashes v3 com um
   nonce por entrada que a redacção destrói, por isso o valor apagado já não
-  pode ser confirmado a partir do hash (RFC 0003). Vê
+  pode ser confirmado a partir do hash (RFC 0005). Vê
   [Apagar dados pessoais](/pt/guide/persistence#erasing-personal-data-audit-redact).
   *(`@basaltkit/audit` 3.1, `audit-prisma` / `audit-sqlite` 2.1)*
 - **Políticas de dados pessoais por evento.** `fieldPolicies` omite ou
@@ -205,7 +205,7 @@ entrada.
   encaminha-o pelo destinatário assinado para handlers conscientes do tenant e
   faz o parse dentro de limites, confiando em `Authentication-Results` e ARC só
   de servidores que indicares. Traz um Worker de referência para o Cloudflare
-  Email Routing (RFC 0003) — vê [Mail de entrada](/pt/guide/inbound-mail).
+  Email Routing (RFC 0004) — vê [Mail de entrada](/pt/guide/inbound-mail).
   *(`@basaltkit/inbound-mail` 0.1)*
 - **Drives que se conseguem operar.** Saúde da ligação e uma sonda
   `drives.check()`, um hook `drive:disconnecting` com veto, um modo de listagem

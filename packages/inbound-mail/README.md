@@ -53,4 +53,4 @@ There is no built-in dedupe. Make handlers idempotent on `mail.deliveryKey`, whi
 
 Not included in 0.1: Postmark, SES/SNS, Mailgun and SendGrid drivers, IMAP polling, zip or nested `.eml` expansion, HTML sanitisation, DKIM/SPF re-verification. The `InboundMailDriver` contract is public, so drivers can be added later.
 
-Full guide, including the reference Cloudflare Worker: [Inbound mail](https://basaltkit-docs.pages.dev/guide/inbound-mail). Design and wire format: RFC 0003 (`docs/rfcs/0003-basaltkit-inbound-mail.md`).
+Full guide, including the reference Cloudflare Worker: [Inbound mail](https://basaltkit-docs.pages.dev/guide/inbound-mail). Design and wire format: RFC 0004 (`docs/rfcs/0004-basaltkit-inbound-mail.md`).

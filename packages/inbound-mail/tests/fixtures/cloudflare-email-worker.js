@@ -1,4 +1,4 @@
-// Cloudflare Email Routing -> Basalt relay (wire format v1, RFC 0003).
+// Cloudflare Email Routing -> Basalt relay (wire format v1, RFC 0004).
 // Secrets: BASALT_INBOUND_URL and BASALT_INBOUND_SECRET (wrangler secret put).
 const MAX_BYTES = 10 * 1024 * 1024 // keep in step with signedDriver({ maxRequestBytes })
 const encoder = new TextEncoder()
