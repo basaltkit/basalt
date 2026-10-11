@@ -34,10 +34,10 @@ cadeias de auditoria apagáveis, filtros de listagem nas políticas (onde um
 filtro de linhas ao nível do ORM foi considerado e rejeitado) e mail de
 entrada.
 
-## Desde a 1.13 (por publicar) {#since-1-13-unreleased}
+## Desde a 1.13: a vaga de majors {#since-1-13}
 
-Entrou no `main` depois da publicação da 1.13 e sai na próxima versão. Ao
-contrário da 1.13, esta vaga **traz** majors: o `@basaltkit/http` 3.0 (com o
+Publicada no npm a 2026-10-11, depois da 1.13 (a versão guarda-chuva
+continua a ser 1.13). Ao contrário das minors da 1.13, esta vaga **traz** majors: o `@basaltkit/http` 3.0 (com o
 `fastify`, o `express`, o `hono` e o `testing` 3.0) torna a idempotência
 estrita por omissão, o `@basaltkit/auth-prisma` 3.0 precisa de uma migração
 da base de dados, e as configurações de que a 1.13 só avisava passam a recusar
