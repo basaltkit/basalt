@@ -51,14 +51,20 @@ What is true of one server only (a port taken there, another branch) goes in
 ```sh
 # as the app user (never root), in the checkout:
 pnpm install
-pnpm exec basalt-deploy env        # writes the .env (asks once), starts the containers, validates
+node node_modules/@basaltkit/deploy/dist/bin.js env    # writes the .env (asks once), starts the containers, validates
 
-# once, as an administrator (node on the file: root often has no pnpm on its PATH):
-sudo node node_modules/@basaltkit/deploy/dist/bin.js install --user=<app user>   # Apache vhost, /var/lib/basalt/<app>
+# once, as an administrator — the node path is resolved by YOUR shell, because
+# with a per-user Node (nvm) root has none on its PATH:
+sudo "$(command -v node)" node_modules/@basaltkit/deploy/dist/bin.js install --user="$USER"
 
 # then, every deploy, as the app user:
-pnpm exec basalt-deploy run
+node node_modules/@basaltkit/deploy/dist/bin.js run
 ```
+
+Wrap it in a two-line `deploy.sh` if you like. Run it with `node`, not
+`pnpm exec basalt-deploy`: pnpm ≥ 12 rewrites `pnpm-lock.yaml` on any command
+in the checkout when the lockfile came from another pnpm, and the deploy
+refuses a modified tree.
 
 `run` pulls the code itself. Store the git credentials once
 (`git config credential.helper store && git fetch`, or a read-only deploy key):
