@@ -1,5 +1,5 @@
 ---
-'@basaltkit/auth-sqlite': minor
+'@basaltkit/auth-sqlite': major
 ---
 
 BK-083: API key lifecycle on SQLite.
@@ -13,3 +13,5 @@ BK-083: API key lifecycle on SQLite.
 - filters `list` by `serviceId`.
 
 This backs `@basaltkit/auth`'s rotation with grace, service keys, IP allowlist and metadata.
+
+**Why a major.** The store imports `ApiKeyPatch` and `ApiKeyUpdateOptions` and implements `ApiKeyStore.update`, which only `@basaltkit/auth` 5 defines, so its peer range moves from `@basaltkit/auth` 4.x to `^5`. No API of the package itself is removed; upgrade it together with `@basaltkit/auth` 5.

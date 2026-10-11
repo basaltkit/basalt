@@ -24,12 +24,15 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
-    "@basaltkit/http": "workspace:^",
+    "@basaltkit/http": "workspace:^"
+  },
+  "peerDependencies": {
     "@basaltkit/subscriptions": "workspace:^"
   },
   "devDependencies": {
     "@basaltkit/auth": "workspace:^",
     "@basaltkit/fastify": "workspace:^",
+    "@basaltkit/subscriptions": "workspace:^",
     "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.6.1",
