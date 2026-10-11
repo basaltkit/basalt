@@ -478,13 +478,21 @@ describe('per-route rate limits cannot be sidestepped when the pre-hook knows th
 
 describe('a full MemoryRateLimitStore stays cheap per hit (no O(n) sweep per new client)', () => {
   it('admits new keys into a full store without rescanning every bucket', () => {
-    const store = new MemoryRateLimitStore({ clock: () => 0, maxEntries: 100_000 })
-    for (let i = 0; i < 100_000; i++) store.hit(`ip-${i}`, 10, 60_000)
-    const started = performance.now()
-    for (let i = 0; i < 2_000; i++) store.hit(`new-${i}`, 10, 60_000)
-    // Rescanning 100 000 live buckets per new client took well over a second
-    // here; evicting from the front of the FIFO takes a few milliseconds.
-    expect(performance.now() - started).toBeLessThan(250)
+    // Relative, not wall-clock: coverage instrumentation or a busy CI runner
+    // slows both runs alike, while a per-hit O(n) sweep makes the 100 000-entry
+    // store ~50x slower than the 2 000-entry one (same eviction path).
+    const admit = (entries: number) => {
+      const s = new MemoryRateLimitStore({ clock: () => 0, maxEntries: entries })
+      for (let i = 0; i < entries; i++) s.hit(`ip-${i}`, 10, 60_000)
+      const started = performance.now()
+      for (let i = 0; i < 2_000; i++) s.hit(`new-${i}`, 10, 60_000)
+      return { store: s, ms: performance.now() - started }
+    }
+    admit(2_000) // warm-up (JIT)
+    const small = admit(2_000).ms
+    const { store, ms: large } = admit(100_000)
+    // The floor keeps a sub-millisecond baseline from turning noise into a failure.
+    expect(large).toBeLessThan(Math.max(small, 5) * 10)
     expect(store.size).toBe(100_000)
     expect(store.hit('new-1999', 1, 60_000).allowed).toBe(false)
   })
