@@ -26,9 +26,11 @@ export async function tlsFindings(ctx: DeployContext): Promise<Finding[]> {
     const label = name === config.domain ? name : `a tenant host (${name})`
     const cert = await host.tlsCertificate(name)
     if ('error' in cert) {
+      const dns = /ENOTFOUND|EAI_AGAIN/.test(cert.error)
       findings.push({
         id: 'C8', level: 'warning', message: `TLS to ${label}: ${cert.error}`,
-        ...(name !== config.domain ? { fix: `add a DNS-only (not proxied) record *.${config.domain} pointing at this server` } : {}),
+        ...(name !== config.domain && dns ? { fix: `add a DNS-only (not proxied) record *.${config.domain} pointing at this server` } : {}),
+        ...(/not trusted/.test(cert.error) ? { fix: 'a Cloudflare Origin certificate behind a DNS-only record? Issue a Let\'s Encrypt one (certbot --dns-cloudflare)' } : {}),
       })
       continue
     }

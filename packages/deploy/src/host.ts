@@ -33,7 +33,7 @@ export interface Host {
   randomHex(bytes: number): string
   now(): Date
   sleep(ms: number): Promise<void>
-  /** The certificate a TLS server presents for `servername` (never verified-and-dropped: we want to see it). */
+  /** The certificate a TLS server presents for `servername`: its names, or why the chain is not trusted. */
   tlsCertificate(servername: string): Promise<TlsCertificate | { error: string }>
   /** GET with an explicit `Host` header (fetch forbids setting it). Never throws. */
   httpGet(url: string, options?: { host?: string; timeoutMs?: number }): Promise<{ status: number } | { error: string }>
@@ -211,24 +211,32 @@ export function nodeHost(output: Output = consoleOutput()): Host {
 
     tlsCertificate(servername) {
       return new Promise((resolve) => {
-        const socket = tls.connect({ host: servername, port: 443, servername, rejectUnauthorized: false, timeout: 10_000 })
+        // The chain is verified as for any client: an untrusted or expired
+        // certificate fails the handshake and is reported by its code. Only
+        // the NAME check is ours — it records the certificate instead of
+        // refusing it, because which names it covers is what we report (C8).
+        // Nothing is sent over the connection either way.
+        let names: string[] = []
+        const socket = tls.connect({
+          host: servername, port: 443, servername, timeout: 10_000,
+          checkServerIdentity: (_host, cert) => {
+            names = (cert.subjectaltname ?? '')
+              .split(',')
+              .map((entry) => entry.trim())
+              .filter((entry) => entry.startsWith('DNS:'))
+              .map((entry) => entry.slice(4).toLowerCase())
+            return undefined
+          },
+        })
         const finish = (value: TlsCertificate | { error: string }) => { socket.destroy(); resolve(value) }
         socket.once('secureConnect', () => {
-          const cert = socket.getPeerCertificate()
-          const names = (cert.subjectaltname ?? '')
-            .split(',')
-            .map((entry) => entry.trim())
-            .filter((entry) => entry.startsWith('DNS:'))
-            .map((entry) => entry.slice(4).toLowerCase())
-          finish({
-            names,
-            validTo: new Date(cert.valid_to),
-            trusted: socket.authorized,
-            ...(socket.authorized ? {} : { trustError: String(socket.authorizationError) }),
-          })
+          finish({ names, validTo: new Date(socket.getPeerCertificate().valid_to), trusted: true })
         })
         socket.once('timeout', () => finish({ error: 'timed out' }))
-        socket.once('error', (error) => finish({ error: error.message }))
+        socket.once('error', (error: NodeJS.ErrnoException) => {
+          const code = error.code ?? ''
+          finish({ error: /CERT|SELF_SIGNED|UNABLE_TO|VERIFY/.test(code) ? `certificate not trusted by browsers (${code})` : error.message })
+        })
       })
     },
 

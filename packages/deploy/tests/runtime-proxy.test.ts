@@ -151,3 +151,13 @@ describe('C8 — certificates as a browser sees them', () => {
     expect(messages.some((m) => /expires in 8 day/.test(m))).toBe(true)
   })
 })
+
+describe('C8 — an untrusted chain fails the handshake and says so', () => {
+  it('suggests the Let\'s Encrypt certificate, not DNS', async () => {
+    const host = new FakeHost()
+    host.certificates.set('*', { error: 'certificate not trusted by browsers (UNABLE_TO_VERIFY_LEAF_SIGNATURE)' })
+    const findings = await tlsFindings(context(host))
+    expect(findings).toHaveLength(2)
+    expect(findings.every((f) => /Let's Encrypt/.test(f.fix ?? ''))).toBe(true)
+  })
+})
