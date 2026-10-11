@@ -26,7 +26,7 @@ In any mode, `prismaPlugin` puts the right client into each request's context �
 pnpm add @basaltkit/prisma
 ```
 
-Depends on `@basaltkit/core` and `@basaltkit/cli`. Prisma itself is an optional *peer dependency* — install it in your project if you don't already have it:
+Depends on `@basaltkit/core`. `@basaltkit/http` (3.x) is an optional *peer dependency* (request-scoped clients ride the app's http pipeline). Prisma itself is an optional *peer dependency* too — install it in your project if you don't already have it:
 
 ```bash
 pnpm add @prisma/client   # requires version >= 5.0.0

@@ -18,7 +18,7 @@ Self-contained HTML page for **managing a team** in [`@basaltkit/teams`](https:/
 pnpm add @basaltkit/teams-ui
 ```
 
-Depends on `@basaltkit/core` and `@basaltkit/fastify`. Requires `teamsPlugin` + `teamRoutes` from `@basaltkit/teams` to be mounted.
+Depends on `@basaltkit/core` and `@basaltkit/http` (3.x) — not on any single adapter. Requires `teamsPlugin` + `teamRoutes` from `@basaltkit/teams` to be mounted.
 
 ## Get started in 5 minutes
 
