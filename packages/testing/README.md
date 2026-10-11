@@ -19,7 +19,7 @@ Everything works with any test runner (Vitest, Jest, node:test…), because noth
 ## Installation
 
 ```bash
-pnpm add -D @basaltkit/testing
+pnpm add -D @basaltkit/testing @basaltkit/mailer
 ```
 
 > Note: it depends on `@basaltkit/core` and `@basaltkit/queue`. `@basaltkit/mailer` is a **peer** (since 3.0): `fakeMailer()` binds the app's own `MAILER` token, so it must be the copy your app (and `@basaltkit/notifications`) uses. The adapters — `@basaltkit/fastify`, `@basaltkit/express` and `@basaltkit/hono`, 3.x — are **optional peers**: install the one your app runs (`fastify` is the default `adapter`; you need `express` / `hono` only if you pass `adapter: 'express'` / `adapter: 'hono'`). Projects created with `create-basalt` already include `@basaltkit/testing` in `devDependencies`.

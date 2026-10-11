@@ -17,8 +17,10 @@ import { describe, expect, it } from 'vitest'
  * `audit-viewer` already follow this rule; this test keeps it from regressing.
  *
  * `@basaltkit/core` (the container itself) and `@basaltkit/http` (the adapters
- * ARE its runtime, and every dependent moves with an http major — see
- * VERSIONING.md, "majors forced by dependencies") are out of scope.
+ * ARE its runtime) are out of scope. Dependents that share http's pipeline,
+ * error classes or `RouteMeta` augmentation move with an http major; dependents
+ * that use it as a private copy may take a patch (VERSIONING.md, "Semver
+ * commitment").
  */
 
 /**
