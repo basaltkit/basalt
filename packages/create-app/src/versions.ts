@@ -16,6 +16,7 @@ export const SCAFFOLD_VERSIONS: Readonly<Record<string, string>> = {
   '@basaltkit/fastify': '^2.6.0',
   '@basaltkit/generator': '^1.6.0',
   '@basaltkit/logger': '^1.3.0',
+  '@basaltkit/mailer': '^2.1.0',
   '@basaltkit/mcp': '^5.1.0',
   '@basaltkit/prisma': '^3.1.0',
   '@basaltkit/sdk': '^2.1.0',

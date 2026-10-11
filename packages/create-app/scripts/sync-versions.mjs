@@ -26,6 +26,7 @@ const SCAFFOLDED = [
   '@basaltkit/fastify',
   '@basaltkit/generator',
   '@basaltkit/logger',
+  '@basaltkit/mailer',
   '@basaltkit/mcp',
   '@basaltkit/prisma',
   '@basaltkit/sdk',

@@ -124,6 +124,10 @@ export function packageJson(options: ProjectOptions): string {
 
   const devDependencies: Record<string, string> = {
     '@basaltkit/testing': versionOf('@basaltkit/testing'),
+    // @basaltkit/testing's peer: fakeMailer() binds the app's own MAILER token,
+    // so the copy must be the app's (a package manager that skips peers would
+    // otherwise leave `@basaltkit/testing` unable to load).
+    '@basaltkit/mailer': versionOf('@basaltkit/mailer'),
     // The project commands (\`pnpm basalt update | add | doctor | info\`) — dev
     // tooling with no dependencies of its own, never imported by the app.
     'create-basalt': versionOf('create-basalt'),
