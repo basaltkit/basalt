@@ -111,9 +111,13 @@ Depois dá os passos que dependem de ti:
 5. **Peers partilhados** — o `@basaltkit/mailer` passa a ser peer do
    `notifications` 2 e do `testing` 3, e o `@basaltkit/audit` peer do
    `audit-viewer` 3.1: cada um lê ou regista o token de contentor desse pacote,
-   por isso tem de usar a cópia da tua app. Se a tua app ainda não declara o
-   `@basaltkit/mailer`, acrescenta-o (`pnpm add @basaltkit/mailer`); o
-   `pnpm basalt doctor` avisa de qualquer peer `@basaltkit/*` em falta.
+   por isso tem de usar a cópia da tua app. O `pnpm basalt update`
+   (create-basalt 1.13) acrescenta um peer `@basaltkit/*` obrigatório que o teu
+   package.json não declara, na versão mais recente, ou avisa quando não
+   consegue; à mão é `pnpm add @basaltkit/mailer`. Não contes com o gestor de
+   pacotes para instalar os peers por ti: o yarn PnP, o
+   `auto-install-peers=false` e o `--legacy-peer-deps` não o fazem, e o
+   `pnpm basalt doctor` só vê o que está instalado.
 
 **Incompatibilidades intencionais.** Estas combinações não funcionam, por
 desenho:
@@ -134,14 +138,16 @@ Os onze patches (`comments`, `files`, `drives`, `teams`, `teams-ui`,
 `api-keys-ui`, `inbound-mail`, `cli`, `activity`, `backup`, `dashboard`)
 funcionam em qualquer das linhas — só constroem rotas ou leem
 dados através de uma cópia privada — mas o `update` também os sobe, e é isso
-que testamos.
+que testamos. As linhas misturadas (um patch no http 3 ao lado de um adapter
+2.x) só são verificadas em runtime, não por um typecheck: se o TypeScript
+recusar passar as rotas deles a um adapter 2.x, sobe o adapter com eles.
 
 **Mapa de publicação.** Todos os pacotes que esta vaga publica (do
 `changeset status`):
 
 | Pacote | Publicado | Próxima | Subida | Porquê |
 | --- | --- | --- | --- | --- |
-| `@basaltkit/http` | 2.8.0 | 3.0.0 | major | idempotência estrita; `meta.responseHeaders` inválido recusado no arranque |
+| `@basaltkit/http` | 2.8.0 | 3.0.0 | major | idempotência estrita; `meta.responseHeaders` inválido recusado no arranque; enrichers sem container falham fechados |
 | `@basaltkit/fastify` | 2.6.0 | 3.0.0 | major | precisa do http 3 |
 | `@basaltkit/express` | 2.1.0 | 3.0.0 | major | precisa do http 3 |
 | `@basaltkit/hono` | 2.1.0 | 3.0.0 | major | precisa do http 3 |
@@ -168,10 +174,10 @@ que testamos.
 | `@basaltkit/subscriptions-pdf` | 0.1.5 | 0.2.0 | minor (rutura em 0.x) | peer subscriptions `^6` |
 | `@basaltkit/billing-ui` | 1.2.0 | 2.0.0 | major | o `@basaltkit/subscriptions` passa a peer |
 | `@basaltkit/audit` | 3.1.0 | 3.2.0 | minor | `auditPlugin({ actor })` |
-| `create-basalt` | 1.12.0 | 1.13.0 | minor | modelo `AuthApiKey` com ciclo de vida; ranges com piso na versão exata |
+| `create-basalt` | 1.12.0 | 1.13.0 | minor | modelo `AuthApiKey` com ciclo de vida; ranges com piso na versão exata; o `update` acrescenta peers `@basaltkit/*` obrigatórios em falta |
 | `@basaltkit/activity` | 1.3.2 | 1.3.3 | patch | tenancy `^4` (cópia privada) |
 | `@basaltkit/api-keys-ui` | 1.4.0 | 1.4.1 | patch | http `^3` (cópia privada) |
-| `@basaltkit/audit-viewer` | 3.0.2 | 3.1.0 | minor | o `@basaltkit/audit` passa a peer (lê o binding `AUDIT` da app); http `^3` |
+| `@basaltkit/audit-viewer` | 3.0.2 | 3.1.0 | minor | o `@basaltkit/audit` passa a peer `^3.0.0` (lê o binding `AUDIT` da app; o audit 3.0/3.1 continua a servir); http `^3` (cópia privada) |
 | `@basaltkit/backup` | 0.3.2 | 0.3.3 | patch | prisma `^4` (cópia privada) |
 | `@basaltkit/cli` | 1.4.0 | 1.4.1 | patch | http `^3` (cópia privada) |
 | `@basaltkit/comments` | 4.1.0 | 4.1.1 | patch | http `^3` (cópia privada) |
@@ -404,6 +410,12 @@ nada aqui muda para ti.
   `meta.tenant` desconhecido em vez de devolver a predefinição da app, e o
   enricher do tenancy recusa esse pedido antes de resolver um tenant — para um
   driver próprio que saltou a verificação de arranque. *(`@basaltkit/tenancy` 4.0)*
+- Um pipeline de rota com enrichers mas sem container lança
+  `EnrichersWithoutContainerError` (`HTTP_ENRICHERS_UNRUNNABLE`, `500`) em vez de
+  os ignorar em silêncio, como os guards já faziam — por isso um driver próprio
+  não pode deixar cair o enricher do tenancy (e a recusa acima) por se esquecer
+  do container. Todos os adapters do kit e o `mcpPlugin` passam-no.
+  *(`@basaltkit/http` 3.0)*
 - As chaves de idempotência têm âmbito na credencial em bruto, e as respostas de
   `POST /apikeys` e `POST /apikeys/:id/rotate` ficam guardadas durante a janela
   de idempotência quando o cliente envia `Idempotency-Key`; vê
