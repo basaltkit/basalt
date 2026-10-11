@@ -158,7 +158,11 @@ against the neutral `@basaltkit/http` contract — see
 `@basaltkit/mailer` is a required peer (since `@basaltkit/testing` 3.0):
 `fakeMailer()` binds the app's own `MAILER` token, so it must be the copy your
 app and `@basaltkit/notifications` use. `create-basalt` apps list it in
-`devDependencies`.
+`devDependencies`; elsewhere install both:
+
+```bash
+pnpm add -D @basaltkit/testing @basaltkit/mailer
+```
 
 ::: warning `app.server()` is Fastify-only, and asynchronous
 `await app.server()` resolves the `FASTIFY` token. On `'express'` / `'hono'` it
