@@ -63,10 +63,10 @@ describe('db:status (BK-041)', () => {
       central: { configPath: 'prisma.config.ts' },
       tenants: {
         list: () => ['acme', 'globex'],
-        target: { mode: 'schema', url: 'postgresql://u:p@db:5432/app' },
+        target: { mode: 'schema', url: 'postgresql://u:p@db:5432/app' }, // trufflehog:ignore — fake test credentials
         configPath: 'prisma/tenant/prisma.config.ts',
       },
-      run: runner({ 'postgresql://u:p@db:5432/app?schema=tenant_globex': PENDING }),
+      run: runner({ 'postgresql://u:p@db:5432/app?schema=tenant_globex': PENDING }), // trufflehog:ignore — fake test credentials
     })
     const code = await command.handle({ io, args: [], flags: {} })
     expect(code).toBe(1)

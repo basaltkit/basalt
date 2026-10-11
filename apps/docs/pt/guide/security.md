@@ -275,7 +275,7 @@ desativar tudo. Uma rota que pode ser guardada em cache define o seu próprio
 `Cache-Control`, que substitui o valor por omissão — fá-lo nas rotas `meta.etag`
 (p. ex. `private, no-cache`), já que `no-store` impede o browser de revalidar.
 
-### Cabeçalhos por rota — `meta.headers`
+### Cabeçalhos por rota — `meta.responseHeaders`
 
 Algumas rotas precisam de cabeçalhos que o resto da API não precisa: um link de
 partilha público que os motores de busca não devem indexar, um download que
@@ -285,7 +285,7 @@ nunca deve ir para cache. Declara-os na rota:
 route({
   method: 'POST',
   url: '/s/:token',
-  meta: { headers: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
+  meta: { responseHeaders: { 'X-Robots-Tag': 'noindex, nofollow', 'Cache-Control': 'no-store' } },
   handler: /* … */,
 })
 ```
@@ -297,6 +297,20 @@ adapters. Um cabeçalho posto com `reply.header()` só chegaria ao caminho de
 sucesso. Substituem um cabeçalho global com o mesmo nome (aqui o
 `Cache-Control` do `securityPlugin`), e um handler continua a poder sobrepor-se
 a um deles com `reply.header()`.
+
+Os valores são verificados no arranque em todos os adapters: strings sem CR, LF
+nem outros caracteres de controlo, e nunca `Set-Cookie`, `Content-Type`,
+`Content-Length`, `Transfer-Encoding`, cabeçalhos hop-by-hop nem `X-Request-Id`,
+que pertencem à resposta ou ao adapter. Uma rota cujo registo viola uma regra
+recebe um aviso no arranque que a nomeia, e o seu registo `responseHeaders` é
+ignorado **por inteiro** — nenhum dos seus cabeçalhos é enviado, nem os
+válidos, e o pedido nunca falha por causa disso. A próxima major recusa esse
+arranque.
+
+A chave é `responseHeaders`, não `headers`: a meta da rota também é tua, e nada
+lê nem envia `meta.headers`. Um pedido que nunca chega à rota — um `404`, um
+`429` do rate limit ou um corpo malformado rejeitado pelo parser da framework —
+leva só os cabeçalhos globais.
 
 Os valores são verificados no arranque (`InvalidRouteMetaError`): strings sem
 CR, LF ou outros caracteres de controlo, e nunca `Set-Cookie`, `Content-Type`,
@@ -458,19 +472,32 @@ idempotencyPlugin()
   Vale para qualquer forma de handler — um que devolve o payload é repetido
   exactamente como um que chama `reply.send()`.
 - Uma repetição enquanto a primeira ainda está em curso → `409 IDEMPOTENCY_CONFLICT`.
-- Respostas `5xx`, downloads `stream()` e streams `sse()` **não** são colocados
-  em cache, por isso falhas genuínas continuam repetíveis. Um erro de cliente que
-  a rota lança (`4xx`) é registado e replicado como qualquer outra resposta.
-- As chaves têm escopo por **credenciais do caller + tenant + método + rota**,
-  com hash SHA-256 antes de chegarem ao store. As credenciais são todos os
-  headers em `credentialHeaders` (por omissão `authorization`, `x-session-id`,
-  `cookie`, `x-api-key`) e o tenant é `x-tenant-id` + `host`, por isso a resposta
-  em cache de um utilizador nunca pode ser replicada a outro (sem fuga entre
-  utilizadores/tenants). O escopo usa o método e o *padrão* da rota
+- Só é registado o resultado **do próprio handler**. Uma recusa levantada antes
+  de o handler correr — o `401`/`403` de um guard, o `429` do rate limiter, um
+  `400` de validação — liberta a chave, por isso um cliente que respeita o
+  `Retry-After` (ou volta a autenticar-se) vê a operação executada no retry.
+- Respostas `5xx`, os status de "tenta mais tarde" `408`, `425` e `429` (mesmo
+  vindos do handler), downloads `stream()` e streams `sse()` **não** são
+  colocados em cache, por isso falhas genuínas continuam repetíveis. Qualquer
+  outro erro de cliente que o handler lança (`4xx`) é registado e replicado byte
+  a byte.
+- As chaves têm escopo por **credenciais do caller + headers de tenant + método +
+  padrão da rota**, com hash SHA-256 antes de chegarem ao store. As credenciais
+  são todos os headers em `credentialHeaders` (por omissão `authorization`,
+  `x-session-id`, `cookie`, `x-api-key`), por isso a resposta em cache de uma
+  credencial nunca é replicada a outra. A rota é o seu *padrão*
   (`/accounts/:id/charge`), por isso a mesma chave em duas rotas diferentes
-  nunca colide; dentro de um padrão, o `fingerprint` por omissão associa os
-  params, a query e o corpo concretos (abaixo). Se autenticas com outro header,
-  adiciona-o a `credentialHeaders`.
+  nunca colide. Se autenticas com outro header, adiciona-o a
+  `credentialHeaders`.
+- **O que o escopo não cobre.** A parte do tenant é só os headers em bruto
+  `x-tenant-id` e `host` — não um tenant resolvido a partir de um segmento do
+  path (`/t/:tenant/...`) ou de um claim do token — e a rota é o seu *padrão*,
+  não os params concretos do path. O `fingerprint` por omissão (`'request'`,
+  abaixo) associa esses params, a query e o corpo, por isso a mesma credencial a
+  reutilizar uma chave em `/t/acme/orders` e `/t/globex/orders`, ou em
+  `/orders/1/pay` e `/orders/2/pay`, é recusada com `422`. Com
+  `fingerprint: 'body'` ou `false` essa reutilização recebe a **primeira**
+  resposta: faz os clientes gerarem uma chave nova por operação (e por tenant).
 - Pedidos **sem** nenhum header de credencial não são colocados em cache nem
   replicados por omissão (senão um estranho que adivinhasse a chave receberia a
   resposta). Ativa com `allowAnonymous: true` apenas em endpoints públicos sem
@@ -480,7 +507,8 @@ idempotencyPlugin()
   `maxEntries` (por omissão 10 000). O `RedisIdempotencyStore` partilha os
   replays entre instâncias.
 - Cobre as rotas que o Basalt serve (definições `route()`). Um handler que
-  registes à mão na framework por baixo não fica coberto.
+  registes à mão na framework por baixo — um `fastify.post(...)` cru — não fica
+  coberto: declara-o com `route()`.
 
 **A chave fica associada ao pedido — `fingerprint`.** Um cliente que reutiliza
 uma chave para um pedido *diferente* (um bug, ou um retry depois de o utilizador
@@ -503,6 +531,12 @@ pedido ainda está a correr. Os modos:
   `undefined` para saltar um pedido.
 - `false` — as chaves não ficam associadas a um pedido.
 
+Com `fingerprint` ligado, o `RedisIdempotencyStore` grava as reservas em curso
+como `pending:<fingerprint>`, que uma instância ainda no plugin só-Fastify
+(`@basaltkit/fastify` 2.5 ou anterior) lê mal durante um rolling deploy: passa
+primeiro toda a frota para `@basaltkit/http` 2.8 / `@basaltkit/fastify` 2.6, e
+só depois atualiza para 3.x.
+
 Uma função é a forma de retirar campos voláteis que um cliente muda em cada
 retry:
 
@@ -519,11 +553,12 @@ idempotencyPlugin({
 verificação corre depois dos guards da rota e da validação do pedido, mesmo
 antes do handler: um caller cujo token foi revogado desde o primeiro pedido
 recebe o `401`/`403` do guard em vez do sucesso em cache, os guards correm em
-cada replay, e um pedido que falha a validação nunca reserva a chave. `false`
-corre-a depois dos enrichers e **antes** dos guards: um caller revogado que
-apresente o mesmo header de credencial continua então a receber o sucesso em
-cache. Mesmo assim, uma rota `rawBody()` com fingerprint `'request'` ou `'body'`
-é verificada depois dos guards, porque os seus bytes nunca são lidos antes de
+cada replay (um tenant suspenso recebe o seu `403`, não um replay), e um pedido
+que falha a validação nunca reserva a chave. `false` corre-a depois dos
+enrichers e **antes** dos guards: um caller revogado que apresente o mesmo
+header de credencial continua então a receber o sucesso em cache. Mesmo assim,
+uma rota `rawBody()` com fingerprint `'request'` ou `'body'` é verificada
+depois dos guards, porque os seus bytes nunca são lidos antes de
 eles passarem.
 
 Para manter o comportamento do `@basaltkit/http` 2.x, passa
@@ -1019,7 +1054,13 @@ setCookie('sid', session.id, { httpOnly: true, secure: true, sameSite: 'lax' })
 
 `basalt routes` lista cada rota com as guardas que **declara**: `auth`, `can`,
 `rateLimit`, `tenant` e as outras chaves guardadas (`mfa`, `teamRole`, `scopes`,
-`subscribed`, `feature`). Duas formas de transformar isso num controlo:
+`subscribed`, `feature`). A coluna `tenant` mostra `required` (`meta.tenant: true`),
+`exempt` (`meta.tenant: false`), `central-only` (`meta.tenant: 'never'` — a rota
+rejeita qualquer pedido que resolva um tenant), ou fica vazia quando a rota herda o
+default da app. A coluna reflete só o `meta.tenant`: o `meta.central: true` (o bypass
+de membership do `@basaltkit/teams`) aparece na coluna de guardas como `central`; verifica `row.tenant ===
+'central-only'` para fixar uma rota de consola ao plano central. Duas formas de
+transformar isso num controlo:
 
 ```bash
 # CI: termina com 1 quando uma rota não declara auth e can (opt-outs explícitos passam)

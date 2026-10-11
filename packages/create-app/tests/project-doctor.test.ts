@@ -157,6 +157,38 @@ describe('doctor', () => {
     expect(result.out).toContain('Fix: set DB_DATABASE_URL in .env (.env.example has an example value), or export it')
   })
 
+  it('flags the db:seed script of create-basalt 1.8–1.11 (no .env) with the exact replacement, statically', async () => {
+    const dir = await installedApp('seed', { prisma: true })
+    await write(dir, 'generated/prisma/client.ts', '')
+    const env = { NO_COLOR: '1' }
+    // The current scaffold: nothing to say.
+    let result = await doctor(dir, [], { env })
+    expect(JSON.parse(await read(dir, 'package.json')).scripts['db:seed']).toBe('prisma db seed')
+    expect(result.out).not.toContain('db:seed')
+    // The script 1.8.0–1.11.0 generated.
+    const pkg = JSON.parse(await read(dir, 'package.json'))
+    pkg.scripts['db:seed'] = 'tsx prisma/seed.ts'
+    const pkgText = `${JSON.stringify(pkg, null, 2)}\n`
+    await write(dir, 'package.json', pkgText)
+    result = await doctor(dir, [], { env })
+    expect(result.out).toMatch(/! prisma\s+`db:seed` runs "tsx prisma\/seed\.ts", which does not load \.env/)
+    expect(result.out).toContain('  package.json       "db:seed": "prisma db seed"')
+    // prisma.config.ts declares the seed command already: no second line.
+    expect(result.out).not.toContain('prisma.config.ts   migrations:')
+    // A config without the seed command gets the line to add.
+    const config = await read(dir, 'prisma.config.ts')
+    await write(dir, 'prisma.config.ts', config.replace(/\n\s*\/\/[^\n]*\n\s*migrations: \{ seed: 'tsx prisma\/seed\.ts' \},/, ''))
+    result = await doctor(dir, [], { env })
+    expect(result.out).toContain("  prisma.config.ts   migrations: { seed: 'tsx prisma/seed.ts' },   (inside defineConfig)")
+    // Read-only: package.json is untouched.
+    expect(await read(dir, 'package.json')).toBe(pkgText)
+    // A customised script is the app's.
+    pkg.scripts['db:seed'] = 'tsx --env-file=.env prisma/seed.ts'
+    await write(dir, 'package.json', `${JSON.stringify(pkg, null, 2)}\n`)
+    result = await doctor(dir, [], { env })
+    expect(result.out).not.toContain('which does not load .env')
+  })
+
   it('warns about dev tooling declared as a runtime dependency', async () => {
     const dir = await installedApp('devtools')
     const ctx = await loadProject(dir)

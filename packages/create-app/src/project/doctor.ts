@@ -11,6 +11,7 @@ import { allDependencies, type ProjectContext } from './context.js'
 import { ownVersion } from './manifest.js'
 import type { PackageJson } from './package-json.js'
 import { LEGACY_PRISMA_OUTPUT, RUNS_TSX } from './production.js'
+import { legacySeedScriptFix } from './seed-script.js'
 import { compareVersions, parseSimpleRange, parseVersion, satisfies } from './semver.js'
 import type { Colors } from './term.js'
 
@@ -362,6 +363,8 @@ export async function runDoctor(ctx: ProjectContext, options: DoctorOptions = {}
     const count = migrations.filter((entry) => entry.isDirectory()).length
     if (count === 0) push('warn', 'prisma', `No migrations yet — run \`${ctx.pm === 'npm' ? 'npm run' : ctx.pm} db:migrate\` (the app boots with assertMigrated).`)
     else push('info', 'prisma', `${count} migration(s) on disk; whether they are applied needs the database: \`prisma migrate status\`.`)
+    const seedFix = legacySeedScriptFix(ctx.packageJson, await readText(join(dir, 'prisma.config.ts')))
+    if (seedFix !== undefined) push('warn', 'prisma', seedFix)
   }
 
   // --- MCP -------------------------------------------------------------------------

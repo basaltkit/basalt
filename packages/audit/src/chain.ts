@@ -266,7 +266,7 @@ export function checkAuditHash(
   return sameHash(compute(entry, { id: parsed.keyId, key }), stored) ? 'ok' : 'hash-mismatch'
 }
 
-// ── Erasure (RFC 0003) ────────────────────────────────────────────────────────
+// ── Erasure (RFC 0005) ────────────────────────────────────────────────────────
 
 /** The value an erased payload field (or a whole payload erased with `'all'`) holds. */
 export const AUDIT_ERASED = '[erased]'

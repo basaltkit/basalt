@@ -1,117 +1,72 @@
-# What's new in Basalt 1.12
+# What's new in Basalt 1.13
 
-> *"Basalt 1.12" is the umbrella label for this wave of work; the `@basaltkit/*`
+> *"Basalt 1.13" is the umbrella label for this wave of work; the `@basaltkit/*`
 > packages ship independently (see [Versioning](/guide/versioning)). Below is what
 > landed and the package version that carries it.*
 
-::: warning Thirty-two packages publish a major — six of them twice
-`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 4
-(`permissions-prisma` / `-sqlite` 2), `tenancy` 3, `tenancy-prisma` 2,
-`storage` 5, `files` 6, `comments` 4, `search` 2, `search-elasticsearch` 2,
-`audit` 3 (`audit-prisma` / `-sqlite` 2), `webhooks` 4 (`webhooks-prisma` /
-`-sqlite` 2), `subscriptions` 5 (`subscriptions-prisma` / `-sqlite` 3),
-`teams` 4, `queue` 3, `prisma` 3, `mcp` 5, `express` 2 and `hono` 2 — and the
-three drive adapters reach 1.0. Some packages went through two majors in this
-wave: `permissions`, `storage`, `files`, `audit`, `webhooks` and `mcp` first
-shipped the audit's fixes (as 3, 4, 5, 2, 3 and 4) and then, a day later, the
-follow-ups in [Closing the harvest](#closing-the-harvest). Coming from 1.11,
-you take both sets of steps. Three 0.x packages break in a minor: `drives` 0.3,
-`mcp-core` 0.4 and `ai-mcp` 0.3 (by way of 0.2). Most of these are one option or
-one renamed call; four need a data step (a re-key, a re-encryption, two new
-auth models, regenerated RLS policies). See [Upgrading](#upgrading).
+::: tip No package publishes a major
+Forty-five packages publish in this wave: forty-four minors and patches, and
+one debut, `@basaltkit/inbound-mail` 0.1. Three 0.x packages move a minor —
+`drives` 0.4, `mcp-core` 0.5 and `ai-mcp` 0.4 — and none of them removes an
+API. Some
+defaults change and a few configurations that used to boot silently now print a
+boot warning; the stricter refusals arrive in a future major. Read
+[Upgrading](#upgrading) before you bump.
 :::
 
-Basalt 1.12 is the release that **keeps its word**. Every package makes
-promises — in its README, in its types, in the name of an option — and 1.11 had
-made sure the secure behaviour was the default. What nobody had checked
-systematically was whether the default did what the promise said. So an
-independent audit, in two passes, read each package's source next to its
-documentation and turned every mismatch it found into a failing test against
-the published build.
+Basalt 1.13 is the release that **closes the backlog without a major**. While
+1.12 was being audited, a document-management SaaS kept building on the
+framework and kept a list — items BK-025 to BK-087 — of every place it had to
+write by hand what the framework should have written: an idempotency plugin
+that only Fastify had, a tenant database client that stayed reserved for thirty
+seconds after each request, a webhook outbox that dead-lettered every entry
+under schema-per-tenant, an audit trail that could not forget a person without
+failing its own integrity check, API keys that every machine client shared one
+rate-limit bucket with.
 
-It found eighty. Ten were rated high, and none of them looked like a security
-bug from the outside — each was a sentence the framework said about itself. The
-README promised `audit.verify()` would detect a forged row, and a row inserted
-straight into the table passed. `idempotencyPlugin` was documented for `route()`
-handlers, and a handler that *returned* its payload — the shape every example
-uses — ran again on every retry. A policy for `project:constructor` resolved
-through `Object.prototype` and authorized anyone. `meta.teamRole: 'Admin'`, a
-typo for `'admin'`, ranked zero and admitted every member. `swap()` moved a free
-subscription onto a paid plan without charging it. `@basaltkit/env` said an
-unset `NODE_ENV` was production and `@basaltkit/auth` said it was development.
+This wave closes that list. Each item landed as a minor or a patch, with tests
+on Fastify, Express and Hono wherever it touches a request, and a release audit
+read the result before it shipped. The items that could only land as a breaking
+change — a warning that should become a refusal, a deprecated override that
+should stop being consulted — keep their warning for now and wait for the next
+major. Three deferred designs got their own RFC first: erasable audit chains,
+policy list filters (where an ORM-level row filter was considered and rejected)
+and inbound mail.
 
-All eighty are closed. Each real defect was reproduced with a failing test
-before it was fixed, and that test now lives in the package's own suite; a
-hypothesis that did not reproduce is documented, not "fixed". The
-theme is the gap between declared and actual behaviour, and it runs through
-every item below: a single-tenant key that could not be a tenant's name, a
-resolver that could not be overruled by a header, three adapters that send the
-same bytes for the same route, an MCP endpoint that knows which session it is
-talking to.
+## Since 1.13 (unreleased) {#since-1-13-unreleased}
 
-The report also ended with a harvest: design gaps and improvements beyond its
-eighty numbered findings. Two more pull requests closed that list after the
-release and ship inside the same wave — policies that run in the route guard,
-error details that are public by construction, audit hashes that name their
-key, webhooks that respect a port policy and a fan-out cap, and more. See
-[Closing the harvest](#closing-the-harvest).
-
-## Since 1.12 (unreleased)
-
-Shipped to `main` after the 1.12 release, all opt-in and non-breaking except
-the `@basaltkit/auth-prisma` 3.0 migration and the idempotency defaults below:
-
-- **Idempotency on every adapter.** `idempotencyPlugin` moved from
-  `@basaltkit/fastify` into the shared route pipeline in `@basaltkit/http`, so
-  Express and Hono get it too (the Fastify import keeps working). Two new
-  options: `fingerprint` refuses a reused key carrying a different request
-  with `422 IDEMPOTENCY_KEY_REUSED`, and `replayAfterGuards` moves the
-  check after the route guards, so a revoked caller gets `401`/`403` instead of
-  the cached success. `@basaltkit/http` 3 turns both on by default — see
-  [Upgrading: idempotency is strict by default](#idempotency-strict-by-default)
-  and [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyplugin).
-- **Per-route headers.** `meta.headers` sets static response headers (say
-  `X-Robots-Tag: noindex` on a public share link) on every response the route
-  produces, its guard, validation and handler errors included — see
-  [Per-route headers](/guide/security#per-route-headers-—-meta-headers).
-- **Operable webhooks.** `secretBox` seals endpoint signing secrets at rest,
-  `onAttempt` and `DeliveryResult.durationMs` report every delivery attempt,
-  `headerPrefix` renames the `x-basalt-*` headers, and `signPayload()` /
-  `verifySignature()` accept raw bytes — see [Webhooks](/guide/webhooks#sealing-secrets-at-rest).
-- **The webhook outbox works with endpoints per tenant.** Under
-  schema-per-tenant (or database-per-tenant) with the webhook store over
-  `tenantClient()`, every relayed entry used to fail with `DB_UNAVAILABLE` and
-  dead-letter. `tenancyPlugin` now publishes a `'tenancy:run'` signal
-  (`TenantRunner`, `@basaltkit/tenancy` minor), and `webhooksPlugin` uses it to
-  run the endpoint lookup of an off-request `dispatch()` scoped by `tenantId`
-  inside `tenancy.run` — the lookup only, never the delivery, so a slow endpoint
-  cannot hold a pooled client. `webhookOutboxPlugin({ tenantOnly: true })` skips
-  events emitted without a tenant. **On by default** whenever `tenancyPlugin` is
-  registered, which shared-schema apps notice too: one `TenantSource.find` and a
-  `tenancy:switched`/`tenancy:exited` pair per such dispatch, and entries of a
-  tenant that no longer exists dead-letter (`TENANT_NOT_FOUND`) instead of being
-  delivered. Opt out with `webhooksPlugin({ runInTenant: false })` — see
-  [Webhooks → Schema-per-tenant](/guide/webhooks#schema-per-tenant).
-- **Inbound mail.** A new package, `@basaltkit/inbound-mail` 0.1, receives
-  email from a relay as signed raw bytes (one recipient per request, envelope
-  inside the signature), routes it by the signed recipient to tenant-aware
-  handlers, and parses it within limits, trusting `Authentication-Results` and
-  ARC only from servers you list. It ships with a reference Cloudflare Email
-  Routing Worker — see [Inbound mail](/guide/inbound-mail).
+Shipped to `main` after the 1.13 release; it goes out with the next one.
+Unlike 1.13, this wave **does** carry majors: `@basaltkit/http` 3.0 (with
+`fastify`, `express`, `hono` and `testing` 3.0) makes idempotency strict by
+default, and `@basaltkit/auth-prisma` 3.0 needs a database migration.
+Everything else is a minor. Read [Upgrading](#upgrading-since-1-13) before you
+bump.
 
 - **API key lifecycle.** `ApiKeys.rotate()` replaces a key's secret and keeps its
   id, with an optional grace window (up to 30 days) for the old secret;
   `update()` / `setExpiry()` change a key in one write; `list({ includeExpired })`
   shows expired keys. Keys can act as a **service** (`serviceId`, scopes only,
   never `ctx().user`), carry an **IP allowlist** (`403 AUTH_APIKEY_IP_NOT_ALLOWED`,
-  fail-closed) and flat `meta`. `apiKeyRoutes()` adds `PATCH /apikeys/:id` and
-  `POST /apikeys/:id/rotate`. `auditPlugin({ actor })` can attribute service
-  callers, and MCP sessions now bind to a userless key's id. *(`@basaltkit/auth`
-  4.2, `audit` 3.1, `mcp` 5.1, `auth-sqlite` 2.1 — auto-migrated.)* **One
-  exception to "non-breaking": `@basaltkit/auth-prisma` 3.0 needs a database
-  migration** (`add_api_key_lifecycle`) — see
-  [Upgrading to auth-prisma 3.0](/guide/auth#prisma-—-basaltkit-auth-prisma) and
+  fail-closed, also emitted as the audited `auth:apikey_refused`) and flat
+  `meta`. `apiKeyRoutes()` adds `PATCH /apikeys/:id` and
+  `POST /apikeys/:id/rotate`, on every adapter. *(`@basaltkit/auth` 4.3,
+  `auth-sqlite` 2.2 — auto-migrated; `auth-prisma` 3.0 — migration below;
+  `create-basalt` 1.13 scaffolds the new model.)* See
   [API keys](/guide/auth#apikeys-rotation).
+- **Service callers in the audit trail.** `auditPlugin({ actor })` resolves the
+  `actorId` of a request, so a service key can be attributed in your own id
+  format; the default stays `ctx().user?.id`. *(`@basaltkit/audit` 3.2)*
+- **MCP sessions bound to a userless key.** A `/mcp` session opened with a
+  userless API key is bound to that key's id: a leaked `mcp-session-id` is
+  refused (404) for another key or an anonymous caller. *(`@basaltkit/mcp` 5.2)*
+- **Idempotency is strict by default.** A reused `Idempotency-Key` with a
+  different request gets `422`, and replays run after the guards.
+  *(`@basaltkit/http` 3.0)* See below.
+
+### Upgrading {#upgrading-since-1-13}
+
+Bump only what you use. Two packages need a step from you; the rest are
+minors.
 
 ### Upgrading: idempotency is strict by default (`@basaltkit/http` 3) {#idempotency-strict-by-default}
 
@@ -132,8 +87,12 @@ of them changes its own API.
   (`replayAfterGuards: true`). A caller whose token was revoked, or whose
   permission was removed, gets the guard's `401`/`403` instead of the cached
   success; guards run on every replay.
-- A request that fails validation no longer reserves the key: its `400` is not
-  recorded or replayed, and the corrected retry runs.
+- A request refused by a guard or by validation no longer reserves the key at
+  all. 1.13 already released such a refusal instead of replaying it; now a
+  concurrent repeat is not answered `409` while the first is being refused
+  either, and the corrected retry runs. Refusals raised by the handler itself
+  keep 1.13's rules (`408`, `425`, `429` and `5xx` released, other `4xx`
+  replayed).
 
 **Who is affected.**
 
@@ -195,7 +154,534 @@ persist `record.fingerprint` for completed records to be refused with `422`. A
 store that drops the fingerprint on the reservation answers a concurrent
 repeat with a different request `409` instead of `422`.
 
+### Upgrading to auth-prisma 3.0 {#auth-prisma-3}
+
+`AuthApiKey` (`auth_api_keys`) gains six nullable or empty-by-default columns:
+`serviceId`, `previousHash` (unique), `previousHashExpiresAt`, `rotatedAt`,
+`allowedIps` and `meta`. Prisma selects every column of a model, so once the
+client is regenerated **every** API-key query fails until the database has
+them. Copy the model from `@basaltkit/auth-prisma/schema.prisma` (`basalt
+prisma:sync` never adds fields to an existing model), run `prisma generate`,
+then `prisma migrate dev --name add_api_key_lifecycle` — with
+schema-per-tenant, in every tenant schema (`basalt tenant:migrate`). Until the
+columns exist, API-key requests fail with `AUTH_API_KEY_SCHEMA_OUTDATED`, whose
+message carries the SQL (also exported as `API_KEY_LIFECYCLE_MIGRATION_SQL`).
+`@basaltkit/auth-sqlite` migrates itself on boot. See
+[Upgrading to auth-prisma 3.0](/guide/auth#prisma-—-basaltkit-auth-prisma).
+
+### Other changes to watch {#watch-since-1-13}
+
+- `auth:apikey_rejected` and `auth:apikey_refused` gain the reason
+  `'ip_not_allowed'`; an exhaustive `switch` needs a new case.
+- `ApiKeyInfo` also omits `previousHash`, so no hash reaches a listing.
+
+---
+
 ## Highlights
+
+### Every adapter runs the same request pipeline
+- **Idempotency on every adapter.** `idempotencyPlugin` moved from
+  `@basaltkit/fastify` into the shared route pipeline in `@basaltkit/http`, so
+  Express and Hono get it too (the Fastify import keeps working). Two new
+  options: `fingerprint: 'body'` refuses a reused key carrying a different body
+  with `422 IDEMPOTENCY_KEY_REUSED`, and `replayAfterGuards: true` moves the
+  check after the route guards, so a revoked caller gets `401`/`403` instead of
+  the cached success. Both will become the default in a future major — see
+  [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyplugin).
+  *(`@basaltkit/http` 2.8, `fastify` 2.6, `express` 2.1, `hono` 2.1)*
+- **Request disposers.** An enricher may return a `RequestDisposer`, and
+  `ctx().onDispose()` registers one from anywhere in the request: cleanup that
+  runs exactly once, after the handler has settled and the response is
+  complete — streams, errors and client aborts included, identically on the
+  three adapters. See
+  [Writing your own guard or enricher](/guide/concepts#writing-your-own-guard-or-enricher).
+  *(`@basaltkit/http` 2.8 and every adapter)*
+- **Per-route headers.** `meta.responseHeaders` sets static response headers (say
+  `X-Robots-Tag: noindex` on a public share link) on every response the route
+  produces, its guard, validation and handler errors included — see
+  [Per-route headers](/guide/security#per-route-headers-—-meta-responseheaders).
+  *(`@basaltkit/http` 2.8)*
+- **An enricher can refuse with a header.** Enrichers receive the `reply`, so a
+  refusal can carry `WWW-Authenticate`; an enricher that sends a reply ends the
+  request. `rawBody()` and `upload()` schemas built by a nested copy of
+  `@basaltkit/http` are recognised by the adapter's copy. *(`@basaltkit/http`
+  2.8)*
+
+### API keys and rate limits for machine clients
+- **API keys behave like credentials, not hints.** `apiKeysPlugin({ rejectInvalid: true })`
+  answers a key that does not verify with `401 AUTH_APIKEY_INVALID` and
+  `WWW-Authenticate` before any guard; `touchEveryMs` throttles `lastUsedAt`
+  writes to one per key per minute; a rejection names the key's display prefix
+  and the client IP, never the secret. *(`@basaltkit/auth` 4.2)*
+- **Budgets per key, per route and per prefix.** `meta.rateLimit` accepts
+  `key: 'apiKey'` (one budget per verified key), an array of budgets charged in
+  order, and `bucket: '<name>'` to share one counter across routes;
+  `securityPlugin({ rateLimit: { prefixes } })` charges a path prefix such as
+  `/v1` instead of the global bucket. An identified caller with no resolved IP
+  (an MCP tool over stdio, Hono without `getClientIp`) gets its own bucket
+  instead of the shared `unknown` one. See
+  [Path-prefix budgets](/guide/security#path-prefix-budgets). *(`@basaltkit/http`
+  2.8)*
+- **OpenAPI documents keys, scopes and idempotency.** A route with `meta.scopes`
+  gets an `apiKeyAuth` requirement and an `x-required-scopes` extension, and
+  with `idempotencyPlugin` registered the guarded methods document the
+  `Idempotency-Key` header. Documents of apps that use none of these are
+  byte-identical. *(`@basaltkit/http` 2.8)*
+- **An unknown key cannot flood the audit trail.** `auth:apikey_rejected` leaves
+  the default capture; refusals of a key that did verify are recorded under the
+  new `auth:apikey_refused`. *(`@basaltkit/audit` 3.1, `auth` 4.2)*
+
+### Tenants, domains and the database
+- **Tenant clients leased per request.** `prismaPlugin` now leases a tenant's
+  pooled client for each HTTP request and each `tenancy.run()`, and gives it
+  back when the response ends, through the request disposers. Before, a client
+  counted as in use for `idleMs` (30 s) after every request, so on defaults the
+  11th distinct tenant within 30 s waited 10 s for a `503` while nothing was
+  running. The pool the plugin builds now defaults `idleMs` to 1 s, a grace
+  period rather than a request budget — see
+  [The per-tenant client pool](/guide/database-per-tenant#the-per-tenant-client-pool).
+  *(`@basaltkit/prisma` 3.1, `tenancy` 3.2, `http` 2.8)*
+- **The webhook outbox works with endpoints per tenant.** Under
+  schema-per-tenant (or database-per-tenant) with the webhook store over
+  `tenantClient()`, every relayed entry used to fail with `DB_UNAVAILABLE` and
+  dead-letter. `tenancyPlugin` now publishes a `'tenancy:run'` signal
+  (`TenantRunner`), and `webhooksPlugin` uses it to run the endpoint lookup of
+  an off-request `dispatch()` scoped by `tenantId` inside `tenancy.run` — the
+  lookup only, never the delivery, so a slow endpoint cannot hold a pooled
+  client. `webhookOutboxPlugin({ tenantOnly: true })` skips events emitted
+  without a tenant. On by default; see the upgrade note below and
+  [Webhooks → Schema-per-tenant](/guide/webhooks#schema-per-tenant).
+  *(`@basaltkit/webhooks` 4.1, `tenancy` 3.2)*
+- **Central-only routes.** `meta: { tenant: 'never' }` refuses a resolved
+  tenant with a plain `404` before any guard, so a platform route cannot run
+  inside a tenant reached on its host. `basalt ai doctor` flags routes that
+  pair `tenant: false` with a `platform:` permission. *(`@basaltkit/tenancy`
+  3.2, `ai` 1.4)*
+- **Custom domains survive a tenant save.** `PrismaDomainStore` and
+  `SqliteDomainStore` are durable `DomainStore`s; tenant saves diff the domain
+  set instead of erasing it (and its verification proof), and a claimed but
+  unverified domain never resolves a request. `@basaltkit/tenancy/testing`
+  ships a contract suite for your own store. *(`@basaltkit/tenancy` 3.2,
+  `tenancy-prisma` 2.1, `tenancy-sqlite` 1.3)*
+- **Database failures that say what to do.** `describeDbError()` turns a
+  permission failure, a baseline needed, an unreachable host or a missing
+  migration into a cause and a fix (the `GRANT`, the `migrate resolve`);
+  `basalt db:status` reports every plane without changing anything; and
+  `assertMigrated({ forbiddenTables })` refuses a central database that a root
+  `migrate dev` filled with tenant tables. *(`@basaltkit/prisma` 3.1)*
+- **Generated modules for every isolation mode.** `--tenant=schema|database`
+  generates a repository over the tenant's own client with no `tenantId`
+  column, still fail-closed. *(`@basaltkit/generator` 1.6)*
+
+### Sign-up, sessions and permissions
+- **Registration policy per plane.** `authRoutes({ register: 'open' | 'closed' | policy })`
+  controls `POST /auth/register`; a refusing policy answers the same `202` as a
+  success, so the route cannot reveal who was invited. `teamsInviteGate()`
+  makes tenant hosts invite-only, and `teams.acceptByEmail()` accepts an
+  invitation once the address is proven. *(`@basaltkit/auth` 4.2, `teams` 4.1)*
+- **Verified accounts from trusted flows.** `auth.register(…, { emailVerified: true })`
+  creates the account verified, and a provider-verified social account is
+  created verified before `auth:registered` fires. *(`@basaltkit/auth` 4.2,
+  `auth-prisma` / `auth-sqlite` 2.1)*
+- **Idle sessions expire.** `sessionIdleTtl` refuses a session unused for
+  longer, on top of the absolute `sessionTtl`, and a `__Host-`/`__Secure-`
+  cookie now implies `Secure` in every environment. *(`@basaltkit/auth` 4.2,
+  `auth-prisma` / `auth-sqlite` 2.1)*
+- **A policy can answer for a list.** `definePolicy(resource, checks, { filters })`
+  declares the list form of a check next to it, and `gate.listFilter(user, 'resource:action')`
+  returns `unrestricted`, `none` or a `where` for list and count queries — fail
+  closed with `PERMISSION_FILTER_MISSING` when no filter matches (RFC 0003; an
+  ORM-level row filter was considered and rejected). See
+  [Policies decide one object, not a list](/guide/authorization#policies-decide-one-object-not-a-list).
+  *(`@basaltkit/permissions` 4.1)*
+- **Listings hide what the caller cannot pass.** `tools/list` and other listing
+  surfaces hide routes whose `meta.scopes` the caller's key lacks, and
+  `meta.mfa` routes from a session without MFA. *(`@basaltkit/auth` 4.2)*
+- **Mounted route sets take your guards.** `fileRoutes()`, `apiKeysUiRoutes()`,
+  `billingUiRoutes()`, `teamsUiRoutes()`, `commentRoutes()` and `inAppRoutes()`
+  accept `meta` (`{ teamRole: 'admin' }`, `{ can: 'billing:manage' }`, a rate
+  limit); `auth: true` always stays on. *(`@basaltkit/files` 6.1, `api-keys-ui`
+  1.4, `billing-ui` 1.2, `teams-ui` 1.2, `comments` 4.1, `notifications` 1.3)*
+
+### Audit and personal data
+- **Erase a person without breaking the chain.** `audit.redact(entryId, …)`
+  replaces chosen payload paths with `'[erased]'` and appends an
+  `audit:redacted` attestation to the entry's own chain in the same
+  transaction; `verify()` checks the redacted entry through it. Opt-in
+  `integrity: { mode: 'hash-chain', erasable: true }` writes v3 hashes with a
+  per-entry nonce that the redaction destroys, so the erased value cannot be
+  confirmed from the hash (RFC 0005). See
+  [Erasing personal data](/guide/persistence#erasing-personal-data-audit-redact).
+  *(`@basaltkit/audit` 3.1, `audit-prisma` / `audit-sqlite` 2.1)*
+- **Personal data policies per event.** `fieldPolicies` omits or pseudonymises
+  fields before the redactor and before hashing, and `audit.record(…, scope)`
+  attributes an entry written from a script to its tenant's chain.
+  *(`@basaltkit/audit` 3.1)*
+- **One AEAD for secrets at rest.** `@basaltkit/core/secret-box` is the
+  AES-256-GCM key-ring box behind auth's `SecretBox` and drives'
+  `DriveSecretBox`; existing ciphertexts stay byte-compatible.
+  *(`@basaltkit/core` 1.6)*
+
+### Webhooks, mail and drives
+- **Operable webhooks.** `secretBox` seals endpoint signing secrets at rest,
+  `onAttempt` and `DeliveryResult.durationMs` report every delivery attempt,
+  `headerPrefix` renames the `x-basalt-*` headers, and `signPayload()` /
+  `verifySignature()` accept raw bytes — see [Webhooks](/guide/webhooks#sealing-secrets-at-rest).
+  `createGuardedFetch()` is the streaming, SSRF-guarded client for untrusted
+  URLs. *(`@basaltkit/webhooks` 4.1)*
+- **Inbound mail.** A new package receives email from a relay as signed raw
+  bytes (one recipient per request, envelope inside the signature), routes it
+  by the signed recipient to tenant-aware handlers, and parses it within
+  limits, trusting `Authentication-Results` and ARC only from servers you list.
+  It ships with a reference Cloudflare Email Routing Worker (RFC 0004) — see
+  [Inbound mail](/guide/inbound-mail). *(`@basaltkit/inbound-mail` 0.1)*
+- **Drives you can operate.** Connection health and a `drives.check()` probe,
+  a vetoable `drive:disconnecting` hook, a per-call `recursive` listing mode,
+  provider explanations kept on the log-only channel, `rotateSecrets()` for
+  dormant connections, and a conformance suite for durable stores; SharePoint
+  columns through `listItemFields`. *(`@basaltkit/drives` 0.4, `drives-google`
+  / `drives-dropbox` / `drives-microsoft` 1.1)*
+
+### Collaboration and data in and out
+- **Comments with anchors, soft deletes and revisions**, and mentions that no
+  longer read an e-mail domain as a user. *(`@basaltkit/comments` 4.1,
+  `comments-prisma` 1.2, `comments-sqlite` 1.1)*
+- **Notifications that mark everything read**, group repeats, prune old rows,
+  and take per-channel `defaults` and `mandatory` channels, with durable
+  preference stores. *(`@basaltkit/notifications` 1.3, `notifications-prisma`
+  1.2, `notifications-sqlite` 1.1)*
+- **CSV both ways.** `parseDelimited()` and `defineImport()` read CSV strictly
+  and report every bad cell by line and column; CSV and XLSX exports render
+  numbers and dates for a locale, with a BOM, real date cells and column
+  formats. *(`@basaltkit/exports` 1.3, `exports-xlsx` 1.1)*
+- **Realtime over `sse()`.** `realtimeSse(hub, …)` runs a hub-backed SSE
+  endpoint unchanged on Fastify, Express and Hono. *(`@basaltkit/realtime` 1.6)*
+
+### MCP that does not leak its errors
+- **Malformed arguments are refused, internal errors are generic.** A
+  non-object `arguments` is `INVALID_PARAMS` before the tool runs, and an
+  unexpected throw answers `Internal error` instead of the exception's message;
+  the cause goes to `onError` (stderr by default). A tool call never forwards
+  the idempotency key, so a replay cannot hand the model an unredacted error.
+  *(`@basaltkit/mcp-core` 0.5, `mcp` 5.1, `ai-mcp` 0.4)*
+
+### From `npm create` to production
+- **A tested production path.** New apps get a `build` script, a `start` that
+  runs the compiled output, and a multi-stage `Dockerfile` that runs as a
+  non-root user with a health check; `--prisma` apps generate the client
+  outside `src/`. `create-basalt update` offers the missing pieces to older
+  apps and `create-basalt doctor` flags what is left. `basalt publish
+  dockerfile` / `ci` emit the same files. *(`create-basalt` 1.12,
+  `@basaltkit/cli` 1.4)*
+- **A route security review.** `basalt routes` prints a column per guard,
+  `--json` for tooling, and `--unguarded --require=auth,can` exits 1 on a route
+  that is missing either — see
+  [Route security review](/guide/security#route-security-review-—-basalt-routes).
+  `describeRoutes()` and `findUnguardedRoutes()` let a test assert the same
+  thing. *(`@basaltkit/http` 2.8, `cli` 1.4)*
+- **A scaffold checked against real PostgreSQL.** A new CI job drives a
+  scaffolded app's own `db:*` scripts against a real database, which found the
+  `db:seed` script below. *(`create-basalt` 1.12)*
+- **A patched `sharp`.** `@basaltkit/image-sharp` 1.1.8 requires `sharp`
+  0.35.5 or later (a vulnerability in the bundled librsvg).
+
+## Upgrading
+
+No package needs a major, but these minors change what some applications see.
+Packages are independent — bump only what you use; each package's
+`CHANGELOG.md` carries the full notes. Read this list before upgrading.
+
+### Idempotency
+
+- **Raw Fastify handlers lose idempotency.** `idempotencyPlugin` now covers
+  Basalt `route()` definitions only. A handler registered directly on the
+  Fastify instance (`fastify.post(...)`, outside `fastifyPlugin({ routes })`)
+  that relied on the old Fastify-only hook is no longer guarded. Move it to
+  `route()`. No boot warning flags these, so check your raw POST handlers.
+- **Only what the handler did is recorded.** A refusal raised before the
+  handler runs (a guard's `401`/`403`, the rate limiter's `429`, a validation
+  `400`) releases the `Idempotency-Key` instead of being replayed for the whole
+  TTL, so a client that signs in again or honours `Retry-After` gets its
+  operation run on the retry. So does an `upload()` body refused while the
+  handler streams it (`413` over a limit, `400` malformed, `415` a refused file
+  type): retry with a smaller file under the same key and the handler runs. `408`, `425` and `429` are never recorded, even
+  from the handler. Any other handler `4xx` is still replayed byte for byte.
+  Identical on Fastify, Express and Hono.
+- **The check runs after the enrichers** (and before the guards, unless
+  `replayAfterGuards: true`). A replay is decided after the tenant is resolved,
+  so a suspended tenant gets its `403` instead of the cached response.
+- **What the scope covers.** The replay scope is the caller's credentials, the
+  raw `x-tenant-id`/`host` headers, the method, the route *pattern* and the key.
+  It does **not** include a tenant resolved from the path or a token claim, nor
+  the concrete path params: the same credential reusing a key on `/t/acme/...`
+  and `/t/globex/...`, or on `/orders/1/pay` and `/orders/2/pay`, receives the
+  first response. Mint a fresh key per operation and tenant, and bind it to the
+  URL with `fingerprint: ({ request }) => request.url + '\n' + JSON.stringify(request.body)`.
+  `fingerprint: 'body'` covers the body only, not the query string or params.
+- **Rolling deploys with `fingerprint`.** `RedisIdempotencyStore` writes
+  in-flight reservations as `pending:<fingerprint>`, which older instances
+  misread. Deploy the new release everywhere first, then turn `fingerprint` on.
+  Empty responses (`204`) are now recorded and replayed.
+- **An enricher that sends a reply ends the request.** After `reply.send()` in
+  an enricher, the remaining enrichers, the guards and the handler no longer
+  run.
+
+See [Idempotent mutations](/guide/security#idempotent-mutations-—-idempotencyplugin).
+
+### Request disposers and Prisma leases
+
+- **Leases need `@basaltkit/http` 2.8.** `prismaPlugin` leases only when the
+  pipeline releases the lease at the end of the response: `@basaltkit/http`
+  2.8 with an adapter from the same release, and `@basaltkit/tenancy` 3.2 for
+  `tenancy.run()`. With older versions nothing leaks: the plugin holds the
+  client for 30 s and then returns it, as `pool.get()` did. `@basaltkit/http`
+  is now an optional peer of `@basaltkit/prisma`. Upgrade http, your adapter
+  and tenancy together with prisma.
+- **Registration order no longer matters for `ctx().db`.** The lease is taken
+  as soon as the tenant is known, so an enricher registered between
+  `tenancyPlugin` and `prismaPlugin` (auth, say) sees `ctx().db`. Each request
+  holds exactly one lease, released even when a later enricher or guard rejects
+  the request.
+- **Disposers wait for the handler.** On a client abort mid-request, Fastify
+  and Express used to run enricher disposers while the handler was still
+  running, which could disconnect its leased client mid-query. Disposers now
+  run exactly once, after the handler has settled *and* the response is
+  complete: sent or abandoned on Fastify/Express; on Hono a buffered response
+  is complete when it is built, so its disposers are awaited before it is
+  handed to the runtime. `stream()` and `sse()` bodies stay covered until their
+  last byte or until the client leaves. A disposer handed to `ctx().onDispose()`
+  after that point (from a timer the handler left behind, say) runs at once, on
+  every adapter. A failing disposer is reported as `REQUEST_DISPOSER_FAILED` on
+  every path (the adapter's `onError`, `@basaltkit/mcp`'s `reportError`,
+  `console.error` for a bare `runRoute`). `ctx().onDispose` is absent inside
+  `tenancy.run()`, in jobs and on older pipelines: check for it rather than
+  calling `ctx().onDispose?.(…)`, which silently drops the cleanup there.
+- **`ctx().db` after the response is not protected.** The lease ends with the
+  response, and the client then stays reserved for only 1 s. Work that outlives
+  the reply must `await` before replying, or run in `tenancy.run()` /
+  `DB_POOL.use()`. If you used `DB_POOL.get()` on the plugin's pool for work
+  longer than 1 s, switch to `DB_POOL.use()` or pass `idleMs` explicitly. A
+  `tenancy:switched` emitted on a request's context after its response ended
+  gets the legacy 30 s hand-out, never a lease that nothing returns.
+- **Size `max` by the distinct tenants active within a few seconds.**
+  Over-subscribing no longer answers `503`; it churns: an idle client is closed
+  and a new one opened on each request. Monitor how often your `forTenant`
+  factory runs.
+- **`PRISMA_POOL_EXHAUSTED` bodies are neutral.** The `503` carries only the
+  code and "Service unavailable.". `max`, `leased`, `recentlyUsed` and the
+  tenant id go to the server log only.
+
+### Configurations that now warn at boot (refused in the next major)
+
+Each of these booted before and still does, with the same runtime behaviour as
+before; each now prints one `[basalt] …` boot warning naming what is wrong. The
+next major turns each warning into a boot refusal, so fix them now — each has a
+one-line fix.
+
+- **`@basaltkit/auth`: a prefixed session cookie with `secure: false` or a
+  sub-path.** A `sessionCookie.name` starting with `__Host-` or `__Secure-`
+  together with an explicit `secure: false` (including the common
+  `secure: process.env.NODE_ENV === 'production'` in dev and test), or a
+  `__Host-` cookie with a `path` other than `/`. The cookie is still emitted
+  exactly as configured; browsers drop it, so such an app has no working
+  browser sessions there. Drop `secure`/`path`, or use an unprefixed name
+  outside production: `name: isProd ? '__Host-sid' : 'sid'`. The next major
+  throws `AUTH_SESSION_COOKIE_INVALID` (`SessionCookieConfigError`, exported
+  now). Prefixes match case-insensitively (`__host-sid` counts), and a
+  `__Host-` cookie with a sub-path and `secure` unset also gets the
+  implied-`Secure` warning outside production. Separately (warning only, never
+  refused), an unprefixed cookie with `sameSite: 'None'` and no `Secure` warns:
+  browsers drop it too.
+- **`@basaltkit/tenancy`: `meta.tenant` other than `true`, `false` or
+  `'never'`.** A value such as `'none'`, `'optional'`, `'false'` or `null`
+  falls back to the app-wide `required` default, as before. If you meant
+  central-only, the value is `'never'`. The next major refuses the boot with
+  `HTTP_INVALID_ROUTE_META`.
+- **`@basaltkit/http`: an invalid `meta.responseHeaders`.** It must be a
+  record of string values without control characters and must not set
+  `set-cookie`, `content-type`, `content-length`, `transfer-encoding`,
+  hop-by-hop headers or `x-request-id`. An invalid record is ignored whole —
+  none of its headers is sent — and the request never fails because of it. The
+  key is new: an app that keeps its own data under `meta.headers` is
+  untouched, because nothing reads or sends `meta.headers`.
+
+### Configurations that now refuse to boot
+
+Only one, and only for forms added in this release:
+
+- **`@basaltkit/http`: malformed new-form `meta.rateLimit`.** An array
+  (including `[]`) with a malformed entry, an object whose `bucket` is a string
+  that is not a valid bucket name, or routes sharing a `bucket` that disagree
+  on limit, window or key, refuse the boot with `HTTP_INVALID_ROUTE_META`. The
+  single object without a string `bucket` — including `bucket: null` — keeps
+  its lenient parse and is enforced per route, as before.
+
+### Other changes
+
+- **Audit — API key refusals.** `auth:apikey_rejected` is no longer recorded by
+  default, because any anonymous client could flood the trail with unknown
+  keys. Refusals of a key that *did* verify (`tenant_mismatch`, `not_allowed`,
+  `scope`) are still recorded, under the new `auth:apikey_refused` hook. A
+  custom `hooks` list applies the default excludes too. To record every
+  rejection again, name it: `hooks: ['auth:**', 'auth:apikey_rejected']` (a
+  valid-key refusal is then recorded twice) — or use the throttled listener in
+  [Which hooks are audited](/guide/persistence#which-hooks-are-audited).
+- **Audit — erasable chains.** Upgrade every service that runs
+  `audit.verify()` before the first `audit.redact()` or before turning on
+  `integrity: { mode: 'hash-chain', erasable: true }`: older releases report v3 entries and
+  redacted entries as `hash-mismatch`. See
+  [Erasing personal data](/guide/persistence#erasing-personal-data-audit-redact).
+- **Auth — a prefixed session cookie now implies `Secure` in every
+  environment.** With `secure` unset, a `__Host-…`/`__Secure-…` cookie is now
+  `Secure` (and `Path=/` for `__Host-`) outside production too; before, it was
+  emitted without `Secure` and browsers dropped it. Browser flows now work,
+  `http://localhost` included. **Test-client caveat:** cookie jars that honour
+  `Secure` (supertest/superagent, tough-cookie) do not send it back over plain
+  `http`, so a suite that relied on the old emission gets 401s; outside
+  production this prints a one-time boot warning. Use an unprefixed name
+  outside production, or set `secure` explicitly (`secure: true` silences it).
+- **Auth — `sessionIdleTtl` is validated.** The new option fails closed at boot
+  (`AUTH_SESSION_IDLE_CONFIG_INVALID`) when it is not a positive duration or
+  the session store has no `touch()`; apps that do not set it are unaffected.
+- **Auth — custom `UserSource` without `update()`.** `create()` now receives
+  `emailVerified`; persist it to get verified social and trusted accounts. A
+  source that neither persists it nor implements `update()` still signs OAuth
+  users in through identity linking, unverified as before. Two cases still
+  fail on such a source: a SAML user (no linked identity) is refused on the
+  second login, as before this release. `register(…, { emailVerified: true })`
+  (new in this release) requires `update()` and otherwise throws
+  `AUTH_UPDATE_UNSUPPORTED` before writing anything — no account is created,
+  so a retry never hits `EmailTakenError`. Implement `update()` (and persist
+  `emailVerified` in `create()`) to get both.
+- **Boot warning for `meta.rateLimit` without a rate limiter.** When any route
+  declares `meta.rateLimit` — `authRoutes()` does, and so may your own routes —
+  and `securityPlugin({ rateLimit })` is not registered, the app now prints one
+  `console.warn` at boot naming those routes, because nothing enforces the
+  limit. Register the limiter, pass `authRoutes({ rateLimit: false })` for the
+  auth routes, or silence it with `allowUnguardedMeta: ['rateLimit']` (or
+  `true`) on the adapter plugin if an outer edge throttles.
+- **Webhooks — `runInTenant` is on by default.** With `tenancyPlugin`
+  registered, each off-request `dispatch()` scoped by a `tenantId` makes one
+  `TenantSource.find` call and fires `tenancy:switched`/`tenancy:exited`; under
+  schema- or database-per-tenant `prismaPlugin` also leases that tenant's client,
+  which can fail with `PRISMA_POOL_EXHAUSTED` when the pool is saturated. A
+  deleted tenant or an invalid id rejects with `TENANT_NOT_FOUND` /
+  `TENANT_ID_INVALID`, and its outbox entries dead-letter after `maxAttempts`.
+  If your webhook tables are central, pass `webhooksPlugin({ runInTenant: false })`
+  — see [what it costs](/guide/webhooks#run-in-tenant-costs).
+- **Drives — connection health is opt-in per store.** `lastSucceededAt`,
+  `lastFailedAt` and `lastErrorCode` are written only to a store that declares
+  `persistsHealth: true` (the in-memory store does). A durable store keeps
+  working unchanged and reports no health. To turn it on, add the three
+  nullable columns, migrate, then set `readonly persistsHealth = true` — see
+  [Connection health](/guide/drives#connection-health).
+- **Notifications — the `Notifier` decides through `preference()`.** It
+  decides each channel through `NotificationPreferences.preference()`, then the
+  notification's `defaults` and `mandatory`. A subclass that overrides
+  `allowed()` keeps working: the `Notifier` detects the override and lets it
+  decide, as before (`defaults` do not apply to it; `mandatory` still bypasses
+  it). Overriding `allowed()` is deprecated — override `preference()`; the next
+  major stops consulting an `allowed()` override.
+- **MCP — internal errors are logged.** An error that escapes a tool still
+  answers `Internal error`, and its cause now goes to stderr by default. Use
+  `mcpPlugin({ onError })` to send it elsewhere, or `onError: false` to silence
+  it.
+- **MCP — no idempotency key in tool calls.** A tool call never forwards
+  `Idempotency-Key` (or the header set by `idempotencyPlugin({ header })`) to
+  the route, even when it is listed in `forwardHeaders`: a replay would hand
+  the model the recorded error body without the tool result's redaction. Each
+  tool call runs the handler; deduplicate inside the handler if you need to.
+- **Tenancy — `basalt prisma:sync` does not add the new `TenantDomain`
+  columns.** The bundled model gains `verificationToken`, `verified`,
+  `createdAt` and `verifiedAt`. `prisma:sync` only adds missing models, so an
+  app that already has `TenantDomain` must add the four fields by hand (copy
+  them from `@basaltkit/tenancy-prisma/prisma/schema.prisma`) and run a
+  migration before deploying a client generated from the new model.
+- **Route table — `central-only`.** `basalt routes` shows `meta.tenant:
+  'never'` as `central-only` (`meta.tenant: 'never'` on the route and
+  `central-only` in the table are the same thing). The new `describeRoutes()`
+  reads `RouteRow.tenant` from `meta.tenant` only; `meta.central: true` (the
+  teams membership bypass) is listed among the guards as `central`.
+- **Apps scaffolded with `--prisma` by create-basalt 1.8–1.11 — change one
+  script.** Their `db:seed` is `tsx prisma/seed.ts`, which loads no `.env`, so
+  `pnpm db:seed` fails with `ENV_INVALID` (database URL and app secret missing)
+  unless you export the variables; and Prisma 7's `migrate dev` never runs the
+  seed, so the `demo` tenant the resolvers expect was never created (the
+  "creates the tables and seeds the demo tenant" next step was wrong). In
+  `package.json`, set `"db:seed": "prisma db seed"` — `prisma.config.ts` then
+  loads `.env` and runs the `migrations.seed` command it already declares —
+  and run `pnpm db:seed` after `pnpm db:migrate`. Nothing rewrites the script
+  for you: `create-basalt doctor` flags it and `create-basalt update` prints
+  the line.
+- **Not verified automatically.** The scaffold's real-PostgreSQL e2e covers
+  `db:migrate --name <change>`, but not `db:migrate` without `--name` on a
+  schema change (Prisma prompts for the name and blocks even with stdin
+  closed) nor `migrate dev`'s reset prompts for a destructive change or a
+  drifted database: both need a terminal.
+- **No npm provenance attestations yet.** The packages of this wave are
+  published without provenance attestations; restoring them is tracked in
+  issue #409.
+
+---
+
+## Previously — Basalt 1.12
+
+> *The release that **keeps its word**: an independent audit's eighty
+> findings closed, each real defect with a regression test; thirty-two majors
+> that make the code do what its documentation said; one wire across Fastify,
+> Express and Hono; and the audit's harvest closed a day later.*
+
+::: warning Thirty-two packages publish a major — six of them twice
+`auth` 4, `auth-prisma` 2, `auth-sqlite` 2, `auth-saml` 3, `permissions` 4
+(`permissions-prisma` / `-sqlite` 2), `tenancy` 3, `tenancy-prisma` 2,
+`storage` 5, `files` 6, `comments` 4, `search` 2, `search-elasticsearch` 2,
+`audit` 3 (`audit-prisma` / `-sqlite` 2), `webhooks` 4 (`webhooks-prisma` /
+`-sqlite` 2), `subscriptions` 5 (`subscriptions-prisma` / `-sqlite` 3),
+`teams` 4, `queue` 3, `prisma` 3, `mcp` 5, `express` 2 and `hono` 2 — and the
+three drive adapters reach 1.0. Some packages went through two majors in this
+wave: `permissions`, `storage`, `files`, `audit`, `webhooks` and `mcp` first
+shipped the audit's fixes (as 3, 4, 5, 2, 3 and 4) and then, a day later, the
+follow-ups in [Closing the harvest](#closing-the-harvest). Coming from 1.11,
+you take both sets of steps. Three 0.x packages break in a minor: `drives` 0.3,
+`mcp-core` 0.4 and `ai-mcp` 0.3 (by way of 0.2). Most of these are one option or
+one renamed call; four need a data step (a re-key, a re-encryption, two new
+auth models, regenerated RLS policies). See [Upgrading to 1.12](#upgrading-to-1-12).
+:::
+
+Basalt 1.12 is the release that **keeps its word**. Every package makes
+promises — in its README, in its types, in the name of an option — and 1.11 had
+made sure the secure behaviour was the default. What nobody had checked
+systematically was whether the default did what the promise said. So an
+independent audit, in two passes, read each package's source next to its
+documentation and turned every mismatch it found into a failing test against
+the published build.
+
+It found eighty. Ten were rated high, and none of them looked like a security
+bug from the outside — each was a sentence the framework said about itself. The
+README promised `audit.verify()` would detect a forged row, and a row inserted
+straight into the table passed. `idempotencyPlugin` was documented for `route()`
+handlers, and a handler that *returned* its payload — the shape every example
+uses — ran again on every retry. A policy for `project:constructor` resolved
+through `Object.prototype` and authorized anyone. `meta.teamRole: 'Admin'`, a
+typo for `'admin'`, ranked zero and admitted every member. `swap()` moved a free
+subscription onto a paid plan without charging it. `@basaltkit/env` said an
+unset `NODE_ENV` was production and `@basaltkit/auth` said it was development.
+
+All eighty are closed. Each real defect was reproduced with a failing test
+before it was fixed, and that test now lives in the package's own suite; a
+hypothesis that did not reproduce is documented, not "fixed". The
+theme is the gap between declared and actual behaviour, and it runs through
+every item below: a single-tenant key that could not be a tenant's name, a
+resolver that could not be overruled by a header, three adapters that send the
+same bytes for the same route, an MCP endpoint that knows which session it is
+talking to.
+
+The report also ended with a harvest: design gaps and improvements beyond its
+eighty numbered findings. Two more pull requests closed that list after the
+release and ship inside the same wave — policies that run in the route guard,
+error details that are public by construction, audit hashes that name their
+key, webhooks that respect a port policy and a fan-out cap, and more. See
+[Closing the harvest](#closing-the-harvest).
 
 ### Promises the code now keeps
 - **The audit trail detects what the README said it detects.** `verify()` now
@@ -427,13 +913,13 @@ publish their second major of the wave.
   and [secret rotation](/guide/webhooks#rotating-a-signing-secret);
   `CONTRIBUTING.md` gained a testing checklist.
 
-## Upgrading
+### Upgrading to 1.12
 
 Packages are independent — bump only what you use. Each changeset carries its
 full migration notes in the package's `CHANGELOG.md`; below are the changes most
 likely to reach an application.
 
-### Defaults that now refuse
+#### Defaults that now refuse
 
 | Package | What refuses | Opt-out / fix |
 | --- | --- | --- |
@@ -451,10 +937,10 @@ likely to reach an application.
 | `queue` 3 | two different jobs under one name; `attempts: 0`; job context with a tenant outside the grammar | rename, or `queuedOn(…, { name })`; `attempts` ≥ 1; pass the same `validateTenantId` to the queue plugin |
 | `subscriptions` 5 | `swap()` onto a paid plan with no gateway subscription (`402`); `subscribe()` to a paid plan on Paddle or Lemon Squeezy (`501`); non-positive-integer usage | `swap(id, plan, { allowUnpaid: true })`; `checkout()` |
 | `search` 2 | a bare `reindex()` outside a tenant when tenancy is registered; `limit` over 1000, `offset` over 10000; filters on undeclared fields or with `null` values | `reindex(name, { all: true })`; `searchPlugin({ maxLimit, maxOffset })`; declare the field `filterable` |
-| `prisma` 3 | a new tenant while every pooled client is in use — `503` after `acquireTimeoutMs` | size `max` for concurrently active tenants; keep `idleMs` above the longest request, or `pool.use(tenantId, fn)` |
+| `prisma` 3 | a new tenant while every pooled client is in use — `503` after `acquireTimeoutMs` | size `max` for concurrently active tenants; on `prisma` 3.0 keep `idleMs` above the longest request, or `pool.use(tenantId, fn)` — from 3.1 requests hold a lease instead (see the [1.13 upgrade notes](#request-disposers-and-prisma-leases)) |
 | `audit` 2 | `verify()` / `verifyAll()` fail for rows outside the chain written after it began | `legacyUntil` for a known, benign source such as a rolling deploy |
 
-### Data steps
+#### Data steps
 
 **The `'@single'` sentinel.** A single-tenant app with persisted records re-keys
 them once, or they read as missing. Skip it if `default` was ever a real tenant
@@ -507,7 +993,7 @@ characters in their tenant or id need one `reindex(name, { all: true })`. Stored
 grants with an empty permission segment never granted anything and can be
 deleted.
 
-### Express and Hono change what a client receives
+#### Express and Hono change what a client receives
 
 On **Express**: return HTML with an explicit `content-type`; send JSON with a
 JSON media type; an empty JSON body is now `undefined`, so default it in the
@@ -518,7 +1004,7 @@ behaviour. On **Hono**: read a repeated query key as `string | string[]`;
 `new URL(request.url, base)`; a malformed JSON body is a 400 before the handler;
 pass `errorHandler: false` if you install your own `onError`.
 
-### Custom stores, drivers and gateways implement more
+#### Custom stores, drivers and gateways implement more
 
 A custom `PasskeyStore` must implement `compareAndSetCounter` (the service
 refuses to start without it). A custom `BillingGateway` implements
@@ -530,14 +1016,14 @@ adapter. Hand-written Prisma clients and test fakes need `$transaction`
 (`tenancy-prisma`) and `create` / `updateMany` (`webhooks-prisma`,
 `auth-prisma`); a generated `PrismaClient` already has them.
 
-### MySQL column limits are opt-in
+#### MySQL column limits are opt-in
 
 Nothing changes on PostgreSQL or SQLite, or on MySQL until you ask. To adopt it,
 let `basalt prisma:sync` copy the `schema.mysql.prisma` variants, migrate, and
 pass `columnLimits: 'mysql'` to the store factories. The
 [MySQL guide](/guide/persistence#mysql) has the details.
 
-### What the harvest changes
+#### What the harvest changes
 
 These are the steps for the versions in [Closing the
 harvest](#closing-the-harvest). Coming from 1.11, apply them on top of

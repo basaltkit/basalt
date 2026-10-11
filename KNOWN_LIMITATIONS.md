@@ -6,8 +6,8 @@ a list of open issues. #2–#4 (fixed in 0.1.x) concerned behavior that only bit
 with a real backend (Redis, a payment gateway) and landed with those drivers;
 #5 (fixed across 0.25.0–0.31.0) was the broader "stores ship in-memory only"
 limitation, now closed by durable SQLite/Prisma backends for every stateful
-domain. There are no open limitations tracked here — forward-looking work toward
-a stable 1.0 lives in [RELEASE_1.0_CHECKLIST.md](./RELEASE_1.0_CHECKLIST.md).
+domain. There are no open limitations tracked here — what each release changed
+lives in [What's new](https://basaltkit-docs.pages.dev/guide/whats-new).
 
 ---
 
@@ -59,8 +59,7 @@ package — 18 store packages in all. Cache, usage metering and webhook idempote
 already had Redis backends; queues, search and storage have production drivers;
 feature flags are stateless by design. Switching a store is a one-line change
 because the contract is unchanged. See the [Persistence guide][p] and the
-[Database-per-tenant guide][dpt]; remaining 1.0 work is tracked in
-[RELEASE_1.0_CHECKLIST.md](./RELEASE_1.0_CHECKLIST.md).
+[Database-per-tenant guide][dpt].
 
 [p]: https://basaltkit-docs.pages.dev/guide/persistence
 [dpt]: https://basaltkit-docs.pages.dev/guide/database-per-tenant

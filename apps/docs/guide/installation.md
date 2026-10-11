@@ -184,7 +184,7 @@ instead:
 `MY_SAAS_DATABASE_URL` becomes a **required** variable (`src/env.ts`), and
 `.env.example` ships it uncommented. The package scripts are `db:migrate`
 (`prisma migrate dev`), `db:deploy` (`prisma migrate deploy`), `db:generate` and
-`db:seed`; `postinstall` runs `prisma generate` so `pnpm typecheck` has the
+`db:seed` (`prisma db seed`); `postinstall` runs `prisma generate` so `pnpm typecheck` has the
 client types right after install. The client is generated into
 `generated/prisma` — **outside** `src/`, so `pnpm build` never has to copy it —
 and `src/db.ts` imports it as `#db/client.js` through the package.json
@@ -199,9 +199,18 @@ is a direct dependency because the generated runtime requires it by name, and
 pnpm create basalt my-saas --prisma
 cd my-saas && pnpm install
 # .env points MY_SAAS_DATABASE_URL at postgres://…@localhost:5432/my_saas — start PostgreSQL or edit it
-pnpm db:migrate          # creates the tables and seeds the demo tenant
+pnpm db:migrate          # creates the tables
+pnpm db:seed             # the demo tenant
 pnpm dev
 ```
+
+After a change to `prisma/schema.prisma`, `pnpm db:migrate --name <change>`
+writes the migration **and** applies it to the development database (Prisma
+creates and drops a temporary shadow database for that, so the database user
+needs `CREATEDB`); without `--name` it asks for one, so in a script always pass
+it. Then run `pnpm db:generate`: Prisma 7's `migrate dev` no longer regenerates
+the client (nor seeds). Production applies the committed migrations with
+`pnpm db:deploy`.
 
 ::: warning Migrations, never `db push`
 The generated `src/app.ts` boots with `assertMigrated: true`, which refuses to

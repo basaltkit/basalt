@@ -1,5 +1,49 @@
 # @basaltkit/comments
 
+## 4.1.0
+
+### Minor Changes
+
+- 06337df: BK-078: `commentRoutes({ meta })` merges extra route metadata into every route
+  (a guard such as `{ can: 'comments:write' }`, a rate limit, OpenAPI tags).
+  `auth: true` is always applied on top and cannot be switched off.
+- 987e007: BK-080:
+  
+  - Fix: the default mention pattern no longer reads the domain of an email
+    address as a mention (`ana@example.com` mentioned `example`). It is now
+    `DEFAULT_MENTION_PATTERN` — `@id` not preceded by a word character, `.`, `+`
+    or `-`. `DELIMITED_MENTION_PATTERN` (`@{id}`) is exported for ids with dots or `@`.
+  - Every hook payload carries `actorId` when an actor is known: the author
+    (`created`, `mentioned`), the resolver (`resolved`), the explicit actor
+    (`edit(id, body, { actorId })`, `remove(id, { by })`, `reopen(id, { actorId })`)
+    or `ctx().user.id`. The positional `tenantId` argument still works.
+  - `AddCommentInput.anchor` / `Comment.anchor`: a JSON object (≤ 4 KB, else
+    `400 COMMENT_ANCHOR_INVALID`) saying where in the resource the comment points;
+    `POST /comments` accepts it.
+  - Opt-in `deletion: 'soft'` (default stays `'hard'`): `remove()` sets
+    `deletedAt`/`deletedBy`/`deleteReason` and `list()`/`tree()` return a
+    tombstone; `comment:deleted` carries `soft: true`.
+  - Opt-in `editWindowMs`: `edit()` past it throws `CommentEditWindowClosedError` (409).
+  - Opt-in `revisions: true`: `edit()` records the previous body through the new
+    optional `CommentStore.addRevision`/`revisions`; `Comments.revisions(id)` lists
+    them. A store without them fails at boot (`CommentRevisionsUnsupportedError`).
+
+### Patch Changes
+
+- Updated dependencies [0353877]
+- Updated dependencies [7a3fd88]
+- Updated dependencies [eeb90bb]
+- Updated dependencies [e600b0a]
+- Updated dependencies [e74b21b]
+- Updated dependencies [3ce3446]
+- Updated dependencies [f029638]
+- Updated dependencies [3740447]
+- Updated dependencies [8b76628]
+- Updated dependencies [36b800c]
+- Updated dependencies [500edef]
+  - @basaltkit/http@2.8.0
+  - @basaltkit/core@1.6.0
+
 ## 4.0.0
 
 ### Major Changes

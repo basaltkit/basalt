@@ -75,6 +75,7 @@ export {
 } from './drivers/redis-rate-limit.js'
 export {
   idempotencyPlugin,
+  idempotencyHeaderOf,
   MemoryIdempotencyStore,
   DEFAULT_IDEMPOTENCY_CREDENTIAL_HEADERS,
   MAX_IDEMPOTENCY_KEY_LENGTH,

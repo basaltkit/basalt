@@ -30,6 +30,23 @@ export interface McpServerOptions extends ToolErrorOptions {
   filter?: (route: BasaltRoute) => boolean
   /** Extra request headers a tool call inherits, on top of `DEFAULT_FORWARDED_HEADERS`. */
   forwardHeaders?: string[]
+  /** See {@link McpPluginOptions.onError}. */
+  onError?: McpInternalErrorHook | false
+}
+
+/**
+ * Receives the original error when a request fails outside a tool's own error
+ * handling (the client only gets `INTERNAL_ERROR` with the text `Internal error`).
+ */
+export type McpInternalErrorHook = (error: unknown, message: JsonRpcRequest) => void
+
+/**
+ * The default {@link McpInternalErrorHook}: one line on stderr — never stdout,
+ * which carries the stdio transport's protocol.
+ */
+export const reportMcpInternalError: McpInternalErrorHook = (error, message) => {
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+  process.stderr.write(`[basalt:mcp] internal error in ${message.method} — ${detail}\n`)
 }
 
 /** Adapt a route-backed {@link McpTool} to the core's function-shaped {@link McpToolDef}. */
@@ -88,7 +105,8 @@ export class McpServer {
       ...(options.redactErrorDetails !== undefined ? { redactErrorDetails: options.redactErrorDetails } : {}),
       ...(options.reportError !== undefined ? { reportError: options.reportError } : {}),
     }).map(toToolDef)
-    this.core = new CoreServer({ tools, serverInfo: this.serverInfo })
+    const onError = options.onError === false ? undefined : (options.onError ?? reportMcpInternalError)
+    this.core = new CoreServer({ tools, serverInfo: this.serverInfo, ...(onError ? { onError } : {}) })
   }
 
   /** Tool descriptors, as returned by `tools/list`. */
@@ -131,6 +149,14 @@ export interface McpPluginOptions extends ToolErrorOptions {
    * custom tenant header. Everything not listed is dropped.
    */
   forwardHeaders?: string[]
+  /**
+   * Called with the original error when a request fails outside a tool's own
+   * error handling — a bug that escaped it, which the client sees only as
+   * `INTERNAL_ERROR` / `Internal error`. Errors a route handler throws go to
+   * `reportError` and become `isError` results instead. Default:
+   * {@link reportMcpInternalError} (one line on stderr). `false` silences it.
+   */
+  onError?: McpInternalErrorHook | false
 }
 
 /**
@@ -153,6 +179,7 @@ export function mcpPlugin(options: McpPluginOptions) {
             ...(options.forwardHeaders ? { forwardHeaders: options.forwardHeaders } : {}),
             ...(options.redactErrorDetails !== undefined ? { redactErrorDetails: options.redactErrorDetails } : {}),
             ...(options.reportError !== undefined ? { reportError: options.reportError } : {}),
+            ...(options.onError !== undefined ? { onError: options.onError } : {}),
           }),
       )
     },

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { Container } from '@basaltkit/core'
+import { describe, expect, it, vi } from 'vitest'
+import { Container, ctx } from '@basaltkit/core'
 import {
   RequestDisposers,
   route,
@@ -149,5 +149,81 @@ describe('runRoute disposers (BK-077)', () => {
       }),
     ).rejects.toThrow('no tenant')
     expect(log).toEqual(['a'])
+  })
+
+  it('exposes the sink as ctx().onDispose, request context only, not copied by a spread', async () => {
+    const sunk: RequestDisposer[] = []
+    let copied: unknown = 'unset'
+    const def = route({
+      method: 'GET',
+      url: '/',
+      handler: () => {
+        const context = ctx()
+        context.onDispose?.(() => undefined)
+        if (false as boolean) {
+          // @ts-expect-error onDispose is read-only
+          context.onDispose = () => {}
+        }
+        copied = { ...context }.onDispose
+        return { enumerable: Object.keys(context).includes('onDispose') }
+      },
+    })
+    const result = await runRoute(def, request(), reply(), {
+      container: new Container(),
+      onDispose: (disposer) => sunk.push(disposer),
+    })
+    expect(sunk).toHaveLength(1)
+    expect(result).toEqual({ enumerable: false })
+    expect(copied).toBeUndefined()
+  })
+
+  it('reports a failing disposer on the console when the caller passes no sink, and still runs the others', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const ran: string[] = []
+      const def = route({ method: 'GET', url: '/', handler: () => ({ ok: true }) })
+      const result = await runRoute(def, request(), reply(), {
+        container: new Container(),
+        enrichers: [
+          () => () => {
+            ran.push('sibling')
+          },
+          () => () => {
+            throw new Error('release failed')
+          },
+        ],
+      })
+      expect(result).toEqual({ ok: true })
+      expect(ran).toEqual(['sibling'])
+      expect(error).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify(error.mock.calls[0]?.[1])).toContain('REQUEST_DISPOSER_FAILED')
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('reports a late ctx().onDispose disposer that fails after the route settled', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      let late: ((disposer: RequestDisposer) => void) | undefined
+      const def = route({
+        method: 'GET',
+        url: '/',
+        handler: () => {
+          late = ctx().onDispose
+          return 'ok'
+        },
+      })
+      await runRoute(def, request(), reply(), { container: new Container() })
+      expect(late).toBeTypeOf('function')
+      late!(() => {
+        throw new Error('late failure')
+      })
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(error).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify(error.mock.calls[0]?.[1])).toContain('REQUEST_DISPOSER_FAILED')
+    } finally {
+      error.mockRestore()
+    }
   })
 })

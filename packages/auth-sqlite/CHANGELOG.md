@@ -1,5 +1,26 @@
 # @basaltkit/auth-sqlite
 
+## 2.1.0
+
+### Minor Changes
+
+- cdc20f6: Create already-verified accounts from trusted flows (BK-045).
+  
+  - `auth.register(email, password, { emailVerified: true })` creates the account verified; the flag is persisted at create time through `UserSource.create({ email, passwordHash, emailVerified? })` (new exported `NewUser` type), so `auth:registered` reports the final state.
+  - Fix: `socialLogin` emitted `auth:registered` before marking a provider-verified account verified, so mail hooks saw `emailVerified: false`. The account is now created verified and the hook fires afterwards.
+  - `socialLogin` passes the provider's verification to `create()`, and a `UserSource` that drops the flag is patched through `update()`. A custom source that can do neither (no `update()`, a `create()` that ignores `emailVerified`) cannot record verification at all: the account is created unverified, linked to the provider identity and logged in, exactly as before — never a `500` after the row exists, which would leave an unlinked account every later login refuses (`AUTH_SOCIAL_LINK_REFUSED`). `auth:registered` and the result report `emailVerified: false` truthfully; to get verified social accounts, persist `emailVerified` in `create()` or implement `update()`. A first login that fails after the row exists (e.g. `update()` throws) is recovered by the retry, which adopts the passwordless account.
+  - `register(…, { emailVerified: true })` requires a `UserSource` with `update()` (the same requirement as email verification). Without it the call throws `UserUpdateUnsupportedError` (`AUTH_UPDATE_UNSUPPORTED`, 500) **before anything is written**: whether `create()` persists the flag can only be learnt by writing the row, and a row that could not be fixed afterwards would leave an unverified account that a retry reports as `EmailTakenError`. The option is new in this release, so no existing call is affected.
+  - `SqliteUserSource` and `PrismaUserSource` persist `emailVerified` on create (no schema change).
+  - The public `POST /auth/register` never creates a verified account.
+- 19fb4c6: BK-076: session hardening.
+  
+  - `@basaltkit/auth`: `sessionIdleTtl` adds an idle timeout to server-side sessions — a session unused for longer is refused and deleted, on top of the absolute `sessionTtl`. Activity is recorded through the new optional `SessionStore.touch(id, at)`, throttled to once per `min(60s, sessionIdleTtl / 4)`; `SessionRecord` gains optional `lastSeenAt`. `sessionIdleTtl` is a new opt-in option and is validated fail-closed: a value that is not a positive duration, or a session store without `touch`, makes `authPlugin` fail at boot (`SessionIdleConfigError`, `AUTH_SESSION_IDLE_CONFIG_INVALID`) rather than configuring an idle timeout that would silently never expire a session. Configurations without `sessionIdleTtl` are unaffected.
+  - `@basaltkit/auth`: a session cookie named `__Host-…` or `__Secure-…` now implies `Secure` (and `Path=/` for `__Host-`) when `secure` / `path` are unset, in every environment — before, outside production such a cookie was emitted without `Secure` and browsers silently dropped it. **Test-client caveat:** cookie jars that honour `Secure` (supertest/superagent, tough-cookie) do not send a `Secure` cookie back over plain `http`, so a suite that relied on the old non-`Secure` emission now gets 401s; outside production this case logs a one-time boot warning. Use an unprefixed name outside production (e.g. `name: isProd ? '__Host-sid' : 'sid'`), or set `secure` explicitly (`secure: true` silences the warning).
+  - **Upgrade — warns at boot (refused in the next major).** A prefixed `sessionCookie.name` with an explicit `secure: false` — including the common `secure: process.env.NODE_ENV === 'production'`, which is `false` in dev and test — or a `__Host-` cookie with a `path` other than `/`, still boots and the cookie is emitted exactly as configured, as before; it logs one `[basalt] sessionCookie …` warning per configuration, because browsers drop such a cookie. The next major refuses it with `SessionCookieConfigError` (`AUTH_SESSION_COOKIE_INVALID`), which is already exported. Fix now: drop `secure` (the prefix implies it) and `path`, or use an unprefixed name outside production.
+  - `@basaltkit/auth`: cookie prefixes are matched case-insensitively, as browsers do (`__host-sid` is a `__Host-` cookie and implies `Secure`). The boot warnings are independent and each is logged once per `sessionCookie` object — a `__Host-` cookie with a sub-path and `secure` unset outside production now gets both the path warning and the implied-`Secure` one (before, only the path warning). An unprefixed cookie with `sameSite: 'None'` and no `Secure` now warns too (emitted unchanged; browsers drop it).
+  - `@basaltkit/auth-sqlite`: `SqliteSessionStore` records `last_seen_at` and implements `touch`; `migrate()` adds the column to existing databases.
+  - `@basaltkit/auth-prisma`: `trackSessionActivity: true` makes `PrismaSessionStore` write `AuthSession.lastSeenAt` and implement `touch`. Off by default, so an unmigrated database keeps working; the column is in the reference schemas — migrate before enabling.
+
 ## 2.0.0
 
 ### Major Changes

@@ -1,0 +1,9 @@
+# Regexes of paths TruffleHog skips (one per line; `#` lines are comments).
+#
+# The prisma test suites assert that connection strings are parsed and that
+# their credentials are redacted from diagnostics, so they are full of fake
+# connection URLs with inline credentials. TruffleHog reports them as
+# unverified Postgres credentials on every commit that touches those files
+# (inline `trufflehog:ignore` cannot cover commits already in history).
+# Only this directory is excluded; everything else is still scanned.
+^packages/prisma/tests/

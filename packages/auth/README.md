@@ -151,7 +151,7 @@ const users: UserSource = {
 |---|---|---|---|
 | `findByEmail(email)` | Yes | `AuthUser \| null` | Sign-in and registration lookups. Emails are case-insensitive identities. |
 | `findById(id)` | Yes | `AuthUser \| null` | Resolving the user behind a token, session or API key. |
-| `create({ email, passwordHash, emailVerified? })` | Yes | `AuthUser` | Registration; the hash arrives already computed. `emailVerified: true` comes only from trusted flows (`register(…, { emailVerified: true })`, a provider-verified social login) and must be persisted with the row. A source that drops it is patched through `update()`; without `update()` such a call throws `AUTH_UPDATE_UNSUPPORTED`. |
+| `create({ email, passwordHash, emailVerified? })` | Yes | `AuthUser` | Registration; the hash arrives already computed. `emailVerified: true` comes only from trusted flows (`register(…, { emailVerified: true })`, a provider-verified social login) and must be persisted with the row. A source that drops it is patched through `update()`; without `update()`, `register(…, { emailVerified: true })` throws `AUTH_UPDATE_UNSUPPORTED` before anything is written and a social login keeps the account unverified (still linked and signed in). |
 | `update(id, patch)` | No | `AuthUser \| null` | Email verification and password reset need it (`AUTH_UPDATE_UNSUPPORTED` without it). |
 | `findByIds(ids)` | No | `PublicUser[]` | **Bulk contact lookup** — see below. |
 
@@ -546,7 +546,10 @@ verify with `401 AUTH_APIKEY_INVALID` and `WWW-Authenticate: Bearer
 error="invalid_token"` (default: the request continues as anonymous), and
 `touchEveryMs` (default 60 s; `0` = every request) throttles `lastUsedAt` writes.
 `auth:apikey_rejected` carries the display `prefix` and `ip` of an invalid key,
-never the secret; `@basaltkit/audit` does not record it by default.
+never the secret; `@basaltkit/audit` does not record it by default. A refusal of
+a key that verified (`tenant_mismatch`, `not_allowed`, `scope`) is also emitted
+as `auth:apikey_refused` (`{ id, reason, tenantId? }`), which the audit records
+by default.
 
 ### Brute-force lockout (LoginThrottle)
 
@@ -598,7 +601,7 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `refreshTtl` | `DurationInput` | No | `'30d'` | Refresh token validity. |
 | `sessionTtl` | `DurationInput` | No | `'30d'` | Session validity (absolute). |
 | `sessionIdleTtl` | `DurationInput` | No | — | Idle timeout: a session unused for longer is refused and deleted. Needs a session store with `touch` (memory, auth-sqlite, auth-prisma with `trackSessionActivity`); fails at boot otherwise. |
-| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value fails at boot (`AUTH_SESSION_COOKIE_INVALID`). |
+| `sessionCookie` | `SessionCookieOptions` | No | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes. `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value is emitted as configured with a boot warning, and is refused from the next major (`AUTH_SESSION_COOKIE_INVALID`). |
 | `loginThrottle` | `LoginThrottle \| false` | No | active (5/15min) | Anti brute-force lockout; `false` disables it. |
 | `throttleStore` | `ThrottleStore` | No | in-memory, per process | Counters of the default login / per-IP / email-request throttles — `RedisThrottleStore` for one budget across replicas. |
 | `requireMfa` | `boolean \| (user, context) => boolean \| Promise<boolean>` | No | off | Plugin only. Require a sign-in with MFA on every authenticated route except `meta.mfa: false` ones. |

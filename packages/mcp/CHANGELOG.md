@@ -1,5 +1,42 @@
 # @basaltkit/mcp
 
+## 5.1.0
+
+### Minor Changes
+
+- f29b366: Reject malformed MCP `arguments` and stop echoing internal exception text (BK-047).
+  
+  - `@basaltkit/mcp-core`: `tools/call` now refuses a present-but-non-object `arguments` (array, string, number, `null`) with `INVALID_PARAMS` before the tool runs, and `prompts/get` requires an object of string values. An unexpected throw from a tool, resource or prompt now answers `INTERNAL_ERROR` with the generic text `Internal error` instead of the exception's `message` (which could carry secrets, paths or SQL). An error with `expose: true` keeps its message. The new `McpServerOptions.onError(error, message)` hook receives the original error for logging. Clients that parsed the `-32603` message text will now see `Internal error`.
+  - `@basaltkit/mcp`: building the route request from tool arguments (argument splitting, URL filling) now runs inside the tool's error handling, so a failure there ends as a sanitised `isError` result instead of a raw `TypeError` text. New `onError` option on `mcpPlugin` / `McpServer` (and exported `reportMcpInternalError`, the default): an error that escapes a tool's own handling — the client sees only `Internal error` — is written as one line to stderr (never stdout, which carries the stdio protocol). Pass your own hook, or `false` to silence it. A tool call never forwards the idempotency key (`idempotency-key`, or the header `idempotencyPlugin({ header })` configured) into the route pipeline, even when it is listed in `forwardHeaders`: an idempotent replay returns the recorded response verbatim, so a replayed error would have reached the model with its `details` unredacted. Each tool call runs the handler; an app that listed the key to deduplicate tool calls must deduplicate inside the handler instead.
+  - `@basaltkit/ai-mcp`: new `onError` option on `AiMcpOptions`; the `basalt-ai-mcp` bin logs the real cause of an internal error to stderr.
+
+### Patch Changes
+
+- eeb90bb: Per-route rate limits without a resolved client IP (BK-046).
+  
+  - `@basaltkit/http`: when `request.ip` is unresolved (Hono without `getClientIp`, a hand-built `runRoute`, an MCP tool called over stdio or through `McpServer.callTool`), the `meta.rateLimit` guard now keys an identified caller by `user:<id>|tenant:<id>` instead of putting everyone in the shared `unknown` bucket. Anonymous ip-less requests still share the fail-closed `unknown` bucket, and requests with an IP are keyed exactly as before.
+  - `@basaltkit/http`: `securityPlugin({ rateLimit })` claims `meta.rateLimit` (new `RATE_LIMIT_META_KEY` export). When routes declare `meta.rateLimit` and no limiter claims it, the adapters' boot check now prints one `console.warn` per app naming those routes. The boot is never refused. Silence the warning with `allowUnguardedMeta: ['rateLimit']` (or `true`). Apps that mount `authRoutes()` without `securityPlugin({ rateLimit })` see it at boot, because the auth routes declare `meta.rateLimit` by default: register the limiter, or pass `authRoutes({ rateLimit: false })` / silence it.
+  - Docs: corrected the claim that an unresolved key "never" falls back to one shared bucket. The ip-less behaviour is now documented in the security, adapters and MCP guides (EN and PT) and in the package READMEs.
+- 500edef: A request disposer that fails during a tool call is reported through `reportError` (code `REQUEST_DISPOSER_FAILED`) instead of being dropped silently. Disposers still finish before the tool result is built; on a cancelled call they run once the abandoned handler has settled.
+- 500edef: `@basaltkit/http` exports `idempotencyHeaderOf(container): string | undefined` — the request header `idempotencyPlugin` reads the key from, lower-cased (`'idempotency-key'` unless renamed with `idempotencyPlugin({ header })`), or `undefined` when the plugin is not registered. It reads the registration as it is now and caches nothing.
+  
+  `@basaltkit/mcp` now learns the idempotency header through this helper instead of reading `@basaltkit/http`'s internal metadata, so http can change how it stores the stage without breaking tool calls. Behaviour is unchanged: a tool call still never forwards `Idempotency-Key` (always dropped) or the configured custom header. `@basaltkit/http` stays a regular dependency of `@basaltkit/mcp` (not a peer); this release publishes the range as `^2.8.0`, the http minor that adds the helper, and npm installs both together — no peer-dependency change and nothing to do for apps.
+- Updated dependencies [0353877]
+- Updated dependencies [7a3fd88]
+- Updated dependencies [eeb90bb]
+- Updated dependencies [f29b366]
+- Updated dependencies [e600b0a]
+- Updated dependencies [e74b21b]
+- Updated dependencies [3ce3446]
+- Updated dependencies [f029638]
+- Updated dependencies [3740447]
+- Updated dependencies [8b76628]
+- Updated dependencies [36b800c]
+- Updated dependencies [500edef]
+  - @basaltkit/http@2.8.0
+  - @basaltkit/core@1.6.0
+  - @basaltkit/mcp-core@0.5.0
+
 ## 5.0.0
 
 ### Major Changes

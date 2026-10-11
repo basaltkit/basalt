@@ -27,7 +27,7 @@ const body = (bytes: Uint8Array, contentType: string | null = 'message/rfc822'):
   return { bytes: buffer, contentType: contentType ?? undefined, contentLength: buffer.length, text: () => buffer.toString('utf8') }
 }
 
-describe('wire format v1 golden vector (RFC 0003 §3.1)', () => {
+describe('wire format v1 golden vector (RFC 0004 §3.1)', () => {
   const golden = {
     secret: 'whsec_golden_vector_secret_000000',
     t: 1767225600,

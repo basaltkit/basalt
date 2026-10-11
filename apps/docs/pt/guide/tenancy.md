@@ -689,9 +689,10 @@ keys em conflito); se vierem primeiro, essa resposta chega ao cliente em vez do
 | `false` | corre sem tenant | corre no tenant |
 | `'never'` | corre sem tenant | `404 NOT_FOUND`, o handler não corre |
 
-Qualquer outro valor (`'none'`, `'false'`, `0`) recusa o arranque com
-`HTTP_INVALID_ROUTE_META`, porque um erro de escrita cairia no default da app e
-serviria a rota em hosts de tenant. O `basalt ai doctor` avisa de rotas que
+Qualquer outro valor (`'none'`, `'false'`, `0`, `null`) cai no default da app,
+como sempre, e regista um aviso no arranque que nomeia as rotas: um erro de
+escrita de `'never'` serviria a rota em hosts de tenant. A próxima major recusa
+esse arranque com `HTTP_INVALID_ROUTE_META`. O `basalt ai doctor` avisa de rotas que
 juntam `tenant: false` a uma permissão `platform:`.
 
 Isentar um caminho levanta apenas a exigência de tenant. A autenticação, as

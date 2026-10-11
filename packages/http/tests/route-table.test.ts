@@ -40,7 +40,8 @@ describe('describeRoutes (BK-025)', () => {
     })
     expect(list.can).toEqual(['projects:read'])
     expect(health).toMatchObject({ auth: false, public: true, can: null })
-    expect(admin).toMatchObject({ tenant: 'central', can: [], guards: ['mfa', 'teamRole=admin'] })
+    // meta.central is the teams membership bypass, not a tenancy declaration.
+    expect(admin).toMatchObject({ tenant: null, can: [], guards: ['mfa', 'teamRole=admin', 'central'] })
     expect(bare).toEqual({
       method: 'GET',
       url: '/bare',
@@ -72,6 +73,21 @@ describe('describeRoutes (BK-025)', () => {
     expect(rate({ limit: 5, windowMs: 60_000, bucket: 'shared' })).toBe('5/1m [shared]')
     expect(rate([{ limit: 'x' }, { limit: 1, windowMs: 1_000 }])).toBe('1/1s')
     expect(rate([])).toBeNull()
+  })
+
+  it("marks meta.tenant: 'never' as central-only, even alongside meta.central", () => {
+    const rows = describeRoutes([
+      { method: 'GET', url: '/console', meta: { tenant: 'never' } },
+      { method: 'GET', url: '/console/both', meta: { tenant: 'never', central: true } },
+    ])
+    expect(rows.map((row) => row.tenant)).toEqual(['central-only', 'central-only'])
+    expect(rows[1]?.guards).toContain('central')
+    expect(rows[0]?.guards).not.toContain('central')
+  })
+
+  it('derives tenant from meta.tenant only: { tenant: true, central: true } requires a tenant', () => {
+    const [row] = describeRoutes([{ method: 'GET', url: '/members', meta: { tenant: true, central: true } }])
+    expect(row).toMatchObject({ tenant: 'required', guards: ['central'] })
   })
 
   it('marks meta.tenant: false as exempt and meta.public as public', () => {

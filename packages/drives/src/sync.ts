@@ -1,7 +1,7 @@
 import type { Drives } from './drives.js'
 import { DriveCursorResetError, errorCodeOf } from './errors.js'
 import type { DriveChange, DriveDelta, DriveItem } from './provider.js'
-import type { DriveConnection, DriveImportStrategy } from './store.js'
+import { healthPatch, type DriveConnection, type DriveImportStrategy } from './store.js'
 
 /**
  * Incremental sync.
@@ -249,7 +249,7 @@ export async function syncConnection(
       const updated = await store.update(
         connection.tenantId,
         connection.id,
-        { cursor: next, ...(synced ? { lastSyncedAt: now(), lastSucceededAt: now() } : {}) },
+        { cursor: next, ...(synced ? { lastSyncedAt: now(), ...healthPatch(store, { lastSucceededAt: now() }) } : {}) },
         revision,
       )
       if (updated) {
@@ -375,7 +375,7 @@ export async function syncConnection(
     // to compare against. Losing the stamp to such a write costs nothing — a
     // refresh that condemned the grant already stamped it in its own write.
     // A caller's abort is not a connection failure and is not stamped.
-    if (!options.signal?.aborted) {
+    if (!options.signal?.aborted && store.persistsHealth === true) {
       try {
         await store.update(
           connection.tenantId,

@@ -63,7 +63,18 @@ export class NotificationPreferences {
     return this.store.list(userId)
   }
 
-  /** Whether a (notification, channel) may be sent to a user — the most specific preference decides; default allowed. */
+  /**
+   * Whether a (notification, channel) may be sent to a user — the most
+   * specific preference decides; default allowed.
+   *
+   * The `Notifier` decides through {@link preference} and the notification's
+   * `defaults`. A subclass that overrides this method is still honoured by
+   * the `Notifier` (its answer is final, `defaults` do not apply).
+   *
+   * @deprecated as an extension point: override {@link preference} instead.
+   * The `Notifier` stops consulting an `allowed()` override in the next major.
+   * Calling it stays supported.
+   */
   async allowed(userId: string, notification: string, channel: string): Promise<boolean> {
     return (await this.preference(userId, notification, channel)) ?? true
   }
