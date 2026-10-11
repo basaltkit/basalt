@@ -570,17 +570,16 @@ prefixo fora de produção (`name: isProd ? '__Host-sid' : 'sid'`) ou define
 `secure: true` explicitamente, o que silencia o aviso.
 
 Um `secure: false` contraditório (incluindo `secure: process.env.NODE_ENV ===
-'production'` em dev e testes), ou um cookie `__Host-` com outro `path`, continua
-a arrancar e o cookie é emitido tal como configurado, mas regista um aviso no
-arranque: o browser descarta esse cookie. A próxima major recusa-o no arranque
-com `AUTH_SESSION_COOKIE_INVALID`. `__Host-` é a escolha mais forte para um
+'production'` em dev e testes), ou um cookie `__Host-` com outro `path`, recusa
+o arranque com `AUTH_SESSION_COOKIE_INVALID` (`SessionCookieConfigError`, desde
+o `@basaltkit/auth` 5): o browser descartaria esse cookie, e cada login falharia
+em silêncio. Muda antes o nome conforme o ambiente —
+`name: isProd ? '__Host-sid' : 'sid'` — e retira o `secure`/`path`. `__Host-` é a escolha mais forte para um
 cookie de sessão: um subdomínio irmão não o consegue definir nem sombrear.
 
 Os prefixos são reconhecidos sem distinguir maiúsculas, como nos browsers
 actuais (`__host-sid` é um cookie `__Host-`). Os avisos são independentes e cada
-um aparece uma vez por objecto `sessionCookie`: um cookie `__Host-` com
-`path: '/app'` e `secure` por definir regista o aviso do path e, fora de
-produção, o do `Secure` implícito. Um cookie sem prefixo com `sameSite: 'None'`
+um aparece uma vez por objecto `sessionCookie`. Um cookie sem prefixo com `sameSite: 'None'`
 e sem `Secure` (o valor por omissão fora de produção) também gera um aviso,
 porque os browsers descartam `SameSite=None` sem `Secure`; é emitido sem
 alterações.
@@ -1463,7 +1462,7 @@ plugin fornece:
 | `refreshTtl` | `DurationInput` | `'30d'` | Duração do refresh token — na prática, "quanto tempo até o utilizador ter de entrar outra vez" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Duração da sessão do lado do servidor (absoluta) |
 | `sessionIdleTtl` | `DurationInput` | — (sem timeout de inatividade) | Recusa e apaga uma sessão sem uso durante mais tempo; requer um store com `touch` ([detalhes](#session-hardening)) |
-| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test`. Um nome `__Host-`/`__Secure-` implica `Secure` (e `Path=/` para `__Host-`); um valor contraditório gera um aviso no arranque (recusado na próxima major) |
+| `sessionCookie` | `SessionCookieOptions` | `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Atributos do cookie de sessão; `Secure` activo por omissão salvo com `NODE_ENV` explicitamente `development`/`test`. Um nome `__Host-`/`__Secure-` implica `Secure` (e `Path=/` para `__Host-`); um `secure: false` ou um path `__Host-` contraditório recusa o arranque (`AUTH_SESSION_COOKIE_INVALID`) |
 | `verificationTtl` | `DurationInput` | `'24h'` | Duração do link de verificação de email |
 | `resetTtl` | `DurationInput` | `'1h'` | Duração do link de reposição de password; mantém-na curta |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 por 15m, por email) | Bloqueio por força bruta por email. `false` desativa-o — só em testes |

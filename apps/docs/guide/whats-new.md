@@ -38,9 +38,10 @@ and inbound mail.
 Shipped to `main` after the 1.13 release; it goes out with the next one.
 Unlike 1.13, this wave **does** carry majors: `@basaltkit/http` 3.0 (with
 `fastify`, `express`, `hono` and `testing` 3.0) makes idempotency strict by
-default, and `@basaltkit/auth-prisma` 3.0 needs a database migration.
-Everything else is a minor. Read [Upgrading](#upgrading-since-1-13) before you
-bump.
+default, `@basaltkit/auth-prisma` 3.0 needs a database migration, and the
+configurations 1.13 only warned about now refuse to boot
+([`@basaltkit/auth` 5.0](#warnings-now-refuse)). Everything else is a minor.
+Read [Upgrading](#upgrading-since-1-13) before you bump.
 
 - **API key lifecycle.** `ApiKeys.rotate()` replaces a key's secret and keeps its
   id, with an optional grace window (up to 30 days) for the old secret;
@@ -49,7 +50,7 @@ bump.
   never `ctx().user`), carry an **IP allowlist** (`403 AUTH_APIKEY_IP_NOT_ALLOWED`,
   fail-closed, also emitted as the audited `auth:apikey_refused`) and flat
   `meta`. `apiKeyRoutes()` adds `PATCH /apikeys/:id` and
-  `POST /apikeys/:id/rotate`, on every adapter. *(`@basaltkit/auth` 4.3,
+  `POST /apikeys/:id/rotate`, on every adapter. *(`@basaltkit/auth` 5.0,
   `auth-sqlite` 2.2 — auto-migrated; `auth-prisma` 3.0 — migration below;
   `create-basalt` 1.13 scaffolds the new model.)* See
   [API keys](/guide/auth#apikeys-rotation).
@@ -62,11 +63,15 @@ bump.
 - **Idempotency is strict by default.** A reused `Idempotency-Key` with a
   different request gets `422`, and replays run after the guards.
   *(`@basaltkit/http` 3.0)* See below.
+- **1.13's boot warnings become refusals.** A prefixed session cookie that
+  browsers would drop no longer boots. *(`@basaltkit/auth` 5.0)* See
+  [below](#warnings-now-refuse).
 
 ### Upgrading {#upgrading-since-1-13}
 
-Bump only what you use. Two packages need a step from you; the rest are
-minors.
+Bump only what you use. `@basaltkit/http` and `@basaltkit/auth-prisma` need a
+step from you; the other majors only refuse configurations that 1.13 already
+warned about. The rest are minors.
 
 ### Upgrading: idempotency is strict by default (`@basaltkit/http` 3) {#idempotency-strict-by-default}
 
@@ -168,6 +173,29 @@ columns exist, API-key requests fail with `AUTH_API_KEY_SCHEMA_OUTDATED`, whose
 message carries the SQL (also exported as `API_KEY_LIFECYCLE_MIGRATION_SQL`).
 `@basaltkit/auth-sqlite` migrates itself on boot. See
 [Upgrading to auth-prisma 3.0](/guide/auth#prisma-—-basaltkit-auth-prisma).
+
+### Upgrading: boot warnings that now refuse {#warnings-now-refuse}
+
+1.13 printed a `[basalt] …` boot warning for these configurations and kept
+their old behaviour, saying the next major would refuse them
+([the 1.13 list](#configurations-that-now-warn-at-boot-refused-in-the-next-major)).
+This wave does. If your app boots on 1.13 without any of these warnings,
+nothing here changes for you.
+
+- **`@basaltkit/auth` 5.0 — a prefixed session cookie that breaks its rule.**
+  A `sessionCookie.name` starting with `__Host-` or `__Secure-` (any case) with
+  an explicit `secure: false`, or a `__Host-` cookie with a `path` other than
+  `/`, throws `SessionCookieConfigError` (`AUTH_SESSION_COOKIE_INVALID`) when
+  `authPlugin` registers. The usual culprit is `secure: process.env.NODE_ENV
+  === 'production'` next to a `__Host-` name. Switch the name instead:
+
+  ```ts
+  authPlugin({ sessionCookie: { name: isProd ? '__Host-sid' : 'sid' } })
+  ```
+
+  The implied `Secure` of a prefixed name with `secure` unset, its one-time
+  warning outside production, and the `SameSite=None` warning are unchanged.
+  See [Session lifetime](/guide/auth#session-hardening).
 
 ### Other changes to watch {#watch-since-1-13}
 

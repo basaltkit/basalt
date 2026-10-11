@@ -39,9 +39,10 @@ entrada.
 Entrou no `main` depois da publicação da 1.13 e sai na próxima versão. Ao
 contrário da 1.13, esta vaga **traz** majors: o `@basaltkit/http` 3.0 (com o
 `fastify`, o `express`, o `hono` e o `testing` 3.0) torna a idempotência
-estrita por omissão, e o `@basaltkit/auth-prisma` 3.0 precisa de uma migração
-da base de dados. Tudo o resto é minor. Lê a
-[Atualização](#upgrading-since-1-13) antes de subir versões.
+estrita por omissão, o `@basaltkit/auth-prisma` 3.0 precisa de uma migração
+da base de dados, e as configurações de que a 1.13 só avisava passam a recusar
+o arranque ([`@basaltkit/auth` 5.0](#warnings-now-refuse)). Tudo o resto é
+minor. Lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
 
 - **Ciclo de vida das API keys.** `ApiKeys.rotate()` substitui o segredo de uma
   chave e mantém o id, com uma janela de tolerância opcional (até 30 dias) para o
@@ -51,7 +52,7 @@ da base de dados. Tudo o resto é minor. Lê a
   **allowlist de IPs** (`403 AUTH_APIKEY_IP_NOT_ALLOWED`, falha fechada, também
   emitida como o `auth:apikey_refused` auditado) e `meta` plano.
   `apiKeyRoutes()` acrescenta `PATCH /apikeys/:id` e `POST /apikeys/:id/rotate`,
-  em todos os adapters. *(`@basaltkit/auth` 4.3, `auth-sqlite` 2.2 — migração
+  em todos os adapters. *(`@basaltkit/auth` 5.0, `auth-sqlite` 2.2 — migração
   automática; `auth-prisma` 3.0 — migração abaixo; o `create-basalt` 1.13 gera o
   novo modelo.)* Vê [API keys](/pt/guide/auth#apikeys-rotation).
 - **Chamadores de serviço no trilho de auditoria.** `auditPlugin({ actor })`
@@ -65,11 +66,15 @@ da base de dados. Tudo o resto é minor. Lê a
 - **A idempotência é estrita por omissão.** Uma `Idempotency-Key` reutilizada
   com um pedido diferente recebe `422`, e os replays correm depois dos guards.
   *(`@basaltkit/http` 3.0)* Vê abaixo.
+- **Os avisos de arranque da 1.13 passam a recusas.** Um cookie de sessão com
+  prefixo que os browsers descartariam deixa de arrancar.
+  *(`@basaltkit/auth` 5.0)* Vê [abaixo](#warnings-now-refuse).
 
 ### Atualização {#upgrading-since-1-13}
 
-Sobe só o que usas. Dois pacotes precisam de um passo teu; os restantes são
-minors.
+Sobe só o que usas. O `@basaltkit/http` e o `@basaltkit/auth-prisma` precisam
+de um passo teu; as outras majors só recusam configurações de que a 1.13 já
+avisava. Os restantes são minors.
 
 ### Atualizar: idempotência estrita por omissão (`@basaltkit/http` 3) {#idempotency-strict-by-default}
 
@@ -174,6 +179,30 @@ pedidos com API key falham com `AUTH_API_KEY_SCHEMA_OUTDATED`, cuja mensagem tra
 o SQL (também exportado como `API_KEY_LIFECYCLE_MIGRATION_SQL`). O
 `@basaltkit/auth-sqlite` migra sozinho no arranque. Vê
 [Atualizar para o auth-prisma 3.0](/pt/guide/auth#prisma-—-basaltkit-auth-prisma).
+
+### Atualizar: avisos de arranque que passam a recusar {#warnings-now-refuse}
+
+A 1.13 mostrava um aviso `[basalt] …` no arranque para estas configurações e
+mantinha o comportamento antigo, anunciando que a próxima major as recusaria
+([a lista da 1.13](#configurations-that-now-warn-at-boot-refused-in-the-next-major)).
+Esta vaga recusa-as. Se a tua app arranca na 1.13 sem nenhum destes avisos,
+nada aqui muda para ti.
+
+- **`@basaltkit/auth` 5.0 — um cookie de sessão com prefixo que quebra a sua
+  regra.** Um `sessionCookie.name` que começa por `__Host-` ou `__Secure-`
+  (sem distinguir maiúsculas) com um `secure: false` explícito, ou um cookie
+  `__Host-` com um `path` diferente de `/`, lança `SessionCookieConfigError`
+  (`AUTH_SESSION_COOKIE_INVALID`) quando o `authPlugin` se regista. O culpado
+  habitual é `secure: process.env.NODE_ENV === 'production'` ao lado de um nome
+  `__Host-`. Muda antes o nome:
+
+  ```ts
+  authPlugin({ sessionCookie: { name: isProd ? '__Host-sid' : 'sid' } })
+  ```
+
+  O `Secure` implícito de um nome com prefixo e `secure` por definir, o seu
+  aviso único fora de produção e o aviso de `SameSite=None` não mudam. Vê
+  [Duração da sessão](/pt/guide/auth#session-hardening).
 
 ### Outras mudanças a ter em conta {#watch-since-1-13}
 

@@ -264,19 +264,18 @@ export interface SessionCookieOptions {
    *
    * A `__Host-` or `__Secure-` name (matched case-insensitively) implies
    * `true` when unset (in every environment): browsers silently drop such a
-   * cookie without `Secure`. An
-   * explicit `false` is kept as given but warns at boot; it is refused from
-   * the next major.
+   * cookie without `Secure`. An explicit `false` on such a name refuses the
+   * boot with `AUTH_SESSION_COOKIE_INVALID` ({@link SessionCookieConfigError}).
    */
   secure?: boolean
 }
 
 /**
- * The session cookie options violate the rules of the cookie name's prefix.
- *
- * Exported ahead of time: today such a configuration only warns at boot (the
- * cookie is emitted as configured, as before); from the next major it is
- * thrown with code `AUTH_SESSION_COOKIE_INVALID`.
+ * The session cookie options violate the rules of the cookie name's prefix
+ * (`__Secure-` without `Secure`, `__Host-` without `Secure` or with a path
+ * other than `/`). Browsers drop such a cookie, so every login would
+ * "succeed" without a session; thrown at boot with code
+ * `AUTH_SESSION_COOKIE_INVALID`.
  */
 export class SessionCookieConfigError extends BasaltError {
   readonly status = 500
@@ -297,7 +296,8 @@ export class SessionIdleConfigError extends BasaltError {
  * Session cookie options already warned about. Keyed on the `sessionCookie`
  * object, not on the `Auth` instance: `authPlugin` validates the options at
  * registration and the `AUTH` singleton resolves them again with the same
- * `sessionCookie` reference, so one configuration warns once.
+ * `sessionCookie` reference, so one configuration warns once. A refusal is
+ * never deduplicated: it throws on every resolution.
  */
 const warnedSessionCookies = new WeakSet<SessionCookieOptions>()
 
@@ -310,13 +310,13 @@ const warnedSessionCookies = new WeakSet<SessionCookieOptions>()
  * "succeed" without a session.
  *
  * An unset `secure` on a prefixed name takes `true`. Contradicting values
- * (`secure: false`, a `__Host-` path other than `/`) are emitted as given and
- * warn once at boot; they are refused from the next major.
+ * (`secure: false`, a `__Host-` path other than `/`) throw
+ * {@link SessionCookieConfigError}: a cookie the browser drops is a broken
+ * login, so it fails closed at boot rather than at the first sign-in.
  *
  * Warnings are independent, each emitted once per `sessionCookie` object:
- * - the cookie is dropped by browsers because of its prefix (refused next major);
  * - Secure is implied by the prefix where it was not before (outside
- *   production, so the emission differs from earlier versions);
+ *   production, so the emission differs from releases before auth 4.2);
  * - `SameSite=None` without `Secure`, which browsers also drop.
  */
 function resolveSessionCookie(options: SessionCookieOptions | undefined): Required<SessionCookieOptions> {
@@ -332,16 +332,17 @@ function resolveSessionCookie(options: SessionCookieOptions | undefined): Requir
     sameSite: options?.sameSite ?? 'Lax',
     secure: options?.secure ?? (prefixed ? true : production),
   }
+  const problems: string[] = []
+  if (prefixed && !resolved.secure) problems.push('secure: true')
+  if (host && resolved.path !== '/') problems.push('path "/"')
+  if (problems.length > 0) {
+    throw new SessionCookieConfigError(
+      `sessionCookie "${name}" requires ${problems.join(' and ')}: browsers drop a ${host ? '__Host-' : '__Secure-'} cookie without it. ` +
+        `Drop the contradicting option, or use an unprefixed name outside production (name: isProd ? '__Host-sid' : 'sid').`,
+    )
+  }
   if (options && !warnedSessionCookies.has(options)) {
     const warnings: string[] = []
-    const problems: string[] = []
-    if (prefixed && !resolved.secure) problems.push('secure: true')
-    if (host && resolved.path !== '/') problems.push('path "/"')
-    if (problems.length > 0) {
-      warnings.push(
-        `[basalt] sessionCookie: "${name}" requires ${problems.join(' / ')} - browsers drop it; this will refuse to boot in the next major.`,
-      )
-    }
     if (prefixed && options.secure === undefined && !production) {
       warnings.push(
         `[basalt] sessionCookie "${name}": Secure is implied by the prefix (it was not before outside production). Test clients over plain http will not send it back; use an unprefixed name outside production, or set secure explicitly (secure: true silences this).`,
