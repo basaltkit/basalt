@@ -1,5 +1,26 @@
 # @basaltkit/tenancy
 
+## 4.0.0
+
+### Major Changes
+
+- bb33bbe: An unknown `meta.tenant` fails closed at request time too.
+  
+  The boot validator already refuses such a route on every adapter and in `mcpPlugin`. A route that skipped it (a custom driver calling `runRoute()` without `assertRouteMetaValid()`) used to fall back to the app-wide `required` default, so a typo of `'never'` served a central-only route on tenant hosts. Now:
+  
+  - `isTenantRequired()` throws the new `InvalidTenantMetaError` (`TENANCY_INVALID_ROUTE_META`, 500) for a `meta.tenant` other than `true`, `false`, `'never'` or absent, instead of returning the default.
+  - `tenancyPlugin`'s enricher throws the same error before resolving a tenant, so the request never runs, with or without a tenant.
+  - `tenantMetaProblem(value)` is exported: the check the boot validator and the request-time check share.
+  
+  This holds for a driver that passes the app's enrichers (`http:enrichers`) to `runRoute()`, as every adapter does; `@basaltkit/http` 3.0 refuses enrichers without a `container` (`HTTP_ENRICHERS_UNRUNNABLE`) instead of skipping them, so the enricher cannot be dropped in silence.
+  
+  **Migrating.** Nothing to do for an app that boots: such routes are already refused at boot.
+- b048ab4: An unknown `meta.tenant` value refuses the boot again.
+  
+  `tenancyPlugin` registers an `http:meta-validators` entry: a `meta.tenant` other than `true`, `false`, `'never'` or absent (a typo such as `'none'`, `'optional'`, `'false'`, `0` or `null`) refuses the boot with `HTTP_INVALID_ROUTE_META` on every adapter, naming each offending route. 3.2 printed one `[basalt] meta.tenant …` warning at `app:booted` and fell back to the app-wide `required` default, so a typo for `'never'` served a platform route on tenant hosts. The fallback and the warning are gone.
+  
+  **Migrating.** If 3.2 printed the warning, fix the value it named: `'never'` for a central-only route (the SaaS owner's console), `false` for a route that works with or without a tenant, `true` (or nothing) for a tenant route. Apps that only use `true`, `false` and `'never'` are unaffected.
+
 ## 3.2.0
 
 ### Minor Changes

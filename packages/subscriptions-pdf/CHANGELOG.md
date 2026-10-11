@@ -1,5 +1,16 @@
 # @basaltkit/subscriptions-pdf
 
+## 0.2.0
+
+### Minor Changes
+
+- 86fea74: Peer range moves to `@basaltkit/subscriptions` `^6`; no API change. The bump is forced by the `@basaltkit/subscriptions` peer leaving its 5.x range. `@basaltkit/subscriptions-pdf` is 0.x, where a minor is the breaking line (0.1 → 0.2). Upgrade them together with `@basaltkit/subscriptions` 6.
+
+### Patch Changes
+
+- Updated dependencies [86fea74]
+  - @basaltkit/subscriptions@6.0.0
+
 ## 0.1.5
 
 ### Patch Changes
