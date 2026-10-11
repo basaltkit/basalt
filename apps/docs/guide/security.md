@@ -296,10 +296,12 @@ replace a global header of the same name (here `securityPlugin`'s
 The values are checked at boot on every adapter: strings without CR, LF or
 other control characters, and never `Set-Cookie`, `Content-Type`,
 `Content-Length`, `Transfer-Encoding`, hop-by-hop headers or `X-Request-Id`,
-which belong to the response or the adapter. A route whose record breaks a rule
-gets one boot warning naming it, and its **whole** `responseHeaders` record is
-ignored — none of its headers is sent, valid siblings included, and the request
-never fails because of it. The next major refuses such a boot.
+which belong to the response or the adapter. A record that breaks a rule
+refuses the boot with `HTTP_INVALID_ROUTE_META`, naming every offending route
+(`@basaltkit/http` 2.8 only warned and sent none of its headers). If you drive
+`runRoute()` yourself without `assertRouteMetaValid()`, such a route throws
+`InvalidRouteHeadersError` (`500`, `HTTP_INVALID_ROUTE_HEADERS`) on each request
+before any of its headers is set.
 
 The key is `responseHeaders`, not `headers`: route meta is also yours, and
 nothing reads or sends `meta.headers`. A request that never reaches the

@@ -301,11 +301,12 @@ a um deles com `reply.header()`.
 Os valores são verificados no arranque em todos os adapters: strings sem CR, LF
 nem outros caracteres de controlo, e nunca `Set-Cookie`, `Content-Type`,
 `Content-Length`, `Transfer-Encoding`, cabeçalhos hop-by-hop nem `X-Request-Id`,
-que pertencem à resposta ou ao adapter. Uma rota cujo registo viola uma regra
-recebe um aviso no arranque que a nomeia, e o seu registo `responseHeaders` é
-ignorado **por inteiro** — nenhum dos seus cabeçalhos é enviado, nem os
-válidos, e o pedido nunca falha por causa disso. A próxima major recusa esse
-arranque.
+que pertencem à resposta ou ao adapter. Um registo que viola uma regra recusa o
+arranque com `HTTP_INVALID_ROUTE_META`, nomeando cada rota em falta (o
+`@basaltkit/http` 2.8 só avisava e não enviava nenhum dos seus cabeçalhos). Se
+conduzes o `runRoute()` tu próprio sem `assertRouteMetaValid()`, essa rota lança
+`InvalidRouteHeadersError` (`500`, `HTTP_INVALID_ROUTE_HEADERS`) em cada pedido,
+antes de definir qualquer um dos seus cabeçalhos.
 
 A chave é `responseHeaders`, não `headers`: a meta da rota também é tua, e nada
 lê nem envia `meta.headers`. Um pedido que nunca chega à rota — um `404`, um

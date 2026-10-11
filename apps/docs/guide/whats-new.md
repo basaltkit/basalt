@@ -40,7 +40,7 @@ Unlike 1.13, this wave **does** carry majors: `@basaltkit/http` 3.0 (with
 `fastify`, `express`, `hono` and `testing` 3.0) makes idempotency strict by
 default, `@basaltkit/auth-prisma` 3.0 needs a database migration, and the
 configurations 1.13 only warned about now refuse to boot
-([`@basaltkit/auth` 5.0, `tenancy` 4.0](#warnings-now-refuse)). Everything else is a minor.
+([`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0](#warnings-now-refuse)). Everything else is a minor.
 Read [Upgrading](#upgrading-since-1-13) before you bump.
 
 - **API key lifecycle.** `ApiKeys.rotate()` replaces a key's secret and keeps its
@@ -64,8 +64,9 @@ Read [Upgrading](#upgrading-since-1-13) before you bump.
   different request gets `422`, and replays run after the guards.
   *(`@basaltkit/http` 3.0)* See below.
 - **1.13's boot warnings become refusals.** A prefixed session cookie that
-  browsers would drop, and an unknown `meta.tenant` value, no longer boot.
-  *(`@basaltkit/auth` 5.0, `tenancy` 4.0)* See [below](#warnings-now-refuse).
+  browsers would drop, an unknown `meta.tenant` value and an invalid
+  `meta.responseHeaders` no longer boot. *(`@basaltkit/auth` 5.0, `tenancy`
+  4.0, `http` 3.0)* See [below](#warnings-now-refuse).
 
 ### Upgrading {#upgrading-since-1-13}
 
@@ -202,6 +203,15 @@ nothing here changes for you.
   naming each route; it no longer falls back to the app-wide `required`. Use
   `'never'` for a central-only route, `false` for one that works with or
   without a tenant. See [Central-only routes](/guide/tenancy#central-only-routes-tenant-never).
+- **`@basaltkit/http` 3.0 — an invalid `meta.responseHeaders`.** A record with
+  a non-string value, a control character, or a header the route may not set
+  (`set-cookie`, `content-type`, `content-length`, `transfer-encoding`,
+  hop-by-hop headers, `x-request-id`) refuses the boot with
+  `HTTP_INVALID_ROUTE_META` on every adapter; 2.8 ignored the whole record. A
+  bespoke `runRoute()` driver that skips `assertRouteMetaValid()` gets the new
+  `InvalidRouteHeadersError` (`500`) on each request instead. Set cookies with
+  `reply.header()` in the handler. See
+  [Per-route headers](/guide/security#per-route-headers-—-meta-responseheaders).
 
 ### Other changes to watch {#watch-since-1-13}
 

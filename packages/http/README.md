@@ -316,7 +316,7 @@ run on every call.
 | `teamRole` | plugin-specific | `@basaltkit/teams` guard | Requires a team-membership rank. Boot-checked. |
 | `rateLimit` | `RouteRateLimits` — `{ limit; windowMs; key?: RateLimitKey; bucket? }` or an array of them | `securityPlugin` | Per-route bucket(s) at a stricter threshold, per IP (default), `'user'`, `'tenant'`, `'user+tenant'`, `'apiKey'` or `(ctx) => id`; `bucket` shares one across routes. |
 | `etag` | `true` | the shared pipeline | Strong `ETag` + `304` on `If-None-Match`, for `GET`/`HEAD`. |
-| `headers` | `Record<string, string>` | the shared pipeline | Static response headers set as soon as the route matches — on its errors (guard `401`, validation `400`, thrown `500`) too. Boot-checked: no control characters; not `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, hop-by-hop or `x-request-id`. |
+| `responseHeaders` | `Record<string, string>` | the shared pipeline | Static response headers set as soon as the route matches — on its errors (guard `401`, validation `400`, thrown `500`) too. No control characters; not `set-cookie`, `content-type`, `content-length`, `transfer-encoding`, hop-by-hop or `x-request-id`. An invalid record refuses the boot (`HTTP_INVALID_ROUTE_META`); one that skipped the boot check (a bespoke `runRoute` driver) throws `InvalidRouteHeadersError` (500). `meta.headers` is app-owned data and never sent. |
 | `summary` · `description` · `tags` · `operationId` | `string` · `string` · `string[]` · `string` | `openapiPlugin` | Operation metadata in the generated document. |
 
 `meta.can` accepts a permission string (`'projects:delete'`) **or** a non-empty array of
