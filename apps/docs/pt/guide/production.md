@@ -10,7 +10,7 @@ linha liga ao guia que traz a tabela de opções completa; nada aqui repete uma.
 ## Checklist
 
 - [ ] **Segredos são fail-closed** — assina com `secret()` para que a produção
-      recuse placeholders. Ver [Segurança](/pt/guide/security#segredos-fail-closed-secret).
+      recuse placeholders. Ver [Segurança](/pt/guide/security#segredos-fail-closed-—-secret).
 - [ ] **A borda está protegida** — `securityPlugin({ rateLimit, cors, headers })`. O limite
       global é chaveado só pelo endereço; uma API pública para clientes máquina
       recebe `rateLimit.prefixes` e orçamentos por chave. Vê [Rate limiting](/pt/guide/security#rate-limiting).
