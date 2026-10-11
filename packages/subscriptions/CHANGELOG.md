@@ -1,5 +1,18 @@
 # @basaltkit/subscriptions
 
+## 6.0.0
+
+### Major Changes
+
+- 86fea74: Requires `@basaltkit/http` 3; no API change. The plugin augments the app's `@basaltkit/http` `RouteMeta` with `meta.subscribed` and `meta.feature`; against a private copy of http those types would not reach the app's routes. Upgrade it together with `@basaltkit/http` 3 and a 3.x adapter.
+
+### Patch Changes
+
+- Updated dependencies [0d6e137]
+- Updated dependencies [14181b0]
+- Updated dependencies [24c317b]
+  - @basaltkit/http@3.0.0
+
 ## 5.0.0
 
 ### Major Changes
