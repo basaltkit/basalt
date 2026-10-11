@@ -41,7 +41,8 @@ contrário da 1.13, esta vaga **traz** majors: o `@basaltkit/http` 3.0 (com o
 `fastify`, o `express`, o `hono` e o `testing` 3.0) torna a idempotência
 estrita por omissão, o `@basaltkit/auth-prisma` 3.0 precisa de uma migração
 da base de dados, e as configurações de que a 1.13 só avisava passam a recusar
-o arranque ([`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0](#warnings-now-refuse)). Tudo o resto é
+o arranque ([`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0, `notifications`
+2.0](#warnings-now-refuse)). Tudo o resto é
 minor. Lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
 
 - **Ciclo de vida das API keys.** `ApiKeys.rotate()` substitui o segredo de uma
@@ -68,8 +69,9 @@ minor. Lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
   *(`@basaltkit/http` 3.0)* Vê abaixo.
 - **Os avisos de arranque da 1.13 passam a recusas.** Um cookie de sessão com
   prefixo que os browsers descartariam, um valor desconhecido de `meta.tenant`
-  e um `meta.responseHeaders` inválido deixam de arrancar. *(`@basaltkit/auth`
-  5.0, `tenancy` 4.0, `http` 3.0)* Vê [abaixo](#warnings-now-refuse).
+  e um `meta.responseHeaders` inválido deixam de arrancar, e o `Notifier` decide
+  só pelo `preference()`. *(`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0,
+  `notifications` 2.0)* Vê [abaixo](#warnings-now-refuse).
 
 ### Atualização {#upgrading-since-1-13}
 
@@ -183,10 +185,12 @@ o SQL (também exportado como `API_KEY_LIFECYCLE_MIGRATION_SQL`). O
 
 ### Atualizar: avisos de arranque que passam a recusar {#warnings-now-refuse}
 
-A 1.13 mostrava um aviso `[basalt] …` no arranque para estas configurações e
-mantinha o comportamento antigo, anunciando que a próxima major as recusaria
-([a lista da 1.13](#configurations-that-now-warn-at-boot-refused-in-the-next-major)).
-Esta vaga recusa-as. Se a tua app arranca na 1.13 sem nenhum destes avisos,
+A 1.13 mostrava um aviso `[basalt] …` no arranque para as três primeiras
+destas configurações e mantinha o comportamento antigo, anunciando que a
+próxima major as recusaria
+([a lista da 1.13](#configurations-that-now-warn-at-boot-refused-in-the-next-major)),
+e tornou a quarta obsoleta. Esta vaga recusa as três e remove a quarta. Se a
+tua app arranca na 1.13 sem nenhum destes avisos e não redefine o `allowed()`,
 nada aqui muda para ti.
 
 - **`@basaltkit/auth` 5.0 — um cookie de sessão com prefixo que quebra a sua
@@ -219,6 +223,17 @@ nada aqui muda para ti.
   `assertRouteMetaValid()` recebe antes o novo `InvalidRouteHeadersError`
   (`500`) em cada pedido. Define cookies com `reply.header()` no handler. Vê
   [Cabeçalhos por rota](/pt/guide/security#cabecalhos-por-rota-—-meta-responseheaders).
+- **`@basaltkit/notifications` 2.0 — o `allowed()` desaparece; decide o
+  `preference()`.** O `Notifier` deixa de detectar uma redefinição de
+  `allowed()`, e o próprio `NotificationPreferences.allowed()` é removido. Passa
+  a lógica de uma redefinição para o `preference()` — `false` bloqueia, `true`
+  envia, `undefined` deixa decidir as preferências guardadas e os `defaults` da
+  definição (ao contrário do `allowed()`, os `defaults` passam a aplicar-se).
+  Um objecto de preferências que ainda define o `allowed()` faz o
+  `new Notifier()` lançar `LegacyAllowedOverrideError`
+  (`NOTIFICATION_ALLOWED_OVERRIDE_REMOVED`) em vez de o ignorar em silêncio.
+  Quem chamava `prefs.allowed(…)` pode usar `(await prefs.preference(…)) ?? true`.
+  Vê [Preferências](/pt/guide/notifications#preferencias-e-digests).
 
 ### Outras mudanças a ter em conta {#watch-since-1-13}
 

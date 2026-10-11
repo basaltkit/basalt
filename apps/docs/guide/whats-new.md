@@ -40,7 +40,8 @@ Unlike 1.13, this wave **does** carry majors: `@basaltkit/http` 3.0 (with
 `fastify`, `express`, `hono` and `testing` 3.0) makes idempotency strict by
 default, `@basaltkit/auth-prisma` 3.0 needs a database migration, and the
 configurations 1.13 only warned about now refuse to boot
-([`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0](#warnings-now-refuse)). Everything else is a minor.
+([`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0, `notifications`
+2.0](#warnings-now-refuse)). Everything else is a minor.
 Read [Upgrading](#upgrading-since-1-13) before you bump.
 
 - **API key lifecycle.** `ApiKeys.rotate()` replaces a key's secret and keeps its
@@ -65,8 +66,9 @@ Read [Upgrading](#upgrading-since-1-13) before you bump.
   *(`@basaltkit/http` 3.0)* See below.
 - **1.13's boot warnings become refusals.** A prefixed session cookie that
   browsers would drop, an unknown `meta.tenant` value and an invalid
-  `meta.responseHeaders` no longer boot. *(`@basaltkit/auth` 5.0, `tenancy`
-  4.0, `http` 3.0)* See [below](#warnings-now-refuse).
+  `meta.responseHeaders` no longer boot, and the `Notifier` decides through
+  `preference()` only. *(`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0,
+  `notifications` 2.0)* See [below](#warnings-now-refuse).
 
 ### Upgrading {#upgrading-since-1-13}
 
@@ -177,11 +179,13 @@ message carries the SQL (also exported as `API_KEY_LIFECYCLE_MIGRATION_SQL`).
 
 ### Upgrading: boot warnings that now refuse {#warnings-now-refuse}
 
-1.13 printed a `[basalt] …` boot warning for these configurations and kept
-their old behaviour, saying the next major would refuse them
-([the 1.13 list](#configurations-that-now-warn-at-boot-refused-in-the-next-major)).
-This wave does. If your app boots on 1.13 without any of these warnings,
-nothing here changes for you.
+1.13 printed a `[basalt] …` boot warning for the first three of these
+configurations and kept their old behaviour, saying the next major would refuse
+them ([the 1.13 list](#configurations-that-now-warn-at-boot-refused-in-the-next-major)),
+and deprecated the fourth. This wave refuses the three and removes the
+fourth. If your app boots on 1.13 without
+any of these warnings and does not override `allowed()`, nothing here changes
+for you.
 
 - **`@basaltkit/auth` 5.0 — a prefixed session cookie that breaks its rule.**
   A `sessionCookie.name` starting with `__Host-` or `__Secure-` (any case) with
@@ -212,6 +216,16 @@ nothing here changes for you.
   `InvalidRouteHeadersError` (`500`) on each request instead. Set cookies with
   `reply.header()` in the handler. See
   [Per-route headers](/guide/security#per-route-headers-—-meta-responseheaders).
+- **`@basaltkit/notifications` 2.0 — `allowed()` is gone; `preference()`
+  decides.** The `Notifier` no longer detects an `allowed()` override, and
+  `NotificationPreferences.allowed()` itself is removed. Move the logic of an
+  override into `preference()` — `false` blocks, `true` sends, `undefined`
+  lets the stored preferences and the definition's `defaults` decide (unlike
+  `allowed()`, `defaults` now apply to it). A preferences object that still
+  defines `allowed()` makes `new Notifier()` throw `LegacyAllowedOverrideError`
+  (`NOTIFICATION_ALLOWED_OVERRIDE_REMOVED`) instead of ignoring it in silence.
+  A caller of `prefs.allowed(…)` can use `(await prefs.preference(…)) ?? true`.
+  See [Preferences](/guide/notifications#preferences-digests).
 
 ### Other changes to watch {#watch-since-1-13}
 

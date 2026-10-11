@@ -65,11 +65,11 @@ describe('BK-078 · SqlitePreferenceStore', () => {
     await prefs.optOut('u1', { channel: 'sms' })
     await prefs.optIn('u1', { channel: 'sms' })
     await prefs.optOut('u1', { notification: 'digest' })
-    expect(await prefs.allowed('u1', 'invoice', 'sms')).toBe(true)
-    expect(await prefs.allowed('u1', 'digest', 'mail')).toBe(false)
+    expect(await prefs.preference('u1', 'invoice', 'sms')).toBe(true)
+    expect(await prefs.preference('u1', 'digest', 'mail')).toBe(false)
     expect((await preferences.list('u1')).length).toBe(2)
     await preferences.remove('u1', 'digest', '*')
-    expect(await prefs.allowed('u1', 'digest', 'mail')).toBe(true)
+    expect(await prefs.preference('u1', 'digest', 'mail')).toBeUndefined()
 
     // Durable: a second store on the same database sees the same rows.
     const again = sqliteInAppStore(db).preferences

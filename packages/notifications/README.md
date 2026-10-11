@@ -131,6 +131,12 @@ defineNotification({ name: 'security.alert', channels: ['mail'], via, mandatory:
 Order of decision: `mandatory` → inline `channelPreferences: false` → most
 specific stored preference → inline `true` → `defaults[channel]` (default `true`).
 
+The stored-preference step is `NotificationPreferences.preference()`, the only
+extension point: override it in a subclass (passed to `new Notifier({ preferences })`)
+for quiet hours or compliance blocks, returning `false`, `true` or `undefined`.
+`allowed()` was removed in 2.0; a preferences object that still defines it makes
+`new Notifier()` throw `LegacyAllowedOverrideError`.
+
 ### Digest (batching)
 
 Instead of sending immediately, hold notifications and flush them as one batch —
