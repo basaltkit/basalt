@@ -111,6 +111,10 @@ não ao adapter — é verificada como qualquer outra:
   desconhecido (tenancy), um `meta.responseHeaders` inválido (http), um
   `meta.teamRole` desconhecido (teams) — recusa-o com `HTTP_INVALID_ROUTE_META`.
 
+O `filter` é avaliado uma única vez, no arranque: o servidor expõe exatamente a
+lista que as verificações validaram, mesmo que o filtro leia algo que muda
+depois.
+
 O `mcpPlugin({ allowUnguardedMeta })` aceita a mesma dispensa que a opção do
 adapter (`true`, ou uma lista de chaves) para proteção imposta numa camada
 exterior; nunca dispensa os validadores. Construir tu próprio
