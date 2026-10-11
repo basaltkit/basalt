@@ -27,8 +27,8 @@ export { SCAFFOLD_VERSIONS } from './versions.js'
 export { THIRD_PARTY_VERSIONS } from './latest-versions.js'
 
 /**
- * The dependency range for a @basaltkit/* package: the current release line
- * (`^<major>.<minor>.0`) of its workspace version, from the generated
+ * The dependency range for a @basaltkit/* package: its workspace version as
+ * the floor (`^<major>.<minor>.<patch>`), from the generated
  * {@link SCAFFOLD_VERSIONS} map. Throws for an unknown package rather than
  * guessing a range — a stale guess once pinned new apps to frozen 1.x lines.
  */

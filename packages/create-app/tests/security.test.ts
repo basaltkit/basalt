@@ -197,6 +197,12 @@ describe('scaffold: @basaltkit/* ranges track the current release lines', () => 
     }
     expect(() => versionOf('@basaltkit/does-not-exist')).toThrow()
   })
+
+  it('floors every range at the exact workspace version, so a new app never resolves an older patch', () => {
+    for (const [name, range] of Object.entries(SCAFFOLD_VERSIONS)) {
+      expect(range, name).toBe(`^${workspaceVersions.get(name)}`)
+    }
+  })
 })
 
 describe('scaffold: secrets are kept out of Docker build contexts', () => {
