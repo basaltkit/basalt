@@ -108,6 +108,12 @@ Depois dá os passos que dependem de ti:
    as mesmas verificações de arranque que as rotas do adapter, e um cliente MCP
    tem de enviar a mesma API key em todos os pedidos de uma sessão; vê
    [Outras mudanças a ter em conta](#watch-since-1-13).
+5. **Peers partilhados** — o `@basaltkit/mailer` passa a ser peer do
+   `notifications` 2 e do `testing` 3, e o `@basaltkit/audit` peer do
+   `audit-viewer` 3.1: cada um lê ou regista o token de contentor desse pacote,
+   por isso tem de usar a cópia da tua app. Se a tua app ainda não declara o
+   `@basaltkit/mailer`, acrescenta-o (`pnpm add @basaltkit/mailer`); o
+   `pnpm basalt doctor` avisa de qualquer peer `@basaltkit/*` em falta.
 
 **Incompatibilidades intencionais.** Estas combinações não funcionam, por
 desenho:
@@ -124,9 +130,9 @@ desenho:
 | `@basaltkit/mcp` 5 | `@basaltkit/http` 3 | as chamadas de tool correm pelo pipeline do http 2 enquanto as rotas HTTP seguem as regras do http 3 |
 | `@basaltkit/prisma` 3 | `@basaltkit/http` 3 | range de peer recusado (os leases por pedido usam o `ctx().onDispose` do pipeline do http) |
 
-Os doze patches (`comments`, `files`, `drives`, `teams`, `teams-ui`,
-`api-keys-ui`, `audit-viewer`, `inbound-mail`, `cli`, `activity`, `backup`,
-`dashboard`) funcionam em qualquer das linhas — só constroem rotas ou leem
+Os onze patches (`comments`, `files`, `drives`, `teams`, `teams-ui`,
+`api-keys-ui`, `inbound-mail`, `cli`, `activity`, `backup`, `dashboard`)
+funcionam em qualquer das linhas — só constroem rotas ou leem
 dados através de uma cópia privada — mas o `update` também os sobe, e é isso
 que testamos.
 
@@ -139,7 +145,7 @@ que testamos.
 | `@basaltkit/fastify` | 2.6.0 | 3.0.0 | major | precisa do http 3 |
 | `@basaltkit/express` | 2.1.0 | 3.0.0 | major | precisa do http 3 |
 | `@basaltkit/hono` | 2.1.0 | 3.0.0 | major | precisa do http 3 |
-| `@basaltkit/testing` | 2.0.3 | 3.0.0 | major | peers opcionais dos adapters passam a 3.x |
+| `@basaltkit/testing` | 2.0.3 | 3.0.0 | major | peers opcionais dos adapters passam a 3.x; o `@basaltkit/mailer` passa a peer |
 | `@basaltkit/auth` | 4.2.0 | 5.0.0 | major | cookie de sessão inválido recusado; ciclo de vida das API keys (`ApiKeyStore.update`) |
 | `@basaltkit/auth-prisma` | 2.1.0 | 3.0.0 | major | migração da base de dados (seis colunas) |
 | `@basaltkit/auth-sqlite` | 2.1.0 | 3.0.0 | major | peer auth `^5` (migra sozinho) |
@@ -147,7 +153,7 @@ que testamos.
 | `@basaltkit/tenancy` | 3.2.0 | 4.0.0 | major | `meta.tenant` desconhecido recusado no arranque e falha fechada por pedido |
 | `@basaltkit/tenancy-prisma` | 2.1.0 | 3.0.0 | major | peer tenancy `^4` |
 | `@basaltkit/tenancy-sqlite` | 1.3.0 | 2.0.0 | major | peer tenancy `^4` |
-| `@basaltkit/notifications` | 1.3.0 | 2.0.0 | major | `allowed()` removido |
+| `@basaltkit/notifications` | 1.3.0 | 2.0.0 | major | `allowed()` removido; o `@basaltkit/mailer` passa a peer |
 | `@basaltkit/notifications-prisma` | 1.2.0 | 2.0.0 | major | peer notifications `^2` |
 | `@basaltkit/notifications-sqlite` | 1.1.0 | 2.0.0 | major | peer notifications `^2` |
 | `@basaltkit/prisma` | 3.1.0 | 4.0.0 | major | peer opcional http `^3` |
@@ -165,7 +171,7 @@ que testamos.
 | `create-basalt` | 1.12.0 | 1.13.0 | minor | modelo `AuthApiKey` com ciclo de vida; ranges com piso na versão exata |
 | `@basaltkit/activity` | 1.3.2 | 1.3.3 | patch | tenancy `^4` (cópia privada) |
 | `@basaltkit/api-keys-ui` | 1.4.0 | 1.4.1 | patch | http `^3` (cópia privada) |
-| `@basaltkit/audit-viewer` | 3.0.2 | 3.0.3 | patch | http `^3` (cópia privada) |
+| `@basaltkit/audit-viewer` | 3.0.2 | 3.1.0 | minor | o `@basaltkit/audit` passa a peer (lê o binding `AUDIT` da app); http `^3` |
 | `@basaltkit/backup` | 0.3.2 | 0.3.3 | patch | prisma `^4` (cópia privada) |
 | `@basaltkit/cli` | 1.4.0 | 1.4.1 | patch | http `^3` (cópia privada) |
 | `@basaltkit/comments` | 4.1.0 | 4.1.1 | patch | http `^3` (cópia privada) |
@@ -184,7 +190,7 @@ ao lado da nova. Atualiza cada um junto com o pacote que acompanha.
 
 | Pacote | Próxima | Acompanha | Porque tem de coincidir |
 | --- | --- | --- | --- |
-| `@basaltkit/testing` | 3.0 | `fastify` / `express` / `hono` 3 | peers opcionais dos adapters |
+| `@basaltkit/testing` | 3.0 | `fastify` / `express` / `hono` 3 | peers opcionais dos adapters (a 3.0 também torna o `@basaltkit/mailer` peer: o `fakeMailer()` regista o `MAILER` da app) |
 | `@basaltkit/prisma` | 4.0 | `http` 3 | peer opcional (leases por pedido) |
 | `@basaltkit/auth-sqlite` | 3.0 | `auth` 5 | peer; implementa `ApiKeyStore.update` |
 | `@basaltkit/tenancy-prisma`, `tenancy-sqlite` | 3.0, 2.0 | `tenancy` 4 | peer |
@@ -201,8 +207,7 @@ ao lado da nova. Atualiza cada um junto com o pacote que acompanha.
 Os pacotes que só constroem rotas ou leem dados com o `@basaltkit/http`, o
 `tenancy`, o `prisma` ou o `subscriptions` como dependência normal
 (`comments`, `files`, `drives`, `teams`, `teams-ui`, `api-keys-ui`,
-`audit-viewer`, `inbound-mail`, `cli`, `activity`, `backup`, `dashboard`)
-recebem um patch: as suas rotas correm em qualquer das linhas do http, por
+`inbound-mail`, `cli`, `activity`, `backup`, `dashboard`) recebem um patch: as suas rotas correm em qualquer das linhas do http, por
 isso nada muda do teu lado.
 
 ### Atualizar: idempotência estrita por omissão (`@basaltkit/http` 3) {#idempotency-strict-by-default}

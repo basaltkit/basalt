@@ -24,7 +24,6 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
-    "@basaltkit/mailer": "workspace:^",
     "@basaltkit/queue": "workspace:^"
   },
   "devDependencies": {
@@ -32,6 +31,7 @@
     "@basaltkit/fastify": "workspace:^",
     "@basaltkit/hono": "workspace:^",
     "@basaltkit/http": "workspace:^",
+    "@basaltkit/mailer": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.6.1",
     "express": "^5.0.0",
@@ -59,7 +59,8 @@
   "peerDependencies": {
     "@basaltkit/express": "workspace:^",
     "@basaltkit/fastify": "workspace:^",
-    "@basaltkit/hono": "workspace:^"
+    "@basaltkit/hono": "workspace:^",
+    "@basaltkit/mailer": "workspace:^"
   },
   "peerDependenciesMeta": {
     "@basaltkit/express": {

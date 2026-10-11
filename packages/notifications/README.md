@@ -19,10 +19,10 @@ This module introduces the concept of a **declarative notification**: with `defi
 ## Installation
 
 ```bash
-pnpm add @basaltkit/notifications
+pnpm add @basaltkit/notifications @basaltkit/mailer
 ```
 
-The package depends on `@basaltkit/mailer` (the email bridge is included). For data validation, also install `zod`.
+`@basaltkit/mailer` is a **peer dependency** (since 2.0): the email bridge reads the app's own `MAILER` binding, so it must be the copy your app installs and registers with `mailerPlugin` (a second copy would leave the `mail` channel silently unwired). The package also depends on `@basaltkit/core` and `@basaltkit/http` (3.x). For data validation, also install `zod`.
 
 ## Get started in 5 minutes
 

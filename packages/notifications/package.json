@@ -24,10 +24,13 @@
   },
   "dependencies": {
     "@basaltkit/core": "workspace:^",
-    "@basaltkit/http": "workspace:^",
+    "@basaltkit/http": "workspace:^"
+  },
+  "peerDependencies": {
     "@basaltkit/mailer": "workspace:^"
   },
   "devDependencies": {
+    "@basaltkit/mailer": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@types/node": "^26.6.1",
     "typescript": "^7.0.2",

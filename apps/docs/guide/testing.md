@@ -155,6 +155,11 @@ only the dispatch differs, a parameterized `describe.each(['fastify',
 against the neutral `@basaltkit/http` contract — see
 [HTTP Adapters](/guide/adapters).
 
+`@basaltkit/mailer` is a required peer (since `@basaltkit/testing` 3.0):
+`fakeMailer()` binds the app's own `MAILER` token, so it must be the copy your
+app and `@basaltkit/notifications` use. `create-basalt` apps list it in
+`devDependencies`.
+
 ::: warning `app.server()` is Fastify-only, and asynchronous
 `await app.server()` resolves the `FASTIFY` token. On `'express'` / `'hono'` it
 throws `DI_UNKNOWN_TOKEN` — resolve `EXPRESS` / `HONO` from `app.container`

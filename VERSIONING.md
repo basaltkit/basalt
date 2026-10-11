@@ -47,7 +47,9 @@ share with the app moves one: a peer dependency, or a dependency shared through
 the app's container (a token such as `AUTH`), its route types (a
 `declare module '@basaltkit/http'` augmentation) or its request pipeline
 (`@basaltkit/mcp` running routes, error classes the adapter matches with
-`instanceof`). Such a dependency should be a peer. A package never ships as a
+`instanceof`). Such a dependency should be a peer;
+`apps/beyond-saas/tests/shared-token-boundary.test.ts` fails the build when a
+package reads or binds a container token of a plain `@basaltkit/*` dependency. A package never ships as a
 patch or minor whose new range silently excludes the major line its previous
 version accepted. A plain dependency used as a private copy (routes built with
 `route()` and its `Symbol.for` markers, a pure helper) may move under a patch.

@@ -748,9 +748,6 @@ importers:
 
   packages/audit-viewer:
     dependencies:
-      '@basaltkit/audit':
-        specifier: workspace:^
-        version: link:../audit
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
@@ -758,6 +755,9 @@ importers:
         specifier: workspace:^
         version: link:../http
     devDependencies:
+      '@basaltkit/audit':
+        specifier: workspace:^
+        version: link:../audit
       '@basaltkit/auth':
         specifier: workspace:^
         version: link:../auth
@@ -1944,10 +1944,10 @@ importers:
       '@basaltkit/http':
         specifier: workspace:^
         version: link:../http
+    devDependencies:
       '@basaltkit/mailer':
         specifier: workspace:^
         version: link:../mailer
-    devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -2770,9 +2770,6 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
-      '@basaltkit/mailer':
-        specifier: workspace:^
-        version: link:../mailer
       '@basaltkit/queue':
         specifier: workspace:^
         version: link:../queue
@@ -2789,6 +2786,9 @@ importers:
       '@basaltkit/http':
         specifier: workspace:^
         version: link:../http
+      '@basaltkit/mailer':
+        specifier: workspace:^
+        version: link:../mailer
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
