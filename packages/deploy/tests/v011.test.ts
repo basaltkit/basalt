@@ -134,7 +134,7 @@ describe('the install hint is a command root can run', () => {
     host.put('/etc/apache2/sites-available/lexfirma.conf', renderVhost(ctx, 3000))
     host.files.set('/etc/apache2/sites-enabled/lexfirma.conf', { kind: 'symlink', target: '../sites-available/lexfirma.conf' })
     const fixes = (await apachePreflight(ctx, 3002)).map((f) => f.fix ?? '')
-    expect(INSTALL_COMMAND).toBe('sudo node node_modules/@basaltkit/deploy/dist/bin.js install --user="$USER"')
+    expect(INSTALL_COMMAND).toBe('sudo "$(command -v node)" node_modules/@basaltkit/deploy/dist/bin.js install --user="$USER"')
     expect(fixes.every((f) => f.includes(INSTALL_COMMAND))).toBe(true)
     expect(fixes.join('\n')).not.toContain('pnpm exec')
   })
