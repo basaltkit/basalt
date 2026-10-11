@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DeployContext, Finding } from './context.js'
 
@@ -60,6 +61,15 @@ const below = (version: number[], minimum: number[]) => {
   return false
 }
 
+/**
+ * Version probes run OUTSIDE the checkout. Inside it, pnpm ≥ 12 reads
+ * `packageManager` and may rewrite `pnpm-lock.yaml` on any command — a
+ * check must never change the repository it checks (it then failed the
+ * deploy's own dirty check). Outside it, the answer is also the right one:
+ * the pnpm actually installed, not the one `packageManager` would fetch.
+ */
+const OUTSIDE = { cwd: tmpdir() }
+
 /** C9 — the toolchain the pipeline will call, before it calls it. */
 export async function toolingFindings(ctx: DeployContext): Promise<Finding[]> {
   const { host } = ctx
@@ -70,14 +80,14 @@ export async function toolingFindings(ctx: DeployContext): Promise<Finding[]> {
   } catch {
     findings.push({ id: 'C9', level: 'error', message: 'package.json is not valid JSON' })
   }
-  const node = await host.exec('node', ['--version'])
+  const node = await host.exec('node', ['--version'], OUTSIDE)
   const nodeVersion = minimumVersion(node.stdout)
   const nodeMinimum = minimumVersion(pkg.engines?.node)
   if (!nodeVersion) findings.push({ id: 'C9', level: 'error', message: 'node is not on PATH' })
   else if (nodeMinimum && below(nodeVersion, nodeMinimum)) {
     findings.push({ id: 'C9', level: 'error', message: `node ${node.stdout.trim()} is older than engines.node (${pkg.engines?.node})` })
   }
-  const pm = await host.exec(ctx.pm, ['--version'])
+  const pm = await host.exec(ctx.pm, ['--version'], OUTSIDE)
   if (pm.code !== 0) {
     findings.push({ id: 'C9', level: 'error', message: `${ctx.pm} is not on PATH`, fix: 'corepack enable' })
   } else {
@@ -89,7 +99,7 @@ export async function toolingFindings(ctx: DeployContext): Promise<Finding[]> {
     }
   }
   if (ctx.config.infra?.kind === 'docker') {
-    const docker = await host.exec('docker', ['compose', 'version'])
+    const docker = await host.exec('docker', ['compose', 'version'], OUTSIDE)
     if (docker.code !== 0) findings.push({ id: 'C9', level: 'error', message: 'docker compose is not available to this user' })
   }
   return findings

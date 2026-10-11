@@ -53,29 +53,44 @@ export interface Preflight {
 }
 
 export async function preflight(ctx: DeployContext, options: RunOptions = {}): Promise<Preflight> {
+  // First, before any command runs: the tree as the operator left it. A
+  // later probe that writes to the checkout would otherwise be blamed on them.
+  const findings: Finding[] = [...await gitFindings(ctx, options)]
   const document = await readEnv(ctx)
   const values = envValues(document)
-  const findings: Finding[] = [...syntaxFindings(document, ctx.config.env.file ?? '.env')]
+  findings.push(...syntaxFindings(document, ctx.config.env.file ?? '.env'))
   const port = await resolvePort(ctx, values)
   findings.push(...await toolingFindings(ctx))
   findings.push(...await lockfileFindings(ctx))
   findings.push(...await pm2Preflight(ctx, port))
   if (ctx.config.proxy?.kind === 'apache') findings.push(...await apachePreflight(ctx, port))
   if (!options.skip?.includes('tls')) findings.push(...await tlsFindings(ctx))
-
-  const dirty = await ctx.host.exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: ctx.dir })
-  if (dirty.code !== 0) {
-    findings.push({ id: 'git', level: 'error', message: `${ctx.dir} is not a git checkout` })
-  } else {
-    if (dirty.stdout.trim()) {
-      findings.push({ id: 'git', level: 'error', message: `tracked files are modified on the server:\n${dirty.stdout.trimEnd().split('\n').map((l) => `        ${l}`).join('\n')}`, fix: 'git stash (or commit them where they belong); a deploy builds what is committed' })
-    }
-    const branch = (await ctx.host.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
-    const wanted = ctx.config.branch ?? 'main'
-    if (branch !== wanted) findings.push({ id: 'git', level: 'error', message: `the checkout is on "${branch}", the deploy tracks "${wanted}"`, fix: `git checkout ${wanted}` })
-    if (!options.skip?.includes('fetch')) findings.push(...await remoteFindings(ctx))
-  }
   return { findings, port, values }
+}
+
+const LOCKFILES = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lock']
+
+async function gitFindings(ctx: DeployContext, options: RunOptions): Promise<Finding[]> {
+  const findings: Finding[] = []
+  const dirty = await ctx.host.exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: ctx.dir })
+  if (dirty.code !== 0) return [{ id: 'git', level: 'error', message: `${ctx.dir} is not a git checkout` }]
+  const changed = dirty.stdout.split('\n').map((l) => l.trimEnd()).filter(Boolean)
+  if (changed.length > 0) {
+    const onlyLockfile = changed.every((l) => LOCKFILES.includes(l.slice(3)))
+    findings.push({
+      id: 'git',
+      level: 'error',
+      message: `tracked files are modified on the server:\n${changed.map((l) => `        ${l}`).join('\n')}`,
+      fix: onlyLockfile
+        ? 'only the lockfile — most likely rewritten by the package manager, not by a person: git checkout -- ' + changed.map((l) => l.slice(3)).join(' ') + ', and commit a lockfile written by the same pnpm as this server'
+        : 'git stash (or commit them where they belong); a deploy builds what is committed',
+    })
+  }
+  const branch = (await ctx.host.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
+  const wanted = ctx.config.branch ?? 'main'
+  if (branch !== wanted) findings.push({ id: 'git', level: 'error', message: `the checkout is on "${branch}", the deploy tracks "${wanted}"`, fix: `git checkout ${wanted}` })
+  if (!options.skip?.includes('fetch')) findings.push(...await remoteFindings(ctx))
+  return findings
 }
 
 const CREDENTIALS = /terminal prompts disabled|could not read (Username|Password)|Authentication failed|Permission denied \(publickey|Host key verification failed|Invalid username or (password|token)/i
@@ -158,6 +173,28 @@ async function build(ctx: DeployContext, values: Map<string, string>): Promise<v
   if (ctx.config.build?.web) await run(['--dir', ctx.config.build.web, 'run', 'build'], { env: values })
 }
 
+/**
+ * The deploy leaves the checkout as committed. pnpm ≥ 12 may rewrite the
+ * lockfile's `packageManagerDependencies` during `exec`/`run` when the
+ * committed one was written by another pnpm; left there, it blocked the
+ * NEXT deploy's dirty check. Put back, and said — the fix belongs in the
+ * repository, not on the server.
+ */
+async function settleLockfile(ctx: DeployContext, said?: { warned: boolean }): Promise<void> {
+  const status = await ctx.host.exec('git', ['status', '--porcelain', '--untracked-files=no', '--', ...LOCKFILES], { cwd: ctx.dir })
+  const rewritten = status.stdout.split('\n').map((l) => l.slice(3).trim()).filter(Boolean)
+  if (status.code !== 0 || rewritten.length === 0) return
+  await git(ctx, ['checkout', '--', ...rewritten])
+  if (said?.warned) return
+  if (said) said.warned = true
+  report(ctx.host, [{
+    id: 'C11',
+    level: 'warning',
+    message: `${ctx.pm} rewrote ${rewritten.join(', ')} during the deploy; put back to the committed version`,
+    fix: `regenerate it with the ${ctx.pm} this server runs (${ctx.pm} install --lockfile-only) and commit it, or every deploy rewrites it`,
+  }])
+}
+
 async function validate(ctx: DeployContext, values: Map<string, string>): Promise<Finding[]> {
   const schema = await checkSchema(ctx, values)
   return [...schema.findings, ...coercionFindings(values, schema.trueKeys), ...policyFindings(ctx, values)]
@@ -212,6 +249,7 @@ async function restoreCode(ctx: DeployContext, sha: string, values: Map<string, 
   ctx.host.out.step(`restoring the code to ${sha.slice(0, 7)}`)
   await git(ctx, ['reset', '--hard', sha])
   await build(ctx, values)
+  await settleLockfile(ctx)
 }
 
 /** The env step's summary: what changed, or that nothing did. */
@@ -297,6 +335,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
   const release: Release = { sha, previous, at: host.now().toISOString(), user: host.env['USER'] ?? String(host.uid()), status: 'failed', migrations: applied }
 
   // From here a failure puts the code on disk back before it is reported.
+  const lockfileSaid = { warned: false }
   let values = checked.values
   let infra: InfraPlan = { services: [], env: [], findings: [], secrets: {} }
   try {
@@ -312,7 +351,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
     values = prepared.env.values
 
     await step(ctx, 'infra', () => infraStep(ctx, infra))
-    await step(ctx, 'build', () => build(ctx, values))
+    await step(ctx, 'build', async () => { await build(ctx, values); await settleLockfile(ctx, lockfileSaid) })
     await step(ctx, 'validate', () => validateStep(ctx, values))
     const backup = backupDecision(config, values, skip)
     if (backup.run) {
@@ -322,7 +361,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
       host.out.step('backup')
       host.out.info(`skipped: ${backup.why}`)
     }
-    await step(ctx, 'migrate', () => migrate(ctx, values))
+    await step(ctx, 'migrate', async () => { await migrate(ctx, values); await settleLockfile(ctx, lockfileSaid) })
   } catch (error) {
     if (sha !== previous) await restoreCode(ctx, previous, values).catch((e: unknown) => host.out.error(`could not restore the code: ${(e as Error).message}`))
     release.note = (error as Error).message
@@ -358,6 +397,8 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
 
   const publicProblem = await publicHealthy(ctx)
   release.status = publicProblem ? 'public-unreachable' : 'ok'
+  // `pnpm run start`, launched by PM2 in the checkout, may rewrite it too.
+  await settleLockfile(ctx, lockfileSaid)
   await step(ctx, 'record', () => recordRelease(ctx, release))
   if (publicProblem) {
     report(host, [publicProblem])
