@@ -90,8 +90,8 @@ export function processEnv(host: DeployContext['host'], env: Map<string, string>
   return out
 }
 
-/** Starts, restarts or re-creates the process. */
-export async function pm2Release(ctx: DeployContext, env: Map<string, string>): Promise<void> {
+/** Starts, restarts or re-creates the process; says which. */
+export async function pm2Release(ctx: DeployContext, env: Map<string, string>): Promise<string> {
   const { host } = ctx
   const name = processName(ctx.config)
   const options = { cwd: ctx.dir, env: processEnv(host, env), inheritEnv: false }
@@ -100,12 +100,16 @@ export async function pm2Release(ctx: DeployContext, env: Map<string, string>): 
     host.out.info(`pm2 delete ${name} (it ran from ${ours.cwd})`)
     await must(ctx, ['delete', name], options)
   }
+  let done: string
   if (ours && ours.cwd === ctx.dir) {
     await must(ctx, ['restart', name, '--update-env'], options)
+    done = `${name} restarted`
   } else {
     await must(ctx, ['start', ctx.pm, '--name', name, '--cwd', ctx.dir, '--', 'run', ctx.config.runtime.script], options)
+    done = ours ? `${name} re-created in ${ctx.dir}` : `${name} started`
   }
   await must(ctx, ['save'], options)
+  return `${done} (${ctx.pm} run ${ctx.config.runtime.script}, port ${env.get('PORT') ?? '?'})`
 }
 
 async function must(ctx: DeployContext, args: string[], options: { cwd: string; env: Record<string, string>; inheritEnv: boolean }) {

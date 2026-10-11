@@ -53,12 +53,17 @@ What is true of one server only (a port taken there, another branch) goes in
 pnpm install
 pnpm exec basalt-deploy env        # writes the .env (asks once), starts the containers, validates
 
-# once, as an administrator:
-sudo pnpm exec basalt-deploy install --user=<app user>   # Apache vhost, /var/lib/basalt/<app>
+# once, as an administrator (node on the file: root often has no pnpm on its PATH):
+sudo node node_modules/@basaltkit/deploy/dist/bin.js install --user=<app user>   # Apache vhost, /var/lib/basalt/<app>
 
 # then, every deploy, as the app user:
 pnpm exec basalt-deploy run
 ```
+
+`run` pulls the code itself. Store the git credentials once
+(`git config credential.helper store && git fetch`, or a read-only deploy key):
+preflight probes the remote with prompts disabled, warns at a terminal and
+stops before anything changes when nobody can type them (cron, CI).
 
 The TLS certificate is yours to issue (`certbot --dns-cloudflare -d <domain> -d '*.<domain>'`);
 every deploy checks it.
@@ -75,6 +80,14 @@ every deploy checks it.
 | `install --user=<name>` | root, once: vhost, state directory |
 
 `--skip=fetch,backup,tls`, `--config=<file>`, `--overrides=<file>`.
+
+## What runs by default
+
+- `prisma migrate deploy` — when `build.prisma` lists a config, or `migrate.central: true`.
+- `tenant:migrate` — only with `migrate.tenants`.
+- The dump before migrating — when something is migrated and there is a
+  Postgres to dump (dedicated, or a `postgres://` URL in the `.env`);
+  `backup.beforeMigrate` forces it either way. `plan` says why when it is skipped.
 
 ## What it refuses to do
 
