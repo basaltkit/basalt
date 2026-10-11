@@ -29,7 +29,7 @@ const CATEGORIES: { key: string; bases: string[] }[] = [
   { key: 'search', bases: ['search'] },
   { key: 'capabilities', bases: ['realtime', 'notifications', 'mailer', 'inbound-mail', 'comments', 'webhooks', 'activity', 'audit', 'i18n', 'exports', 'flags', 'drives'] },
   { key: 'admin', bases: ['admin', 'dashboard'] },
-  { key: 'devx', bases: ['cli', 'generator', 'ai', 'testing'] },
+  { key: 'devx', bases: ['cli', 'generator', 'ai', 'testing', 'deploy'] },
 ]
 
 const keyOf = (base: string): string => {

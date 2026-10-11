@@ -1,0 +1,130 @@
+import { join } from 'node:path'
+import type { DeployContext, Finding } from './context.js'
+import { applyEnvChanges, envValues, formatValue, parseEnv, UnwritableValueError, type EnvChange, type EnvDocument } from './dotenv.js'
+
+/**
+ * The `.env` step (RFC 0006 §6.1). Order: fixed → generated (only when absent)
+ * → derived → infra → asked (only when absent) → forbidden removed.
+ *
+ * Nothing here prints a value. The summary is keys and reasons only.
+ */
+
+export interface EnvPlan {
+  document: EnvDocument
+  values: Map<string, string>
+  changes: EnvChange[]
+  /** Keys still to ask — answered by {@link answerQuestions}. */
+  questions: string[]
+  findings: Finding[]
+}
+
+export const envFile = (ctx: DeployContext) => join(ctx.dir, ctx.config.env.file ?? '.env')
+
+export async function readEnv(ctx: DeployContext): Promise<EnvDocument> {
+  return parseEnv((await ctx.host.readFile(envFile(ctx))) ?? '')
+}
+
+export function syntaxFindings(document: EnvDocument, file: string): Finding[] {
+  return document.problems.map((p) => ({
+    id: 'C5',
+    level: 'error' as const,
+    message: `${file}:${p.line}: ${p.message}`,
+    fix: `edit line ${p.line} by hand (KEY=value on one line); the value is not shown here`,
+  }))
+}
+
+export function planEnv(ctx: DeployContext, document: EnvDocument, port: number, infra: EnvChange[]): EnvPlan {
+  const { config } = ctx
+  const values = envValues(document)
+  const changes: EnvChange[] = []
+  const pending = new Map(values)
+  const set = (key: string, value: string, reason: string) => {
+    if (pending.get(key) === value) return
+    const existing = changes.findIndex((c) => c.key === key)
+    if (existing !== -1) changes.splice(existing, 1)
+    changes.push({ kind: 'set', key, value, reason })
+    pending.set(key, value)
+  }
+
+  set('PORT', String(port), 'the port the process listens on')
+  for (const [key, value] of Object.entries(config.env.fixed ?? {})) set(key, value, 'fixed in deploy.config.ts')
+  for (const [key, spec] of Object.entries(config.env.generate ?? {})) {
+    if (!pending.get(key)) set(key, ctx.host.randomHex(spec.bytes), 'generated')
+  }
+  const derived = config.env.derive?.({ app: config.app, domain: config.domain, port }) ?? {}
+  for (const [key, value] of Object.entries(derived)) set(key, value, 'derived from the domain/port')
+  for (const change of infra) if (change.kind === 'set') set(change.key, change.value, change.reason)
+
+  const questions: string[] = []
+  for (const [key, question] of Object.entries(config.env.ask ?? {})) {
+    const current = pending.get(key)
+    if (current === undefined || (current === '' && !question.optional)) questions.push(key)
+  }
+  for (const key of config.env.forbid ?? []) {
+    if (pending.has(key)) changes.push({ kind: 'remove', key, reason: 'forbidden in production by deploy.config.ts' })
+  }
+  return { document, values, changes, questions, findings: syntaxFindings(document, config.env.file ?? '.env') }
+}
+
+/**
+ * Asks once, at the terminal (secrets with echo off), or takes the answer from
+ * the deploy's own environment under the same name — CI, or a person who
+ * prefers `MAILER_URL=… basalt-deploy run`. Returns what is still missing.
+ */
+export async function answerQuestions(ctx: DeployContext, plan: EnvPlan): Promise<string[]> {
+  const missing: string[] = []
+  for (const key of plan.questions) {
+    const question = ctx.config.env.ask?.[key]
+    if (!question) continue
+    let answer = ctx.host.env[key]?.trim()
+    for (let attempt = 0; answer === undefined && attempt < 3; attempt++) {
+      const typed = await ctx.host.prompt(`${question.prompt} [${key}]${question.optional ? ' (empty to skip)' : ''}`, { secret: question.secret })
+      if (typed === undefined) break
+      const value = typed === '' && question.default !== undefined ? question.default : typed
+      if (value === '' && !question.optional) { ctx.host.out.warn(`${key} is required`); continue }
+      try {
+        formatValue(value, key)
+        answer = value
+      } catch (error) {
+        if (!(error instanceof UnwritableValueError)) throw error
+        ctx.host.out.warn(error.message)
+      }
+    }
+    if (answer === undefined) {
+      if (question.optional) answer = question.default ?? ''
+      else { missing.push(key); continue }
+    }
+    plan.changes.push({ kind: 'set', key, value: answer, reason: 'answered' })
+  }
+  plan.questions = []
+  return missing
+}
+
+export function describeEnv(plan: EnvPlan): string[] {
+  return [
+    ...plan.changes.map((c) => c.kind === 'remove'
+      ? `remove ${c.key} (${c.reason})`
+      : `${plan.values.has(c.key) ? 'change' : 'add'} ${c.key} (${c.reason})`),
+    ...plan.questions.map((key) => `ask ${key}`),
+  ]
+}
+
+/** Backs the file up (0600, last 5 kept) and writes it atomically, 0600. */
+export async function writeEnv(ctx: DeployContext, plan: EnvPlan): Promise<void> {
+  if (plan.changes.length === 0) return
+  const { host } = ctx
+  const file = envFile(ctx)
+  const text = applyEnvChanges(plan.document, plan.changes)
+  if (await host.exists(file)) {
+    const stamp = host.now().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '')
+    await host.copyFile(file, `${file}.bak-${stamp}`, 0o600)
+    const base = file.slice(file.lastIndexOf('/') + 1)
+    const dir = file.slice(0, file.lastIndexOf('/'))
+    const backups = (await host.list(dir)).filter((name) => name.startsWith(`${base}.bak-`)).sort()
+    for (const old of backups.slice(0, -5)) await host.remove(join(dir, old))
+  }
+  await host.writeFile(file, text, 0o600)
+  plan.document = parseEnv(text)
+  plan.values = envValues(plan.document)
+  plan.changes = []
+}
