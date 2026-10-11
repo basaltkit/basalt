@@ -1,6 +1,6 @@
 /**
  * `@basaltkit/inbound-mail`: receive email as signed raw bytes, parse it within
- * bounds, and route it by its signed recipient. See RFC 0003.
+ * bounds, and route it by its signed recipient. See RFC 0004.
  */
 export type { InboundEnvelope, InboundMail, InboundMailDriver, InboundMailDriverInput } from './contract.js'
 export {
