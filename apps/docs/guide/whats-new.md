@@ -106,9 +106,13 @@ Then take the steps that need you:
 5. **Shared peers** — `@basaltkit/mailer` is now a peer of `notifications` 2
    and `testing` 3, and `@basaltkit/audit` a peer of `audit-viewer` 3.1: each
    reads or binds that package's container token, so it must use your app's
-   copy. If your app does not list `@basaltkit/mailer` yet, add it
-   (`pnpm add @basaltkit/mailer`); `pnpm basalt doctor` warns about any
-   `@basaltkit/*` peer that is missing.
+   copy. `pnpm basalt update` (create-basalt 1.13) adds a required
+   `@basaltkit/*` peer your package.json does not list, at its latest
+   version, or warns when it cannot; by hand it is
+   `pnpm add @basaltkit/mailer`. Do not rely on your package manager
+   installing peers for you: yarn PnP, `auto-install-peers=false` and
+   `--legacy-peer-deps` do not, and `pnpm basalt doctor` only sees what is
+   installed.
 
 **Intentional incompatibilities.** These combinations do not work, by design:
 
@@ -127,12 +131,15 @@ Then take the steps that need you:
 The eleven patches (`comments`, `files`, `drives`, `teams`, `teams-ui`,
 `api-keys-ui`, `inbound-mail`, `cli`, `activity`, `backup`, `dashboard`) work on either line — they only build routes or read data through
 a private copy — but `update` takes them too, and that is what we test.
+Mixed lines (a patch on http 3 next to an adapter 2.x) are verified at runtime
+only, not by a typecheck: if TypeScript rejects passing their routes to an
+adapter 2.x, upgrade the adapter with them.
 
 **Release map.** Every package this wave publishes (from `changeset status`):
 
 | Package | Published | Next | Bump | Why |
 | --- | --- | --- | --- | --- |
-| `@basaltkit/http` | 2.8.0 | 3.0.0 | major | strict idempotency; invalid `meta.responseHeaders` refused at boot |
+| `@basaltkit/http` | 2.8.0 | 3.0.0 | major | strict idempotency; invalid `meta.responseHeaders` refused at boot; enrichers without a container fail closed |
 | `@basaltkit/fastify` | 2.6.0 | 3.0.0 | major | needs http 3 |
 | `@basaltkit/express` | 2.1.0 | 3.0.0 | major | needs http 3 |
 | `@basaltkit/hono` | 2.1.0 | 3.0.0 | major | needs http 3 |
@@ -159,10 +166,10 @@ a private copy — but `update` takes them too, and that is what we test.
 | `@basaltkit/subscriptions-pdf` | 0.1.5 | 0.2.0 | minor (0.x breaking) | subscriptions peer `^6` |
 | `@basaltkit/billing-ui` | 1.2.0 | 2.0.0 | major | `@basaltkit/subscriptions` becomes a peer |
 | `@basaltkit/audit` | 3.1.0 | 3.2.0 | minor | `auditPlugin({ actor })` |
-| `create-basalt` | 1.12.0 | 1.13.0 | minor | `AuthApiKey` lifecycle model; ranges floored at the exact version |
+| `create-basalt` | 1.12.0 | 1.13.0 | minor | `AuthApiKey` lifecycle model; ranges floored at the exact version; `update` adds missing required `@basaltkit/*` peers |
 | `@basaltkit/activity` | 1.3.2 | 1.3.3 | patch | tenancy `^4` (private copy) |
 | `@basaltkit/api-keys-ui` | 1.4.0 | 1.4.1 | patch | http `^3` (private copy) |
-| `@basaltkit/audit-viewer` | 3.0.2 | 3.1.0 | minor | `@basaltkit/audit` becomes a peer (reads the app's `AUDIT` binding); http `^3` |
+| `@basaltkit/audit-viewer` | 3.0.2 | 3.1.0 | minor | `@basaltkit/audit` becomes a peer `^3.0.0` (reads the app's `AUDIT` binding; audit 3.0/3.1 still fit); http `^3` (private copy) |
 | `@basaltkit/backup` | 0.3.2 | 0.3.3 | patch | prisma `^4` (private copy) |
 | `@basaltkit/cli` | 1.4.0 | 1.4.1 | patch | http `^3` (private copy) |
 | `@basaltkit/comments` | 4.1.0 | 4.1.1 | patch | http `^3` (private copy) |
@@ -388,6 +395,12 @@ for you.
   `meta.tenant` instead of returning the app-wide default, and the tenancy
   enricher refuses such a request before resolving a tenant — for a custom
   driver that skipped the boot check. *(`@basaltkit/tenancy` 4.0)*
+- A route pipeline that carries enrichers but no container throws
+  `EnrichersWithoutContainerError` (`HTTP_ENRICHERS_UNRUNNABLE`, `500`) instead
+  of skipping them in silence, like guards already did — so a custom driver
+  cannot drop tenancy's enricher (and its refusal above) by forgetting the
+  container. Every shipped adapter and `mcpPlugin` pass it.
+  *(`@basaltkit/http` 3.0)*
 - Idempotency keys are scoped to the raw credential, and the responses of
   `POST /apikeys` and `POST /apikeys/:id/rotate` are stored for the
   idempotency window when the client sends `Idempotency-Key`; see

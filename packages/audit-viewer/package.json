@@ -27,7 +27,7 @@
     "@basaltkit/http": "workspace:^"
   },
   "peerDependencies": {
-    "@basaltkit/audit": "workspace:^",
+    "@basaltkit/audit": "workspace:^3.0.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
