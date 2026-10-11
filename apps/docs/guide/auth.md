@@ -564,17 +564,17 @@ so use an unprefixed name outside production (`name: isProd ? '__Host-sid' :
 'sid'`) or set `secure: true` explicitly, which silences it.
 
 A contradicting `secure: false` (including `secure: process.env.NODE_ENV ===
-'production'` in dev and test), or a `__Host-` cookie with another `path`, still
-boots and the cookie is emitted as configured, but it logs a boot warning: the
-browser drops that cookie. The next major refuses it at boot with
-`AUTH_SESSION_COOKIE_INVALID`. `__Host-` is the strongest choice for a session
+'production'` in dev and test), or a `__Host-` cookie with another `path`,
+refuses the boot with `AUTH_SESSION_COOKIE_INVALID` (`SessionCookieConfigError`,
+since `@basaltkit/auth` 5): the browser would drop that cookie, so every login
+would fail silently. Switch the name with the environment instead —
+`name: isProd ? '__Host-sid' : 'sid'` — and drop the `secure`/`path` override.
+`__Host-` is the strongest choice for a session
 cookie: a sibling subdomain cannot set or shadow it.
 
 The prefixes match case-insensitively, as in current browsers (`__host-sid` is
 a `__Host-` cookie). The warnings are independent and each is logged once per
-`sessionCookie` object: a `__Host-` cookie with `path: '/app'` and `secure`
-unset logs both the path warning and, outside production, the implied-`Secure`
-one. An unprefixed cookie with `sameSite: 'None'` and no `Secure` (the default
+`sessionCookie` object. An unprefixed cookie with `sameSite: 'None'` and no `Secure` (the default
 outside production) also warns, because browsers drop `SameSite=None` without
 `Secure`; it is emitted unchanged.
 
@@ -1449,7 +1449,7 @@ the plugin supplies:
 | `refreshTtl` | `DurationInput` | `'30d'` | Refresh-token lifetime — effectively "how long until a user must log in again" |
 | `sessionTtl` | `DurationInput` | `'30d'` | Server-side session lifetime (absolute) |
 | `sessionIdleTtl` | `DurationInput` | — (no idle timeout) | Refuse and delete a session unused for longer; needs a store with `touch` ([details](#session-hardening)) |
-| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting value warns at boot (refused in the next major) |
+| `sessionCookie` | `SessionCookieOptions` | default `basalt_session`, `HttpOnly`, `SameSite=Lax`, `Path=/` | Browser session cookie attributes; `Secure` defaults on unless `NODE_ENV` is explicitly `development`/`test`. A `__Host-`/`__Secure-` name implies `Secure` (and `Path=/` for `__Host-`); a contradicting `secure: false` or `__Host-` path refuses the boot (`AUTH_SESSION_COOKIE_INVALID`) |
 | `verificationTtl` | `DurationInput` | `'24h'` | Email-verification link lifetime |
 | `resetTtl` | `DurationInput` | `'1h'` | Password-reset link lifetime; keep it short |
 | `loginThrottle` | `LoginThrottle \| false` | `new LoginThrottle()` (5 per 15m, per email) | Brute-force lockout per email. `false` disables it — tests only |
