@@ -104,7 +104,7 @@ incident (RFC 0006 §5):
 - **C8** stay silent about a certificate that does not cover the apex or a tenant host;
 - **C9** run with a package manager major other than the one `packageManager` declares;
 - **C10** keep a forbidden key, or a fixed key with another value.
-- **C11** build a commit whose `packageManager` (pnpm ≥ 12) the lockfile does not record — checked in preflight and again on the commit the fetch brings, before any install.
+- **C11** build a commit whose `packageManager` (pnpm ≥ 12) the lockfile does not record — checked in preflight and again on the commit the fetch brings, before any install. A lockfile the package manager rewrites during the deploy is put back to the committed version (with a warning), so the next deploy is not blocked; and no check runs the package manager inside the checkout.
 
 Secrets never reach a command line, the compose file, or the terminal: the
 summary names keys, passwords travel in child-process environments only.
