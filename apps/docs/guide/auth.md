@@ -1193,7 +1193,7 @@ carries the presented key's display `prefix` (`mk_live_` plus six characters,
 what listings show — never the secret) and the client `ip`, so you can alert or
 throttle per caller. Because any anonymous client can trigger it, this hook is
 **not** recorded by `auditPlugin`'s defaults. A refusal of a key that verified
-(`tenant_mismatch`, `not_allowed`, `scope`) is also emitted as
+(`ip_not_allowed`, `tenant_mismatch`, `not_allowed`, `scope`) is also emitted as
 `auth:apikey_refused`, which **is** audited by default — see
 [which hooks are audited](/guide/persistence#which-hooks-are-audited).
 
@@ -1344,7 +1344,8 @@ await apiKeys.update(id, { allowedIps: null }) // lift the restriction
   `127.0.0.1` both match `127.0.0.0/8`.
 - A genuine key used from an address outside its list is **always** refused
   with `403 AUTH_APIKEY_IP_NOT_ALLOWED`, whatever `rejectInvalid` says, and
-  emits `auth:apikey_rejected` with `reason: 'ip_not_allowed'`. Nothing is set
+  emits `auth:apikey_rejected` and `auth:apikey_refused` with
+  `reason: 'ip_not_allowed'`. Nothing is set
   on `ctx()` and `lastUsedAt` is not touched.
 - **Fail closed:** a key with an allowlist is refused on a request without a
   resolvable IP. The allowlist sees the IP your adapter resolved. Behind a
@@ -1620,7 +1621,7 @@ users in.
 | `auth:apikey_rotated` | `{ id, tenantId?, userId?, serviceId?, graceUntil? }` | Audit trail — `graceUntil` is when the replaced secret stops working |
 | `auth:apikey_updated` | `{ id, tenantId?, userId?, serviceId?, changes }` | Audit trail — `changes` names the fields (`name`, `scopes`, `expiresAt`, `allowedIps`, `meta`), never their values |
 | `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alerting — `reason` is `invalid`, `ip_not_allowed`, `tenant_mismatch`, `not_allowed` or `scope`; `prefix` is the display prefix of an invalid key, never the key. Not audited by default |
-| `auth:apikey_refused` | `{ id, reason, tenantId? }` | A key that verified was refused (`tenant_mismatch`, `not_allowed`, `scope`); emitted right after `auth:apikey_rejected`. Audited by default |
+| `auth:apikey_refused` | `{ id, reason, tenantId? }` | A key that verified was refused (`ip_not_allowed`, `tenant_mismatch`, `not_allowed`, `scope`); emitted right after `auth:apikey_rejected`. Audited by default |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | MFA brute-force and lockout alerting |
 | `auth:refresh_reused` | `{ userId, familyId }` | Token-theft alerting — a consumed refresh token came back |
 | `auth:social_account_adopted` | `{ user }` | A verified social login took over an unverified account; its old credentials and account links were revoked |

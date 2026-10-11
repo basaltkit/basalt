@@ -1200,7 +1200,7 @@ o `prefix` de apresentação da chave (`mk_live_` mais seis caracteres, o que as
 listagens mostram — nunca o segredo) e o `ip` do cliente, para poderes alertar
 ou limitar por chamador. Como qualquer cliente anónimo o consegue disparar, este
 hook **não** é registado pelos padrões do `auditPlugin`. A recusa de uma chave
-que foi verificada (`tenant_mismatch`, `not_allowed`, `scope`) é também emitida
+que foi verificada (`ip_not_allowed`, `tenant_mismatch`, `not_allowed`, `scope`) é também emitida
 como `auth:apikey_refused`, que **é** auditado por padrão — vê
 [que hooks são auditados](/pt/guide/persistence#which-hooks-are-audited).
 
@@ -1357,7 +1357,8 @@ await apiKeys.update(id, { allowedIps: null }) // levanta a restrição
   `127.0.0.1` do Fastify correspondem ambos a `127.0.0.0/8`.
 - Uma chave genuína usada a partir de um endereço fora da lista é **sempre**
   recusada com `403 AUTH_APIKEY_IP_NOT_ALLOWED`, diga o `rejectInvalid` o que
-  disser, e emite `auth:apikey_rejected` com `reason: 'ip_not_allowed'`. Nada é
+  disser, e emite `auth:apikey_rejected` e `auth:apikey_refused` com
+  `reason: 'ip_not_allowed'`. Nada é
   definido em `ctx()` e o `lastUsedAt` não é tocado.
 - **Falha fechada:** uma chave com allowlist é recusada num pedido sem IP
   resolúvel. A allowlist vê o IP que o teu adapter resolveu. Atrás de um proxy,
@@ -1637,7 +1638,7 @@ autenticar os utilizadores.
 | `auth:apikey_rotated` | `{ id, tenantId?, userId?, serviceId?, graceUntil? }` | Trilho de auditoria — `graceUntil` é quando o segredo substituído deixa de funcionar |
 | `auth:apikey_updated` | `{ id, tenantId?, userId?, serviceId?, changes }` | Trilho de auditoria — `changes` nomeia os campos (`name`, `scopes`, `expiresAt`, `allowedIps`, `meta`), nunca os valores |
 | `auth:apikey_rejected` | `{ id?, reason, tenantId?, prefix?, ip? }` | Alertas — `reason` é `invalid`, `ip_not_allowed`, `tenant_mismatch`, `not_allowed` ou `scope`; `prefix` é o prefixo de apresentação de uma chave inválida, nunca a chave. Não auditado por padrão |
-| `auth:apikey_refused` | `{ id, reason, tenantId? }` | Uma chave verificada foi recusada (`tenant_mismatch`, `not_allowed`, `scope`); emitido logo após o `auth:apikey_rejected`. Auditado por padrão |
+| `auth:apikey_refused` | `{ id, reason, tenantId? }` | Uma chave verificada foi recusada (`ip_not_allowed`, `tenant_mismatch`, `not_allowed`, `scope`); emitido logo após o `auth:apikey_rejected`. Auditado por padrão |
 | `auth:mfa_failed` · `auth:locked_out` | `{ userId }` · `{ email, ip? }` | Alertas de força bruta de MFA e de bloqueio |
 | `auth:refresh_reused` | `{ userId, familyId }` | Alertas de roubo de token — um refresh token consumido voltou |
 | `auth:social_account_adopted` | `{ user }` | Um login social verificado assumiu uma conta não verificada; as credenciais antigas e as ligações de contas foram revogadas |

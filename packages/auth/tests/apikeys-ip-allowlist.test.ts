@@ -112,16 +112,20 @@ async function setup(adapter: (typeof availableAdapters)[number], hono: Record<s
   const store = new MemoryApiKeyStore()
   const keys = new ApiKeys({ store })
   const rejections: Rejection[] = []
+  const refusals: Rejection[] = []
   const recorder = definePlugin({
     name: 'test:rejections',
     register({ hooks }) {
       hooks.on('auth:apikey_rejected', (payload) => {
         rejections.push(payload as Rejection)
       })
+      hooks.on('auth:apikey_refused', (payload) => {
+        refusals.push(payload as Rejection)
+      })
     },
   })
   harness = await boot(adapter, [recorder, apiKeysPlugin({ store })], routes, { hono })
-  return { keys, store, rejections, h: harness }
+  return { keys, store, rejections, refusals, h: harness }
 }
 
 describe.each(availableAdapters)('%s: per-key IP allowlist (BK-083 f)', (adapter) => {
@@ -134,7 +138,7 @@ describe.each(availableAdapters)('%s: per-key IP allowlist (BK-083 f)', (adapter
   })
 
   it('a key used from outside its allowlist is 403 AUTH_APIKEY_IP_NOT_ALLOWED, even on a public route', async () => {
-    const { keys, store, h, rejections } = await setup(adapter)
+    const { keys, store, h, rejections, refusals } = await setup(adapter)
     const { record, key } = await keys.issue({ name: 'ci', scopes: ['orders:read'], allowedIps: ['10.0.0.0/8'] })
     for (const url of ['/orders', '/public']) {
       const res = await h.call({ method: 'GET', url, headers: { authorization: `Bearer ${key}` } })
@@ -143,6 +147,9 @@ describe.each(availableAdapters)('%s: per-key IP allowlist (BK-083 f)', (adapter
     }
     expect(rejections).toHaveLength(2)
     expect(rejections[0]).toMatchObject({ id: record.id, reason: 'ip_not_allowed' })
+    // A genuine key refused: also the attributable event the audit records by default.
+    expect(refusals).toHaveLength(2)
+    expect(refusals[0]).toEqual({ id: record.id, reason: 'ip_not_allowed' })
     expect(JSON.stringify(rejections)).not.toContain(key)
     expect((await store.findById(record.id))?.lastUsedAt).toBeUndefined()
   })

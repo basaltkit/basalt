@@ -55,7 +55,8 @@ declare module '@basaltkit/core' {
       ip?: string
     }
     /**
-     * A key that verified was refused: used outside its tenant
+     * A key that verified was refused: used from an address outside its
+     * `allowedIps` (`ip_not_allowed`), outside its tenant
      * (`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond
      * its scopes (`scope`). Emitted right after the matching
      * `auth:apikey_rejected`. Unlike an unknown key, it is attributable (`id`)
@@ -64,7 +65,7 @@ declare module '@basaltkit/core' {
      */
     'auth:apikey_refused': {
       id: string
-      reason: 'tenant_mismatch' | 'not_allowed' | 'scope'
+      reason: 'ip_not_allowed' | 'tenant_mismatch' | 'not_allowed' | 'scope'
       tenantId?: string
     }
   }
@@ -223,13 +224,12 @@ export function apiKeysPlugin(options: ApiKeysPluginOptions = {}) {
           // A genuine key used from the wrong place: always refused, whatever
           // `rejectInvalid` says — silently downgrading to anonymous would hide
           // a misconfiguration (or a stolen key). Nothing is set, nothing touched.
+          // Only the key holder can cause it, so it is also the attributable
+          // `auth:apikey_refused` the audit records by default.
           const tenantId = result.record.tenantId
-          await hooks.emit('auth:apikey_rejected', {
-            id: result.record.id,
-            reason: 'ip_not_allowed',
-            ...(tenantId !== undefined ? { tenantId } : {}),
-            ...(ip !== undefined ? { ip } : {}),
-          })
+          const scope = { id: result.record.id, reason: 'ip_not_allowed' as const, ...(tenantId !== undefined ? { tenantId } : {}) }
+          await hooks.emit('auth:apikey_rejected', { ...scope, ...(ip !== undefined ? { ip } : {}) })
+          await hooks.emit('auth:apikey_refused', scope)
           throw new ApiKeyIpNotAllowedError()
         }
         const record = result.ok ? result.record : null

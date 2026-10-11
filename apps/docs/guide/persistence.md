@@ -272,8 +272,8 @@ fires for every request that presents a dead API key, before anyone is
 authenticated, so recording it let any anonymous client append to a tenant's
 (serialized, hash-chained) trail as fast as it could send requests.
 
-Refusals of a key that **did** verify — used in another tenant
-(`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond its
+Refusals of a key that **did** verify — used from outside its IP allowlist
+(`ip_not_allowed`), in another tenant (`tenant_mismatch`), on a session-only route (`not_allowed`) or beyond its
 scopes (`scope`) — are still audited by default: `apiKeysPlugin` emits them a
 second time as `auth:apikey_refused` (`{ id, reason, tenantId? }`), which `auth:**`
 records. Only a key holder can cause one, and the entry names the key, so a
