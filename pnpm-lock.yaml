@@ -1878,6 +1878,9 @@ importers:
         specifier: workspace:^
         version: link:../mcp-core
     devDependencies:
+      '@basaltkit/auth':
+        specifier: workspace:^
+        version: link:../auth
       '@basaltkit/express':
         specifier: workspace:^
         version: link:../express
@@ -1887,6 +1890,9 @@ importers:
       '@basaltkit/hono':
         specifier: workspace:^
         version: link:../hono
+      '@basaltkit/tenancy':
+        specifier: workspace:^
+        version: link:../tenancy
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig

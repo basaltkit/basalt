@@ -31,9 +31,11 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@basaltkit/auth": "workspace:^",
     "@basaltkit/express": "workspace:^",
     "@basaltkit/fastify": "workspace:^",
     "@basaltkit/hono": "workspace:^",
+    "@basaltkit/tenancy": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
     "@hono/node-server": "^2.1.1",
     "@types/node": "^26.6.1",

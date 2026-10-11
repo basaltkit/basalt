@@ -97,6 +97,27 @@ tenant no pedido `POST /mcp`; por stdio, passa `headers` estáticos ao
 `serveMcpStdio`.
 :::
 
+### Verificações de arranque {#boot-checks}
+
+O `mcpPlugin` corre as verificações de arranque dos adapters sobre todas as
+rotas que expõe como tool (com `meta.mcp` e mantidas pelo `filter`), por isso
+uma rota alcançável **só** pelo MCP — passada ao `mcpPlugin({ routes })` mas
+não ao adapter — é verificada como qualquer outra:
+
+- meta de segurança (`auth`, `can`, `teamRole`, `scopes`, `subscribed`,
+  `feature`, `mfa`) que nenhum guard registado impõe recusa o arranque com
+  `HTTP_UNGUARDED_ROUTE_META`;
+- um valor que o validador de meta de um plugin recusa — um `meta.tenant`
+  desconhecido (tenancy), um `meta.responseHeaders` inválido (http), um
+  `meta.teamRole` desconhecido (teams) — recusa-o com `HTTP_INVALID_ROUTE_META`.
+
+O `mcpPlugin({ allowUnguardedMeta })` aceita a mesma dispensa que a opção do
+adapter (`true`, ou uma lista de chaves) para proteção imposta numa camada
+exterior; nunca dispensa os validadores. Construir tu próprio
+`new McpServer({ routes, container })` salta estas verificações: chama
+`assertRoutesGuarded(routes, app.container)` do `@basaltkit/http` depois do
+arranque.
+
 ### O que o modelo vê quando uma tool falha {#what-the-model-sees-when-a-tool-fails}
 
 O cliente MCP é um modelo de linguagem — e qualquer pessoa que consiga ler ou
@@ -305,7 +326,10 @@ e uma sessão diferente, mesmo que adivinhe o id do pedido, nunca consegue. Uma
 sessão fica **ligada a quem a abriu**: o `ctx().user` autenticado (no seu tenant);
 para uma API key verificada sem utilizador (uma chave de serviço, enviada em
 `Authorization` ou `x-api-key`), o id dessa chave no seu tenant; caso contrário,
-uma impressão com chave do header `Authorization`. O mesmo id apresentado por outra pessoa dá 404. As sessões expiram
+uma impressão com chave do header `Authorization`. O mesmo id apresentado por outra pessoa dá 404.
+Um cliente com uma chave sem utilizador tem por isso de enviar a **mesma
+chave** em todos os pedidos da sessão (qualquer dos dois transportes serve);
+uma chave rodada mantém o id, por isso a sessão sobrevive à rotação. As sessões expiram
 após 30 minutos inativas, e há no máximo 1000 vivas em simultâneo (a usada há
 mais tempo é despejada — o seu cliente simplesmente volta a inicializar):
 `mcpRoutes({ sessions: { ttlMs, maxSessions } })`.
@@ -380,6 +404,7 @@ As tabelas abaixo são as opções públicas completas dos quatro pontos de entr
 | `redactErrorDetails` | `ErrorDetailsRedactor \| false` | `redactSensitiveDetails` | Filtra os `details` públicos de um erro lançado antes de entrarem num resultado de tool (ver [O que o modelo vê](#what-the-model-sees-when-a-tool-fails)); `false` envia-os como o HTTP enviaria. Uma rota substitui-o com `meta.mcp.redactErrorDetails` |
 | `reportError` | `HttpErrorReporter \| false` | reporter de consola | Recebe cada erro que uma chamada de tool lança, `internalDetails` incluído; `false` não reporta nada |
 | `onError` | `(error, message) => void \| false` | `reportMcpInternalError` (uma linha no stderr) | Recebe um erro que escapou ao tratamento da própria tool — o cliente só recebe `INTERNAL_ERROR` / `Internal error`. Nunca no stdout, que transporta o protocolo stdio; `false` silencia-o |
+| `allowUnguardedMeta` | `boolean \| string[]` | `false` | Dispensa a [verificação de arranque](#boot-checks) de meta de segurança que nenhum guard impõe, como a opção do adapter; nunca dispensa os validadores de meta |
 
 ### `mcpRoutes(options)`
 
@@ -422,6 +447,7 @@ texto é o mesmo corpo de erro que o HTTP teria devolvido (ex.:
 | Sintoma | Causa | Correção |
 | --- | --- | --- |
 | O arranque lança `UnguardedRouteMetaError` (`HTTP_UNGUARDED_ROUTE_META`) | Uma rota declara `meta.auth`/`meta.can`/`meta.teamRole` e nenhum plugin o impõe | Regista `authPlugin` / `permissionsPlugin` / `teamsPlugin` — vê [Segurança](/pt/guide/security) |
+| O arranque lança `InvalidRouteMetaError` (`HTTP_INVALID_ROUTE_META`) a nomear uma rota de tool | O validador de um plugin recusou a sua meta (um `meta.tenant` desconhecido, um `meta.responseHeaders` inválido…) — o `mcpPlugin` verifica as rotas que expõe, mesmo as que o adapter não serve | Corrige o valor indicado — vê [Verificações de arranque](#boot-checks) |
 | `isError: true` com um corpo `UNAUTHORIZED`/`FORBIDDEN` | A rota da tool está guardada e a chamada não levou credenciais (ou levou más) | Envia headers `Authorization`/tenant com o `POST /mcp`, ou `serveMcpStdio(app, { headers })` |
 | JSON-RPC `-32602` `Unknown tool: …` | Nome de tool não registado — rota sem `meta.mcp`, excluída pelo `filter`, ou renomeada | Verifica o `tools/list`; lembra os overrides via `meta.mcp.name` |
 | JSON-RPC `-32602` ``tools/call `arguments` must be an object`` | O cliente enviou `arguments` como array, string, número ou `null` | Envia um objeto de argumentos nomeados conforme o input schema da tool |
