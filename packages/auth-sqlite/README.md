@@ -21,7 +21,7 @@ migration tool, no service to run. It's the reference "real backend" for auth
 and the pattern other durable stores follow.
 
 ```bash
-pnpm add @basaltkit/auth-sqlite   # peer: @basaltkit/auth
+pnpm add @basaltkit/auth-sqlite   # peer: @basaltkit/auth 5.x
 ```
 
 > Requires **Node 22.5+**. On Node 24 `node:sqlite` is stable and needs no flag;
@@ -151,7 +151,7 @@ things up yourself.
   their idle clock on their next use. New rows record their creation time, and
   nothing updates it while `sessionIdleTtl` is off, so turning the option on
   later signs out sessions older than the window once.
-- **API key lifecycle** (`@basaltkit/auth` 4.2: rotation grace, service keys,
+- **API key lifecycle** (`@basaltkit/auth` 5.0: rotation grace, service keys,
   IP allowlist, metadata). `migrate()` adds the `service_id`, `previous_hash`,
   `previous_hash_expires_at`, `rotated_at`, `allowed_ips` and `meta` columns to
   an existing `auth_api_keys` table, along with a unique index on `previous_hash`.

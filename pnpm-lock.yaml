@@ -835,9 +835,6 @@ importers:
 
   packages/auth-saml:
     dependencies:
-      '@basaltkit/auth':
-        specifier: workspace:^
-        version: link:../auth
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
@@ -845,6 +842,9 @@ importers:
         specifier: workspace:^
         version: link:../http
     devDependencies:
+      '@basaltkit/auth':
+        specifier: workspace:^
+        version: link:../auth
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig
@@ -921,9 +921,6 @@ importers:
       '@basaltkit/http':
         specifier: workspace:^
         version: link:../http
-      '@basaltkit/subscriptions':
-        specifier: workspace:^
-        version: link:../subscriptions
     devDependencies:
       '@basaltkit/auth':
         specifier: workspace:^
@@ -931,6 +928,9 @@ importers:
       '@basaltkit/fastify':
         specifier: workspace:^
         version: link:../fastify
+      '@basaltkit/subscriptions':
+        specifier: workspace:^
+        version: link:../subscriptions
       '@basaltkit/tenancy':
         specifier: workspace:^
         version: link:../tenancy

@@ -42,8 +42,10 @@ contrário da 1.13, esta vaga **traz** majors: o `@basaltkit/http` 3.0 (com o
 estrita por omissão, o `@basaltkit/auth-prisma` 3.0 precisa de uma migração
 da base de dados, e as configurações de que a 1.13 só avisava passam a recusar
 o arranque ([`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0, `notifications`
-2.0](#warnings-now-refuse)). Tudo o resto é
-minor. Lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
+2.0](#warnings-now-refuse)). Os pacotes cujo peer ou dependência partilhada é
+uma dessas majors sobem uma major com ela, sem mudar a sua própria API
+([a lista](#majors-forced-by-dependencies)). Tudo o resto é minor ou patch. Lê
+a [Atualização](#upgrading-since-1-13) antes de subir versões.
 
 - **Ciclo de vida das API keys.** `ApiKeys.rotate()` substitui o segredo de uma
   chave e mantém o id, com uma janela de tolerância opcional (até 30 dias) para o
@@ -53,7 +55,7 @@ minor. Lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
   **allowlist de IPs** (`403 AUTH_APIKEY_IP_NOT_ALLOWED`, falha fechada, também
   emitida como o `auth:apikey_refused` auditado) e `meta` plano.
   `apiKeyRoutes()` acrescenta `PATCH /apikeys/:id` e `POST /apikeys/:id/rotate`,
-  em todos os adapters. *(`@basaltkit/auth` 5.0, `auth-sqlite` 2.2 — migração
+  em todos os adapters. *(`@basaltkit/auth` 5.0, `auth-sqlite` 3.0 — migração
   automática; `auth-prisma` 3.0 — migração abaixo; o `create-basalt` 1.13 gera o
   novo modelo.)* Vê [API keys](/pt/guide/auth#apikeys-rotation).
 - **Chamadores de serviço no trilho de auditoria.** `auditPlugin({ actor })`
@@ -63,7 +65,7 @@ minor. Lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
 - **Sessões MCP ligadas a uma chave sem utilizador.** Uma sessão `/mcp` aberta
   com uma API key sem utilizador fica ligada ao id dessa chave: um
   `mcp-session-id` que vaze é recusado (404) para outra chave ou para um caller
-  anónimo. *(`@basaltkit/mcp` 5.2)*
+  anónimo. *(`@basaltkit/mcp` 6.0)*
 - **A idempotência é estrita por omissão.** Uma `Idempotency-Key` reutilizada
   com um pedido diferente recebe `422`, e os replays correm depois dos guards.
   *(`@basaltkit/http` 3.0)* Vê abaixo.
@@ -76,8 +78,39 @@ minor. Lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
 ### Atualização {#upgrading-since-1-13}
 
 Sobe só o que usas. O `@basaltkit/http` e o `@basaltkit/auth-prisma` precisam
-de um passo teu; as outras majors só recusam configurações de que a 1.13 já
-avisava. Os restantes são minors.
+de um passo teu; o `auth`, o `tenancy`, o `http` e o `notifications` recusam
+configurações de que a 1.13 já avisava; as outras majors só acompanham as suas
+dependências ([abaixo](#majors-forced-by-dependencies)). Os restantes são
+minors e patches.
+
+### Majors forçadas pelas dependências {#majors-forced-by-dependencies}
+
+Estes pacotes não mudam nenhuma API própria. Sobem uma major porque o pacote
+que têm de partilhar com a tua app subiu uma, por isso a linha antiga não corre
+ao lado da nova. Atualiza cada um junto com o pacote que acompanha.
+
+| Pacote | Próxima | Acompanha | Porque tem de coincidir |
+| --- | --- | --- | --- |
+| `@basaltkit/testing` | 3.0 | `fastify` / `express` / `hono` 3 | peers opcionais dos adapters |
+| `@basaltkit/prisma` | 4.0 | `http` 3 | peer opcional (leases por pedido) |
+| `@basaltkit/auth-sqlite` | 3.0 | `auth` 5 | peer; implementa `ApiKeyStore.update` |
+| `@basaltkit/tenancy-prisma`, `tenancy-sqlite` | 3.0, 2.0 | `tenancy` 4 | peer |
+| `@basaltkit/notifications-prisma`, `notifications-sqlite` | 2.0, 2.0 | `notifications` 2 | peer |
+| `@basaltkit/mcp` | 6.0 | `http` 3 | corre as tuas rotas pelo pipeline do http |
+| `@basaltkit/permissions` | 5.0 | `http` 3 | aumenta o `RouteMeta` (`meta.can`); o seu `400` depende das classes de erro do adapter |
+| `@basaltkit/permissions-prisma`, `permissions-sqlite` | 3.0, 3.0 | `permissions` 5 | peer |
+| `@basaltkit/subscriptions` | 6.0 | `http` 3 | aumenta o `RouteMeta` (`meta.subscribed`, `meta.feature`) |
+| `@basaltkit/subscriptions-prisma`, `-sqlite`, `-proxypay` | 4.0, 4.0, 3.0 | `subscriptions` 6 | peer |
+| `@basaltkit/subscriptions-pdf` | 0.2 | `subscriptions` 6 | peer (0.x: o minor é a linha de rutura) |
+| `@basaltkit/auth-saml` | 4.0 | `auth` 5, `http` 3 | o `@basaltkit/auth` passa a **peer**: lê o binding `AUTH` da app |
+| `@basaltkit/billing-ui` | 2.0 | `subscriptions` 6, `http` 3 | o `@basaltkit/subscriptions` passa a **peer**: lê o binding `SUBSCRIPTIONS` da app |
+
+Os pacotes que só constroem rotas ou leem dados com o `@basaltkit/http`, o
+`tenancy`, o `prisma` ou o `subscriptions` como dependência normal
+(`comments`, `files`, `drives`, `teams`, `teams-ui`, `api-keys-ui`,
+`audit-viewer`, `inbound-mail`, `cli`, `activity`, `backup`, `dashboard`)
+recebem um patch: as suas rotas correm em qualquer das linhas do http, por
+isso nada muda do teu lado.
 
 ### Atualizar: idempotência estrita por omissão (`@basaltkit/http` 3) {#idempotency-strict-by-default}
 

@@ -12,6 +12,13 @@ the public API is **stable**: breaking changes only in a new **major**, new
 features in a **minor**, and fixes in a **patch**. You can depend on a `^1`
 range and get features and fixes without breakage until the next major.
 
+A package also moves a **major** when a package it must share with your app
+does: a peer dependency (a store adapter's feature package, `testing`'s
+adapters), or a dependency it shares through the app's container, its route
+types or its request pipeline. It never ships as a patch that silently
+requires another package's new major. A plain dependency used as a private copy
+(routes built with `route()`, a pure helper) gets a patch.
+
 ## Package versions & the Basalt release
 
 Versioning works on two levels, on purpose:
