@@ -23,14 +23,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@basaltkit/audit": "workspace:^",
     "@basaltkit/core": "workspace:^",
     "@basaltkit/http": "workspace:^"
   },
   "peerDependencies": {
+    "@basaltkit/audit": "workspace:^",
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@basaltkit/audit": "workspace:^",
     "@basaltkit/auth": "workspace:^",
     "@basaltkit/fastify": "workspace:^",
     "@basaltkit/tenancy": "workspace:^",

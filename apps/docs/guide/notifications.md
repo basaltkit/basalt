@@ -23,6 +23,9 @@ Two layers, one direction of dependency:
 The `mail` channel bridges the two: when `mailerPlugin` is registered, the
 notifier delivers mail through it automatically. Use the mailer directly for
 transactional flows that aren't "notifications" (password reset, magic links).
+`@basaltkit/mailer` is a peer of `@basaltkit/notifications` (since 2.0), so
+both read the same `MAILER` binding: install it in the app
+(`pnpm add @basaltkit/notifications @basaltkit/mailer`).
 
 ## Define a notification
 
