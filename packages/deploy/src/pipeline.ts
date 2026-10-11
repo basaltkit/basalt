@@ -3,7 +3,7 @@ import { apacheInstall, apachePreflight, vhostPaths } from './apache.js'
 import { backupDatabase, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { processName } from './config.js'
-import { DeployError, errors, INSTALL_COMMAND, report, type DeployContext, type Finding } from './context.js'
+import { DeployError, errors, INSTALL_COMMAND, report, RUN_COMMAND, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
 import { answerQuestions, describeEnv, planEnv, readEnv, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
 import { envValues } from './dotenv.js'
@@ -460,19 +460,30 @@ export async function install(ctx: DeployContext, user: string | undefined): Pro
   if (host.uid() !== 0) throw new DeployError(`install needs root: ${INSTALL_COMMAND}`)
   if (!user || user === 'root') throw new DeployError('install needs the unprivileged user the deploys run as: --user=<name> (never root)')
   const port = Number(envValues(await readEnv(ctx)).get('PORT'))
-  if (!Number.isInteger(port) || port <= 0) throw new DeployError('no PORT in the .env yet: run `pnpm exec basalt-deploy env` as the app user first')
+  if (!Number.isInteger(port) || port <= 0) throw new DeployError(`no PORT in the .env yet: run \`${RUN_COMMAND.replace(/ run$/, ' env')}\` as the app user first`)
 
   const stateDir = `/var/lib/basalt/${config.app}`
   await step(ctx, `state directory ${stateDir}`, async () => {
     await host.mkdir(stateDir, 0o700)
     await host.mkdir(join(stateDir, 'install-backups'), 0o700)
     const local = await host.readFile(join(ctx.dir, '.basalt', 'releases.json'))
-    if (local && !(await host.exists(join(stateDir, 'releases.json')))) await host.writeFile(join(stateDir, 'releases.json'), local, 0o600)
+    const target = join(stateDir, 'releases.json')
+    let history = 'no release history yet'
+    if (await host.exists(target)) {
+      history = 'release history kept as it was'
+    } else if (local) {
+      await host.writeFile(target, local, 0o600)
+      const count = (() => { try { const v = JSON.parse(local) as unknown; return Array.isArray(v) ? v.length : 0 } catch { return 0 } })()
+      history = `${count} release(s) copied from ${join(ctx.dir, '.basalt', 'releases.json')}`
+    }
     const chown = await host.exec('chown', ['-R', `${user}:`, stateDir])
     if (chown.code !== 0) throw new DeployError(`chown ${user} ${stateDir}: ${chown.stderr.trim()}`)
-    if (!(await host.exists(`/etc/basalt/${config.app}.json`))) {
+    host.out.ok(`${stateDir} (0700, owned by ${user}); ${history}`)
+    const overrides = `/etc/basalt/${config.app}.json`
+    if (!(await host.exists(overrides))) {
       await host.mkdir('/etc/basalt', 0o755)
-      await host.writeFile(`/etc/basalt/${config.app}.json`, '{}\n', 0o644)
+      await host.writeFile(overrides, '{}\n', 0o644)
+      host.out.ok(`${overrides} created (server-local overrides, no secrets)`)
     }
   })
 
@@ -488,6 +499,6 @@ export async function install(ctx: DeployContext, user: string | undefined): Pro
       host.out.info(`dedicated infra runs under ${user}'s rootless Docker: dockerd-rootless-setuptool.sh install (as ${user}), then loginctl enable-linger ${user}`)
     }
   }
-  host.out.ok(`installed — from now on, as ${user}: pnpm exec basalt-deploy run`)
+  host.out.ok(`installed — from now on, as ${user} (not root), in ${ctx.dir}: ${RUN_COMMAND}`)
   return 0
 }

@@ -23,11 +23,23 @@ export interface Finding {
   fix?: string
 }
 
+/** The tool, run by `node` on its file — never `pnpm exec` (see {@link RUN_COMMAND}). */
+const BIN = 'node_modules/@basaltkit/deploy/dist/bin.js'
+
 /**
- * How an administrator runs `install`. `node` on the file, not `pnpm exec`:
- * root often has no pnpm on its PATH (a per-user install, corepack).
+ * How the app user runs the deploy. Not `pnpm exec`: pnpm ≥ 12 rewrites
+ * `pnpm-lock.yaml` on any command in the checkout when the lockfile came from
+ * another pnpm, and the deploy then refuses its own dirty tree.
  */
-export const INSTALL_COMMAND = 'sudo node node_modules/@basaltkit/deploy/dist/bin.js install --user="$USER"'
+export const RUN_COMMAND = `node ${BIN} run`
+
+/**
+ * How an administrator runs `install`. The node binary is resolved by the
+ * operator's shell BEFORE sudo: with a per-user Node (nvm, fnm, volta) root
+ * has no `node` on its PATH — `sudo node` failed with "command not found" on
+ * the first server. Not `pnpm exec` either: root often has no pnpm.
+ */
+export const INSTALL_COMMAND = `sudo "$(command -v node)" ${BIN} install --user="$USER"`
 
 export const errors = (findings: Finding[]) => findings.filter((f) => f.level === 'error')
 
