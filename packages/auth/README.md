@@ -547,7 +547,7 @@ error="invalid_token"` (default: the request continues as anonymous), and
 `touchEveryMs` (default 60 s; `0` = every request) throttles `lastUsedAt` writes.
 `auth:apikey_rejected` carries the display `prefix` and `ip` of an invalid key,
 never the secret; `@basaltkit/audit` does not record it by default. A refusal of
-a key that verified (`tenant_mismatch`, `not_allowed`, `scope`) is also emitted
+a key that verified (`ip_not_allowed`, `tenant_mismatch`, `not_allowed`, `scope`) is also emitted
 as `auth:apikey_refused` (`{ id, reason, tenantId? }`), which the audit records
 by default.
 

@@ -278,8 +278,8 @@ antes de alguém estar autenticado, por isso registá-lo deixava qualquer client
 anónimo acrescentar entradas ao trilho (serializado e encadeado por hash) de um
 tenant tão depressa quanto conseguisse enviar pedidos.
 
-As recusas de uma chave que **foi** verificada — usada noutro tenant
-(`tenant_mismatch`), numa rota só de sessão (`not_allowed`) ou além dos seus
+As recusas de uma chave que **foi** verificada — usada fora da sua allowlist de
+IPs (`ip_not_allowed`), noutro tenant (`tenant_mismatch`), numa rota só de sessão (`not_allowed`) ou além dos seus
 scopes (`scope`) — continuam auditadas por padrão: o `apiKeysPlugin` emite-as
 uma segunda vez como `auth:apikey_refused` (`{ id, reason, tenantId? }`), que o
 `auth:**` regista. Só quem tem a chave as consegue causar, e a entrada identifica
