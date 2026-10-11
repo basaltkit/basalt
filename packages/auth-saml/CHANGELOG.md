@@ -1,5 +1,21 @@
 # @basaltkit/auth-saml
 
+## 4.0.0
+
+### Major Changes
+
+- 86fea74: `@basaltkit/auth` becomes a **peer dependency** (`^5`), and `@basaltkit/http` moves to `^3`. `samlPlugin` resolves the app's `AUTH` binding from the container; a token is a module-local symbol, so a second copy of `@basaltkit/auth` (what a plain dependency allowed when the app sat on another major) fails the boot with a missing binding. Install `@basaltkit/auth` 5 in the app (you already have it) and upgrade together with `@basaltkit/http` 3. No API change.
+
+### Patch Changes
+
+- Updated dependencies [a847de8]
+- Updated dependencies [51fd60c]
+- Updated dependencies [0d6e137]
+- Updated dependencies [14181b0]
+- Updated dependencies [24c317b]
+  - @basaltkit/auth@5.0.0
+  - @basaltkit/http@3.0.0
+
 ## 3.0.0
 
 ### Major Changes

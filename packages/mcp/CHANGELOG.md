@@ -1,5 +1,31 @@
 # @basaltkit/mcp
 
+## 6.0.0
+
+### Major Changes
+
+- 2aa4314: BK-083: a `/mcp` session opened by a request authenticated with a userless API key is now bound to that key (`ctx().apiKey.id`, in its tenant). Before, such callers carry no `ctx().user` and no `Authorization` header when the key travels in `x-api-key`, so every one of them bound to the same anonymous fingerprint and a leaked `mcp-session-id` was accepted for a different key. A session is now refused (404) for another key or for an anonymous caller. Sessions opened by a user are unchanged; the key is read by duck-typing, with no new dependency.
+  
+  **Why a major.** `@basaltkit/mcp` now requires `@basaltkit/http` 3. It runs the app's routes as tools through its own copy of the http pipeline (`runRoute`, `toErrorResponse`, `isRouteVisible`), with the guards and enrichers the app's other plugins registered, so it must be the same `@basaltkit/http` the app's adapter runs: next to an http 2.x adapter, an MCP tool call would apply http 3's rules (for example the `meta.responseHeaders` refusal) where the HTTP route does not. Upgrade it together with `@basaltkit/http` 3 and a 3.x adapter. This reason alone changes no API of the package; the boot checks on tool routes (see the `mcpPlugin` entry) are its own change.
+  
+  **Watch for.** A session opened with a userless key is bound to that key's id. A client must send the same API key on every request of the session (either carrier, `x-api-key` or `Authorization: Bearer`, is fine). One that opens the session with one key and continues with another, or drops the key after `initialize`, now gets `404` and must re-initialize. A key rotation keeps its id, so a rotated key keeps the session.
+- fcb0919: `mcpPlugin` runs the adapters' boot checks over the routes it exposes as tools.
+  
+  A route reachable only through MCP (passed to `mcpPlugin({ routes })` but not to the adapter) used to get no boot check at all: an unknown `meta.tenant` (for example `'none'`, a typo of `'never'`), an invalid `meta.responseHeaders` or security meta no registered guard enforces (`meta.auth` without `authPlugin`) were accepted. `mcpPlugin` now calls `assertRoutesGuarded(routes, container)` at boot on every route it turns into a tool (opted in with `meta.mcp` and kept by `filter`), which runs every plugin's `http:meta-validators` entry, so the boot fails with `HTTP_INVALID_ROUTE_META` or `HTTP_UNGUARDED_ROUTE_META` exactly as on fastify, express and hono.
+  
+  `filter` is evaluated once and the server exposes that same list, so a filter that is not a pure function of the route can no longer expose a tool the boot checks never saw.
+  
+  New option `allowUnguardedMeta` (same meaning as the adapter option) waives the unguarded-meta check when an outer edge enforces it. It never waives the meta validators.
+  
+  **Migrating.** If the boot now fails, fix the route it names, or pass `mcpPlugin({ routes, allowUnguardedMeta: [...] })` with the same waiver your adapter uses. Code that builds `new McpServer({ routes, container })` directly gets no check: call `assertRoutesGuarded(routes, app.container)` after boot.
+
+### Patch Changes
+
+- Updated dependencies [0d6e137]
+- Updated dependencies [14181b0]
+- Updated dependencies [24c317b]
+  - @basaltkit/http@3.0.0
+
 ## 5.1.0
 
 ### Minor Changes
