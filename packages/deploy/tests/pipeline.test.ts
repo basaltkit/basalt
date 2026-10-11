@@ -28,6 +28,7 @@ function server(options: {
   publicStatus?: number
   trueKeys?: string[]
   env?: string
+  remote?: ReturnType<typeof ok>
 } = {}): Server {
   let head = OLD
   const host = new FakeHost().put(ENV, options.env ?? GOOD_ENV, 0o600)
@@ -47,6 +48,7 @@ function server(options: {
       if (verb === 'status') return ok(options.dirty ?? '')
       if (verb === 'rev-parse') return ok(rest[0] === '--abbrev-ref' ? 'master\n' : `${head}\n`)
       if (verb === 'fetch') return ok()
+      if (verb === 'ls-remote') return options.remote ?? ok(`${NEW}\trefs/heads/master\n`)
       if (verb === 'merge') { head = NEW; return ok() }
       if (verb === 'reset') { head = rest[1] as string; return ok() }
       if (verb === 'diff') return ok((options.migrations ?? []).map((m) => `prisma/migrations/${m}/migration.sql`).join('\n'))

@@ -3,7 +3,7 @@ import { apacheInstall, apachePreflight, vhostPaths } from './apache.js'
 import { backupDatabase, restoreCommand } from './backup.js'
 import { tlsFindings, toolingFindings } from './checks.js'
 import { processName } from './config.js'
-import { DeployError, errors, report, type DeployContext, type Finding } from './context.js'
+import { DeployError, errors, INSTALL_COMMAND, report, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
 import { answerQuestions, describeEnv, planEnv, readEnv, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
 import { envValues } from './dotenv.js'
@@ -27,8 +27,14 @@ export interface RunOptions {
   skip?: Skippable[]
 }
 
-async function git(ctx: DeployContext, args: string[]): Promise<string> {
-  const result = await ctx.host.exec('git', args, { cwd: ctx.dir })
+/**
+ * Never a credential prompt: one in the middle of a deploy hangs cron and CI,
+ * and interrupts a person half-way. With nobody to answer, git fails instead.
+ */
+const NO_PROMPT = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' }
+
+async function git(ctx: DeployContext, args: string[], options: { noPrompt?: boolean } = {}): Promise<string> {
+  const result = await ctx.host.exec('git', args, { cwd: ctx.dir, ...(options.noPrompt ? { env: NO_PROMPT } : {}) })
   if (result.code !== 0) throw new DeployError(`git ${args[0]} failed: ${result.stderr.trim()}`)
   return result.stdout.trim()
 }
@@ -66,14 +72,61 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
     const branch = (await ctx.host.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
     const wanted = ctx.config.branch ?? 'main'
     if (branch !== wanted) findings.push({ id: 'git', level: 'error', message: `the checkout is on "${branch}", the deploy tracks "${wanted}"`, fix: `git checkout ${wanted}` })
+    if (!options.skip?.includes('fetch')) findings.push(...await remoteFindings(ctx))
   }
   return { findings, port, values }
+}
+
+const CREDENTIALS = /terminal prompts disabled|could not read (Username|Password)|Authentication failed|Permission denied \(publickey|Host key verification failed|Invalid username or (password|token)/i
+
+/** Can the fetch reach the branch without asking anyone for anything? */
+async function remoteFindings(ctx: DeployContext): Promise<Finding[]> {
+  const remote = ctx.config.remote ?? 'origin'
+  const branch = ctx.config.branch ?? 'main'
+  const probe = await ctx.host.exec('git', ['ls-remote', '--exit-code', remote, `refs/heads/${branch}`], { cwd: ctx.dir, env: NO_PROMPT })
+  if (probe.code === 0) return []
+  if (probe.code === 2) return [{ id: 'git', level: 'error', message: `the branch "${branch}" does not exist on ${remote}` }]
+  const reason = probe.stderr.trim().split('\n').find((l) => l.trim()) ?? `exit ${probe.code}`
+  if (CREDENTIALS.test(probe.stderr)) {
+    const fix = 'store them once: git config credential.helper store && git fetch (or a read-only deploy key and an ssh remote)'
+    return ctx.host.interactive()
+      ? [{ id: 'git', level: 'warning', message: `${remote} needs credentials: the fetch will ask for them`, fix }]
+      : [{ id: 'git', level: 'error', message: `${remote} needs credentials and nobody can type them here (no terminal)`, fix }]
+  }
+  return [{ id: 'git', level: 'warning', message: `could not reach ${remote}: ${reason}`, fix: '--skip=fetch deploys the code already in the checkout' }]
 }
 
 function stopOnErrors(ctx: DeployContext, findings: Finding[], what: string): void {
   report(ctx.host, findings)
   const blocking = errors(findings)
   if (blocking.length > 0) throw new DeployError(`${what}: ${blocking.length} problem(s) above — nothing was changed`, blocking)
+}
+
+// ── what runs by default ───────────────────────────────────────────────────
+
+/** `prisma migrate deploy` runs when asked to, or — unsaid — when the app generates a Prisma client. */
+export function migratesCentral(config: DeployContext['config']): boolean {
+  return config.migrate?.central ?? (config.build?.prisma?.length ?? 0) > 0
+}
+
+const migratesAnything = (config: DeployContext['config']) => migratesCentral(config) || Boolean(config.migrate?.tenants)
+
+/**
+ * Whether the pre-migration dump runs, and why not when it does not. Unsaid,
+ * it runs when there is something to migrate AND a Postgres to dump: the
+ * dedicated one, or a `postgres…` URL in the `.env`. Explicitly on, a missing
+ * database is the backup step's error to report.
+ */
+export function backupDecision(config: DeployContext['config'], values: Map<string, string>, skip: Iterable<string> = []):
+  { run: true } | { run: false; why: string } {
+  if ([...skip].includes('backup')) return { run: false, why: '--skip=backup' }
+  const wanted = config.backup?.beforeMigrate
+  if (wanted === false) return { run: false, why: 'backup.beforeMigrate is false' }
+  if (wanted === true) return { run: true }
+  if (!migratesAnything(config)) return { run: false, why: 'nothing to migrate' }
+  if (config.infra?.kind === 'docker' && config.infra.postgres) return { run: true }
+  const url = values.get(config.backup?.urlKey ?? 'DATABASE_URL') ?? ''
+  return /^postgres(ql)?:\/\//.test(url) ? { run: true } : { run: false, why: 'no Postgres database in the .env' }
 }
 
 // ── the building blocks ────────────────────────────────────────────────────
@@ -112,7 +165,7 @@ async function validate(ctx: DeployContext, values: Map<string, string>): Promis
 async function migrate(ctx: DeployContext, values: Map<string, string>): Promise<void> {
   const { host, pm } = ctx
   const env = { cwd: ctx.dir, stream: true, env: Object.fromEntries(values) }
-  if (ctx.config.migrate?.central !== false) {
+  if (migratesCentral(ctx.config)) {
     host.out.info(`${pm} exec prisma migrate deploy`)
     const central = await host.exec(pm, ['exec', 'prisma', 'migrate', 'deploy'], env)
     if (central.code !== 0) throw new DeployError('prisma migrate deploy failed')
@@ -124,6 +177,7 @@ async function migrate(ctx: DeployContext, values: Map<string, string>): Promise
     const result = await host.exec(pm, args, env)
     if (result.code !== 0) throw new DeployError('the tenant migrations failed')
   }
+  if (!migratesAnything(ctx.config)) host.out.info('nothing to migrate (no build.prisma, no migrate.tenants)')
 }
 
 async function healthy(ctx: DeployContext, port: number): Promise<boolean> {
@@ -159,6 +213,25 @@ async function restoreCode(ctx: DeployContext, sha: string, values: Map<string, 
   await build(ctx, values)
 }
 
+/** The env step's summary: what changed, or that nothing did. */
+function reportEnv(ctx: DeployContext, plan: EnvPlan): void {
+  const lines = describeEnv(plan)
+  if (lines.length === 0) ctx.host.out.ok(`${ctx.config.env.file ?? '.env'} unchanged`)
+  for (const line of lines) ctx.host.out.info(line)
+}
+
+async function infraStep(ctx: DeployContext, infra: InfraPlan): Promise<void> {
+  stopOnErrors(ctx, await applyInfra(ctx, infra), 'infra')
+  if (infra.services.length === 0) ctx.host.out.ok('nothing to start (external infra)')
+  else ctx.host.out.ok(`${infra.services.map((s) => s.container).join(', ')} healthy; credentials accepted${ctx.config.infra?.kind === 'docker' && ctx.config.infra.minio?.buckets.length ? '; buckets in place' : ''}`)
+}
+
+async function validateStep(ctx: DeployContext, values: Map<string, string>): Promise<void> {
+  stopOnErrors(ctx, await validate(ctx, values), 'validate')
+  const schema = ctx.config.env.schema
+  ctx.host.out.ok(schema ? `${ctx.config.env.file ?? '.env'} is valid for ${schema}` : `${ctx.config.env.file ?? '.env'}: syntax and policy only (no env.schema configured)`)
+}
+
 // ── commands ───────────────────────────────────────────────────────────────
 
 export async function plan(ctx: DeployContext, options: RunOptions = {}): Promise<number> {
@@ -174,8 +247,10 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
     ...describeInfra(infra).map((l) => `infra: ${l}`),
     `build: ${pm} install (frozen), ${(config.build?.prisma ?? []).map((c) => `prisma generate --config ${c}`).join(', ') || 'no prisma'}${config.build?.web ? `, ${config.build.web} build` : ''}`,
     `validate: ${config.env.schema ?? '(no schema configured)'} against the new .env`,
-    options.skip?.includes('backup') || config.backup?.beforeMigrate === false ? 'backup: skipped' : `backup: pg_dump → ${config.backup?.dir ?? 'backups/predeploy'} (keep ${config.backup?.keep ?? 10})`,
-    `migrate: ${config.migrate?.central === false ? '' : 'prisma migrate deploy'}${config.migrate?.tenants ? ' + tenant:migrate' : ''}`,
+    ((decision) => decision.run
+      ? `backup: pg_dump → ${config.backup?.dir ?? 'backups/predeploy'} (keep ${config.backup?.keep ?? 10})`
+      : `backup: skipped (${decision.why})`)(backupDecision(config, checked.values, options.skip ?? [])),
+    `migrate: ${[migratesCentral(config) ? 'prisma migrate deploy' : '', config.migrate?.tenants ? 'tenant:migrate' : ''].filter(Boolean).join(' + ') || 'nothing configured'}`,
     `release: pm2 ${processName(config)} on 127.0.0.1:${checked.port}`,
     `health: http://127.0.0.1:${checked.port}${config.health?.path ?? '/health'} (Host: ${config.domain})${config.proxy?.kind === 'apache' && config.health?.public !== false ? `, then https://${config.domain}${config.proxy.apiPrefix}${config.health?.path ?? '/health'}` : ''}`,
   ]
@@ -192,10 +267,10 @@ export async function envCommand(ctx: DeployContext): Promise<number> {
   stopOnErrors(ctx, infra.findings, 'infra')
   const missing = await answerQuestions(ctx, env)
   if (missing.length > 0) throw new DeployError(`no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`)
-  for (const line of describeEnv(env)) ctx.host.out.info(line)
+  reportEnv(ctx, env)
   await writeEnv(ctx, env)
-  await step(ctx, 'infra', async () => stopOnErrors(ctx, await applyInfra(ctx, infra), 'infra'))
-  await step(ctx, 'validate', async () => stopOnErrors(ctx, await validate(ctx, env.values), 'validate'))
+  await step(ctx, 'infra', () => infraStep(ctx, infra))
+  await step(ctx, 'validate', () => validateStep(ctx, env.values))
   ctx.host.out.ok(`.env ready (PORT=${port})`)
   return 0
 }
@@ -211,7 +286,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
   const previous = await git(ctx, ['rev-parse', 'HEAD'])
   if (!skip.has('fetch')) {
     await step(ctx, 'fetch', async () => {
-      await git(ctx, ['fetch', '--quiet', config.remote ?? 'origin', config.branch ?? 'main'])
+      await git(ctx, ['fetch', '--quiet', config.remote ?? 'origin', config.branch ?? 'main'], { noPrompt: !host.interactive() })
       await git(ctx, ['merge', '--ff-only', `${config.remote ?? 'origin'}/${config.branch ?? 'main'}`])
     })
   }
@@ -229,16 +304,20 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
     stopOnErrors(ctx, infra.findings, 'infra')
     const missing = await answerQuestions(ctx, prepared.env)
     if (missing.length > 0) throw new DeployError(`no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`)
-    for (const line of describeEnv(prepared.env)) host.out.info(line)
+    reportEnv(ctx, prepared.env)
     await writeEnv(ctx, prepared.env)
     values = prepared.env.values
 
-    await step(ctx, 'infra', async () => stopOnErrors(ctx, await applyInfra(ctx, infra), 'infra'))
+    await step(ctx, 'infra', () => infraStep(ctx, infra))
     await step(ctx, 'build', () => build(ctx, values))
-    await step(ctx, 'validate', async () => stopOnErrors(ctx, await validate(ctx, values), 'validate'))
-    if (!skip.has('backup') && config.backup?.beforeMigrate !== false) {
+    await step(ctx, 'validate', () => validateStep(ctx, values))
+    const backup = backupDecision(config, values, skip)
+    if (backup.run) {
       release.backup = await step(ctx, 'backup', () => backupDatabase(ctx, values, infra, sha))
       host.out.ok(release.backup)
+    } else {
+      host.out.step('backup')
+      host.out.info(`skipped: ${backup.why}`)
     }
     await step(ctx, 'migrate', () => migrate(ctx, values))
   } catch (error) {
@@ -266,7 +345,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
   }
 
   try {
-    await step(ctx, 'release', () => pm2Release(ctx, values))
+    host.out.ok(await step(ctx, 'release', () => pm2Release(ctx, values)))
   } catch (error) {
     return recover((error as Error).message)
   }
@@ -288,7 +367,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
 async function rollbackTo(ctx: DeployContext, sha: string, values: Map<string, string>, port: number): Promise<void> {
   await restoreCode(ctx, sha, values)
   ctx.host.out.step(`release ${sha.slice(0, 7)}`)
-  await pm2Release(ctx, values)
+  ctx.host.out.ok(await pm2Release(ctx, values))
   if (await healthy(ctx, port)) ctx.host.out.ok(`back on ${sha.slice(0, 7)}`)
   else ctx.host.out.error(`${sha.slice(0, 7)} does not answer either — pm2 logs ${processName(ctx.config)}`)
 }
@@ -334,7 +413,7 @@ export async function status(ctx: DeployContext): Promise<number> {
  */
 export async function install(ctx: DeployContext, user: string | undefined): Promise<number> {
   const { host, config } = ctx
-  if (host.uid() !== 0) throw new DeployError('install needs root: sudo pnpm exec basalt-deploy install --user=<app user>')
+  if (host.uid() !== 0) throw new DeployError(`install needs root: ${INSTALL_COMMAND}`)
   if (!user || user === 'root') throw new DeployError('install needs the unprivileged user the deploys run as: --user=<name> (never root)')
   const port = Number(envValues(await readEnv(ctx)).get('PORT'))
   if (!Number.isInteger(port) || port <= 0) throw new DeployError('no PORT in the .env yet: run `pnpm exec basalt-deploy env` as the app user first')
