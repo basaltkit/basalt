@@ -1,4 +1,4 @@
-# RFC 0003 — `@basaltkit/inbound-mail`: receiving email as signed raw bytes
+# RFC 0004 — `@basaltkit/inbound-mail`: receiving email as signed raw bytes
 
 - **Status:** Accepted (v0.1 implemented in this change)
 - **Author:** basalt-principal-architect

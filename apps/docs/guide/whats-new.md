@@ -166,7 +166,7 @@ and inbound mail.
   transaction; `verify()` checks the redacted entry through it. Opt-in
   `integrity: { mode: 'hash-chain', erasable: true }` writes v3 hashes with a
   per-entry nonce that the redaction destroys, so the erased value cannot be
-  confirmed from the hash (RFC 0003). See
+  confirmed from the hash (RFC 0005). See
   [Erasing personal data](/guide/persistence#erasing-personal-data-audit-redact).
   *(`@basaltkit/audit` 3.1, `audit-prisma` / `audit-sqlite` 2.1)*
 - **Personal data policies per event.** `fieldPolicies` omits or pseudonymises
@@ -189,7 +189,7 @@ and inbound mail.
   bytes (one recipient per request, envelope inside the signature), routes it
   by the signed recipient to tenant-aware handlers, and parses it within
   limits, trusting `Authentication-Results` and ARC only from servers you list.
-  It ships with a reference Cloudflare Email Routing Worker (RFC 0003) — see
+  It ships with a reference Cloudflare Email Routing Worker (RFC 0004) — see
   [Inbound mail](/guide/inbound-mail). *(`@basaltkit/inbound-mail` 0.1)*
 - **Drives you can operate.** Connection health and a `drives.check()` probe,
   a vetoable `drive:disconnecting` hook, a per-call `recursive` listing mode,

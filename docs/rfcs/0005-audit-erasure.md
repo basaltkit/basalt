@@ -1,4 +1,4 @@
-# RFC 0003 — Erasing personal data from a verifiable audit trail (`audit.redact`)
+# RFC 0005 — Erasing personal data from a verifiable audit trail (`audit.redact`)
 
 - **Status:** Draft (phases 0–5 implemented, see §9)
 - **Author:** basalt-principal-architect

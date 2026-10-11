@@ -1393,7 +1393,7 @@ export class Audit {
 
   /**
    * Erases personal data from one stored entry while the trail stays
-   * verifiable (RFC 0003). The requested payload paths become
+   * verifiable (RFC 0005). The requested payload paths become
    * {@link AUDIT_ERASED} and the flagged `ip` / `userAgent` are dropped, in
    * place; the entry keeps its original `hash`, so the chain links hold. In the
    * same transaction an `audit:redacted` entry is appended to the entry's own

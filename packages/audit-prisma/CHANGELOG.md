@@ -4,7 +4,7 @@
 
 ### Minor Changes
 
-- e6c0ac0: Supports `audit.redact()` (RFC 0003). Both schemas gain the nullable `nonce`, `redaction` and `redactedBy` columns, and `auditMysqlColumnLimits` covers them. You only need the migration when you redact or turn on `erasable`: `nonce` is sent only by v3 entries, so an existing schema keeps appending. `get(id)` validates the id before `findUnique`. `redact()` runs inside one interactive `$transaction`, which does two things:
+- e6c0ac0: Supports `audit.redact()` (RFC 0005). Both schemas gain the nullable `nonce`, `redaction` and `redactedBy` columns, and `auditMysqlColumnLimits` covers them. You only need the migration when you redact or turn on `erasable`: `nonce` is sent only by v3 entries, so an existing schema keeps appending. `get(id)` validates the id before `findUnique`. `redact()` runs inside one interactive `$transaction`, which does two things:
   - an `updateMany` conditioned on `hash` and `redactedBy`, where a miss maps to `AuditRedactionConflictError`;
   - the attestation `create`, where a unique violation maps to `AuditChainConflictError`.
   
