@@ -682,6 +682,13 @@ and serve the route on tenant hosts. (`@basaltkit/tenancy` 3.2 only
 warned and fell back.) `basalt ai doctor` warns
 about routes that pair `tenant: false` with a `platform:` permission.
 
+`mcpPlugin` runs the same check over the routes it exposes as MCP tools. A
+route that skips it — a custom driver calling `runRoute()` without
+`assertRouteMetaValid()` — fails closed on each request: `isTenantRequired()`
+and the tenancy enricher throw `InvalidTenantMetaError`
+(`TENANCY_INVALID_ROUTE_META`, `500`) before resolving any tenant, instead of
+falling back to `required`.
+
 Exempting a path only lifts the tenant requirement. Auth, subscription checks
 and every other guard still run.
 

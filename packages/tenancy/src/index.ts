@@ -13,6 +13,8 @@ import {
   assertValidTenantId,
   isValidTenantId,
   CentralOnlyRouteError,
+  InvalidTenantMetaError,
+  tenantMetaProblem,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -34,6 +36,8 @@ export {
   assertValidTenantId,
   isValidTenantId,
   CentralOnlyRouteError,
+  InvalidTenantMetaError,
+  tenantMetaProblem,
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
@@ -547,7 +551,9 @@ export const TENANCY = createToken<Tenancy>('tenancy')
  * Whether this request must carry a tenant.
  *
  * Exported for tests; the path is compared without its query string, so
- * `/health` still matches `/health?probe=1`.
+ * `/health` still matches `/health?probe=1`. Throws
+ * {@link InvalidTenantMetaError} (500) for a `meta.tenant` other than `true`,
+ * `false`, `'never'` or absent — never a silent fallback to `required`.
  */
 export function isTenantRequired(
   required: TenancyPluginOptions['required'],
@@ -558,6 +564,11 @@ export function isTenantRequired(
   // sits next to the handler, so a central route stays central through a
   // rename, and a reviewer sees the decision without opening the app config.
   const declared = meta?.['tenant']
+  // Fail closed on a value tenancy does not know. The boot validator refuses
+  // such a route on every adapter and in mcpPlugin; this guards a custom
+  // driver that skipped `assertRouteMetaValid()` — falling back to `required`
+  // would serve a typo of 'never' (a central-only route) on tenant hosts.
+  if (tenantMetaProblem(declared) !== undefined) throw new InvalidTenantMetaError(declared)
   // 'never' is stricter than `false`: a central-only route not only runs
   // without a tenant, it refuses one (enforced by the enricher, not here).
   if (declared === false || declared === 'never') return false
@@ -805,14 +816,8 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
       // serving tenant hosts. Structural signature: no @basaltkit/http import.
       ensureMetadata(container).add(
         'http:meta-validators',
-        ({ route }: { route: { meta?: Record<string, unknown> | undefined } }): string | undefined => {
-          const declared = route.meta?.['tenant']
-          if (declared === undefined || declared === true || declared === false || declared === 'never') return
-          return (
-            `meta.tenant ${JSON.stringify(declared) ?? String(declared)} is not valid ` +
-            `(expected true, false or 'never'; if you meant central-only, the value is 'never')`
-          )
-        },
+        ({ route }: { route: { meta?: Record<string, unknown> | undefined } }): string | undefined =>
+          tenantMetaProblem(route.meta?.['tenant']),
       )
       // Marker other plugins read to adopt tenant-safe defaults (e.g.
       // @basaltkit/cache fails closed on a missing tenant scope when this app
@@ -841,6 +846,10 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
           container: unknown
           route?: { meta?: Record<string, unknown> | undefined }
         }) => {
+          // Fail closed BEFORE resolving: an unknown meta.tenant (a route that
+          // skipped the boot validator) must not run with or without a tenant.
+          const declared = route?.meta?.['tenant']
+          if (tenantMetaProblem(declared) !== undefined) throw new InvalidTenantMetaError(declared)
           const tenancy = container.get(TENANCY)
           const tenant = await tenancy.resolve({
             headers: request.headers ?? {},
