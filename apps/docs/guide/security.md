@@ -484,6 +484,18 @@ idempotencyPlugin()
   `/orders/2/pay`, is refused with `422`. With `fingerprint: 'body'` or `false`
   that reuse receives the **first** response: have clients mint a fresh key per
   operation (and per tenant).
+- **The credential part is raw bytes.** A retry whose credential headers
+  differ in any byte is a different caller to the plugin: after an API key
+  [rotation](/guide/auth#apikeys-rotation), after switching from `x-api-key` to
+  `Authorization: Bearer` (or back), or after the `cookie` header changed, the
+  retry finds no record and **runs the operation again**. It never replays to
+  another caller; it can duplicate. Retry with the credential the first attempt
+  used. See [API keys and idempotency](/guide/auth#apikeys-idempotency).
+- **The recorded response is stored as sent**, for `ttlMs` (24 h by default),
+  in the configured store. A response that carries a secret — `POST /apikeys`
+  and `POST /apikeys/:id/rotate` return the plaintext key — sits in that store
+  (process memory, or Redis) when the client sent `Idempotency-Key`. Protect a
+  shared store like any secret store.
 - Requests with **no** credential header are not cached or replayed by default
   (a stranger who guessed the key would otherwise get the response). Opt in with
   `allowAnonymous: true` only for public endpoints with nothing private in them.

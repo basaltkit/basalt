@@ -161,6 +161,16 @@ things up yourself.
 - `node:sqlite` is synchronous; the methods stay `async` to honor the contracts,
   so there's no behavioral difference for callers.
 
+## Upgrading to 3.0
+
+3.0.0 stores the API key lifecycle of `@basaltkit/auth` 5.0. It requires
+`@basaltkit/auth` 5 (peer `^5.0.0`) and Node 22.5+; with auth 4.x installed the
+peer range is refused. Upgrade both in the same change (`create-basalt update`
+does). There is no API change in this package and no manual data step:
+`migrate()` adds the six columns and the `previous_hash` index on the next
+boot, and existing keys keep working. It is a major only because the
+`@basaltkit/auth` line it accepts moved one.
+
 ## When to reach for something else
 
 SQLite is an excellent default for single-node deployments and is genuinely
