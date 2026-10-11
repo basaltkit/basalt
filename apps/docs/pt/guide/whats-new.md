@@ -44,8 +44,8 @@ da base de dados, e as configurações de que a 1.13 só avisava passam a recusa
 o arranque ([`@basaltkit/auth` 5.0, `tenancy` 4.0, `http` 3.0, `notifications`
 2.0](#warnings-now-refuse)). Os pacotes cujo peer ou dependência partilhada é
 uma dessas majors sobem uma major com ela, sem mudar a sua própria API
-([a lista](#majors-forced-by-dependencies)). Tudo o resto é minor ou patch. Lê
-a [Atualização](#upgrading-since-1-13) antes de subir versões.
+([a lista](#majors-forced-by-dependencies)). O conjunto `@basaltkit/*` sobe
+**em bloco**: lê a [Atualização](#upgrading-since-1-13) antes de subir versões.
 
 - **Ciclo de vida das API keys.** `ApiKeys.rotate()` substitui o segredo de uma
   chave e mantém o id, com uma janela de tolerância opcional (até 30 dias) para o
@@ -77,15 +77,108 @@ a [Atualização](#upgrading-since-1-13) antes de subir versões.
 
 ### Atualização {#upgrading-since-1-13}
 
-Sobe só o que usas. O `@basaltkit/http` e o `@basaltkit/auth-prisma` precisam
-de um passo teu; o `auth`, o `tenancy`, o `http` e o `notifications` recusam
-configurações de que a 1.13 já avisava; as outras majors só acompanham as suas
-dependências ([abaixo](#majors-forced-by-dependencies)). Os restantes são
-minors e patches.
+**Atualiza o conjunto `@basaltkit/*` inteiro de uma vez.** Esta vaga não é um
+menu. Os pacotes partilham objetos vivos com a tua app — tokens do container,
+as classes de erro do adapter, o tipo `RouteMeta` que cada plugin aumenta — e um
+token do container é um símbolo local ao módulo, por isso uma segunda cópia de
+um pacote nunca encontra o binding da tua app. Os adapters 3.0 correm o
+`@basaltkit/http` 3, o `auth` 5 precisa de stores que implementem os novos
+métodos, e todos os pacotes que se ligam a eles sobem com eles. Misturar uma
+linha antiga com uma nova é recusado pelos ranges de peer onde o npm o vê, e
+parte no arranque ou no pedido onde não vê.
+
+O caminho mais curto é um comando, que atravessa todas as majors do framework
+de uma vez e mostra o link do CHANGELOG de cada pacote:
+
+```bash
+pnpm basalt update --dry          # o plano
+pnpm basalt update                # escreve, instala, corre os codemods
+npx create-basalt@latest update   # o mesmo, numa app sem o script basalt
+```
+
+Depois dá os passos que dependem de ti:
+
+1. **Idempotência** — clientes que repetem com um body ou query alterados
+   recebem `422`; vê [idempotência estrita por omissão](#idempotency-strict-by-default).
+2. **auth-prisma** — acrescenta as seis colunas das API keys antes de o novo
+   cliente servir tráfego; vê [Atualizar para o auth-prisma 3.0](#auth-prisma-3).
+3. **Recusas no arranque** — corrige o que a 1.13 avisava; vê
+   [avisos de arranque que passam a recusar](#warnings-now-refuse).
+4. **MCP** — as rotas de tool passadas ao `mcpPlugin({ routes })` passam a ter
+   as mesmas verificações de arranque que as rotas do adapter, e um cliente MCP
+   tem de enviar a mesma API key em todos os pedidos de uma sessão; vê
+   [Outras mudanças a ter em conta](#watch-since-1-13).
+
+**Incompatibilidades intencionais.** Estas combinações não funcionam, por
+desenho:
+
+| Mantens | Ao lado de | O que acontece |
+| --- | --- | --- |
+| um adapter 2.x (`fastify` 2.6, `express`/`hono` 2.1) | `@basaltkit/http` 3 | duas cópias do http: o `idempotencyPlugin` fica com as predefinições da cópia de onde o importas, e os plugins feitos para o http 3 não reconhecem as classes de erro do adapter |
+| `@basaltkit/auth` 4.x | `auth-prisma` 3 / `auth-sqlite` 3 | range de peer recusado (`auth ^5`); as stores implementam `ApiKeyStore.update` e as colunas do ciclo de vida |
+| `auth-prisma` 2 / `auth-sqlite` 2 | `@basaltkit/auth` 5 | range de peer recusado; `rotate()`, `update()` e `setExpiry()` precisam do novo método da store |
+| `@basaltkit/tenancy` 3.x | `tenancy-prisma` 3 / `tenancy-sqlite` 2 | range de peer recusado |
+| `@basaltkit/notifications` 1.x | `notifications-prisma` 2 / `-sqlite` 2 | range de peer recusado |
+| `permissions` 4 / `subscriptions` 5 | `@basaltkit/http` 3 | os tipos de `meta.can` / `meta.subscribed` apontam para a outra cópia do http, e um `400` de validação do permissions passa a `500` (`instanceof` entre cópias) |
+| `auth-saml` 3 / `billing-ui` 1 | `auth` 5 / `subscriptions` 6 | traziam a sua própria cópia do `auth` / `subscriptions`; ler o binding `AUTH` / `SUBSCRIPTIONS` da app falha no arranque. A 4.0 / 2.0 tornam-no peer |
+| `@basaltkit/mcp` 5 | `@basaltkit/http` 3 | as chamadas de tool correm pelo pipeline do http 2 enquanto as rotas HTTP seguem as regras do http 3 |
+| `@basaltkit/prisma` 3 | `@basaltkit/http` 3 | range de peer recusado (os leases por pedido usam o `ctx().onDispose` do pipeline do http) |
+
+Os doze patches (`comments`, `files`, `drives`, `teams`, `teams-ui`,
+`api-keys-ui`, `audit-viewer`, `inbound-mail`, `cli`, `activity`, `backup`,
+`dashboard`) funcionam em qualquer das linhas — só constroem rotas ou leem
+dados através de uma cópia privada — mas o `update` também os sobe, e é isso
+que testamos.
+
+**Mapa de publicação.** Todos os pacotes que esta vaga publica (do
+`changeset status`):
+
+| Pacote | Publicado | Próxima | Subida | Porquê |
+| --- | --- | --- | --- | --- |
+| `@basaltkit/http` | 2.8.0 | 3.0.0 | major | idempotência estrita; `meta.responseHeaders` inválido recusado no arranque |
+| `@basaltkit/fastify` | 2.6.0 | 3.0.0 | major | precisa do http 3 |
+| `@basaltkit/express` | 2.1.0 | 3.0.0 | major | precisa do http 3 |
+| `@basaltkit/hono` | 2.1.0 | 3.0.0 | major | precisa do http 3 |
+| `@basaltkit/testing` | 2.0.3 | 3.0.0 | major | peers opcionais dos adapters passam a 3.x |
+| `@basaltkit/auth` | 4.2.0 | 5.0.0 | major | cookie de sessão inválido recusado; ciclo de vida das API keys (`ApiKeyStore.update`) |
+| `@basaltkit/auth-prisma` | 2.1.0 | 3.0.0 | major | migração da base de dados (seis colunas) |
+| `@basaltkit/auth-sqlite` | 2.1.0 | 3.0.0 | major | peer auth `^5` (migra sozinho) |
+| `@basaltkit/auth-saml` | 3.0.0 | 4.0.0 | major | o `@basaltkit/auth` passa a peer |
+| `@basaltkit/tenancy` | 3.2.0 | 4.0.0 | major | `meta.tenant` desconhecido recusado no arranque e falha fechada por pedido |
+| `@basaltkit/tenancy-prisma` | 2.1.0 | 3.0.0 | major | peer tenancy `^4` |
+| `@basaltkit/tenancy-sqlite` | 1.3.0 | 2.0.0 | major | peer tenancy `^4` |
+| `@basaltkit/notifications` | 1.3.0 | 2.0.0 | major | `allowed()` removido |
+| `@basaltkit/notifications-prisma` | 1.2.0 | 2.0.0 | major | peer notifications `^2` |
+| `@basaltkit/notifications-sqlite` | 1.1.0 | 2.0.0 | major | peer notifications `^2` |
+| `@basaltkit/prisma` | 3.1.0 | 4.0.0 | major | peer opcional http `^3` |
+| `@basaltkit/mcp` | 5.1.0 | 6.0.0 | major | pipeline do http 3; verificações de arranque nas rotas de tool; sessões ligadas a uma chave sem utilizador |
+| `@basaltkit/permissions` | 4.1.0 | 5.0.0 | major | partilha o http 3 da app |
+| `@basaltkit/permissions-prisma` | 2.1.0 | 3.0.0 | major | peer permissions `^5` |
+| `@basaltkit/permissions-sqlite` | 2.1.0 | 3.0.0 | major | peer permissions `^5` |
+| `@basaltkit/subscriptions` | 5.0.0 | 6.0.0 | major | partilha o http 3 da app |
+| `@basaltkit/subscriptions-prisma` | 3.0.0 | 4.0.0 | major | peer subscriptions `^6` |
+| `@basaltkit/subscriptions-sqlite` | 3.0.0 | 4.0.0 | major | peer subscriptions `^6` |
+| `@basaltkit/subscriptions-proxypay` | 2.1.5 | 3.0.0 | major | peer subscriptions `^6` |
+| `@basaltkit/subscriptions-pdf` | 0.1.5 | 0.2.0 | minor (rutura em 0.x) | peer subscriptions `^6` |
+| `@basaltkit/billing-ui` | 1.2.0 | 2.0.0 | major | o `@basaltkit/subscriptions` passa a peer |
+| `@basaltkit/audit` | 3.1.0 | 3.2.0 | minor | `auditPlugin({ actor })` |
+| `create-basalt` | 1.12.0 | 1.13.0 | minor | modelo `AuthApiKey` com ciclo de vida; ranges com piso na versão exata |
+| `@basaltkit/activity` | 1.3.2 | 1.3.3 | patch | tenancy `^4` (cópia privada) |
+| `@basaltkit/api-keys-ui` | 1.4.0 | 1.4.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/audit-viewer` | 3.0.2 | 3.0.3 | patch | http `^3` (cópia privada) |
+| `@basaltkit/backup` | 0.3.2 | 0.3.3 | patch | prisma `^4` (cópia privada) |
+| `@basaltkit/cli` | 1.4.0 | 1.4.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/comments` | 4.1.0 | 4.1.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/dashboard` | 1.4.5 | 1.4.6 | patch | subscriptions `^6` (só tipos) |
+| `@basaltkit/drives` | 0.4.0 | 0.4.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/files` | 6.1.0 | 6.1.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/inbound-mail` | 0.1.0 | 0.1.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/teams` | 4.1.0 | 4.1.1 | patch | http `^3` (cópia privada) |
+| `@basaltkit/teams-ui` | 1.2.0 | 1.2.1 | patch | http `^3` (cópia privada) |
 
 ### Majors forçadas pelas dependências {#majors-forced-by-dependencies}
 
-Estes pacotes não mudam nenhuma API própria. Sobem uma major porque o pacote
+Tirando o `mcp` (assinalado na sua linha), estes pacotes não mudam nenhuma API própria. Sobem uma major porque o pacote
 que têm de partilhar com a tua app subiu uma, por isso a linha antiga não corre
 ao lado da nova. Atualiza cada um junto com o pacote que acompanha.
 
@@ -96,7 +189,7 @@ ao lado da nova. Atualiza cada um junto com o pacote que acompanha.
 | `@basaltkit/auth-sqlite` | 3.0 | `auth` 5 | peer; implementa `ApiKeyStore.update` |
 | `@basaltkit/tenancy-prisma`, `tenancy-sqlite` | 3.0, 2.0 | `tenancy` 4 | peer |
 | `@basaltkit/notifications-prisma`, `notifications-sqlite` | 2.0, 2.0 | `notifications` 2 | peer |
-| `@basaltkit/mcp` | 6.0 | `http` 3 | corre as tuas rotas pelo pipeline do http |
+| `@basaltkit/mcp` | 6.0 | `http` 3 | corre as tuas rotas pelo pipeline do http (a 6.0 também traz mudanças próprias: [verificações no arranque e sessões ligadas à chave](#watch-since-1-13)) |
 | `@basaltkit/permissions` | 5.0 | `http` 3 | aumenta o `RouteMeta` (`meta.can`); o seu `400` depende das classes de erro do adapter |
 | `@basaltkit/permissions-prisma`, `permissions-sqlite` | 3.0, 3.0 | `permissions` 5 | peer |
 | `@basaltkit/subscriptions` | 6.0 | `http` 3 | aumenta o `RouteMeta` (`meta.subscribed`, `meta.feature`) |
@@ -207,10 +300,26 @@ omissão: `serviceId`, `previousHash` (única), `previousHashExpiresAt`,
 `rotatedAt`, `allowedIps` e `meta`. O Prisma seleciona todas as colunas de um
 modelo, por isso, depois de regenerar o cliente, **todas** as queries de API keys
 falham até a base de dados as ter. Copia o modelo de
-`@basaltkit/auth-prisma/schema.prisma` (o `basalt prisma:sync` nunca acrescenta
-campos a um modelo existente), corre `prisma generate` e depois
-`prisma migrate dev --name add_api_key_lifecycle` — com schema por tenant, em
-cada schema de tenant (`basalt tenant:migrate`). Até as colunas existirem, os
+`@basaltkit/auth-prisma/schema.prisma` (ou `schema.mysql.prisma` em MySQL; o
+`basalt prisma:sync` nunca acrescenta campos a um modelo existente), corre
+`prisma generate` e depois `prisma migrate dev --name add_api_key_lifecycle` —
+com schema por tenant, em cada schema de tenant (`basalt tenant:migrate`).
+Requer o `@basaltkit/auth` 5.
+
+O `migrate dev` avisa que acrescentar a restrição única em `previousHash` pode
+falhar com duplicados; é seguro, porque a coluna é nova e todas as linhas têm
+`NULL`. Também se recusa a correr numa shell não interativa (CI, um contentor,
+um agente). Aí, escreve a migração e aplica-a:
+
+```bash
+mkdir -p prisma/migrations/20261011000000_add_api_key_lifecycle
+prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script \
+  > prisma/migrations/20261011000000_add_api_key_lifecycle/migration.sql
+prisma migrate deploy
+```
+
+(O `API_KEY_LIFECYCLE_MIGRATION_SQL.postgresql` / `.mysql` tem as mesmas
+instruções, se preferires colá-las.) Até as colunas existirem, os
 pedidos com API key falham com `AUTH_API_KEY_SCHEMA_OUTDATED`, cuja mensagem traz
 o SQL (também exportado como `API_KEY_LIFECYCLE_MIGRATION_SQL`). O
 `@basaltkit/auth-sqlite` migra sozinho no arranque. Vê
@@ -274,6 +383,26 @@ nada aqui muda para ti.
   `'ip_not_allowed'`; um `switch` exaustivo precisa de um caso novo.
 - O `ApiKeyInfo` também omite o `previousHash`, por isso nenhum hash chega a uma
   listagem.
+- O `mcpPlugin` corre as verificações de arranque dos adapters sobre todas as
+  rotas que expõe como tool (`assertRoutesGuarded` com o container): uma rota
+  alcançável só pelo MCP com um `meta.tenant` desconhecido, um
+  `meta.responseHeaders` inválido ou meta de segurança que nenhum guard impõe
+  passa a recusar o arranque. O novo `mcpPlugin({ allowUnguardedMeta })` aceita
+  a mesma dispensa que os adapters. *(`@basaltkit/mcp` 6.0)* Vê
+  [MCP](/pt/guide/mcp#boot-checks).
+- Um cliente MCP com uma API key sem utilizador tem de enviar a **mesma chave**
+  em todos os pedidos de uma sessão `/mcp` (qualquer dos transportes,
+  `x-api-key` ou `Authorization: Bearer`); outra chave, ou nenhuma, recebe `404`
+  e tem de voltar a inicializar. Uma chave rodada mantém o id, por isso a
+  sessão sobrevive à rotação.
+- O `isTenantRequired()` lança `InvalidTenantMetaError` (`500`) para um
+  `meta.tenant` desconhecido em vez de devolver a predefinição da app, e o
+  enricher do tenancy recusa esse pedido antes de resolver um tenant — para um
+  driver próprio que saltou a verificação de arranque. *(`@basaltkit/tenancy` 4.0)*
+- As chaves de idempotência têm âmbito na credencial em bruto, e as respostas de
+  `POST /apikeys` e `POST /apikeys/:id/rotate` ficam guardadas durante a janela
+  de idempotência quando o cliente envia `Idempotency-Key`; vê
+  [API keys e idempotência](/pt/guide/auth#apikeys-idempotency).
 
 ---
 

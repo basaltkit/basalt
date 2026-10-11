@@ -10,7 +10,7 @@ that carries the full option table; nothing here restates one.
 ## Checklist
 
 - [ ] **Secrets are fail-closed** — sign with `secret()` so production refuses
-      placeholders. See [Security](/guide/security#fail-closed-secrets-secret).
+      placeholders. See [Security](/guide/security#fail-closed-secrets-—-secret).
 - [ ] **Edge is protected** — `securityPlugin({ rateLimit, cors, headers })`. The global
       limit is keyed by address only; a public API for machine clients gets
       `rateLimit.prefixes` and per-key budgets. See [Rate limiting](/guide/security#rate-limiting).
