@@ -1,6 +1,6 @@
 # RFC 0007 — `basalt-deploy` phase 3: zero scripts, a typed config, `init`
 
-- **Status:** Draft
+- **Status:** Accepted (2026-10-12) — not yet implemented
 - **Author:** Marcio Zebedeu
 - **Date:** 2026-10-12
 - **Affects:** `@basaltkit/deploy` (config types, new commands `init` and `bootstrap`, declarative infra and verify, the `caddy` target); `create-basalt` (a new app ships a `deploy.config.ts`); no runtime package
@@ -323,17 +323,19 @@ Each of these is one PR, released as a minor version:
    then goes from `git clone` to `run` and is checked end to end before this is
    called done.
 
-## 11. Open decisions
+## 11. Decisions
+
+Decided 2026-10-12 by the product owner: the three recommendations below.
 
 1. **Where `bootstrap` installs Node from.** NodeSource (what `provision.sh`
-   does) or the official tarball pinned to `engines.node`. Recommended:
+   does) or the official tarball pinned to `engines.node`. **Decided:**
    NodeSource. It updates with `apt`, and C9 already refuses a Node that does
    not satisfy `engines`.
 2. **Rootless Docker in `bootstrap`** (RFC 0006 §11.4). Today, `bootstrap`
    gives the deploy user the `docker` group and says plainly that it is
-   root-equivalent. Recommended: rootless as a separate phase. It means moving
+   root-equivalent. **Decided:** rootless as a separate phase. It means moving
    every volume, and it should not block removing the scripts.
 3. **Company grants (§4.1):** done by the package after `tenant:migrate`, or
-   left to the app's runner. Recommended: the package, for every app with
+   left to the app's runner. **Decided:** the package, for every app with
    `migrate.tenants`. A new company schema without grants is an outage the app
    role only finds at runtime.
