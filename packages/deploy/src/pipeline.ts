@@ -2,13 +2,14 @@ import { basename, dirname, join } from 'node:path'
 import { apacheInstall, apachePreflight, vhostPaths } from './apache.js'
 import { backupDatabase, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
-import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, pruneImages } from './compose.js'
+import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, logFindings, pruneImages } from './compose.js'
 import { definedEntries, processName } from './config.js'
 import { DeployError, errors, INSTALL_COMMAND, report, RUN_COMMAND, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
 import { answerQuestions, describeEnv, envFile, envMirrors, mirrorFindings, planEnv, readEnv, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
 import { envValues } from './dotenv.js'
-import { applyInfra, describeInfra, planInfra, type InfraPlan } from './infra.js'
+import { applyInfra, describeInfra, dockerPostgres, maintainServices, planInfra, type InfraPlan } from './infra.js'
+import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, externalPostgres, grantTenantSchemas } from './services.js'
 import { pm2List, pm2Preflight, pm2Release, resolvePort } from './pm2.js'
 import { lastGood, migrationNames, readReleases, recordRelease, type Release } from './state.js'
 
@@ -113,9 +114,10 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
   return { findings, port, values }
 }
 
-/** `backup.container` running — found now, not after the build, minutes later. */
+/** The dump's container running — found now, not after the build, minutes later. */
 async function backupFindings(ctx: DeployContext, values: Map<string, string>, options: RunOptions): Promise<Finding[]> {
   const container = ctx.config.backup?.container
+  // An external infra.postgres is checked with the rest of the infra.
   if (!container || !backupDecision(ctx.config, values, options.skip ?? []).run) return []
   const running = await ctx.host.exec('docker', ['inspect', '--format', '{{.State.Running}}', container])
   if (running.stdout.trim() === 'true') return []
@@ -209,7 +211,8 @@ export function backupDecision(config: DeployContext['config'], values: Map<stri
   if (wanted === true) return { run: true }
   if (!migratesAnything(config)) return { run: false, why: 'nothing to migrate' }
   if (config.infra?.kind === 'docker' && config.infra.postgres) return { run: true }
-  const url = migrationValues(config, values).get(config.backup?.urlKey ?? 'DATABASE_URL') ?? ''
+  if (dumpContainer(config)) return { run: true }
+  const url = migrationValues(config, values).get(dumpUrlKey(config)) ?? ''
   return /^postgres(ql)?:\/\//.test(url) ? { run: true } : { run: false, why: 'no Postgres database in the .env' }
 }
 
@@ -318,6 +321,26 @@ async function healthy(ctx: DeployContext, port: number): Promise<boolean> {
   return false
 }
 
+/** `verify.logs` and `verify.http` (RFC 0007 §6); throws what failed, which rolls the release back. */
+async function verifyDeclared(ctx: DeployContext, sha: string, port: number, since: Date): Promise<void> {
+  const verify = ctx.config.verify
+  if (!verify) return
+  const problems: string[] = []
+  if (verify.logs && Object.keys(verify.logs).length) {
+    if (!isCompose(ctx)) throw new DeployError('verify.logs reads compose service logs: it needs runtime: compose(…)')
+    const found = await logFindings(ctx, sha, since)
+    problems.push(...found)
+    if (found.length === 0) ctx.host.out.ok(`logs of ${Object.keys(verify.logs).join(', ')}: clean since the release`)
+  }
+  for (const check of verify.http ?? []) {
+    const expect = check.expect ?? 200
+    const answer = await ctx.host.httpGet(`http://127.0.0.1:${port}${check.path}`, { host: ctx.config.domain })
+    if ('status' in answer && answer.status === expect) ctx.host.out.ok(`${check.path}: ${expect}`)
+    else problems.push(`${check.path}: ${'status' in answer ? `HTTP ${answer.status}` : answer.error}, expected ${expect}`)
+  }
+  if (problems.length > 0) throw new DeployError(`verify: ${problems.join('; ')}`)
+}
+
 async function publicHealthy(ctx: DeployContext): Promise<Finding | undefined> {
   const { config } = ctx
   if (config.health?.public === false || config.proxy?.kind !== 'apache') return undefined
@@ -350,10 +373,22 @@ function reportEnv(ctx: DeployContext, plan: EnvPlan): void {
   for (const line of lines) ctx.host.out.info(line)
 }
 
-async function infraStep(ctx: DeployContext, infra: InfraPlan): Promise<void> {
+async function infraStep(ctx: DeployContext, infra: InfraPlan, values: Map<string, string>): Promise<void> {
   stopOnErrors(ctx, await applyInfra(ctx, infra), 'infra')
-  if (infra.services.length === 0) ctx.host.out.ok('nothing to start (external infra)')
-  else ctx.host.out.ok(`${infra.services.map((s) => s.container).join(', ')} healthy; credentials accepted${ctx.config.infra?.kind === 'docker' && ctx.config.infra.minio?.buckets.length ? '; buckets in place' : ''}`)
+  const external = externalOf(ctx.config)
+  const adopted = [external?.postgres?.container, external?.redis?.container, external?.minio?.container].filter(Boolean)
+  if (infra.services.length > 0) ctx.host.out.ok(`${infra.services.map((s) => s.container).join(', ')} healthy; credentials accepted`)
+  else if (adopted.length > 0) ctx.host.out.ok(`${adopted.join(', ')} running (external)`)
+  else ctx.host.out.ok('nothing to start (external infra)')
+  for (const line of await maintainServices(ctx, infra, values)) ctx.host.out.ok(line)
+}
+
+/** The app role on every company schema, after the companies' migrations (RFC 0007 §11.3). */
+async function tenantGrants(ctx: DeployContext, infra: InfraPlan, values: Map<string, string>): Promise<void> {
+  const role = appRoleOf(ctx.config)
+  if (!role || !ctx.config.migrate?.tenants) return
+  const pg = ctx.config.infra?.kind === 'docker' ? dockerPostgres(infra) : externalPostgres(ctx, values)
+  if (pg) ctx.host.out.ok(await grantTenantSchemas(ctx, pg, role))
 }
 
 async function validateStep(ctx: DeployContext, values: Map<string, string>): Promise<void> {
@@ -375,17 +410,22 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
     options.skip?.includes('fetch') ? 'fetch: skipped' : `fetch: git fetch ${config.remote ?? 'origin'} ${config.branch ?? 'main'} && git merge --ff-only`,
     ...describeEnv(env).map((l) => `env: ${l}`),
     ...describeInfra(infra).map((l) => `infra: ${l}`),
+    ...describeServices(config).map((l) => `infra: ${l}`),
     `build: ${pm} install (frozen), ${(config.build?.prisma ?? []).map((c) => `prisma generate --config ${c}`).join(', ') || 'no prisma'}${config.build?.script ? `, ${pm} run ${config.build.script}` : ''}${config.build?.web ? `, ${config.build.web} build` : ''}${isCompose(ctx) ? `, docker build ${composeOf(ctx).images.map((i) => i.tag).join(', ')} (skipped when the commit's tag exists)` : ''}`,
     ...(config.hooks?.infra ?? []).map((h) => `infra hook: ${h.join(' ')}`),
     `validate: ${config.env.schema ?? '(no schema configured)'} against the new .env`,
     ((decision) => decision.run
-      ? `backup: pg_dump${config.backup?.container ? ` inside ${config.backup.container}` : ''} → ${config.backup?.dir ?? 'backups/predeploy'} (keep ${config.backup?.keep ?? 10})`
+      ? `backup: pg_dump${dumpContainer(config) ? ` inside ${dumpContainer(config)}` : ''} → ${config.backup?.dir ?? 'backups/predeploy'} (keep ${config.backup?.keep ?? 10})`
       : `backup: skipped (${decision.why})`)(backupDecision(config, checked.values, options.skip ?? [])),
     `migrate: ${[config.migrate?.command?.join(' ') ?? '', migratesCentral(config) ? 'prisma migrate deploy' : '', config.migrate?.tenants ? 'tenant:migrate' : ''].filter(Boolean).join(' + ') || 'nothing configured'}`,
+    ...(isCompose(ctx) && composeOf(ctx).attach ? [`attach: ${Object.entries(composeOf(ctx).attach ?? {}).map(([c, n]) => `${c} → ${n.join(', ')}`).join('; ')}`] : []),
+    ...(isCompose(ctx) ? (composeOf(ctx).jobs ?? []).map((j) => `job: ${j.service}${j.command ? ` ${j.command.join(' ')}` : ''}${j.once ? ` (unless ${j.once.exists} exists)` : ''}`) : []),
     `release: ${describeRelease(ctx, checked.port)}`,
     `health: http://127.0.0.1:${checked.port}${config.health?.path ?? '/health'} (Host: ${config.domain})${config.proxy?.kind === 'apache' && config.health?.public !== false ? `, then https://${config.domain}${config.proxy.apiPrefix}${config.health?.path ?? '/health'}` : ''}`,
   ]
   for (const hook of config.hooks?.verify ?? []) lines.push(`verify hook: ${hook.join(' ')}`)
+  if (config.verify?.logs) lines.push(`verify: no ${[...new Set(Object.values(config.verify.logs).flat())].join(' / ')} in the logs of ${Object.keys(config.verify.logs).join(', ')}`)
+  for (const check of config.verify?.http ?? []) lines.push(`verify: ${check.path} answers ${check.expect ?? 200}`)
   for (const line of lines) host.out.info(line)
   return errors([...checked.findings, ...infra.findings]).length > 0 ? 1 : 0
 }
@@ -401,7 +441,7 @@ export async function envCommand(ctx: DeployContext): Promise<number> {
   if (missing.length > 0) throw new DeployError(`no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`)
   reportEnv(ctx, env)
   await writeEnv(ctx, env)
-  await step(ctx, 'infra', () => infraStep(ctx, infra))
+  await step(ctx, 'infra', () => infraStep(ctx, infra, env.values))
   await step(ctx, 'validate', () => validateStep(ctx, env.values))
   ctx.host.out.ok(isCompose(ctx) ? `${envFile(ctx)} ready` : `.env ready (PORT=${port})`)
   return 0
@@ -443,7 +483,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
     await writeEnv(ctx, prepared.env)
     values = prepared.env.values
 
-    await step(ctx, 'infra', async () => { await infraStep(ctx, infra); await runHooks(ctx, 'infra', values, sha) })
+    await step(ctx, 'infra', async () => { await infraStep(ctx, infra, values); await runHooks(ctx, 'infra', values, sha) })
     await step(ctx, 'build', async () => { await build(ctx, values, sha); await settleLockfile(ctx, lockfileSaid) })
     await step(ctx, 'validate', () => validateStep(ctx, values))
     const backup = backupDecision(config, values, skip)
@@ -454,7 +494,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
       host.out.step('backup')
       host.out.info(`skipped: ${backup.why}`)
     }
-    await step(ctx, 'migrate', async () => { await migrate(ctx, values); await settleLockfile(ctx, lockfileSaid) })
+    await step(ctx, 'migrate', async () => { await migrate(ctx, values); await tenantGrants(ctx, infra, values); await settleLockfile(ctx, lockfileSaid) })
   } catch (error) {
     if (sha !== previous) await restoreCode(ctx, previous, values).catch((e: unknown) => host.out.error(`could not restore the code: ${(e as Error).message}`))
     record.note = (error as Error).message
@@ -479,6 +519,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
     return 1
   }
 
+  const releasedAt = host.now()
   try {
     host.out.ok(await step(ctx, 'release', () => release(ctx, values, sha)))
   } catch (error) {
@@ -487,15 +528,20 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
   const health = await step(ctx, 'health', () => healthCheck(ctx, port, sha))
   if (!health.ok) return recover(health.why)
   host.out.ok(`http://127.0.0.1:${port}${config.health?.path ?? '/health'}`)
-  if (config.hooks?.verify?.length) {
+  // Through the proxy, under the health step: a failure here is the proxy,
+  // DNS or TLS — reported at the end, never rolled back.
+  const publicProblem = await publicHealthy(ctx)
+  if (config.hooks?.verify?.length || config.verify) {
     try {
-      await step(ctx, 'verify', () => runHooks(ctx, 'verify', values, sha))
+      await step(ctx, 'verify', async () => {
+        await runHooks(ctx, 'verify', values, sha)
+        await verifyDeclared(ctx, sha, port, releasedAt)
+      })
     } catch (error) {
       return recover((error as Error).message)
     }
   }
 
-  const publicProblem = await publicHealthy(ctx)
   record.status = publicProblem ? 'public-unreachable' : 'ok'
   // `pnpm run start`, launched by PM2 in the checkout, may rewrite it too.
   await settleLockfile(ctx, lockfileSaid)

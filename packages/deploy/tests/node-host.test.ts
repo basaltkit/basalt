@@ -71,6 +71,12 @@ describe('the real host', () => {
     }
     expect((await host.exec('basalt-no-such-command', [])).code).toBe(127)
   })
+
+  it('writes stdin to the child and closes it (SQL with a password never goes in argv)', async () => {
+    const host = nodeHost(quiet)
+    const script = 'let t="";process.stdin.on("data",(c)=>t+=c).on("end",()=>console.log(t.toUpperCase()))'
+    expect((await host.exec(process.execPath, ['-e', script], { stdin: "alter role x password 'pw';" })).stdout.trim()).toBe("ALTER ROLE X PASSWORD 'PW';")
+  })
 })
 
 describe('the real host: files, network, terminal', () => {
