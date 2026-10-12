@@ -109,7 +109,18 @@ async function nameFindings(ctx: DeployContext, sha: string): Promise<Finding[]>
     const near = services.find((s) => s.startsWith(name.slice(0, 3)) || name.startsWith(s.slice(0, 3)))
     findings.push({ id: 'compose', level: 'error', message: `${where}: "${name}" is not a service of ${rt.file}${near ? ` — did you mean "${near}"?` : ''} (services: ${services.join(', ')})` })
   }
+  // The dedicated infra's containers are created by the infra step, before the
+  // release: on a new server they do not exist yet, and that is not an error.
+  const infra = ctx.config.infra
+  const dedicated = new Set(infra?.kind === 'docker'
+    ? [
+        infra.postgres && (infra.postgres.container ?? `${ctx.config.app}-pg`),
+        infra.redis && (infra.redis.container ?? `${ctx.config.app}-redis`),
+        infra.minio && (infra.minio.container ?? `${ctx.config.app}-minio`),
+      ].filter((c): c is string => Boolean(c))
+    : [])
   for (const container of Object.keys(rt.attach ?? {})) {
+    if (dedicated.has(container)) continue
     const state = await ctx.host.exec('docker', ['inspect', '--format', '{{.State.Running}}', container])
     if (state.stdout.trim() !== 'true') {
       findings.push(state.code === 0
