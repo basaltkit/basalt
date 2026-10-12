@@ -99,6 +99,18 @@ describe('basalt-deploy run', () => {
     expect(host.transcript).not.toContain('s3cr3t')
   })
 
+  it('build.script compiles the app after prisma generate, before the web (start runs dist/)', async () => {
+    const { host } = server({ env: `${GOOD_ENV}DATABASE_URL=postgresql://lexfirma:pw@127.0.0.1:5434/lexfirma\n` })
+    const ctx = context(host, lexfirmaConfig({ backup: { urlKey: 'DATABASE_URL' }, build: { prisma: ['prisma.config.ts'], script: 'build', web: 'web' } }))
+    expect(await run(ctx)).toBe(0)
+    expect(host.commands('pnpm').filter((c) => c !== 'pnpm --version').slice(0, 4)).toEqual([
+      'pnpm install --frozen-lockfile',
+      'pnpm exec prisma generate --config prisma.config.ts',
+      'pnpm run build',
+      'pnpm --dir web run build',
+    ])
+  })
+
   it('stops at preflight with nothing changed when the checkout has local edits', async () => {
     const { host, head } = server({ dirty: ' M src/app.ts' })
     await expect(run(context(host, config()))).rejects.toThrow(DeployError)

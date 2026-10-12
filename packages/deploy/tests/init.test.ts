@@ -30,7 +30,7 @@ export const env = defineEnv(
 
 function scaffold(readyz = false): FakeHost {
   return new FakeHost()
-    .put(`${DIR}/package.json`, JSON.stringify({ name: '@acme/Acme App', scripts: { 'db:deploy': 'prisma migrate deploy' } }))
+    .put(`${DIR}/package.json`, JSON.stringify({ name: '@acme/Acme App', scripts: { 'db:deploy': 'prisma migrate deploy', build: 'tsc -p tsconfig.build.json', start: 'node --enable-source-maps dist/src/server.js' } }))
     .put(`${DIR}/src/env.ts`, SCAFFOLD_ENV)
     .put(`${DIR}/prisma.config.ts`, '')
     .on(({ command }) => (command === 'grep' ? (readyz ? ok('src/routes/health.ts\n') : fail('', 1)) : undefined))
@@ -128,6 +128,7 @@ describe('the file', () => {
     expect(source).not.toMatch(/DATABASE_URL|FEATURE_X|PORT:/)
     expect(source).toContain(`infra: dockerInfra('acme-app', { redis: false })`)
     expect(source).toContain(`migrate: { central: true }`)
+    expect(source).toContain(`build: { prisma: ['prisma.config.ts'], script: 'build' }`)
     expect(source).toContain('runtime: pm2(),')
     expect(source).toContain(`health: { path: '/health' }`)
     expect(source).not.toContain('tenants:')
