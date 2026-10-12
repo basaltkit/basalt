@@ -81,6 +81,13 @@ export interface DeployConfig<E extends object = EnvShape> {
   hooks?: HooksConfig
   /** Declarative checks after the health check; a failure is a failed release, rolled back (RFC 0007 §6). */
   verify?: VerifyConfig
+  /** What `basalt-deploy bootstrap` sets up on a fresh server (RFC 0007 §7). */
+  bootstrap?: {
+    /** Swap created when RAM is under 6 GB and there is none; 0 = never. @default 4 */
+    swapGb?: number
+    /** ufw: SSH (+ 80/443 behind a proxy), turned on only when nothing else listens. @default true */
+    firewall?: boolean
+  }
 }
 
 export interface VerifyConfig {
@@ -375,7 +382,35 @@ export interface Pm2Runtime {
   avoid: number[]
 }
 
-export type ProxyConfig = ApacheProxy | NoProxy
+export type ProxyConfig = ApacheProxy | CaddyProxy | NoProxy
+
+/**
+ * Caddy on the host (RFC 0007 §8): `install` writes `/etc/caddy/sites/<app>.caddy`
+ * (imported by the main Caddyfile) and reloads after `caddy validate`; deploys
+ * diff it and never rewrite it. TLS is Caddy's own: one certificate per host,
+ * issued on first visit — for tenants, only once the app says the host is
+ * theirs (`onDemandTls.ask`).
+ */
+export interface CaddyProxy {
+  kind: 'caddy'
+  /** Directory served at `/`, relative to the app directory. @default 'web/dist' */
+  webRoot: string
+  /** Path prefix proxied to the API (stripped). @default '/api' */
+  apiPrefix: string
+  /**
+   * Issue certificates on demand, after asking the app (`GET <ask>?domain=<host>`
+   * answering 200) — required for `tenants: 'subdomain'` and customer domains.
+   * Caddy has one such endpoint per server: it lives in the main Caddyfile.
+   * @example { ask: '/tls/allowed' }
+   */
+  onDemandTls?: { ask: `/${string}` }
+  /** More Caddyfile appended to the site file, as is (another host of the app, special routes). */
+  extra?: string
+  /** `false`: the site file is the app's own — checked (imported, C1), never written. */
+  managed?: boolean
+  /** @default '/etc/caddy' */
+  root?: string
+}
 
 export interface ApacheProxy {
   kind: 'apache'
@@ -461,6 +496,16 @@ export const pm2 = (options: { name?: string; script?: string; port?: number | '
   script: options.script ?? 'start',
   port: options.port ?? 'auto',
   avoid: options.avoid ?? [],
+})
+
+export const caddy = (options: { webRoot?: string; apiPrefix?: string; onDemandTls?: { ask: `/${string}` }; extra?: string; managed?: boolean; root?: string } = {}): CaddyProxy => ({
+  kind: 'caddy',
+  webRoot: options.webRoot ?? 'web/dist',
+  apiPrefix: options.apiPrefix ?? '/api',
+  ...(options.onDemandTls ? { onDemandTls: options.onDemandTls } : {}),
+  ...(options.extra === undefined ? {} : { extra: options.extra }),
+  ...(options.managed === undefined ? {} : { managed: options.managed }),
+  ...(options.root === undefined ? {} : { root: options.root }),
 })
 
 export const apache = (options: { vhost?: string; webRoot?: string; apiPrefix?: string; certName?: string; root?: string; managed?: boolean; vhosts?: string[] } = {}): ApacheProxy => ({
@@ -628,6 +673,9 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   }
   if (config.backup?.container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(config.backup.container)) {
     problems.push(`backup.container "${config.backup.container}" is not a container name`)
+  }
+  if (config.proxy?.kind === 'caddy' && config.tenants === 'subdomain' && !config.proxy.onDemandTls) {
+    problems.push(`tenants: 'subdomain' behind caddy() needs onDemandTls: { ask: '/…' } — a certificate per tenant host, issued only for hosts the app vouches for`)
   }
   if (problems.length > 0) throw new DeployConfigError(problems)
   return typed

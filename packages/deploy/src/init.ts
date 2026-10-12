@@ -57,7 +57,7 @@ export interface InitAnswers {
   domain: string
   tenants: 'subdomain' | 'none'
   branch: string
-  proxy: 'apache' | 'none'
+  proxy: 'apache' | 'caddy' | 'none'
 }
 
 const COMPOSE_FILES = ['docker/compose.prod.yml', 'docker/compose.prod.yaml', 'compose.prod.yml', 'compose.prod.yaml', 'docker-compose.prod.yml']
@@ -386,6 +386,13 @@ export function renderConfig(facts: ProjectFacts, answers: InitAnswers): string 
     lines.push(`  runtime: pm2(${avoid.length ? `{ avoid: [${avoid.join(', ')}] }` : ''}),${avoid.length ? '   // ports already taken on this server' : ''}`)
   }
 
+  if (answers.proxy === 'caddy') {
+    helpers.add('caddy')
+    // One certificate per tenant host, issued only for hosts the app vouches for.
+    lines.push(answers.tenants === 'subdomain'
+      ? `  proxy: caddy({ onDemandTls: { ask: '/tls/allowed' } }),   // GET /tls/allowed?domain=<host> must answer 200 for the app's hosts only`
+      : '  proxy: caddy(),')
+  }
   if (answers.proxy === 'apache') {
     helpers.add('apache')
     const vhosts = facts.server?.vhosts ?? []
@@ -404,7 +411,7 @@ export function renderConfig(facts: ProjectFacts, answers: InitAnswers): string 
     ' *   node node_modules/@basaltkit/deploy/dist/bin.js run',
     ' */',
   ]
-  const order = ['apache', 'ask', 'compose', 'defineDeploy', 'dockerInfra', 'pm2', 'secret']
+  const order = ['apache', 'ask', 'caddy', 'compose', 'defineDeploy', 'dockerInfra', 'pm2', 'secret']
   const imports = order.filter((h) => helpers.has(h))
   return [
     ...header,
@@ -460,9 +467,9 @@ export async function init(host: Host, dir: string, flags: Map<string, string>, 
     return 1
   }
   const branch = (await answer('branch', 'Branch deployed', 'main')) ?? 'main'
-  const proxy = (await answer('proxy', 'Proxy on this server: apache | none', 'apache')) ?? 'apache'
-  if (proxy !== 'apache' && proxy !== 'none') {
-    host.out.error('--proxy is apache or none')
+  const proxy = (await answer('proxy', 'Proxy on this server: apache | caddy | none', 'apache')) ?? 'apache'
+  if (proxy !== 'apache' && proxy !== 'caddy' && proxy !== 'none') {
+    host.out.error('--proxy is apache, caddy or none')
     return 1
   }
 

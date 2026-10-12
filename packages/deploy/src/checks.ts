@@ -49,12 +49,12 @@ export async function tlsFindings(ctx: DeployContext): Promise<Finding[]> {
   return findings
 }
 
-function minimumVersion(range: string | undefined): number[] | undefined {
+export function minimumVersion(range: string | undefined): number[] | undefined {
   const match = range ? /(\d+)\.(\d+)(?:\.(\d+))?/.exec(range) : null
   return match ? [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)] : undefined
 }
 
-const below = (version: number[], minimum: number[]) => {
+export const below = (version: number[], minimum: number[]) => {
   for (let i = 0; i < 3; i++) {
     if ((version[i] ?? 0) !== (minimum[i] ?? 0)) return (version[i] ?? 0) < (minimum[i] ?? 0)
   }

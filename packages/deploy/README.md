@@ -86,6 +86,25 @@ CI catches them too.
 
 ## On a new server
 
+A fresh Ubuntu or Debian with Node, three commands:
+
+```sh
+git clone <repo> /srv/myapp && cd /srv/myapp
+sudo npx -y -p @basaltkit/deploy basalt-deploy bootstrap --user=ubuntu   # --dry-run first, to see it
+node node_modules/@basaltkit/deploy/dist/bin.js run                       # as ubuntu, from then on
+```
+
+`bootstrap` installs only what is missing — base packages, Docker with compose,
+Node at `engines.node` (NodeSource), the pnpm the lockfile records, swap when
+RAM is under 6 GB (`bootstrap.swapGb`), ufw with SSH and 80/443 (turned on only
+when nothing else listens; `--no-firewall`), Caddy when the proxy is `caddy()` —
+gives the checkout and the `docker` group to the user (said plainly: that group
+is root on the machine; rootless Docker is a later step), then runs, as the
+user, `pnpm install` and `env` (it asks what it cannot generate) and, as root,
+`install`. A step that fails stops it; running it again redoes nothing done.
+
+By hand, the same thing:
+
 ```sh
 # as the app user (never root), in the checkout:
 pnpm install
@@ -109,8 +128,20 @@ refuses a modified tree.
 preflight probes the remote with prompts disabled, warns at a terminal and
 stops before anything changes when nobody can type them (cron, CI).
 
-The TLS certificate is yours to issue (`certbot --dns-cloudflare -d <domain> -d '*.<domain>'`);
-every deploy checks it.
+With Apache the TLS certificate is yours to issue (`certbot --dns-cloudflare -d <domain> -d '*.<domain>'`);
+every deploy checks it. With Caddy it is Caddy's:
+
+```ts
+proxy: caddy({ onDemandTls: { ask: '/tls/allowed' } }),   // tenants: a certificate per host, for hosts the app vouches for
+```
+
+`install` writes `/etc/caddy/sites/<app>.caddy` — the apex (and `*.<domain>`
+with tenants), `/api/` stripped to the app, `web/dist` with the SPA fallback —
+and, on a server still on the package's Caddyfile, a main file that imports it
+and asks the app before each certificate. Someone's own Caddyfile only gets the
+import line. `caddy validate` runs before the reload; a failure puts every file
+back. Deploys diff the site and never rewrite it; C1, C2 (not imported) and C8
+(no `ask`) are checked as for Apache.
 
 ## Commands
 

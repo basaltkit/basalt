@@ -190,6 +190,9 @@ describe('the command', () => {
     expect(await init(scaffold(), DIR, flags({ domain: 'Not A Host' }), new Set())).toBe(1)
     expect(await init(scaffold(), DIR, flags({ domain: 'a.example.ao', tenants: 'yes' }), new Set())).toBe(1)
     expect(await init(scaffold(), DIR, flags({ domain: 'a.example.ao', proxy: 'nginx' }), new Set())).toBe(1)
+    const host = scaffold()
+    expect(await init(host, DIR, flags({ domain: 'a.example.ao', proxy: 'caddy', tenants: 'subdomain' }), new Set())).toBe(0)
+    expect(host.file(`${DIR}/deploy.config.ts`)).toContain(`proxy: caddy({ onDemandTls: { ask: '/tls/allowed' } })`)
   })
 
   it('with a terminal it asks, with defaults', async () => {
