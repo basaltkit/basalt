@@ -7,11 +7,11 @@ const ENV = `${DIR}/.env`
 
 describe('the .env step', () => {
   it('writes fixed, generated, derived and asked values; removes forbidden ones; prints keys only', async () => {
-    const host = new FakeHost().put(ENV, 'PROXYPAY_FAKE=0\nNODE_ENV=development\n', 0o644)
+    const host = new FakeHost().put(ENV, 'PAYCO_FAKE=0\nNODE_ENV=development\n', 0o644)
     host.answers = ['', 'sk_live_TOKEN_123']
     const ctx = context(host)
     const plan = planEnv(ctx, await readEnv(ctx), 3002, [])
-    expect(plan.questions).toEqual(['MAILER_URL', 'PROXYPAY_SECRET_TOKEN'])
+    expect(plan.questions).toEqual(['MAILER_URL', 'PAYCO_SECRET_TOKEN'])
     expect(await answerQuestions(ctx, plan)).toEqual([])
     for (const line of describeEnv(plan)) host.out.info(line)
     await writeEnv(ctx, plan)
@@ -20,16 +20,16 @@ describe('the .env step', () => {
     expect(written.get('PORT')).toBe('3002')
     expect(written.get('NODE_ENV')).toBe('production')
     expect(written.get('APP_SECRET')).toMatch(/^[0-9a-f]{64}$/)
-    expect(written.get('PROXYPAY_CALLBACK_URL')).toBe('https://lexfirma.aipro.ao/api/webhooks/proxypay')
-    expect(written.get('PROXYPAY_SECRET_TOKEN')).toBe('sk_live_TOKEN_123')
+    expect(written.get('PAYCO_CALLBACK_URL')).toBe('https://acme.example.com/api/webhooks/payco')
+    expect(written.get('PAYCO_SECRET_TOKEN')).toBe('sk_live_TOKEN_123')
     expect(written.get('MAILER_URL')).toBe('')
-    expect(written.has('PROXYPAY_FAKE')).toBe(false)
+    expect(written.has('PAYCO_FAKE')).toBe(false)
 
     expect(host.mode(ENV)).toBe(0o600)
-    expect(host.file(`${ENV}.bak-20261011T120000`)).toBe('PROXYPAY_FAKE=0\nNODE_ENV=development\n')
+    expect(host.file(`${ENV}.bak-20261011T120000`)).toBe('PAYCO_FAKE=0\nNODE_ENV=development\n')
     expect(host.mode(`${ENV}.bak-20261011T120000`)).toBe(0o600)
     // The summary names keys; no value — generated or typed — reaches the screen.
-    expect(host.transcript).toContain('add PROXYPAY_SECRET_TOKEN (answered)')
+    expect(host.transcript).toContain('add PAYCO_SECRET_TOKEN (answered)')
     expect(host.transcript).not.toContain('sk_live_TOKEN_123')
     expect(host.transcript).not.toContain(written.get('APP_SECRET'))
   })
@@ -48,16 +48,16 @@ describe('the .env step', () => {
 
   it('without a terminal, takes answers from its own environment, else lists what is missing', async () => {
     const host = new FakeHost().put(ENV, '')
-    host.env['PROXYPAY_SECRET_TOKEN'] = 'from-ci'
+    host.env['PAYCO_SECRET_TOKEN'] = 'from-ci'
     const ctx = context(host)
     const plan = planEnv(ctx, await readEnv(ctx), 3002, [])
     expect(await answerQuestions(ctx, plan)).toEqual([])
-    expect(plan.changes.find((c) => c.key === 'PROXYPAY_SECRET_TOKEN')).toMatchObject({ value: 'from-ci' })
+    expect(plan.changes.find((c) => c.key === 'PAYCO_SECRET_TOKEN')).toMatchObject({ value: 'from-ci' })
 
     const bare = new FakeHost().put(ENV, '')
     const ctx2 = context(bare)
     const plan2 = planEnv(ctx2, await readEnv(ctx2), 3002, [])
-    expect(await answerQuestions(ctx2, plan2)).toEqual(['PROXYPAY_SECRET_TOKEN'])
+    expect(await answerQuestions(ctx2, plan2)).toEqual(['PAYCO_SECRET_TOKEN'])
   })
 
   it('asks again for a value no quoting can carry, instead of writing a broken file', async () => {
@@ -66,7 +66,7 @@ describe('the .env step', () => {
     const ctx = context(host)
     const plan = planEnv(ctx, await readEnv(ctx), 3002, [])
     await answerQuestions(ctx, plan)
-    expect(plan.changes.find((c) => c.key === 'PROXYPAY_SECRET_TOKEN')).toMatchObject({ value: 'good' })
+    expect(plan.changes.find((c) => c.key === 'PAYCO_SECRET_TOKEN')).toMatchObject({ value: 'good' })
     expect(host.prompts).toHaveLength(2)
   })
 
@@ -83,10 +83,10 @@ describe('the .env step', () => {
 
 describe('C6 — a value meant as off that the schema reads as on', () => {
   it('flags "0"/"false"/"no"/"off" parsed as true, prefixed names included', () => {
-    const values = new Map([['PROXYPAY_FAKE', '0'], ['MY_APP_DEBUG', 'false'], ['OTHER', '1'], ['FEATURE', 'true']])
-    const findings = coercionFindings(values, ['PROXYPAY_FAKE', 'DEBUG', 'OTHER', 'FEATURE'])
-    expect(findings.map((f) => f.message.split('=')[0])).toEqual(['PROXYPAY_FAKE', 'MY_APP_DEBUG'])
-    expect(findings[0]?.fix).toMatch(/remove PROXYPAY_FAKE/)
+    const values = new Map([['PAYCO_FAKE', '0'], ['MY_APP_DEBUG', 'false'], ['OTHER', '1'], ['FEATURE', 'true']])
+    const findings = coercionFindings(values, ['PAYCO_FAKE', 'DEBUG', 'OTHER', 'FEATURE'])
+    expect(findings.map((f) => f.message.split('=')[0])).toEqual(['PAYCO_FAKE', 'MY_APP_DEBUG'])
+    expect(findings[0]?.fix).toMatch(/remove PAYCO_FAKE/)
   })
 
   it('says nothing about a value parsed as false', () => {
@@ -97,7 +97,7 @@ describe('C6 — a value meant as off that the schema reads as on', () => {
 describe('C10 — forbidden and fixed keys', () => {
   it('reports both', () => {
     const ctx = context(new FakeHost())
-    const findings = policyFindings(ctx, new Map([['PROXYPAY_FAKE', ''], ['NODE_ENV', 'production'], ['HOST', '0.0.0.0']]))
-    expect(findings.map((f) => f.message)).toEqual(['PROXYPAY_FAKE must not exist in the production .env', 'HOST differs from deploy.config.ts'])
+    const findings = policyFindings(ctx, new Map([['PAYCO_FAKE', ''], ['NODE_ENV', 'production'], ['HOST', '0.0.0.0']]))
+    expect(findings.map((f) => f.message)).toEqual(['PAYCO_FAKE must not exist in the production .env', 'HOST differs from deploy.config.ts'])
   })
 })

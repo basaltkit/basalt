@@ -1,5 +1,5 @@
 /**
- * What the first production deploy (LexFirma, 2026-10-11) showed:
+ * What the first production deploy (Acme, 2026-10-11) showed:
  * a credential prompt in the middle of `fetch`, steps that said nothing when
  * they worked, an install hint root could not run, and Prisma/Postgres steps
  * that ran by default in apps without either.
@@ -8,10 +8,10 @@ import { describe, expect, it } from 'vitest'
 import { apachePreflight, renderVhost } from '../src/apache.js'
 import { INSTALL_COMMAND } from '../src/context.js'
 import { backupDecision, migratesCentral, plan, preflight, run } from '../src/pipeline.js'
-import { context, DIR, FakeHost, fail, jlist, lexfirmaConfig, ok } from './fake-host.js'
+import { context, DIR, FakeHost, fail, jlist, acmeConfig, ok } from './fake-host.js'
 
 const ENV = `${DIR}/.env`
-const BASE_ENV = 'NODE_ENV=production\nHOST=127.0.0.1\nPORT=3002\nAPP_SECRET=s3cr3t\nMAILER_URL=\nPROXYPAY_SECRET_TOKEN=tok\nPROXYPAY_CALLBACK_URL=https://lexfirma.aipro.ao/api/webhooks/proxypay\n'
+const BASE_ENV = 'NODE_ENV=production\nHOST=127.0.0.1\nPORT=3002\nAPP_SECRET=s3cr3t\nMAILER_URL=\nPAYCO_SECRET_TOKEN=tok\nPAYCO_CALLBACK_URL=https://acme.example.com/api/webhooks/payco\n'
 
 function gitHost(remote: ReturnType<typeof ok>) {
   return new FakeHost()
@@ -24,12 +24,12 @@ function gitHost(remote: ReturnType<typeof ok>) {
       return ok()
     })
     .on(({ command }) => (command === 'ss' ? ok('') : undefined))
-    .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'lexfirma-api', cwd: DIR })) : undefined))
+    .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'acme-api', cwd: DIR })) : undefined))
     .on(({ command }) => (command === 'node' ? ok('v24.17.0') : undefined))
     .on(({ command }) => (command === 'pnpm' ? ok('11.8.0') : undefined))
 }
 
-const noApache = () => lexfirmaConfig({ proxy: { kind: 'none' } })
+const noApache = () => acmeConfig({ proxy: { kind: 'none' } })
 
 describe('git credentials are checked before the deploy starts, never prompted for unattended', () => {
   const needsCredentials = fail("fatal: could not read Username for 'https://github.com': terminal prompts disabled", 128)
@@ -72,24 +72,24 @@ describe('git credentials are checked before the deploy starts, never prompted f
 })
 
 describe('Prisma and Postgres steps run by default only when the app has them', () => {
-  const bare = (extra: Partial<ReturnType<typeof lexfirmaConfig>> = {}) => lexfirmaConfig({ build: {}, migrate: {}, ...extra })
+  const bare = (extra: Partial<ReturnType<typeof acmeConfig>> = {}) => acmeConfig({ build: {}, migrate: {}, ...extra })
 
   it('prisma migrate deploy: with build.prisma, or when asked', () => {
-    expect(migratesCentral(lexfirmaConfig())).toBe(true)
+    expect(migratesCentral(acmeConfig())).toBe(true)
     expect(migratesCentral(bare())).toBe(false)
     expect(migratesCentral(bare({ migrate: { central: true } }))).toBe(true)
-    expect(migratesCentral(lexfirmaConfig({ migrate: { central: false } }))).toBe(false)
+    expect(migratesCentral(acmeConfig({ migrate: { central: false } }))).toBe(false)
   })
 
   it('the dump: when something is migrated and there is a Postgres to dump', () => {
     const pg = new Map([['DATABASE_URL', 'postgresql://u:p@127.0.0.1:5434/db']])
-    expect(backupDecision(lexfirmaConfig(), pg)).toEqual({ run: true })
-    expect(backupDecision(lexfirmaConfig(), new Map([['DATABASE_URL', 'mysql://u:p@h/db']]))).toEqual({ run: false, why: 'no Postgres database in the .env' })
-    expect(backupDecision(lexfirmaConfig({ infra: { kind: 'docker', postgres: { image: 'postgres:16', port: 'auto', user: 'x', database: 'x', urlKey: 'DATABASE_URL', urlParams: {} } } }), new Map())).toEqual({ run: true })
+    expect(backupDecision(acmeConfig(), pg)).toEqual({ run: true })
+    expect(backupDecision(acmeConfig(), new Map([['DATABASE_URL', 'mysql://u:p@h/db']]))).toEqual({ run: false, why: 'no Postgres database in the .env' })
+    expect(backupDecision(acmeConfig({ infra: { kind: 'docker', postgres: { image: 'postgres:16', port: 'auto', user: 'x', database: 'x', urlKey: 'DATABASE_URL', urlParams: {} } } }), new Map())).toEqual({ run: true })
     expect(backupDecision(bare(), pg)).toEqual({ run: false, why: 'nothing to migrate' })
     expect(backupDecision(bare({ backup: { beforeMigrate: true } }), new Map())).toEqual({ run: true })
-    expect(backupDecision(lexfirmaConfig({ backup: { beforeMigrate: false } }), pg)).toEqual({ run: false, why: 'backup.beforeMigrate is false' })
-    expect(backupDecision(lexfirmaConfig(), pg, ['backup'])).toEqual({ run: false, why: '--skip=backup' })
+    expect(backupDecision(acmeConfig({ backup: { beforeMigrate: false } }), pg)).toEqual({ run: false, why: 'backup.beforeMigrate is false' })
+    expect(backupDecision(acmeConfig(), pg, ['backup'])).toEqual({ run: false, why: '--skip=backup' })
   })
 
   it('an app without Prisma or Postgres deploys without either, and says so', async () => {
@@ -117,13 +117,13 @@ describe('every step says what it did', () => {
     const host = gitHost(ok('x'))
       .on(({ command }) => (command === process.execPath ? ok('\n@@basalt-deploy@@{"ok":true,"trueKeys":[]}\n') : undefined))
       .on(({ command }) => (command === 'pm2' ? ok() : undefined))
-    const ctx = context(host, lexfirmaConfig({ proxy: { kind: 'none' }, backup: { beforeMigrate: false } }))
+    const ctx = context(host, acmeConfig({ proxy: { kind: 'none' }, backup: { beforeMigrate: false } }))
     expect(await run(ctx, { skip: ['tls'] })).toBe(0)
     const after = (step: string) => host.printed[host.printed.indexOf(`STEP ${step}`) + 1]
     expect(after('env')).toBe('OK .env unchanged')
     expect(after('infra')).toBe('OK nothing to start (external infra)')
     expect(after('validate')).toBe('OK .env is valid for src/env.ts')
-    expect(after('release')).toBe('OK lexfirma-api restarted (pnpm run start, port 3002)')
+    expect(after('release')).toBe('OK acme-api restarted (pnpm run start, port 3002)')
   })
 })
 
@@ -131,8 +131,8 @@ describe('the install hint is a command root can run', () => {
   it('uses node on the file, not pnpm exec', async () => {
     const host = new FakeHost()
     const ctx = context(host)
-    host.put('/etc/apache2/sites-available/lexfirma.conf', renderVhost(ctx, 3000))
-    host.files.set('/etc/apache2/sites-enabled/lexfirma.conf', { kind: 'symlink', target: '../sites-available/lexfirma.conf' })
+    host.put('/etc/apache2/sites-available/acme.conf', renderVhost(ctx, 3000))
+    host.files.set('/etc/apache2/sites-enabled/acme.conf', { kind: 'symlink', target: '../sites-available/acme.conf' })
     const fixes = (await apachePreflight(ctx, 3002)).map((f) => f.fix ?? '')
     expect(INSTALL_COMMAND).toBe('sudo "$(command -v node)" node_modules/@basaltkit/deploy/dist/bin.js install --user="$USER"')
     expect(fixes.every((f) => f.includes(INSTALL_COMMAND))).toBe(true)

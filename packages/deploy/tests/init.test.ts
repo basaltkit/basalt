@@ -1,6 +1,6 @@
 /**
  * RFC 0007 §3: `basalt-deploy init` writes deploy.config.ts from the project.
- * The fake projects mirror a create-basalt app and Mukanda.
+ * The fake projects mirror a create-basalt app and Globex.
  */
 import { describe, expect, it } from 'vitest'
 import { appName, detectProject, init, parseEnvSchema, renderConfig } from '../src/init.js'
@@ -83,7 +83,7 @@ describe('reading the project', () => {
     expect(appName('a'.repeat(50))).toHaveLength(31)
   })
 
-  it('a compose file of infra only is not the runtime (LexFirma\'s postgres + redis)', async () => {
+  it('a compose file of infra only is not the runtime (Acme\'s postgres + redis)', async () => {
     const host = scaffold().put(`${DIR}/docker-compose.prod.yml`, '')
       .on(({ command }) => (command === 'docker' ? ok(JSON.stringify({ services: { postgres: { image: 'postgres:16' } } })) : undefined))
     expect((await detectProject(host, DIR)).compose).toBeUndefined()
@@ -139,7 +139,7 @@ describe('the file', () => {
     expect(source).not.toContain('branch:')
   })
 
-  it('a compose app (Mukanda\'s shape): images, upstream, its migration script, tenants, branch, server vhosts', async () => {
+  it('a compose app (Globex\'s shape): images, upstream, its migration script, tenants, branch, server vhosts', async () => {
     const host = composed().put(`${DIR}/package.json`, JSON.stringify({ name: 'acme', scripts: { 'db:deploy': 'tsx scripts/db.ts deploy' } }))
     const facts = { ...(await detectProject(host, DIR)), server: { vhosts: ['acme-app.conf', 'acme-share.conf'], busyPorts: [] } }
     const source = renderConfig(facts, { domain: 'acme.example.ao', tenants: 'subdomain', branch: 'master', proxy: 'apache' })
