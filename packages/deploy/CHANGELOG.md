@@ -1,5 +1,11 @@
 # @basaltkit/deploy
 
+## 0.3.1
+
+### Patch Changes
+
+- 99f3b78: The README, the JSDoc examples and the comments shipped in `dist` use generic names (`acme.example.com`, `globex`) instead of the production apps' domains, container names and providers.
+
 ## 0.3.0
 
 ### Minor Changes
