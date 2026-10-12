@@ -142,6 +142,28 @@ export async function attachContainers(ctx: DeployContext, sha: string): Promise
   return connected.length ? [`attached: ${connected.join(', ')}`] : []
 }
 
+/**
+ * Volumes the compose file declares `external` (data meant to outlive the
+ * project, e.g. ClamAV signatures) are created empty when missing — compose
+ * refuses to start, or to run a job, without them.
+ */
+export async function externalVolumes(ctx: DeployContext, sha: string): Promise<string[]> {
+  const config = await ctx.host.exec('docker', composeArgs(ctx, 'config', '--format', 'json'), { cwd: ctx.dir, env: composeEnv(ctx, sha) })
+  if (config.code !== 0) return []
+  let parsed: { volumes?: Record<string, { external?: boolean; name?: string }> } = {}
+  try { parsed = JSON.parse(config.stdout) as typeof parsed } catch { return [] }
+  const created: string[] = []
+  for (const [key, volume] of Object.entries(parsed.volumes ?? {})) {
+    if (!volume.external) continue
+    const name = volume.name ?? key
+    if ((await ctx.host.exec('docker', ['volume', 'inspect', name])).code === 0) continue
+    const made = await ctx.host.exec('docker', ['volume', 'create', name])
+    if (made.code !== 0) throw new DeployError(`docker volume create ${name}: ${made.stderr.trim().split('\n')[0] ?? ''}`)
+    created.push(name)
+  }
+  return created.length ? [`external volume(s) created: ${created.join(', ')}`] : []
+}
+
 /** The one-off jobs, before `up` (RFC 0007 §4.4); a failure stops the release before anything is replaced. */
 export async function runJobs(ctx: DeployContext, sha: string): Promise<string[]> {
   const lines: string[] = []
@@ -179,7 +201,7 @@ export async function composeRelease(ctx: DeployContext, sha: string): Promise<s
     const ref = `${image.tag}:${short(sha)}`
     if ((await ctx.host.exec('docker', ['image', 'inspect', ref])).code !== 0) throw new DeployError(`the image ${ref} does not exist — nothing to start`)
   }
-  for (const line of [...await attachContainers(ctx, sha), ...await runJobs(ctx, sha)]) ctx.host.out.ok(line)
+  for (const line of [...await externalVolumes(ctx, sha), ...await attachContainers(ctx, sha), ...await runJobs(ctx, sha)]) ctx.host.out.ok(line)
   const up = await ctx.host.exec('docker', composeArgs(ctx, 'up', '-d'), { cwd: ctx.dir, env: composeEnv(ctx, sha), stream: true })
   if (up.code !== 0) throw new DeployError(`docker compose up failed (exit ${up.code})`)
   return `${ctx.config.app} project up on ${short(sha)} (${rt.images.map((i) => i.tag).join(', ')})`
