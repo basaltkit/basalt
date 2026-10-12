@@ -46,6 +46,30 @@ export default defineDeploy({
 What is true of one server only (a port taken there, another branch) goes in
 `/etc/basalt/<app>.json`: `{ "port": 3002, "infra": { "postgres": { "port": 5434 } } }`.
 
+### Typed by your env
+
+Give `defineDeploy` the type of your `defineEnv(...)` and every `.env` key the
+config names is completed and checked — `env.fixed`, `generate`, `ask`,
+`derive`, `backup.urlKey`, the infra `urlKey`s, `migrate.env`. Values follow the
+schema: a `z.enum` completes its members, a number takes digits, a boolean
+`'true' | 'false'`.
+
+```ts
+import type { env } from './src/env.js'   // type only: the app is never loaded
+import { defineDeploy } from '@basaltkit/deploy'
+
+export default defineDeploy<typeof env>({
+  env: { fixed: { NODE_ENV: 'prod' } },    // ✗ '"prod"' is not assignable to '"development" | "production" | "test"'
+  backup: { urlKey: 'DATABSE_URL' },        // ✗ … Did you mean '"DATABASE_URL"'?
+  // …
+})
+```
+
+Without the type argument every key is a plain string, as before.
+`basalt-deploy check` runs the same checks without a server — the config's
+own validation, then your `tsc` on `deploy.config.ts` with your tsconfig — so
+CI catches them too.
+
 ## On a new server
 
 ```sh
@@ -78,6 +102,7 @@ every deploy checks it.
 
 | | |
 |---|---|
+| `check` | the config is valid and types check (your `tsc`). No server needed — for CI. |
 | `plan` | every check, then what `run` would do. Writes nothing, asks nothing. |
 | `run` | preflight → fetch → env → infra → build → validate → backup → migrate → release → health → record |
 | `env` | the `.env` and the containers only |

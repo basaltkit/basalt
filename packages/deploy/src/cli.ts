@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module'
 import { isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { check } from './check.js'
 import { applyOverrides, DeployConfigError, parseOverrides, validateConfig, type DeployConfig } from './config.js'
 import { DeployError, detectPackageManager, resolveStateDir, type DeployContext } from './context.js'
 import { nodeHost, type Host } from './host.js'
@@ -8,6 +9,7 @@ import { envCommand, install, plan, rollback, run, SKIPPABLE, status, type Skipp
 
 export const USAGE = `basalt-deploy — deploy this Basalt app on this server (RFC 0006)
 
+  basalt-deploy check             the config is valid and types check; no server needed
   basalt-deploy plan              what a run would do; changes nothing
   basalt-deploy run               fetch, .env, infra, build, backup, migrate, restart, health
   basalt-deploy env               the .env and the dedicated infra only (first setup)
@@ -100,8 +102,10 @@ export async function main(argv: string[], host: Host = nodeHost(), cwd: string 
   if (flags.switches.has('no-fetch')) skip.push('fetch')
 
   try {
-    let config = await loadConfig(cwd, flags.values.get('config') ?? 'deploy.config.ts')
+    const file = flags.values.get('config') ?? 'deploy.config.ts'
+    let config = await loadConfig(cwd, file)
     validateConfig(config)
+    if (flags.command === 'check') return await check(host, cwd, file, config)
     const overridesPath = flags.values.get('overrides') ?? `/etc/basalt/${config.app}.json`
     const overrides = await host.readFile(overridesPath)
     if (overrides !== undefined) config = validateConfig(applyOverrides(config, parseOverrides(overrides, overridesPath)))

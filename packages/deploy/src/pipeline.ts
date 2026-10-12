@@ -3,7 +3,7 @@ import { apacheInstall, apachePreflight, vhostPaths } from './apache.js'
 import { backupDatabase, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, pruneImages } from './compose.js'
-import { processName } from './config.js'
+import { definedEntries, processName } from './config.js'
 import { DeployError, errors, INSTALL_COMMAND, report, RUN_COMMAND, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
 import { answerQuestions, describeEnv, envFile, envMirrors, mirrorFindings, planEnv, readEnv, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
@@ -192,7 +192,7 @@ const migratesAnything = (config: DeployContext['config']) =>
 /** The `.env` as the migration and the dump see it: `migrate.env` on top (host URLs for container names). */
 export function migrationValues(config: DeployContext['config'], values: Map<string, string>): Map<string, string> {
   const extra = config.migrate?.env?.(values) ?? {}
-  return new Map([...values, ...Object.entries(extra)])
+  return new Map([...values, ...definedEntries(extra)])
 }
 
 /**

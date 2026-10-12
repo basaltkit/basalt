@@ -1,4 +1,5 @@
 import { basename, dirname, join, resolve } from 'node:path'
+import { definedEntries } from './config.js'
 import type { DeployContext, Finding } from './context.js'
 import { applyEnvChanges, envValues, formatValue, parseEnv, UnwritableValueError, type EnvChange, type EnvDocument } from './dotenv.js'
 
@@ -53,16 +54,16 @@ export function planEnv(ctx: DeployContext, document: EnvDocument, port: number,
   // PM2 runs the app on the host: PORT is where it listens. Under compose the
   // port inside the container is the compose file's business, not the .env's.
   if (config.runtime.kind === 'pm2') set('PORT', String(port), 'the port the process listens on')
-  for (const [key, value] of Object.entries(config.env.fixed ?? {})) set(key, value, 'fixed in deploy.config.ts')
-  for (const [key, spec] of Object.entries(config.env.generate ?? {})) {
+  for (const [key, value] of definedEntries(config.env.fixed)) set(key, value, 'fixed in deploy.config.ts')
+  for (const [key, spec] of definedEntries(config.env.generate)) {
     if (!pending.get(key)) set(key, ctx.host.randomHex(spec.bytes), 'generated')
   }
   const derived = config.env.derive?.({ app: config.app, domain: config.domain, port }) ?? {}
-  for (const [key, value] of Object.entries(derived)) set(key, value, 'derived from the domain/port')
+  for (const [key, value] of definedEntries(derived)) set(key, value, 'derived from the domain/port')
   for (const change of infra) if (change.kind === 'set') set(change.key, change.value, change.reason)
 
   const questions: string[] = []
-  for (const [key, question] of Object.entries(config.env.ask ?? {})) {
+  for (const [key, question] of definedEntries(config.env.ask)) {
     const current = pending.get(key)
     if (current === undefined || (current === '' && !question.optional)) questions.push(key)
   }
