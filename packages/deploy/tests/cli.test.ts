@@ -8,7 +8,7 @@ import { FakeHost, jlist, ok } from './fake-host.js'
 
 let dir: string
 const CONFIG = `export default {
-  app: 'lexfirma', domain: 'lexfirma.aipro.ao', env: {},
+  app: 'acme', domain: 'acme.example.com', env: {},
   runtime: { kind: 'pm2', script: 'start', port: 'auto', avoid: [] },
 }
 `
@@ -17,7 +17,7 @@ beforeAll(async () => {
   await writeFile(join(dir, 'deploy.config.mjs'), CONFIG)
   await writeFile(join(dir, 'named.mjs'), CONFIG.replace('export default', 'export const config ='))
   await writeFile(join(dir, 'empty.mjs'), 'export const nothing = 1\n')
-  await writeFile(join(dir, 'invalid.mjs'), CONFIG.replace("app: 'lexfirma'", "app: 'Lex Firma'"))
+  await writeFile(join(dir, 'invalid.mjs'), CONFIG.replace("app: 'acme'", "app: 'Lex Firma'"))
 })
 afterAll(async () => { await rm(dir, { recursive: true, force: true }) })
 
@@ -25,8 +25,8 @@ const stdout = () => vi.spyOn(process.stdout, 'write').mockImplementation(() => 
 
 describe('loadConfig', () => {
   it('reads a default or a named `config` export', async () => {
-    expect((await loadConfig(dir, 'deploy.config.mjs')).app).toBe('lexfirma')
-    expect((await loadConfig(dir, join(dir, 'named.mjs'))).app).toBe('lexfirma')
+    expect((await loadConfig(dir, 'deploy.config.mjs')).app).toBe('acme')
+    expect((await loadConfig(dir, join(dir, 'named.mjs'))).app).toBe('acme')
   })
 
   it('says what is wrong with a file that is missing or exports nothing', async () => {
@@ -64,14 +64,14 @@ describe('main', () => {
 
   it('applies the server overrides file and runs the command', async () => {
     const host = new FakeHost()
-      .put('/etc/basalt/lexfirma.json', '{"runtime": 1}')
+      .put('/etc/basalt/acme.json', '{"runtime": 1}')
       .on(({ command }) => (command === 'pm2' ? ok(jlist()) : undefined))
     expect(await main(['status', '--config=deploy.config.mjs'], host, dir)).toBe(1)
     expect(host.transcript).toContain('unknown keys runtime')
 
-    host.put('/etc/basalt/lexfirma.json', '{"branch": "main"}')
+    host.put('/etc/basalt/acme.json', '{"branch": "main"}')
     expect(await main(['status', '--config=deploy.config.mjs'], host, dir)).toBe(0)
-    expect(host.transcript).toContain('pm2 lexfirma-api: not running')
+    expect(host.transcript).toContain('pm2 acme-api: not running')
   })
 
   it('turns a DeployError into exit 1 and an unexpected error into a one-line report', async () => {
@@ -104,9 +104,9 @@ describe('context', () => {
 
   it('keeps state in /var/lib/basalt/<app> once install created it, else in the checkout', async () => {
     const host = new FakeHost()
-    const config = { app: 'lexfirma' } as Parameters<typeof resolveStateDir>[1]
+    const config = { app: 'acme' } as Parameters<typeof resolveStateDir>[1]
     expect(await resolveStateDir(host, config, '/app')).toBe('/app/.basalt')
-    await host.mkdir('/var/lib/basalt/lexfirma')
-    expect(await resolveStateDir(host, config, '/app')).toBe('/var/lib/basalt/lexfirma')
+    await host.mkdir('/var/lib/basalt/acme')
+    expect(await resolveStateDir(host, config, '/app')).toBe('/var/lib/basalt/acme')
   })
 })

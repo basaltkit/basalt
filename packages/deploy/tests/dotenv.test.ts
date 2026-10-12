@@ -9,8 +9,8 @@ describe('parseEnv', () => {
   })
 
   it('reports a value split over two lines by line number, never by value (incident 5)', () => {
-    // What a prompt echoing to stdout wrote into the LexFirma .env.
-    const doc = parseEnv('A=1\nPROXYPAY_SECRET_TOKEN="\nsk_live_abcdef"\nB=2\n')
+    // What a prompt echoing to stdout wrote into the Acme .env.
+    const doc = parseEnv('A=1\nPAYCO_SECRET_TOKEN="\nsk_live_abcdef"\nB=2\n')
     expect(doc.problems.map((p) => p.line)).toEqual([2, 3])
     expect(JSON.stringify(doc.problems)).not.toContain('sk_live_abcdef')
   })
@@ -30,7 +30,7 @@ describe('parseEnv', () => {
 describe('formatValue', () => {
   it('leaves URLs and hex bare, quotes the rest in a form every reader agrees on', () => {
     expect(formatValue('postgresql://u:p@127.0.0.1:5434/db?schema=public')).toBe('postgresql://u:p@127.0.0.1:5434/db?schema=public')
-    expect(formatValue('Mukanda <no-reply@aipro.ao>')).toBe("'Mukanda <no-reply@aipro.ao>'")
+    expect(formatValue('Globex <no-reply@example.com>')).toBe("'Globex <no-reply@example.com>'")
     expect(formatValue('a $b')).toBe("'a $b'")
     expect(formatValue("it's")).toBe('"it\'s"')
   })
@@ -49,10 +49,10 @@ describe('formatValue', () => {
 
 describe('applyEnvChanges', () => {
   it('changes a key on its own line, appends new keys, drops removed ones, keeps comments', () => {
-    const doc = parseEnv('# keep me\nA=1\nPROXYPAY_FAKE=0\nB=2\n')
+    const doc = parseEnv('# keep me\nA=1\nPAYCO_FAKE=0\nB=2\n')
     const text = applyEnvChanges(doc, [
       { kind: 'set', key: 'A', value: 'new', reason: '' },
-      { kind: 'remove', key: 'PROXYPAY_FAKE', reason: '' },
+      { kind: 'remove', key: 'PAYCO_FAKE', reason: '' },
       { kind: 'set', key: 'C', value: 'with space', reason: '' },
     ])
     expect(text).toBe("# keep me\nA=new\nB=2\n\n# Added by basalt-deploy\nC='with space'\n")

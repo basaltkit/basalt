@@ -31,8 +31,8 @@ and runs `check` on what it wrote.
 import { apache, ask, defineDeploy, dockerInfra, pm2, secret } from '@basaltkit/deploy'
 
 export default defineDeploy({
-  app: 'lexfirma',                     // names everything it owns: lexfirma-api, lexfirma-pg, …
-  domain: 'lexfirma.aipro.ao',
+  app: 'acme',                     // names everything it owns: acme-api, acme-pg, …
+  domain: 'acme.example.com',
   tenants: 'subdomain',                // also checks the *.domain certificate and DNS
   branch: 'master',
   env: {
@@ -41,14 +41,14 @@ export default defineDeploy({
     generate: { APP_SECRET: secret(32) },
     ask: {
       MAILER_URL: ask.secret('SMTP URL', { optional: true }),
-      PROXYPAY_SECRET_TOKEN: ask.secret('ProxyPay token'),
+      PAYCO_SECRET_TOKEN: ask.secret('PayCo token'),
     },
-    derive: ({ domain }) => ({ PROXYPAY_CALLBACK_URL: `https://${domain}/api/webhooks/proxypay` }),
-    forbid: ['PROXYPAY_FAKE'],
+    derive: ({ domain }) => ({ PAYCO_CALLBACK_URL: `https://${domain}/api/webhooks/payco` }),
+    forbid: ['PAYCO_FAKE'],
   },
-  infra: dockerInfra('lexfirma', {
+  infra: dockerInfra('acme', {
     postgres: { urlParams: { schema: 'public' } },
-    minio: { buckets: ['lexfirma-documents', 'lexfirma-backups'] },
+    minio: { buckets: ['acme-documents', 'acme-backups'] },
   }),
   build: { prisma: ['prisma.config.ts', 'prisma/tenants/prisma.config.ts'], web: 'web' },
   migrate: { central: true, tenants: true },

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { DeployContext } from '../src/context.js'
 import { checkSchema } from '../src/env-check.js'
 import { nodeHost, type Output } from '../src/host.js'
-import { lexfirmaConfig } from './fake-host.js'
+import { acmeConfig } from './fake-host.js'
 
 const quiet: Output = { step() {}, info() {}, ok() {}, warn() {}, error() {} }
 let dir: string
@@ -13,7 +13,7 @@ beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'basalt-deploy-')) })
 afterAll(async () => { await rm(dir, { recursive: true, force: true }) })
 
 const ctxFor = (schema: string): DeployContext => ({
-  config: lexfirmaConfig({ env: { schema } }), dir, host: nodeHost(quiet), pm: 'pnpm', envPath: join(dir, '.env'), stateDir: join(dir, '.basalt'),
+  config: acmeConfig({ env: { schema } }), dir, host: nodeHost(quiet), pm: 'pnpm', envPath: join(dir, '.env'), stateDir: join(dir, '.basalt'),
 })
 
 describe('the real host', () => {
@@ -112,8 +112,8 @@ describe('the real host: files, network, terminal', () => {
     const port = (server.address() as { port: number }).port
     try {
       const host = nodeHost(quiet)
-      expect(await host.httpGet(`http://127.0.0.1:${port}/health`, { host: 'lexfirma.aipro.ao' })).toEqual({ status: 204 })
-      expect(seen).toEqual(['lexfirma.aipro.ao'])
+      expect(await host.httpGet(`http://127.0.0.1:${port}/health`, { host: 'acme.example.com' })).toEqual({ status: 204 })
+      expect(seen).toEqual(['acme.example.com'])
     } finally {
       server.close()
     }

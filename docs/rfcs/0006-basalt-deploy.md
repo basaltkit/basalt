@@ -10,7 +10,7 @@
 
 ## 0. TL;DR
 
-Two Basalt apps in production — Mukanda and LexFirma — each grew a deploy script
+Two Basalt apps in production — Globex and Acme — each grew a deploy script
 of 480–850 lines of bash: `scripts/deploy-prod.sh` (Docker Compose images, Caddy
 or no proxy) and `deploy.sh` (PM2, host Apache). They do the same eleven things
 in a different order, with different bugs, and both learned their lessons from
@@ -49,7 +49,7 @@ and hostnames, not tooling (§7).
 **Non-goals**
 
 - Several servers, Kubernetes, autoscaling, blue/green across hosts.
-- Provisioning the machine (users, firewall, swap, Docker install). Mukanda's
+- Provisioning the machine (users, firewall, swap, Docker install). Globex's
   `bootstrap` step stays a script; `basalt deploy` starts where Docker and Node exist.
 - Issuing TLS certificates. Certbot DNS-01 stays the operator's step; `deploy`
   **checks** that the certificate covers the apex and `*.domain` (§5, check C8).
@@ -57,9 +57,9 @@ and hostnames, not tooling (§7).
 
 ## A. Current state
 
-| Step | Mukanda `scripts/deploy-prod.sh` | LexFirma `deploy.sh` |
+| Step | Globex `scripts/deploy-prod.sh` | Acme `deploy.sh` |
 |---|---|---|
-| Config | `/etc/mukanda/deploy.conf` + `--init-config` | env vars + prompts |
+| Config | `/etc/globex/deploy.conf` + `--init-config` | env vars + prompts |
 | `.env` | `write_env_files` (`FORCE_ENV=0` keeps existing) | `setenv`/`ask`/auto-repair, `.env.bak-<date>` |
 | Infra | `ensure_vm_infra` (pg, redis, minio, clamav containers) | `docker-compose.server.yml` (pg, redis, minio), reuses passwords from running containers |
 | Code | `git pull --ff-only` | `git pull --ff-only`, refuses a dirty tree |
@@ -70,11 +70,11 @@ and hostnames, not tooling (§7).
 | Proxy | Caddy, or `PROXY=none` | none (Apache configured by hand) |
 | Health | `/readyz` on loopback **and** through the public URL, ingest-worker DNS, tenant migrations present in the image | `/health` on loopback with `Host:` |
 | Rollback | previous SHA's images | previous SHA, reinstall, restart |
-| State | `/etc/mukanda/current-sha` | none (git `HEAD@{1}`) |
+| State | `/etc/globex/current-sha` | none (git `HEAD@{1}`) |
 
 Incidents that shaped them (each becomes a check in §5):
 
-1. **Proxy to the wrong port.** The LexFirma vhost proxied `/api/` to `:3000`,
+1. **Proxy to the wrong port.** The Acme vhost proxied `/api/` to `:3000`,
    which on that server is Apache itself serving another site; the API answered
    nothing and the app showed someone else's HTML.
 2. **`sites-enabled/` held copies, not symlinks.** The wildcard certificate was
@@ -85,7 +85,7 @@ Incidents that shaped them (each becomes a check in §5):
    `pm2 restart all` or `delete` would have taken down a production app.
 5. **`.env` lines split in two** by a prompt whose echo went to stdout; Compose
    refused the file (`unexpected character`).
-6. **`PROXYPAY_FAKE="0"` meant true.** `z.coerce.boolean` reads any non-empty
+6. **`PAYCO_FAKE="0"` meant true.** `z.coerce.boolean` reads any non-empty
    string as `true`; the fake payment gateway was enabled by the line meant to
    disable it.
 7. **A Postgres volume with an old password.** A fresh password in `.env` against
@@ -125,8 +125,8 @@ secrets** and is committed.
 import { defineDeploy, pm2, apache, dockerInfra, secret, ask } from '@basaltkit/deploy'
 
 export default defineDeploy({
-  app: 'lexfirma',                       // owner label: names every process, container, vhost, backup
-  domain: 'lexfirma.aipro.ao',
+  app: 'acme',                       // owner label: names every process, container, vhost, backup
+  domain: 'acme.example.com',
   tenants: 'subdomain',                  // 'subdomain' → checks *.domain DNS + certificate; 'none'
   branch: 'master',
 
@@ -137,11 +137,11 @@ export default defineDeploy({
     generate: { APP_SECRET: secret(48) },
     ask: {
       MAILER_URL: ask.secret('SMTP URL (smtps://user:pass@host:465)'),
-      PROXYPAY_SECRET_TOKEN: ask.secret('ProxyPay token'),
-      PROXYPAY_ENTITY: ask.text('ProxyPay entity'),
+      PAYCO_SECRET_TOKEN: ask.secret('PayCo token'),
+      PAYCO_ENTITY: ask.text('PayCo entity'),
     },
-    derive: ({ domain }) => ({ PROXYPAY_CALLBACK_URL: `https://${domain}/api/webhooks/proxypay` }),
-    forbid: ['PROXYPAY_FAKE'],           // must not exist at all in production
+    derive: ({ domain }) => ({ PAYCO_CALLBACK_URL: `https://${domain}/api/webhooks/payco` }),
+    forbid: ['PAYCO_FAKE'],           // must not exist at all in production
   },
 
   infra: dockerInfra({                   // or: external() — the URLs are in .env, nothing to run
@@ -158,22 +158,22 @@ export default defineDeploy({
   backup: { beforeMigrate: true, keep: 10 },
 
   runtime: pm2({ entry: 'src/server.ts', port: 'auto', avoid: [3000, 3001] }),
-  proxy: apache({ vhost: 'lexfirma.conf', webRoot: 'web/dist', apiPrefix: '/api' }),
+  proxy: apache({ vhost: 'acme.conf', webRoot: 'web/dist', apiPrefix: '/api' }),
   health: { path: '/health', public: true },
 })
 ```
 
-Mukanda's would differ in three fields:
+Globex's would differ in three fields:
 
 ```ts
   infra: external(),                     // its containers come from docker/compose.prod.yml
   runtime: compose({ file: 'docker/compose.prod.yml', images: 'sha', services: ['api', 'worker', 'ingest-worker'] }),
-  proxy: none(),                         // Apache on the host, DocumentRoot /srv/mukanda/web/dist
+  proxy: none(),                         // Apache on the host, DocumentRoot /srv/globex/web/dist
 ```
 
 **Server-local overrides** (a port, a container name adopted from a manual
 install) go in `/etc/basalt/<app>.json`, never in the committed file. That is what
-`/etc/mukanda/deploy.conf` is today.
+`/etc/globex/deploy.conf` is today.
 
 ## 4. The pipeline
 
@@ -273,8 +273,8 @@ critical path). The tenant is placed by the app's own resolver:
 
 - **Apps that resolve the tenant from the path** (`routeResolver`,
   `/t/:tenant/…`): `pr12.preview.domain/t/acme/…`. Nothing preview-specific.
-- **Apps that resolve it from the host** (`subdomainResolver`) — Mukanda and
-  LexFirma today: **`acme--pr12.preview.domain`**, served by the one
+- **Apps that resolve it from the host** (`subdomainResolver`) — Globex and
+  Acme today: **`acme--pr12.preview.domain`**, served by the one
   `*.preview.domain` certificate. Moving these apps to paths in a preview is
   rejected: production keeps the session cookie host-only so that one company's
   session never reaches another's host; on a single preview host every tenant
@@ -295,7 +295,7 @@ characters with the suffix is refused when the preview is seeded, with the reaso
 
 Apps build tenant URLs from one template — `{tenant}.{base}` in production,
 `{tenant}--pr12.preview.domain` in a preview — written by `deploy` into `.env`
-(`APP_TENANT_HOST_TEMPLATE`). Mukanda's `canonicalDomainFor` and the web
+(`APP_TENANT_HOST_TEMPLATE`). Globex's `canonicalDomainFor` and the web
 client's host parsing read it instead of concatenating `${id}.${base}`.
 
 ## 8. State and rollback
@@ -303,7 +303,7 @@ client's host parsing read it instead of concatenating `${id}.${base}`.
 `/var/lib/basalt/<app>/releases.json`: one entry per release — SHA, time,
 migrations applied (central and per tenant count), backup file, health result,
 who ran it. `basalt deploy status` prints the last ten. This replaces
-`/etc/mukanda/current-sha`.
+`/etc/globex/current-sha`.
 
 Rollback restores **code**, not the database. Apps must keep migrations
 expand/contract (add, backfill, switch, drop in a later release) so that release
@@ -340,8 +340,8 @@ to end with a fake host — including each incident in §A as a regression test.
 | Phase | Delivers | Adopted by |
 |---|---|---|
 | 0 | This RFC | — |
-| 1 ✅ | Package, config, pipeline, `.env` step, checks C1–C10, `pm2` + `apache`/`none`, `dockerInfra`, backup, health, rollback, state | LexFirma: `deploy.sh` becomes `pnpm exec basalt-deploy run` |
-| 2 | `compose` runtime (SHA images, one-off migrate container), `caddy`, adopting containers created by a script | Mukanda: `deploy-prod.sh` keeps `bootstrap`, the rest delegates |
+| 1 ✅ | Package, config, pipeline, `.env` step, checks C1–C10, `pm2` + `apache`/`none`, `dockerInfra`, backup, health, rollback, state | Acme: `deploy.sh` becomes `pnpm exec basalt-deploy run` |
+| 2 | `compose` runtime (SHA images, one-off migrate container), `caddy`, adopting containers created by a script | Globex: `deploy-prod.sh` keeps `bootstrap`, the rest delegates |
 | 3 | Previews (§7), `subdomainResolver({ suffix })` in `@basaltkit/tenancy` (minor), `APP_TENANT_HOST_TEMPLATE` in both apps | both |
 | — | A Rust agent | only if phase 3 grows into a long-running service across several servers |
 
@@ -352,8 +352,8 @@ Decided 2026-10-11 by the product owner.
 1. **Tenant hosts in previews:** path (`/t/:tenant`) for apps that already
    resolve by route; `<tenant>--<slug>.preview.<domain>` for apps that resolve by
    host, under one `*.preview.<domain>` certificate. No certificate per preview or
-   per tenant. Details and why the path form does not apply to Mukanda and
-   LexFirma in §7.1.
+   per tenant. Details and why the path form does not apply to Globex and
+   Acme in §7.1.
 
 2. **Config format:** `deploy.config.ts`, typed with `defineDeploy`, loaded with
    the `tsx` the app already has. It may import BasaltKit helpers; it must not
@@ -386,7 +386,7 @@ Decided 2026-10-11 by the product owner.
    runtime an unprivileged user is only real with **rootless Docker** for that
    user. Phase 1 (PM2) needs Docker only for `dockerInfra`; `install` sets up
    rootless Docker for the app user and refuses to add it to the `docker` group.
-   Mukanda's existing rootful containers are adopted in phase 2 — migrating them
+   Globex's existing rootful containers are adopted in phase 2 — migrating them
    to rootless is a data move and is planned there, not assumed.
 
 ## 12. Phase 1 as built — where it differs from the design
@@ -403,12 +403,12 @@ Decided 2026-10-11 by the product owner.
 3. **Rootless Docker is not set up by `install`.** It refuses nothing and adds
    nobody to the `docker` group; it warns when the app user already is in it
    (root-equivalent) and prints the rootless steps otherwise. The server
-   LexFirma runs on keeps its containers in rootful volumes; moving them is the
+   Acme runs on keeps its containers in rootful volumes; moving them is the
    data move §11.4 plans for phase 2, done once for both apps.
 4. **`dockerInfra(app, options)`** takes the app name, so the names it owns —
    `<app>-pg`, `<app>-redis`, `<app>-minio`, volumes `<app>_<app>-*-data` — are
-   visible in the config. They match what LexFirma's
-   `docker-compose.server.yml` (project `lexfirma`) already created, so the
+   visible in the config. They match what Acme's
+   `docker-compose.server.yml` (project `acme`) already created, so the
    first run adopts them, credentials read back from the containers.
 5. **`pm2({ script })`** runs a package.json script (default `start`) rather than
    an entry file: the app already says how it starts.
@@ -419,20 +419,20 @@ Decided 2026-10-11 by the product owner.
 8. **PM2 gets a minimal environment** (`NODE_ENV`, `PORT`, `HOST`), not the
    `.env`: `pm2 save` writes the process environment to `~/.pm2/dump.pm2`, so
    passing the file would copy every secret there. The app loads its own
-   `.env` (LexFirma: `import 'dotenv/config'` in `src/server.ts`).
+   `.env` (Acme: `import 'dotenv/config'` in `src/server.ts`).
 
-## 13. Phase 2 — the `compose` runtime, and Mukanda
+## 13. Phase 2 — the `compose` runtime, and Globex
 
-Mukanda deploys with `scripts/deploy-prod.sh` (843 lines, run with `sudo`):
+Globex deploys with `scripts/deploy-prod.sh` (843 lines, run with `sudo`):
 three images built per commit, a compose file with five services on four
 networks, Postgres/Redis/MinIO started by the script outside compose, two
 database roles (an owner that migrates, an app role without DDL), migrations
 through its own `scripts/db.ts deploy`, bucket versioning and expiry rules,
-ClamAV signatures seeded into a volume, two env files under `/etc/mukanda`,
+ClamAV signatures seeded into a volume, two env files under `/etc/globex`,
 and health checks that go beyond `/readyz`.
 
 What is common to any Basalt app on Compose goes into the package; what only
-Mukanda does stays in Mukanda, called at fixed points of the pipeline.
+Globex does stays in Globex, called at fixed points of the pipeline.
 
 ### 13.1 Every step of `deploy-prod.sh`, and where it goes
 
@@ -440,16 +440,16 @@ Mukanda does stays in Mukanda, called at fixed points of the pipeline.
 |---|---|
 | `bootstrap` (apt, Docker, swap, ufw, Node) | stays in the script — provisioning is a non-goal (§1) |
 | `preflight`, `validate_deploy_config` | package preflight (C1–C11) |
-| `ensure_vm_infra` (Postgres + roles + grants) | `hooks.infra` → `scripts/deploy/infra.sh` (Mukanda) |
+| `ensure_vm_infra` (Postgres + roles + grants) | `hooks.infra` → `scripts/deploy/infra.sh` (Globex) |
 | `build_images` (3 × `docker build -t name:sha`) | `compose({ images })` — built once per commit, skipped when the tag exists |
 | `write_env_files` (api.env, copied to worker.env) | the `.env` step, `env.file` absolute + `env.mirror` |
 | `migrate_db` (`tsx scripts/db.ts deploy` with host URLs) | `migrate.command` + `migrate.env` (a function of the `.env`) |
-| `compose_up` (networks, Redis/MinIO, buckets, ILM, clamav seed, `up -d`) | `hooks.infra` for the Mukanda-only parts; `compose up -d` by the runtime |
-| `record_sha` (`/etc/mukanda/current-sha`) | `releases.json` (§8) |
+| `compose_up` (networks, Redis/MinIO, buckets, ILM, clamav seed, `up -d`) | `hooks.infra` for the Globex-only parts; `compose up -d` by the runtime |
+| `record_sha` (`/etc/globex/current-sha`) | `releases.json` (§8) |
 | `build_web` | `build.web` |
 | `configure_proxy` (Caddy; `PROXY=none` on the server) | `apache({ managed: false })` — checked, never written (§13.4) |
 | `healthcheck` 1–2 (api healthy, nothing restarting) | the compose runtime's health |
-| `healthcheck` 3–4 (ingest-worker reaches Redis, migrations in the image) | `hooks.verify` (Mukanda) |
+| `healthcheck` 3–4 (ingest-worker reaches Redis, migrations in the image) | `hooks.verify` (Globex) |
 | `healthcheck` 5–6 (loopback and public `/readyz`) | the package health (`health.path: '/readyz'`) |
 | `rollback` (previous images, no rebuild) | the package rollback; images of earlier releases are kept |
 
@@ -459,12 +459,12 @@ Mukanda does stays in Mukanda, called at fixed points of the pipeline.
 runtime: compose({
   file: 'docker/compose.prod.yml',
   images: [                                   // tag must start with the app name (C4)
-    { tag: 'mukanda', dockerfile: 'docker/app/Dockerfile', env: 'MUKANDA_IMAGE' },
-    { tag: 'mukanda-ingest', dockerfile: 'docker/ingest/Dockerfile', env: 'MUKANDA_INGEST_IMAGE' },
-    { tag: 'mukanda-clamd', dockerfile: 'docker/clamav/Dockerfile', context: 'docker/clamav', env: 'MUKANDA_CLAMD_IMAGE' },
+    { tag: 'globex', dockerfile: 'docker/app/Dockerfile', env: 'GLOBEX_IMAGE' },
+    { tag: 'globex-ingest', dockerfile: 'docker/ingest/Dockerfile', env: 'GLOBEX_INGEST_IMAGE' },
+    { tag: 'globex-clamd', dockerfile: 'docker/clamav/Dockerfile', context: 'docker/clamav', env: 'GLOBEX_CLAMD_IMAGE' },
   ],
   upstream: { service: 'api', port: 3001 },   // what the proxy reaches, on 127.0.0.1
-  env: { MUKANDA_API_HOST_PORT: '3001' },     // compose interpolation, never secrets
+  env: { GLOBEX_API_HOST_PORT: '3001' },     // compose interpolation, never secrets
   keepImages: 3,                              // releases whose images stay for rollback
 })
 ```
@@ -504,24 +504,24 @@ also run by hand when something is being diagnosed at 3 a.m.
 
 ### 13.4 Apache, checked but not owned
 
-`apache({ managed: false, vhosts: ['mukanda-app.conf', 'mukanda-share.conf'] })`:
-C2 (each vhost linked, not copied — the incident that hid Mukanda's wildcard
+`apache({ managed: false, vhosts: ['globex-app.conf', 'globex-share.conf'] })`:
+C2 (each vhost linked, not copied — the incident that hid Globex's wildcard
 certificate) and C1 (every `ProxyPass` to 127.0.0.1 targets the upstream port)
 run on every deploy; nothing is rendered, diffed or written, and `install`
 leaves Apache alone. For apps whose vhosts are more than one site.
 
 ### 13.5 The `.env` outside the checkout
 
-`env.file: '/etc/mukanda/api.env'`, `env.mirror: ['/etc/mukanda/worker.env']`:
+`env.file: '/etc/globex/api.env'`, `env.mirror: ['/etc/globex/worker.env']`:
 the mirror is rewritten as an exact copy (0600) whenever the file changes, and
 a mirror that differs from the file is a C10 error — two env files that
 disagree are two configurations.
 
 **Ownership (decision).** Deploys run as the app user, never root (§11.4), so
 the user must read and write these files. `install` takes them over:
-`chown <user>: /etc/mukanda/*.env`, mode 0600 unchanged. Today they are
+`chown <user>: /etc/globex/*.env`, mode 0600 unchanged. Today they are
 root-owned and the script runs under `sudo`. The Docker-group caveat of §11.4
-applies unchanged to Mukanda.
+applies unchanged to Globex.
 
 ### 13.6 Migrations by command
 
@@ -530,8 +530,8 @@ migrate: {
   command: ['./node_modules/.bin/tsx', 'scripts/db.ts', 'deploy'],
   // the .env speaks to containers by name; the host reaches them on 127.0.0.1
   env: (v) => ({
-    MUKANDA_OWNER_DATABASE_URL: v.get('MUKANDA_OWNER_DATABASE_URL')!.replace('@mukanda-postgres:', '@127.0.0.1:'),
-    MUKANDA_DATABASE_URL: v.get('MUKANDA_DATABASE_URL')!.replace('@mukanda-postgres:', '@127.0.0.1:'),
+    GLOBEX_OWNER_DATABASE_URL: v.get('GLOBEX_OWNER_DATABASE_URL')!.replace('@globex-postgres:', '@127.0.0.1:'),
+    GLOBEX_DATABASE_URL: v.get('GLOBEX_DATABASE_URL')!.replace('@globex-postgres:', '@127.0.0.1:'),
   }),
 }
 ```
@@ -542,7 +542,7 @@ same way.
 ### 13.7 Not in phase 2
 
 - **Caddy.** No deployed app uses it; it follows when one does.
-- **Rootless Docker** for Mukanda and LexFirma (§11.4) — a data move of every
+- **Rootless Docker** for Globex and Acme (§11.4) — a data move of every
   volume, planned separately.
 - **Provisioning** (`bootstrap`) stays in the script.
 
@@ -550,16 +550,16 @@ same way.
 
 1. Package: the runtime, hooks, `managed: false`, `env.file`/`mirror`,
    `migrate.command`, image retention — with the fake-host tests of phase 1.
-2. Mukanda: `deploy.config.ts`, `scripts/deploy/{infra,verify}.sh` carved out
+2. Globex: `deploy.config.ts`, `scripts/deploy/{infra,verify}.sh` carved out
    of `deploy-prod.sh` unchanged in behaviour, `deploy-prod.sh` reduced to
    `bootstrap` plus a call to the package.
-3. On the server, as for LexFirma: `plan` first — it must show the existing
+3. On the server, as for Acme: `plan` first — it must show the existing
    containers and env files adopted, nothing created — then `install` (env
    ownership), then `run`.
 
-### 13.9 After the first Mukanda deploy (0.2.1)
+### 13.9 After the first Globex deploy (0.2.1)
 
-The first `run` on Mukanda (63c710a) passed every step with the backup off:
+The first `run` on Globex (63c710a) passed every step with the backup off:
 the host has no pg_dump of the server's major, and `deploy-prod.sh` never
 dumped either. `backup.container` closes that — `docker exec -e PGPASSWORD
 <container> pg_dump`, user and database from the URL at `backup.urlKey`, the

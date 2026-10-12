@@ -5,15 +5,15 @@ import { describe, expect, it } from 'vitest'
 import { bootstrap, planBootstrap } from '../src/bootstrap.js'
 import { caddyInstall, caddyPreflight, caddyProxiedPorts, renderMain, renderSite } from '../src/caddy.js'
 import { caddy, DeployConfigError, validateConfig } from '../src/config.js'
-import { context, DIR, FakeHost, fail, lexfirmaConfig, ok } from './fake-host.js'
+import { context, DIR, FakeHost, fail, acmeConfig, ok } from './fake-host.js'
 
 const PORT = 3002
-const config = (extra = {}) => lexfirmaConfig({ proxy: caddy({ onDemandTls: { ask: '/tls/allowed' } }), ...extra })
+const config = (extra = {}) => acmeConfig({ proxy: caddy({ onDemandTls: { ask: '/tls/allowed' } }), ...extra })
 
 describe('the caddy target', () => {
   it('renders one site: apex and tenant hosts on demand, the API prefix stripped, the SPA from web/dist', () => {
     const site = renderSite(context(new FakeHost(), config()), PORT)
-    expect(site).toContain('lexfirma.aipro.ao, *.lexfirma.aipro.ao {')
+    expect(site).toContain('acme.example.com, *.acme.example.com {')
     expect(site).toContain('\ttls {\n\t\ton_demand\n\t}')
     expect(site).toContain('handle /api/* {\n\t\turi strip_prefix /api\n\t\treverse_proxy 127.0.0.1:3002 {')
     expect(site).toContain(`root * ${DIR}/web/dist`)
@@ -22,8 +22,8 @@ describe('the caddy target', () => {
   })
 
   it('tenants on subdomains need on-demand TLS: refused without it', () => {
-    expect(() => validateConfig(lexfirmaConfig({ proxy: caddy() }))).toThrow(DeployConfigError)
-    expect(validateConfig(lexfirmaConfig({ tenants: 'none', proxy: caddy() })).proxy?.kind).toBe('caddy')
+    expect(() => validateConfig(acmeConfig({ proxy: caddy() }))).toThrow(DeployConfigError)
+    expect(validateConfig(acmeConfig({ tenants: 'none', proxy: caddy() })).proxy?.kind).toBe('caddy')
   })
 
   it('install on a stock Caddy: the site, the main file with the ask endpoint, validate, reload', async () => {
@@ -31,8 +31,8 @@ describe('the caddy target', () => {
       .on(({ command }) => (command === 'caddy' || command === 'systemctl' ? ok() : undefined))
     host.confirmations.push(true)   // the stock Caddyfile is shown, then replaced
     const ctx = context(host, config())
-    await caddyInstall(ctx, PORT, '/var/lib/basalt/lexfirma/install-backups')
-    expect(host.file('/etc/caddy/sites/lexfirma.caddy')).toBe(renderSite(ctx, PORT))
+    await caddyInstall(ctx, PORT, '/var/lib/basalt/acme/install-backups')
+    expect(host.file('/etc/caddy/sites/acme.caddy')).toBe(renderSite(ctx, PORT))
     expect(host.file('/etc/caddy/Caddyfile')).toContain('import /etc/caddy/sites/*.caddy')
     expect(host.file('/etc/caddy/Caddyfile')).toContain('ask http://127.0.0.1:3002/tls/allowed')
     expect(host.commands('systemctl')).toEqual(['systemctl reload-or-restart caddy'])
@@ -47,7 +47,7 @@ describe('the caddy target', () => {
     const ctx = context(host, config())
     await expect(caddyInstall(ctx, PORT, '/b')).rejects.toThrow(/caddy validate failed — every file was put back/)
     expect(host.file('/etc/caddy/Caddyfile')).toBe(own)
-    expect(host.file('/etc/caddy/sites/lexfirma.caddy')).toBeUndefined()
+    expect(host.file('/etc/caddy/sites/acme.caddy')).toBeUndefined()
     expect(host.transcript).toContain('is not the package\'s: add on_demand_tls')
   })
 
@@ -55,7 +55,7 @@ describe('the caddy target', () => {
     const host = new FakeHost()
     const ctx = context(host, config())
     expect((await caddyPreflight(ctx, PORT))[0]?.message).toContain('no Caddy site')
-    host.put('/etc/caddy/Caddyfile', '{\n}\n').put('/etc/caddy/sites/lexfirma.caddy', renderSite(ctx, 3000))
+    host.put('/etc/caddy/Caddyfile', '{\n}\n').put('/etc/caddy/sites/acme.caddy', renderSite(ctx, 3000))
     const ids = (await caddyPreflight(ctx, PORT)).map((f) => f.id)
     expect(ids).toEqual(['C2', 'C8', 'C1', 'vhost'])
   })

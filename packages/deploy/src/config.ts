@@ -33,12 +33,12 @@ export interface DeployConfig<E extends object = EnvShape> {
   /**
    * Owner label: names every process, container, volume, vhost and backup.
    * `[a-z][a-z0-9-]{1,30}`.
-   * @example 'lexfirma'
+   * @example 'acme'
    */
   app: string
   /**
    * The apex the app answers on.
-   * @example 'lexfirma.aipro.ao'
+   * @example 'acme.example.com'
    */
   domain: string
   /**
@@ -116,7 +116,7 @@ export interface EnvConfig<E extends object = EnvShape> {
    * Relative to the app directory, or absolute. Written 0600, backed up
    * before every change, in its own directory.
    * @default '.env'
-   * @example '/etc/mukanda/api.env'
+   * @example '/etc/globex/api.env'
    */
   file?: string
   /** Exact copies of the file (0600), rewritten with it; one that differs is a C10 error. */
@@ -204,7 +204,7 @@ export interface ExternalPostgres<E extends object = EnvShape> {
  * there when absent), and granted DML through the owner's default privileges.
  */
 export interface AppRole<E extends object = EnvShape> {
-  /** @example 'mukanda_app' */
+  /** @example 'globex_app' */
   name: string
   /** The `.env` key with the app's URL. */
   urlKey: EnvKey<E>
@@ -288,7 +288,7 @@ export interface MigrateConfig<E extends object = EnvShape> {
   command?: string[]
   /**
    * Values that override the `.env` for the migration and the pre-migration
-   * dump — e.g. URLs that name a container (`@mukanda-postgres:`) rewritten to
+   * dump — e.g. URLs that name a container (`@globex-postgres:`) rewritten to
    * reach it from the host (`@127.0.0.1:`).
    */
   env?: (values: ReadonlyMap<EnvKey<E>, string>) => { [K in EnvKey<E>]?: string }
