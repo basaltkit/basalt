@@ -8,8 +8,10 @@ import type { InfraPlan } from './infra.js'
  * schema-per-tenant every company's schema is in the same database, so one
  * dump covers them all.
  *
- * With dedicated infra the dump runs INSIDE the container: same pg_dump major
- * as the server, by construction, and no password needed on the local socket.
+ * With dedicated infra, or `backup.container`, the dump runs INSIDE the
+ * container: same pg_dump major as the server, by construction. The password,
+ * when there is one, travels in the environment (`docker exec -e PGPASSWORD`,
+ * no value), never on a command line.
  */
 export async function backupDatabase(ctx: DeployContext, values: Map<string, string>, infra: InfraPlan, sha: string): Promise<string> {
   const { host, config } = ctx
@@ -23,15 +25,18 @@ export async function backupDatabase(ctx: DeployContext, values: Map<string, str
   if (pg) {
     result = await host.exec('docker', ['exec', pg.container, 'pg_dump', '-U', pg.user ?? config.app, '-d', pg.database ?? config.app, '--format=custom', '--no-owner', '--no-acl'], { stdoutFile: file })
   } else {
-    const key = config.backup?.urlKey ?? 'DATABASE_URL'
-    const raw = values.get(key)
-    if (!raw) throw new DeployError(`backup: ${key} is not set in the .env`)
-    const url = new URL(raw)
+    const url = databaseUrl(ctx, values)
     const password = decodeURIComponent(url.password)
-    url.password = ''
-    // Prisma's `?schema=` is not a libpq parameter; pg_dump refuses it.
-    url.search = ''
-    result = await host.exec('pg_dump', ['--dbname', url.toString(), '--format=custom', '--no-owner', '--no-acl'], { stdoutFile: file, env: { PGPASSWORD: password } })
+    const container = config.backup?.container
+    if (container) {
+      const args = ['exec', '-e', 'PGPASSWORD', container, 'pg_dump', '-U', decodeURIComponent(url.username), '-d', databaseName(url), '--format=custom', '--no-owner', '--no-acl']
+      result = await host.exec('docker', args, { stdoutFile: file, env: { PGPASSWORD: password } })
+    } else {
+      url.password = ''
+      // Prisma's `?schema=` is not a libpq parameter; pg_dump refuses it.
+      url.search = ''
+      result = await host.exec('pg_dump', ['--dbname', url.toString(), '--format=custom', '--no-owner', '--no-acl'], { stdoutFile: file, env: { PGPASSWORD: password } })
+    }
   }
   const size = (await host.stat(file))?.size ?? 0
   if (result.code !== 0 || size === 0) {
@@ -45,8 +50,24 @@ export async function backupDatabase(ctx: DeployContext, values: Map<string, str
   return file
 }
 
-export function restoreCommand(ctx: DeployContext, infra: InfraPlan, file: string): string {
+export function restoreCommand(ctx: DeployContext, infra: InfraPlan, file: string, values: Map<string, string> = new Map()): string {
   const pg = infra.services.find((s) => s.service === 'postgres')
   if (pg) return `docker exec -i ${pg.container} pg_restore --clean --if-exists --no-owner -U ${pg.user ?? ctx.config.app} -d ${pg.database ?? ctx.config.app} < ${file}`
+  const container = ctx.config.backup?.container
+  if (container) {
+    const url = databaseUrl(ctx, values)
+    return `docker exec -i ${container} pg_restore --clean --if-exists --no-owner -U ${decodeURIComponent(url.username)} -d ${databaseName(url)} < ${file}`
+  }
   return `pg_restore --clean --if-exists --no-owner --dbname "<the database URL, without ?schema=>" ${file}`
+}
+
+function databaseUrl(ctx: DeployContext, values: Map<string, string>): URL {
+  const key = ctx.config.backup?.urlKey ?? 'DATABASE_URL'
+  const raw = values.get(key)
+  if (!raw) throw new DeployError(`backup: ${key} is not set in the .env`)
+  return new URL(raw)
+}
+
+function databaseName(url: URL): string {
+  return decodeURIComponent(url.pathname.replace(/^\//, ''))
 }

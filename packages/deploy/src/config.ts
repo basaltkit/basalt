@@ -161,6 +161,12 @@ export interface BackupConfig {
   dir?: string
   /** With external infra: the `.env` key holding the database URL. Default `DATABASE_URL`. */
   urlKey?: string
+  /**
+   * With external infra: the Postgres container to dump INSIDE (`docker exec`)
+   * — the server's own pg_dump major, and no pg_dump needed on the host. The
+   * user and database come from the URL at `urlKey`.
+   */
+  container?: string
 }
 
 export type RuntimeConfig = Pm2Runtime | ComposeRuntime
@@ -398,6 +404,9 @@ export function validateConfig(config: DeployConfig): DeployConfig {
   }
   if (config.backup?.keep !== undefined && (!Number.isInteger(config.backup.keep) || config.backup.keep < 1)) {
     problems.push('backup.keep must be a whole number ≥ 1')
+  }
+  if (config.backup?.container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(config.backup.container)) {
+    problems.push(`backup.container "${config.backup.container}" is not a container name`)
   }
   if (problems.length > 0) throw new DeployConfigError(problems)
   return config

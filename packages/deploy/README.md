@@ -148,6 +148,10 @@ checks C2 and C1 on each vhost on every deploy and never writes them.
 - The dump before migrating — when something is migrated and there is a
   Postgres to dump (dedicated, or a `postgres://` URL in the `.env`);
   `backup.beforeMigrate` forces it either way. `plan` says why when it is skipped.
+  With external infra in a container, `backup: { container: 'myapp-postgres' }`
+  runs `pg_dump` inside it (`docker exec`), as the user and database of the
+  URL at `backup.urlKey` — the server's own pg_dump, none needed on the host.
+  The preflight checks the container is running.
 
 ## What it refuses to do
 
