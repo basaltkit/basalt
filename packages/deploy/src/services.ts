@@ -82,16 +82,29 @@ export function externalPostgres(ctx: DeployContext, values: Map<string, string>
 }
 
 /**
- * The app role's URL, when the `.env` has none yet: the owner's, with the
- * role's name and a new password. Kept from then on — the role follows it.
+ * The app role's URL: the owner's, with the role's name and a new password,
+ * when the `.env` has none yet; then kept — the role follows its password.
+ * When the database moves (another host, port or name: a recreated
+ * container), the URL follows it and keeps the password.
  */
 export function appRoleEnv(ctx: DeployContext, values: Map<string, string>, ownerUrl: string | undefined): EnvChange[] {
   const role = appRoleOf(ctx.config)
-  if (!role || values.get(role.urlKey) || !ownerUrl) return []
-  const url = new URL(ownerUrl)
+  if (!role || !ownerUrl) return []
+  const owner = new URL(ownerUrl)
+  const current = values.get(role.urlKey)
+  if (!current) {
+    const url = new URL(ownerUrl)
+    url.username = role.name
+    url.password = ctx.host.randomHex(24)
+    return [{ kind: 'set', key: role.urlKey, value: url.toString(), reason: `password of the ${role.name} role (new)` }]
+  }
+  const url = new URL(current)
+  if (url.host === owner.host && url.pathname === owner.pathname && url.search === owner.search && url.username === role.name) return []
+  url.host = owner.host
+  url.pathname = owner.pathname
+  url.search = owner.search
   url.username = role.name
-  url.password = ctx.host.randomHex(24)
-  return [{ kind: 'set', key: role.urlKey, value: url.toString(), reason: `password of the ${role.name} role (new)` }]
+  return [{ kind: 'set', key: role.urlKey, value: url.toString(), reason: `the ${role.name} role follows the database (${owner.host}${owner.pathname})` }]
 }
 
 const ident = (name: string) => `"${name.replace(/"/g, '""')}"`

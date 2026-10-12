@@ -12,6 +12,13 @@ export interface DeployContext {
   envPath: string
   /** Releases, generated infra files. `/var/lib/basalt/<app>` once `install` ran, else `<dir>/.basalt`. */
   stateDir: string
+  /**
+   * The `.env` as last read or written — what `compose({ passEnv })` hands to
+   * compose in its environment (never on a command line, never in a file).
+   */
+  values?: Map<string, string>
+  /** Container addresses → their 127.0.0.1 form, for what runs on the host (`dockerInfra({ access: 'containers' })`). */
+  hostUrls?: Array<[string, string]>
 }
 
 export interface Finding {

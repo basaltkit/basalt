@@ -41,6 +41,12 @@ export interface InfraPlan {
   secrets: Record<string, string>
   /** The dedicated Postgres's owner URL, as the `.env` will hold it (the app role's is derived from it). */
   ownerUrl?: string
+  /**
+   * With `access: 'containers'`: each container address in the `.env` and the
+   * 127.0.0.1 one that reaches it from the host — for the migrations, which
+   * run on the host. `['@myapp-pg:5432', '@127.0.0.1:5433']`.
+   */
+  hostUrls?: Array<[string, string]>
 }
 
 interface Inspected {
@@ -70,15 +76,17 @@ async function volumeExists(ctx: DeployContext, volume: string): Promise<boolean
   return (await ctx.host.exec('docker', ['volume', 'inspect', volume])).code === 0
 }
 
-function urlParts(value: string | undefined): { user: string; password: string; port: number; database: string } | undefined {
+function urlParts(value: string | undefined, container?: string): { user: string; password: string; port: number | undefined; database: string } | undefined {
   if (!value) return undefined
   try {
     const url = new URL(value)
-    if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') return undefined
+    const onHost = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+    if (!onHost && url.hostname !== container) return undefined
     return {
       user: decodeURIComponent(url.username),
       password: decodeURIComponent(url.password),
-      port: Number(url.port),
+      // A container's port is its internal one: no use for picking the published port.
+      port: onHost ? Number(url.port) : undefined,
       database: url.pathname.replace(/^\//, ''),
     }
   } catch {
@@ -86,16 +94,19 @@ function urlParts(value: string | undefined): { user: string; password: string; 
   }
 }
 
-const names = (app: string, service: ServiceName, container?: string) => {
+const names = (app: string, project: string, service: ServiceName, container?: string) => {
   const suffix = service === 'postgres' ? 'pg' : service
-  // Compose prefixes volumes with the project name — the app — so this is
-  // what an older compose file with the same project name already created.
-  return { container: container ?? `${app}-${suffix}`, volumeKey: `${app}-${suffix}-data`, volume: `${app}_${app}-${suffix}-data` }
+  // Compose prefixes volumes with the project name — by default the app — so
+  // this is what an older compose file with the same project name created.
+  return { container: container ?? `${app}-${suffix}`, volumeKey: `${app}-${suffix}-data`, volume: `${project}_${app}-${suffix}-data` }
 }
+
+/** The compose project of the dedicated infra. */
+export const infraProject = (app: string, infra: DockerInfra) => infra.project ?? app
 
 export async function planInfra(ctx: DeployContext, values: Map<string, string>): Promise<InfraPlan> {
   const infra = ctx.config.infra
-  const plan: InfraPlan = { services: [], env: [], findings: [], secrets: {} }
+  const plan: InfraPlan = { services: [], env: [], findings: [], secrets: {}, hostUrls: [] }
   if (infra?.kind === 'external') {
     plan.findings.push(...await externalFindings(ctx))
     const pg = infra.postgres
@@ -104,6 +115,14 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
   }
   if (infra?.kind !== 'docker') return plan
   const { app } = ctx.config
+  const project = infraProject(app, infra)
+  const inContainers = infra.access === 'containers'
+  /** The address the `.env` holds: the container's, or the host's. */
+  const address = (container: string, internal: number, published: number) => {
+    if (!inContainers) return `127.0.0.1:${published}`
+    plan.hostUrls?.push([`${container}:${internal}`, `127.0.0.1:${published}`])
+    return `${container}:${internal}`
+  }
   const picked: number[] = []
   const pick = async (wanted: number | 'auto', existing: number | undefined, from: number) => {
     const port = typeof wanted === 'number' ? wanted : existing ?? await freePort(ctx.host, from, [], picked)
@@ -122,9 +141,9 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
 
   if (infra.postgres) {
     const pg = infra.postgres
-    const { container, volume } = names(app, 'postgres', pg.container)
+    const { container, volume } = names(app, project, 'postgres', pg.container)
     const running = await inspect(ctx, container)
-    const fromEnv = urlParts(values.get(pg.urlKey))
+    const fromEnv = urlParts(values.get(pg.urlKey), inContainers ? container : undefined)
     let password = running?.env.get('POSTGRES_PASSWORD')
     let source: ServicePlan['source'] = 'container'
     if (password === undefined && fromEnv?.password) { password = fromEnv.password; source = 'env' }
@@ -137,7 +156,7 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
     const database = running?.env.get('POSTGRES_DB') ?? fromEnv?.database ?? pg.database
     const port = await pick(pg.port, running?.ports.get('5432/tcp') ?? fromEnv?.port, 5433)
     const params = new URLSearchParams(pg.urlParams).toString()
-    plan.ownerUrl = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:${port}/${database}${params ? `?${params}` : ''}`
+    plan.ownerUrl = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${address(container, 5432, port)}/${database}${params ? `?${params}` : ''}`
     setEnv(pg.urlKey, plan.ownerUrl,
       source === 'container' ? `from the running ${container}` : source === 'generated' ? 'new database' : 'port or parameters')
     plan.env.push(...appRoleEnv(ctx, values, plan.ownerUrl))
@@ -147,16 +166,16 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
 
   if (infra.redis) {
     const redis = infra.redis
-    const { container, volume } = names(app, 'redis', redis.container)
+    const { container, volume } = names(app, project, 'redis', redis.container)
     const running = await inspect(ctx, container)
-    const fromEnv = urlParts(values.get(redis.urlKey))
+    const fromEnv = urlParts(values.get(redis.urlKey), inContainers ? container : undefined)
     let password = running?.env.get('REDIS_PASSWORD')
     let source: ServicePlan['source'] = 'container'
     if (password === undefined && fromEnv?.password) { password = fromEnv.password; source = 'env' }
     // Redis keeps no credentials in its data: a new password is always safe.
     if (password === undefined) { password = ctx.host.randomHex(24); source = 'generated' }
     const port = await pick(redis.port, running?.ports.get('6379/tcp') ?? fromEnv?.port, 6380)
-    setEnv(redis.urlKey, `redis://:${encodeURIComponent(password)}@127.0.0.1:${port}`,
+    setEnv(redis.urlKey, `redis://:${encodeURIComponent(password)}@${address(container, 6379, port)}`,
       source === 'container' ? `from the running ${container}` : source === 'generated' ? 'new redis' : 'port')
     plan.secrets['BASALT_REDIS_PASSWORD'] = password
     plan.services.push({ service: 'redis', container, volume, action: running ? 'adopt' : 'create', port, source })
@@ -164,7 +183,7 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
 
   if (infra.minio) {
     const minio = infra.minio
-    const { container, volume } = names(app, 'minio', minio.container)
+    const { container, volume } = names(app, project, 'minio', minio.container)
     const running = await inspect(ctx, container)
     let user = running?.env.get('MINIO_ROOT_USER')
     let password = running?.env.get('MINIO_ROOT_PASSWORD')
@@ -183,14 +202,14 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
     let endpointPort: number | undefined
     try {
       const endpoint = values.get(minio.keys.endpoint)
-      endpointPort = endpoint ? Number(new URL(endpoint).port) || undefined : undefined
+      endpointPort = endpoint && !inContainers ? Number(new URL(endpoint).port) || undefined : undefined
     } catch {
       endpointPort = undefined
     }
     const port = await pick(minio.port, running?.ports.get('9000/tcp') ?? endpointPort, 9100)
     const consolePort = await pick(minio.consolePort, running?.ports.get('9001/tcp'), port + 1)
     const reason = source === 'container' ? `from the running ${container}` : source === 'generated' ? 'new minio' : 'port'
-    setEnv(minio.keys.endpoint, `http://127.0.0.1:${port}`, reason)
+    setEnv(minio.keys.endpoint, `http://${address(container, 9000, port)}`, reason)
     setEnv(minio.keys.accessKey, user, reason)
     setEnv(minio.keys.secretKey, password, reason)
     plan.secrets['BASALT_MINIO_USER'] = user
@@ -215,13 +234,13 @@ export function renderCompose(app: string, infra: DockerInfra, plan: InfraPlan):
     `# Generated by basalt-deploy for "${app}". Do not edit — change deploy.config.ts.`,
     '# Every port is bound to 127.0.0.1: Docker writes its own iptables rules and',
     '# ignores ufw, so a port published without an address is open to the internet.',
-    `name: ${app}`,
+    `name: ${infraProject(app, infra)}`,
     '',
     'services:',
   ]
   const volumes: string[] = []
   for (const service of plan.services) {
-    const key = service.volume.slice(app.length + 1)
+    const key = service.volume.slice(infraProject(app, infra).length + 1)
     volumes.push(key)
     if (service.service === 'postgres' && infra.postgres) {
       lines.push(
@@ -297,9 +316,10 @@ export async function applyInfra(ctx: DeployContext, plan: InfraPlan): Promise<F
   const { app } = ctx.config
   await host.mkdir(ctx.stateDir, 0o700)
   await host.writeFile(composeFile(ctx), renderCompose(app, infra, plan), 0o600)
-  const up = await host.exec('docker', ['compose', '-p', app, '-f', composeFile(ctx), 'up', '-d', '--wait', '--wait-timeout', '180'], { env: plan.secrets })
+  const project = infraProject(app, infra)
+  const up = await host.exec('docker', ['compose', '-p', project, '-f', composeFile(ctx), 'up', '-d', '--wait', '--wait-timeout', '180'], { env: plan.secrets })
   if (up.code !== 0) {
-    return [{ id: 'infra', level: 'error', message: `docker compose up failed:\n${up.stderr.trim()}`, fix: `docker compose -p ${app} ps; docker logs ${app}-pg` }]
+    return [{ id: 'infra', level: 'error', message: `docker compose up failed:\n${up.stderr.trim()}`, fix: `docker compose -p ${project} ps; docker logs ${plan.services[0]?.container ?? app}` }]
   }
   const findings: Finding[] = []
   for (const service of plan.services) {

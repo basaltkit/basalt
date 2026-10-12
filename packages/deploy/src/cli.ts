@@ -6,6 +6,7 @@ import { check } from './check.js'
 import { init } from './init.js'
 import { applyOverrides, DeployConfigError, parseOverrides, validateConfig, type DeployConfig } from './config.js'
 import { DeployError, detectPackageManager, resolveStateDir, type DeployContext } from './context.js'
+import { envValues, parseEnv } from './dotenv.js'
 import { nodeHost, type Host } from './host.js'
 import { envCommand, install, plan, rollback, run, SKIPPABLE, status, type Skippable } from './pipeline.js'
 
@@ -82,13 +83,17 @@ export async function loadConfig(dir: string, file: string): Promise<DeployConfi
 }
 
 export async function createContext(host: Host, dir: string, config: DeployConfig): Promise<DeployContext> {
+  const envPath = resolve(dir, config.env.file ?? '.env')
+  const text = await host.readFile(envPath)
   return {
     config,
     dir,
     host,
     pm: await detectPackageManager(host, dir),
-    envPath: resolve(dir, config.env.file ?? '.env'),
+    envPath,
     stateDir: await resolveStateDir(host, config, dir),
+    // What compose interpolation reads for passEnv in plan, status, rollback.
+    ...(text === undefined ? {} : { values: envValues(parseEnv(text)) }),
   }
 }
 
