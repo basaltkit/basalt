@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { dockerInfra } from '../src/config.js'
-import { applyInfra, planInfra, renderCompose } from '../src/infra.js'
+import { applyInfra, maintainServices, planInfra, renderCompose } from '../src/infra.js'
 import { context, FakeHost, fail, lexfirmaConfig, ok } from './fake-host.js'
 
 const config = () => lexfirmaConfig({
@@ -70,6 +70,7 @@ describe('dedicated infra', () => {
     const ctx = context(host, config())
     const plan = await planInfra(ctx, new Map())
     expect(await applyInfra(ctx, plan)).toEqual([])
+    expect(await maintainServices(ctx, plan, new Map())).toEqual(['buckets: lexfirma-documents, lexfirma-backups'])
 
     const secrets = Object.values(plan.secrets).filter((v) => v !== 'lexfirma')
     const compose = host.file(`${ctx.stateDir}/infra.compose.yml`) ?? ''

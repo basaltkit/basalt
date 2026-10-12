@@ -61,6 +61,8 @@ export async function composePreflight(ctx: DeployContext, sha: string): Promise
   const config = await ctx.host.exec('docker', composeArgs(ctx, 'config', '--quiet'), { cwd: ctx.dir, env: composeEnv(ctx, sha) })
   if (config.code !== 0) {
     findings.push({ id: 'compose', level: 'error', message: `docker compose rejects ${rt.file}: ${config.stderr.trim().split('\n')[0] ?? ''}` })
+  } else {
+    findings.push(...await nameFindings(ctx, sha))
   }
   // C1 under compose: the published port belongs to docker-proxy (root), so a
   // listener with no visible pid is not foreign by itself — it is ours when
@@ -79,6 +81,81 @@ export async function composePreflight(ctx: DeployContext, sha: string): Promise
     }
   }
   return findings
+}
+
+/**
+ * Every service and container the config names exists — names no type can
+ * know. An unknown one is an error that lists the ones that do exist.
+ */
+async function nameFindings(ctx: DeployContext, sha: string): Promise<Finding[]> {
+  const rt = composeOf(ctx)
+  const listed = await ctx.host.exec('docker', composeArgs(ctx, 'config', '--services'), { cwd: ctx.dir, env: composeEnv(ctx, sha) })
+  const services = listed.stdout.split('\n').map((s) => s.trim()).filter(Boolean)
+  if (listed.code !== 0 || services.length === 0) return []
+  const findings: Finding[] = []
+  const named: Array<[string, string]> = [
+    ['runtime.upstream.service', rt.upstream.service],
+    ...(rt.jobs ?? []).map((j): [string, string] => ['runtime.jobs[].service', j.service]),
+    ...Object.keys(ctx.config.verify?.logs ?? {}).map((s): [string, string] => ['verify.logs', s]),
+  ]
+  for (const [where, name] of named) {
+    if (services.includes(name)) continue
+    const near = services.find((s) => s.startsWith(name.slice(0, 3)) || name.startsWith(s.slice(0, 3)))
+    findings.push({ id: 'compose', level: 'error', message: `${where}: "${name}" is not a service of ${rt.file}${near ? ` — did you mean "${near}"?` : ''} (services: ${services.join(', ')})` })
+  }
+  for (const container of Object.keys(rt.attach ?? {})) {
+    const state = await ctx.host.exec('docker', ['inspect', '--format', '{{.State.Running}}', container])
+    if (state.stdout.trim() !== 'true') {
+      findings.push(state.code === 0
+        ? { id: 'compose', level: 'error', message: `runtime.attach: ${container} is not running`, fix: `docker start ${container}` }
+        : { id: 'compose', level: 'error', message: `runtime.attach: ${container} does not exist` })
+    }
+  }
+  return findings
+}
+
+/**
+ * Containers the project does not own, on its networks (RFC 0007 §4.3). The
+ * networks exist once the project does: on a fresh server it is created first
+ * (`up --no-start`), with this commit's images.
+ */
+export async function attachContainers(ctx: DeployContext, sha: string): Promise<string[]> {
+  const attach = composeOf(ctx).attach ?? {}
+  const pairs = Object.entries(attach).flatMap(([container, networks]) => networks.map((n) => ({ container, network: `${ctx.config.app}_${n}` })))
+  if (pairs.length === 0) return []
+  const exists = async (network: string) => (await ctx.host.exec('docker', ['network', 'inspect', network, '--format', '{{range .Containers}}{{.Name}} {{end}}'])).code === 0
+  const missing: string[] = []
+  for (const network of new Set(pairs.map((p) => p.network))) if (!(await exists(network))) missing.push(network)
+  if (missing.length > 0) {
+    const created = await ctx.host.exec('docker', composeArgs(ctx, 'up', '--no-start'), { cwd: ctx.dir, env: composeEnv(ctx, sha) })
+    if (created.code !== 0) throw new DeployError(`creating the ${ctx.config.app} project for its networks (${missing.join(', ')}): ${created.stderr.trim().split('\n')[0] ?? ''}`)
+  }
+  const connected: string[] = []
+  for (const { container, network } of pairs) {
+    const members = await ctx.host.exec('docker', ['network', 'inspect', network, '--format', '{{range .Containers}}{{.Name}} {{end}}'])
+    if (members.code !== 0) throw new DeployError(`network ${network} does not exist — is "${network.slice(ctx.config.app.length + 1)}" a network of ${composeOf(ctx).file}?`)
+    if (members.stdout.split(/\s+/).includes(container)) continue
+    const connect = await ctx.host.exec('docker', ['network', 'connect', network, container])
+    if (connect.code !== 0) throw new DeployError(`docker network connect ${network} ${container}: ${connect.stderr.trim().split('\n')[0] ?? ''}`)
+    connected.push(`${container} → ${network}`)
+  }
+  return connected.length ? [`attached: ${connected.join(', ')}`] : []
+}
+
+/** The one-off jobs, before `up` (RFC 0007 §4.4); a failure stops the release before anything is replaced. */
+export async function runJobs(ctx: DeployContext, sha: string): Promise<string[]> {
+  const lines: string[] = []
+  for (const job of composeOf(ctx).jobs ?? []) {
+    if (job.once) {
+      const seen = await ctx.host.exec('docker', composeArgs(ctx, 'run', '--rm', '--no-deps', '--entrypoint', 'sh', job.service, '-c', `ls ${job.once.exists}`), { cwd: ctx.dir, env: composeEnv(ctx, sha) })
+      if (seen.code === 0) { lines.push(`job ${job.service}: already done (${job.once.exists})`); continue }
+    }
+    ctx.host.out.info(`docker compose run --rm ${job.service}${job.command ? ` ${job.command.join(' ')}` : ''}`)
+    const ran = await ctx.host.exec('docker', composeArgs(ctx, 'run', '--rm', '--no-deps', job.service, ...(job.command ?? [])), { cwd: ctx.dir, env: composeEnv(ctx, sha), stream: true })
+    if (ran.code !== 0) throw new DeployError(`job ${job.service} failed (exit ${ran.code})`)
+    lines.push(`job ${job.service}: done`)
+  }
+  return lines
 }
 
 /** `docker build` of every image not built yet for this commit. */
@@ -102,6 +179,7 @@ export async function composeRelease(ctx: DeployContext, sha: string): Promise<s
     const ref = `${image.tag}:${short(sha)}`
     if ((await ctx.host.exec('docker', ['image', 'inspect', ref])).code !== 0) throw new DeployError(`the image ${ref} does not exist — nothing to start`)
   }
+  for (const line of [...await attachContainers(ctx, sha), ...await runJobs(ctx, sha)]) ctx.host.out.ok(line)
   const up = await ctx.host.exec('docker', composeArgs(ctx, 'up', '-d'), { cwd: ctx.dir, env: composeEnv(ctx, sha), stream: true })
   if (up.code !== 0) throw new DeployError(`docker compose up failed (exit ${up.code})`)
   return `${ctx.config.app} project up on ${short(sha)} (${rt.images.map((i) => i.tag).join(', ')})`
@@ -144,6 +222,21 @@ export async function pruneImages(ctx: DeployContext, keep: string[]): Promise<s
     }
   }
   return removed
+}
+
+/** Text from `verify.logs` in a service's logs since `since` (RFC 0007 §6). */
+export async function logFindings(ctx: DeployContext, sha: string, since: Date): Promise<string[]> {
+  const problems: string[] = []
+  for (const [service, patterns] of Object.entries(ctx.config.verify?.logs ?? {})) {
+    const logs = await ctx.host.exec('docker', composeArgs(ctx, 'logs', '--no-color', '--since', since.toISOString(), service), { cwd: ctx.dir, env: composeEnv(ctx, sha) })
+    const text = `${logs.stdout}${logs.stderr}`
+    const found = patterns.filter((p) => text.includes(p))
+    if (found.length > 0) {
+      const line = text.split('\n').find((l) => found.some((p) => l.includes(p)))?.trim() ?? ''
+      problems.push(`${service} logs ${found.join(', ')}: ${line.slice(0, 200)}`)
+    }
+  }
+  return problems
 }
 
 export async function composeStatus(ctx: DeployContext, sha: string): Promise<string[]> {
