@@ -69,7 +69,7 @@ const SENSITIVE = /SECRET|TOKEN|PASSWORD|PASS\b|_KEY\b|^KEY_|CREDENTIAL|_URL$|_D
  * the server. One a provider issues (S3, an API, SMTP) is asked instead — a
  * random value would only fail at the first call.
  */
-const ISSUED = /S3|AWS|ACCESS_KEY|API_?KEY|TOKEN|SMTP|MAIL|OAUTH|CLIENT|STRIPE|PROXYPAY|TWILIO|SENDGRID|PASSWORD/
+const ISSUED = /S3|AWS|ACCESS_KEY|API_?KEY|TOKEN|SMTP|MAIL|OAUTH|CLIENT|STRIPE|PAYCO|TWILIO|SENDGRID|PASSWORD/
 
 // ── detection ──────────────────────────────────────────────────────────────
 
@@ -430,7 +430,7 @@ function block(name: string, entries: string[]): string[] {
   return [`    ${name}: {`, ...entries.map((e) => `      ${e},`), '    },']
 }
 
-/** `MUKANDA_SMTP_URL` → `SMTP URL`: the prompt the operator sees once. */
+/** `GLOBEX_SMTP_URL` → `SMTP URL`: the prompt the operator sees once. */
 function label(key: string, app: string): string {
   const prefix = `${app.toUpperCase().replace(/-/g, '_')}_`
   return (key.startsWith(prefix) ? key.slice(prefix.length) : key).replace(/_/g, ' ')

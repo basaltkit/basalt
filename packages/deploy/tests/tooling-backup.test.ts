@@ -3,7 +3,7 @@ import { backupDatabase, restoreCommand } from '../src/backup.js'
 import { toolingFindings } from '../src/checks.js'
 import { dockerInfra } from '../src/config.js'
 import type { InfraPlan } from '../src/infra.js'
-import { context, DIR, FakeHost, fail, lexfirmaConfig, ok } from './fake-host.js'
+import { context, DIR, FakeHost, fail, acmeConfig, ok } from './fake-host.js'
 
 describe('C9 — the toolchain', () => {
   const host = (node: string, pnpm: string | null, docker = true) => new FakeHost()
@@ -17,13 +17,13 @@ describe('C9 — the toolchain', () => {
   })
 
   it('reports an old node, another pnpm major (pnpm 11 refused a pnpm 10 flag), and missing tools', async () => {
-    const messages = (await toolingFindings(context(host('v20.11.0', '10.4.1'), lexfirmaConfig({ infra: dockerInfra('lexfirma') }))))
+    const messages = (await toolingFindings(context(host('v20.11.0', '10.4.1'), acmeConfig({ infra: dockerInfra('acme') }))))
       .map((f) => f.message)
     expect(messages).toEqual([
       'node v20.11.0 is older than engines.node (>=22.5.0)',
       'pnpm 10.4.1 on this server, but package.json declares pnpm@11.8.0',
     ])
-    const missing = (await toolingFindings(context(host('', null, false), lexfirmaConfig({ infra: dockerInfra('lexfirma') })))).map((f) => f.message)
+    const missing = (await toolingFindings(context(host('', null, false), acmeConfig({ infra: dockerInfra('acme') })))).map((f) => f.message)
     expect(missing).toEqual(['node is not on PATH', 'pnpm is not on PATH', 'docker compose is not available to this user'])
   })
 
@@ -35,19 +35,19 @@ describe('C9 — the toolchain', () => {
 
 describe('backup with dedicated infra', () => {
   const infra: InfraPlan = {
-    services: [{ service: 'postgres', container: 'lexfirma-pg', volume: 'lexfirma_lexfirma-pg-data', action: 'adopt', port: 5434, user: 'lexfirma', database: 'lexfirma', source: 'container' }],
+    services: [{ service: 'postgres', container: 'acme-pg', volume: 'acme_acme-pg-data', action: 'adopt', port: 5434, user: 'acme', database: 'acme', source: 'container' }],
     env: [], findings: [], secrets: {},
   }
 
   it('dumps inside the container (same pg_dump major as the server) and keeps the newest N', async () => {
     const h = new FakeHost().on(({ command }) => (command === 'docker' ? ok('PGDMP') : undefined))
     for (let i = 0; i < 3; i++) h.put(`${DIR}/backups/predeploy/2026010${i}T000000-aaaaaaa.dump`, 'old', 0o600)
-    const ctx = context(h, lexfirmaConfig({ backup: { keep: 2 } }))
+    const ctx = context(h, acmeConfig({ backup: { keep: 2 } }))
     const file = await backupDatabase(ctx, new Map(), infra, 'b'.repeat(40))
-    expect(h.commands('docker')).toEqual(['docker exec lexfirma-pg pg_dump -U lexfirma -d lexfirma --format=custom --no-owner --no-acl'])
+    expect(h.commands('docker')).toEqual(['docker exec acme-pg pg_dump -U acme -d acme --format=custom --no-owner --no-acl'])
     expect(h.mode(file)).toBe(0o600)
     expect((await h.list(`${DIR}/backups/predeploy`)).sort()).toEqual(['20260102T000000-aaaaaaa.dump', '20261011T120000-bbbbbbb.dump'])
-    expect(restoreCommand(ctx, infra, file)).toBe(`docker exec -i lexfirma-pg pg_restore --clean --if-exists --no-owner -U lexfirma -d lexfirma < ${file}`)
+    expect(restoreCommand(ctx, infra, file)).toBe(`docker exec -i acme-pg pg_restore --clean --if-exists --no-owner -U acme -d acme < ${file}`)
   })
 
   it('refuses an empty dump and leaves no file behind', async () => {

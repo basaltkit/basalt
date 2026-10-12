@@ -1,5 +1,5 @@
 /**
- * The LexFirma deploys blocked by their own dirty check (2026-10-11): pnpm 12
+ * The Acme deploys blocked by their own dirty check (2026-10-11): pnpm 12
  * rewrote pnpm-lock.yaml (packageManagerDependencies) on `pnpm --version` in
  * preflight, and on `pnpm exec`/`run` during the build of the deploy before.
  */
@@ -8,9 +8,9 @@ import { tmpdir } from 'node:os'
 import { toolingFindings } from '../src/checks.js'
 import { dockerInfra } from '../src/config.js'
 import { preflight, run } from '../src/pipeline.js'
-import { context, DIR, FakeHost, jlist, lexfirmaConfig, ok } from './fake-host.js'
+import { context, DIR, FakeHost, jlist, acmeConfig, ok } from './fake-host.js'
 
-const ENV = 'NODE_ENV=production\nHOST=127.0.0.1\nPORT=3002\nAPP_SECRET=x\nMAILER_URL=\nPROXYPAY_SECRET_TOKEN=t\nPROXYPAY_CALLBACK_URL=https://lexfirma.aipro.ao/api/webhooks/proxypay\n'
+const ENV = 'NODE_ENV=production\nHOST=127.0.0.1\nPORT=3002\nAPP_SECRET=x\nMAILER_URL=\nPAYCO_SECRET_TOKEN=t\nPAYCO_CALLBACK_URL=https://acme.example.com/api/webhooks/payco\n'
 
 /** A server whose pnpm rewrites the lockfile whenever it runs inside the checkout. */
 function server(options: { dirtyAtStart?: string; rewriteOn?: (args: string[]) => boolean } = {}) {
@@ -36,18 +36,18 @@ function server(options: { dirtyAtStart?: string; rewriteOn?: (args: string[]) =
     })
     .on(({ command }) => (command === 'node' ? ok('v24.17.0') : undefined))
     .on(({ command }) => (command === 'ss' ? ok('') : undefined))
-    .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'lexfirma-api', cwd: DIR })) : undefined))
+    .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'acme-api', cwd: DIR })) : undefined))
     .on(({ command }) => (command === 'pm2' ? ok() : undefined))
     .on(({ command }) => (command === process.execPath ? ok('\n@@basalt-deploy@@{"ok":true,"trueKeys":[]}\n') : undefined))
   return { host, lockDirty: () => lockDirty, clean: () => { other = '' } }
 }
 
-const config = () => lexfirmaConfig({ proxy: { kind: 'none' }, backup: { beforeMigrate: false } })
+const config = () => acmeConfig({ proxy: { kind: 'none' }, backup: { beforeMigrate: false } })
 
 describe('a check never changes the repository it checks', () => {
   it('the version probes run outside the checkout', async () => {
     const { host } = server()
-    await toolingFindings(context(host, lexfirmaConfig({ infra: dockerInfra('lexfirma') })))
+    await toolingFindings(context(host, acmeConfig({ infra: dockerInfra('acme') })))
     const probes = host.calls.filter((c) => c.args[0] === '--version' || (c.command === 'docker' && c.args[1] === 'version'))
     expect(probes.map((c) => c.options.cwd)).toEqual([tmpdir(), tmpdir(), tmpdir()])
   })

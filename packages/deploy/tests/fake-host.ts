@@ -134,12 +134,12 @@ export class FakeHost implements Host {
   interactive() { return this.tty }
 }
 
-export const DIR = '/srv/lexfirma'
+export const DIR = '/srv/acme'
 
-export function lexfirmaConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
+export function acmeConfig(overrides: Partial<DeployConfig> = {}): DeployConfig {
   return {
-    app: 'lexfirma',
-    domain: 'lexfirma.aipro.ao',
+    app: 'acme',
+    domain: 'acme.example.com',
     tenants: 'subdomain',
     branch: 'master',
     env: {
@@ -148,10 +148,10 @@ export function lexfirmaConfig(overrides: Partial<DeployConfig> = {}): DeployCon
       generate: { APP_SECRET: { kind: 'secret', bytes: 32 } },
       ask: {
         MAILER_URL: { kind: 'question', prompt: 'SMTP URL', secret: true, optional: true },
-        PROXYPAY_SECRET_TOKEN: { kind: 'question', prompt: 'ProxyPay token', secret: true, optional: false },
+        PAYCO_SECRET_TOKEN: { kind: 'question', prompt: 'PayCo token', secret: true, optional: false },
       },
-      derive: ({ domain }) => ({ PROXYPAY_CALLBACK_URL: `https://${domain}/api/webhooks/proxypay` }),
-      forbid: ['PROXYPAY_FAKE'],
+      derive: ({ domain }) => ({ PAYCO_CALLBACK_URL: `https://${domain}/api/webhooks/payco` }),
+      forbid: ['PAYCO_FAKE'],
     },
     infra: { kind: 'external' },
     build: { prisma: ['prisma.config.ts'], web: 'web' },
@@ -163,7 +163,7 @@ export function lexfirmaConfig(overrides: Partial<DeployConfig> = {}): DeployCon
   }
 }
 
-export function context(host: FakeHost, config: DeployConfig = lexfirmaConfig()): DeployContext {
+export function context(host: FakeHost, config: DeployConfig = acmeConfig()): DeployContext {
   return { config, dir: DIR, host, pm: 'pnpm', envPath: `${DIR}/.env`, stateDir: `${DIR}/.basalt` }
 }
 

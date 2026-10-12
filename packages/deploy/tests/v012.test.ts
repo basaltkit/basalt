@@ -1,14 +1,14 @@
 /**
- * C11 — the two failed LexFirma deploys of 2026-10-11: `packageManager:
+ * C11 — the two failed Acme deploys of 2026-10-11: `packageManager:
  * pnpm@12.3.4` committed with a lockfile written by pnpm 11, so the server's
  * pnpm 12 refused `--frozen-lockfile` half-way through the build.
  */
 import { describe, expect, it } from 'vitest'
 import { lockedPnpm, lockfileFindings } from '../src/checks.js'
 import { run } from '../src/pipeline.js'
-import { context, DIR, FakeHost, jlist, lexfirmaConfig, ok } from './fake-host.js'
+import { context, DIR, FakeHost, jlist, acmeConfig, ok } from './fake-host.js'
 
-// The section pnpm 12 writes, as it landed in the LexFirma lockfile.
+// The section pnpm 12 writes, as it landed in the Acme lockfile.
 const SECTION = `---
 lockfileVersion: '9.0'
 
@@ -74,7 +74,7 @@ describe('C11 — packageManager the lockfile does not record', () => {
   it('checks the commit the fetch brings, and puts the old one back before any install', async () => {
     let head = 'a'.repeat(40)
     const h = host(undefined, BODY)
-      .put(`${DIR}/.env`, 'NODE_ENV=production\nHOST=127.0.0.1\nPORT=3002\nAPP_SECRET=x\nMAILER_URL=\nPROXYPAY_SECRET_TOKEN=t\nPROXYPAY_CALLBACK_URL=https://lexfirma.aipro.ao/api/webhooks/proxypay\n', 0o600)
+      .put(`${DIR}/.env`, 'NODE_ENV=production\nHOST=127.0.0.1\nPORT=3002\nAPP_SECRET=x\nMAILER_URL=\nPAYCO_SECRET_TOKEN=t\nPAYCO_CALLBACK_URL=https://acme.example.com/api/webhooks/payco\n', 0o600)
       .on(({ command, args }) => {
         if (command !== 'git') return undefined
         if (args[0] === 'status') return ok('')
@@ -93,10 +93,10 @@ describe('C11 — packageManager the lockfile does not record', () => {
         return ok()
       })
       .on(({ command }) => (command === 'ss' ? ok('') : undefined))
-      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'lexfirma-api', cwd: DIR })) : undefined))
+      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'acme-api', cwd: DIR })) : undefined))
       .on(({ command }) => (command === 'node' || command === 'pnpm' ? ok('12.3.4') : undefined))
 
-    const ctx = context(h, lexfirmaConfig({ proxy: { kind: 'none' }, backup: { beforeMigrate: false } }))
+    const ctx = context(h, acmeConfig({ proxy: { kind: 'none' }, backup: { beforeMigrate: false } }))
     await expect(run(ctx, { skip: ['tls'] })).rejects.toThrow(/the incoming commit bbbbbbb/)
     expect(h.transcript).toContain('[C11] package.json declares pnpm@12.3.4')
     expect(head).toBe('a'.repeat(40))

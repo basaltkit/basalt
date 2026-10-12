@@ -1,5 +1,5 @@
 /**
- * RFC 0007 §4–§6: Mukanda's infra.sh and verify.sh as config. A Mukanda-shaped
+ * RFC 0007 §4–§6: Globex's infra.sh and verify.sh as config. A Globex-shaped
  * server — external containers, a compose project, an app role — deployed
  * with no hook at all.
  */
@@ -10,40 +10,40 @@ import { plan, preflight, run } from '../src/pipeline.js'
 import { readReleases } from '../src/state.js'
 import { FakeHost, fail, ok, type Call } from './fake-host.js'
 
-const DIR = '/srv/mukanda'
-const API_ENV = '/etc/mukanda/api.env'
+const DIR = '/srv/globex'
+const API_ENV = '/etc/globex/api.env'
 const OLD = 'a'.repeat(40)
 const NEW = 'b'.repeat(40)
-const OWNER = 'postgresql://mukanda_owner:ownerpw@mukanda-postgres:5432/mukanda'
-const APP = 'postgresql://mukanda_app:apppw@mukanda-postgres:5432/mukanda'
+const OWNER = 'postgresql://globex_owner:ownerpw@globex-postgres:5432/globex'
+const APP = 'postgresql://globex_app:apppw@globex-postgres:5432/globex'
 
-function mukanda(extra: Partial<DeployConfig> = {}): DeployConfig {
+function globex(extra: Partial<DeployConfig> = {}): DeployConfig {
   return {
-    app: 'mukanda',
-    domain: 'mukanda.aipro.ao',
+    app: 'globex',
+    domain: 'globex.example.com',
     tenants: 'subdomain',
     env: { file: API_ENV, fixed: { NODE_ENV: 'production' } },
     infra: external({
-      postgres: { container: 'mukanda-postgres', urlKey: 'MUKANDA_OWNER_DATABASE_URL', appRole: { name: 'mukanda_app', urlKey: 'MUKANDA_DATABASE_URL' } },
-      redis: { container: 'mukanda-redis' },
-      minio: { container: 'minio', buckets: [{ name: 'mukanda-documents', versioned: true }, { name: 'mukanda-quarantine', expireDays: 1 }] },
+      postgres: { container: 'globex-postgres', urlKey: 'GLOBEX_OWNER_DATABASE_URL', appRole: { name: 'globex_app', urlKey: 'GLOBEX_DATABASE_URL' } },
+      redis: { container: 'globex-redis' },
+      minio: { container: 'minio', buckets: [{ name: 'globex-documents', versioned: true }, { name: 'globex-quarantine', expireDays: 1 }] },
     }),
     migrate: { command: ['pnpm', 'db:deploy'], tenants: true },
     runtime: compose({
       file: 'docker/compose.prod.yml',
-      images: [{ tag: 'mukanda', dockerfile: 'docker/app/Dockerfile', env: 'MUKANDA_IMAGE' }],
+      images: [{ tag: 'globex', dockerfile: 'docker/app/Dockerfile', env: 'GLOBEX_IMAGE' }],
       upstream: { service: 'api', port: 3001 },
-      attach: { 'mukanda-postgres': ['data'], 'mukanda-redis': ['data', 'sandbox'] },
+      attach: { 'globex-postgres': ['data'], 'globex-redis': ['data', 'sandbox'] },
       jobs: [{ service: 'freshclam', command: ['freshclam', '--stdout'], once: { exists: '/var/lib/clamav/main.c?d' } }],
     }),
     verify: { logs: { 'ingest-worker': ['EAI_AGAIN', 'ECONNREFUSED'] }, http: [{ path: '/readyz' }] },
-    proxy: apache({ managed: false, vhosts: ['mukanda-app.conf'] }),
+    proxy: apache({ managed: false, vhosts: ['globex-app.conf'] }),
     health: { path: '/readyz', timeoutSeconds: 10 },
     ...extra,
   }
 }
 
-const ctxOf = (host: FakeHost, config: DeployConfig = mukanda()): DeployContext =>
+const ctxOf = (host: FakeHost, config: DeployConfig = globex()): DeployContext =>
   ({ config, dir: DIR, host, pm: 'pnpm', envPath: API_ENV, stateDir: `${DIR}/.basalt` })
 
 interface World {
@@ -66,28 +66,28 @@ function server(options: {
 } = {}): World {
   let head = OLD
   let upSha: string | undefined = 'aaaaaaa'
-  const roles = new Set(options.role === 'missing' ? [] : ['mukanda_app'])
-  const networks = new Map<string, Set<string>>(options.networks === false ? [] : [['mukanda_data', new Set(['mukanda-postgres'])], ['mukanda_sandbox', new Set()]])
-  const images = new Set(['mukanda:aaaaaaa'])
-  const volumes = new Set(options.networks === false ? [] : ['mukanda-clamdb'])
+  const roles = new Set(options.role === 'missing' ? [] : ['globex_app'])
+  const networks = new Map<string, Set<string>>(options.networks === false ? [] : [['globex_data', new Set(['globex-postgres'])], ['globex_sandbox', new Set()]])
+  const images = new Set(['globex:aaaaaaa'])
+  const volumes = new Set(options.networks === false ? [] : ['globex-clamdb'])
   const rules: string[] = []
   const sql: string[] = []
-  const host = new FakeHost().put(API_ENV, options.env ?? `NODE_ENV=production\nMUKANDA_OWNER_DATABASE_URL=${OWNER}\nMUKANDA_DATABASE_URL=${APP}\n`, 0o600)
+  const host = new FakeHost().put(API_ENV, options.env ?? `NODE_ENV=production\nGLOBEX_OWNER_DATABASE_URL=${OWNER}\nGLOBEX_DATABASE_URL=${APP}\n`, 0o600)
   host.put(`${DIR}/package.json`, '{}').put(`${DIR}/docker/compose.prod.yml`, 'services: {}\n')
-  host.put('/etc/apache2/sites-available/mukanda-app.conf', 'ProxyPass "/api/" "http://127.0.0.1:3001/"\n')
-  host.files.set('/etc/apache2/sites-enabled/mukanda-app.conf', { kind: 'symlink', target: '../sites-available/mukanda-app.conf' })
+  host.put('/etc/apache2/sites-available/globex-app.conf', 'ProxyPass "/api/" "http://127.0.0.1:3001/"\n')
+  host.files.set('/etc/apache2/sites-enabled/globex-app.conf', { kind: 'symlink', target: '../sites-available/globex-app.conf' })
   host.http = (url) => (url.endsWith('/readyz') && url.startsWith('http://') ? { status: options.readyz ?? 200 } : { status: 200 })
   const docker = ({ args, options: o }: Call) => {
     const [verb, ...rest] = args
     if (verb === 'inspect' && rest[0] === '--format') return rest[2] === options.stopped ? ok('false\n') : ok('true\n')
-    if (verb === 'inspect' && rest[1] === '--format') return ok(JSON.stringify(['MINIO_ROOT_USER=mukanda', 'MINIO_ROOT_PASSWORD=miniopw']))
+    if (verb === 'inspect' && rest[1] === '--format') return ok(JSON.stringify(['MINIO_ROOT_USER=globex', 'MINIO_ROOT_PASSWORD=miniopw']))
     if (verb === 'exec' && args.includes('psql')) {
       const text = o.stdin ?? ''
       sql.push(text)
-      const asApp = args.includes('mukanda_app')
+      const asApp = args.includes('globex_app')
       if (asApp) return options.role === 'stale' ? fail('password authentication failed', 2) : ok('1\n')
-      if (text.startsWith('SELECT 1 FROM pg_roles')) return ok(roles.has('mukanda_app') ? '1\n' : '')
-      if (text.includes('CREATE ROLE')) roles.add('mukanda_app')
+      if (text.startsWith('SELECT 1 FROM pg_roles')) return ok(roles.has('globex_app') ? '1\n' : '')
+      if (text.includes('CREATE ROLE')) roles.add('globex_app')
       if (text.includes('DO $basalt$')) return ok('4\n')
       return ok()
     }
@@ -110,13 +110,13 @@ function server(options: {
     if (verb === 'build') { images.add(args[args.indexOf('-t') + 1] as string); return ok() }
     if (verb === 'compose') {
       if (args.includes('--services')) return ok('api\nworker\ningest-worker\nfreshclam\n')
-      if (args.includes('config') && args.includes('json')) return ok(JSON.stringify({ volumes: { clamdb: { external: true, name: 'mukanda-clamdb' }, cache: {} } }))
+      if (args.includes('config') && args.includes('json')) return ok(JSON.stringify({ volumes: { clamdb: { external: true, name: 'globex-clamdb' }, cache: {} } }))
       if (args.includes('config')) return ok()
-      if (args.includes('--no-start')) { networks.set('mukanda_data', new Set()); networks.set('mukanda_sandbox', new Set()); return ok() }
+      if (args.includes('--no-start')) { networks.set('globex_data', new Set()); networks.set('globex_sandbox', new Set()); return ok() }
       if (args.includes('run') && args.includes('--entrypoint')) return options.seeded ? ok('main.cvd\n') : fail('', 2)
       if (args.includes('run')) return ok()
       if (args.includes('logs')) return ok(options.logs ?? 'ingest-worker | ready\n')
-      if (args.includes('up')) { upSha = (o.env?.['MUKANDA_IMAGE'] ?? '').split(':')[1]; return ok() }
+      if (args.includes('up')) { upSha = (o.env?.['GLOBEX_IMAGE'] ?? '').split(':')[1]; return ok() }
       if (args.includes('ps')) {
         return ok(upSha ? JSON.stringify({ Service: 'api', State: 'running', Health: 'healthy', Publishers: [{ PublishedPort: 3001 }] }) : '')
       }
@@ -143,7 +143,7 @@ function server(options: {
 
 const dockerArgs = (host: FakeHost) => host.calls.filter((c) => c.command === 'docker').map((c) => c.args.join(' '))
 
-describe('a Mukanda deploy with no scripts', () => {
+describe('a Globex deploy with no scripts', () => {
   it('role, buckets, dump in the external container, company grants, attach, job, release, verify', async () => {
     const world = server({ role: 'missing', networks: false })
     const ctx = ctxOf(world.host)
@@ -151,10 +151,10 @@ describe('a Mukanda deploy with no scripts', () => {
     expect(world.up()).toBe('bbbbbbb')
 
     // §4.1 — created, with the .env's password, on stdin only.
-    expect(world.roles.has('mukanda_app')).toBe(true)
+    expect(world.roles.has('globex_app')).toBe(true)
     const create = world.sql.find((s) => s.includes('CREATE ROLE'))
-    expect(create).toContain(`ALTER ROLE "mukanda_app" WITH LOGIN PASSWORD 'apppw';`)
-    expect(create).toContain('ALTER DEFAULT PRIVILEGES FOR ROLE "mukanda_owner" IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "mukanda_app";')
+    expect(create).toContain(`ALTER ROLE "globex_app" WITH LOGIN PASSWORD 'apppw';`)
+    expect(create).toContain('ALTER DEFAULT PRIVILEGES FOR ROLE "globex_owner" IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "globex_app";')
     expect(create).not.toContain('ON ALL TABLES IN SCHEMA public')
     for (const argv of dockerArgs(world.host)) {
       expect(argv).not.toContain('apppw')
@@ -164,23 +164,23 @@ describe('a Mukanda deploy with no scripts', () => {
     // §11.3 — company schemas after the migration.
     const grants = world.sql.findIndex((s) => s.includes('DO $basalt$'))
     expect(grants).toBeGreaterThan(-1)
-    expect(world.host.transcript).toContain('role mukanda_app: granted on 4 company schema(s)')
+    expect(world.host.transcript).toContain('role globex_app: granted on 4 company schema(s)')
 
     // §4.2 — buckets, versioning, the expiry rule once.
-    expect(dockerArgs(world.host)).toContain('exec -e MC_HOST_local minio mc mb -p local/mukanda-documents local/mukanda-quarantine')
-    expect(dockerArgs(world.host)).toContain('exec -e MC_HOST_local minio mc version enable local/mukanda-documents')
-    expect(world.rules).toEqual(['local/mukanda-quarantine'])
+    expect(dockerArgs(world.host)).toContain('exec -e MC_HOST_local minio mc mb -p local/globex-documents local/globex-quarantine')
+    expect(dockerArgs(world.host)).toContain('exec -e MC_HOST_local minio mc version enable local/globex-documents')
+    expect(world.rules).toEqual(['local/globex-quarantine'])
 
     // The dump runs inside the external Postgres, as its owner — no backup.container needed.
-    expect(dockerArgs(world.host).some((a) => a.startsWith('exec -e PGPASSWORD mukanda-postgres pg_dump -U mukanda_owner -d mukanda'))).toBe(true)
+    expect(dockerArgs(world.host).some((a) => a.startsWith('exec -e PGPASSWORD globex-postgres pg_dump -U globex_owner -d globex'))).toBe(true)
 
     // §4.3 — a fresh server: the project created for its networks, then the containers attached.
     expect(dockerArgs(world.host).some((a) => a.includes('up --no-start'))).toBe(true)
-    expect(world.networks.get('mukanda_sandbox')).toEqual(new Set(['mukanda-redis']))
-    expect(world.networks.get('mukanda_data')).toEqual(new Set(['mukanda-postgres', 'mukanda-redis']))
+    expect(world.networks.get('globex_sandbox')).toEqual(new Set(['globex-redis']))
+    expect(world.networks.get('globex_data')).toEqual(new Set(['globex-postgres', 'globex-redis']))
 
     // A fresh server: the external volume the compose file names, created empty.
-    expect(world.host.transcript).toContain('external volume(s) created: mukanda-clamdb')
+    expect(world.host.transcript).toContain('external volume(s) created: globex-clamdb')
     // §4.4 — the job ran (no signatures yet), before up.
     const calls = dockerArgs(world.host)
     const job = calls.findIndex((a) => a.endsWith('run --rm --no-deps freshclam freshclam --stdout'))
@@ -196,14 +196,14 @@ describe('a Mukanda deploy with no scripts', () => {
 
   it('the second deploy changes nothing: role in place, rule kept, job done, nothing to attach', async () => {
     const world = server({ seeded: true })
-    world.rules.push('local/mukanda-quarantine')
-    world.networks.set('mukanda_data', new Set(['mukanda-postgres', 'mukanda-redis']))
-    world.networks.set('mukanda_sandbox', new Set(['mukanda-redis']))
+    world.rules.push('local/globex-quarantine')
+    world.networks.set('globex_data', new Set(['globex-postgres', 'globex-redis']))
+    world.networks.set('globex_sandbox', new Set(['globex-redis']))
     expect(await run(ctxOf(world.host), { skip: ['tls'] })).toBe(0)
-    expect(world.host.transcript).toContain('role mukanda_app: in place; grants in place')
+    expect(world.host.transcript).toContain('role globex_app: in place; grants in place')
     expect(world.sql.some((s) => s.includes('PASSWORD'))).toBe(false)
-    expect(world.rules).toEqual(['local/mukanda-quarantine'])
-    expect(world.host.transcript).toContain('mukanda-quarantine (1-day expiry)')
+    expect(world.rules).toEqual(['local/globex-quarantine'])
+    expect(world.host.transcript).toContain('globex-quarantine (1-day expiry)')
     expect(world.host.transcript).toContain('job freshclam: already done')
     expect(dockerArgs(world.host).some((a) => a.startsWith('network connect'))).toBe(false)
     expect(dockerArgs(world.host).some((a) => a.includes('--no-start'))).toBe(false)
@@ -212,17 +212,17 @@ describe('a Mukanda deploy with no scripts', () => {
   it('a role whose password drifted from the .env gets it back', async () => {
     const world = server({ role: 'stale', seeded: true })
     expect(await run(ctxOf(world.host), { skip: ['tls'] })).toBe(0)
-    expect(world.host.transcript).toContain('role mukanda_app: password set from the .env')
+    expect(world.host.transcript).toContain('role globex_app: password set from the .env')
   })
 
   it('an app URL that does not exist yet is generated from the owner\'s, then kept', async () => {
-    const world = server({ env: `NODE_ENV=production\nMUKANDA_OWNER_DATABASE_URL=${OWNER}\n`, seeded: true })
+    const world = server({ env: `NODE_ENV=production\nGLOBEX_OWNER_DATABASE_URL=${OWNER}\n`, seeded: true })
     expect(await run(ctxOf(world.host), { skip: ['tls'] })).toBe(0)
-    expect(world.host.file(API_ENV)).toMatch(/^MUKANDA_DATABASE_URL=postgresql:\/\/mukanda_app:[0-9a-f]{48}@mukanda-postgres:5432\/mukanda$/m)
+    expect(world.host.file(API_ENV)).toMatch(/^GLOBEX_DATABASE_URL=postgresql:\/\/globex_app:[0-9a-f]{48}@globex-postgres:5432\/globex$/m)
   })
 
   it('a worker that logs EAI_AGAIN is a failed release, rolled back', async () => {
-    const world = server({ seeded: true, logs: 'ingest-worker | getaddrinfo EAI_AGAIN mukanda-redis\n' })
+    const world = server({ seeded: true, logs: 'ingest-worker | getaddrinfo EAI_AGAIN globex-redis\n' })
     const ctx = ctxOf(world.host)
     expect(await run(ctx, { skip: ['tls'] })).toBe(1)
     expect(world.up()).toBe('aaaaaaa')
@@ -231,7 +231,7 @@ describe('a Mukanda deploy with no scripts', () => {
 
   it('a verify URL that does not answer is a failed release too', async () => {
     const world = server({ seeded: true, readyz: 503 })
-    const config = mukanda({ health: { path: '/health', timeoutSeconds: 10 } })
+    const config = globex({ health: { path: '/health', timeoutSeconds: 10 } })
     expect(await run(ctxOf(world.host, config), { skip: ['tls'] })).toBe(1)
     expect(world.host.transcript).toContain('/readyz: HTTP 503, expected 200')
   })
@@ -239,15 +239,15 @@ describe('a Mukanda deploy with no scripts', () => {
 
 describe('found before anything is built', () => {
   it('a stopped external container, an unknown service with a suggestion, a missing attach target', async () => {
-    const world = server({ stopped: 'mukanda-redis' })
-    const config = mukanda({
+    const world = server({ stopped: 'globex-redis' })
+    const config = globex({
       verify: { logs: { 'ingest': ['EAI_AGAIN'] } },
     })
     const p = await plan(ctxOf(world.host, config), { skip: ['tls'] })
     expect(p).toBe(1)
-    expect(world.host.transcript).toContain('redis: mukanda-redis is not running')
+    expect(world.host.transcript).toContain('redis: globex-redis is not running')
     expect(world.host.transcript).toContain('verify.logs: "ingest" is not a service of docker/compose.prod.yml — did you mean "ingest-worker"?')
-    expect(world.host.transcript).toContain('runtime.attach: mukanda-redis is not running')
+    expect(world.host.transcript).toContain('runtime.attach: globex-redis is not running')
     const checked = await preflight(ctxOf(server().host), { skip: ['tls'] })
     expect(checked.findings.filter((f) => f.level === 'error')).toEqual([])
   })
@@ -256,11 +256,11 @@ describe('found before anything is built', () => {
     const world = server()
     await plan(ctxOf(world.host), { skip: ['tls'] })
     for (const line of [
-      'infra: postgres: mukanda-postgres (external, kept running by its owner)',
-      'infra: role mukanda_app: created if missing, password from MUKANDA_DATABASE_URL, DML grants (company schemas too, after the migration)',
-      'infra: buckets: mukanda-documents (versioned), mukanda-quarantine (1-day expiry)',
-      'backup: pg_dump inside mukanda-postgres',
-      'attach: mukanda-postgres → data; mukanda-redis → data, sandbox',
+      'infra: postgres: globex-postgres (external, kept running by its owner)',
+      'infra: role globex_app: created if missing, password from GLOBEX_DATABASE_URL, DML grants (company schemas too, after the migration)',
+      'infra: buckets: globex-documents (versioned), globex-quarantine (1-day expiry)',
+      'backup: pg_dump inside globex-postgres',
+      'attach: globex-postgres → data; globex-redis → data, sandbox',
       'job: freshclam freshclam --stdout (unless /var/lib/clamav/main.c?d exists)',
       'verify: no EAI_AGAIN / ECONNREFUSED in the logs of ingest-worker',
       'verify: /readyz answers 200',
@@ -268,9 +268,9 @@ describe('found before anything is built', () => {
   })
 
   it('config: bucket names, expiry days, container names and the role name are checked', () => {
-    const bad = mukanda({
+    const bad = globex({
       infra: external({
-        postgres: { container: 'bad name', appRole: { name: 'Mukanda-App', urlKey: 'X' } },
+        postgres: { container: 'bad name', appRole: { name: 'Globex-App', urlKey: 'X' } },
         minio: { container: 'minio', buckets: [{ name: 'Bad_Bucket' }, { name: 'ok-bucket', expireDays: 0 }] },
       }),
     })
@@ -283,7 +283,7 @@ describe('found before anything is built', () => {
       expect(text).toContain('bucket "Bad_Bucket" is not a valid S3 bucket name')
       expect(text).toContain('bucket "ok-bucket": expireDays must be a whole number ≥ 1')
       expect(text).toContain('container "bad name" is not a container name')
-      expect(text).toContain('appRole "Mukanda-App" must be a lowercase Postgres identifier')
+      expect(text).toContain('appRole "Globex-App" must be a lowercase Postgres identifier')
     }
   })
 })
