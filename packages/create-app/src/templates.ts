@@ -1413,8 +1413,14 @@ export function dockerignore(): string {
  * (`[a-z][a-z0-9-]{1,30}`), from the package name.
  */
 export function deployAppName(name: string): string {
-  const base = name.replace(/^@[^/]+\//, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '').slice(0, 31).replace(/-+$/, '')
-  return /^[a-z][a-z0-9-]{1,30}$/.test(base) ? base : 'app'
+  // Trimmed in linear time: an anchored `-+$` regex backtracks on long runs of '-'.
+  const base = name.replace(/^@[^/]+\//, '').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  let start = 0
+  while (start < base.length && !((base[start] as string) >= 'a' && (base[start] as string) <= 'z')) start++
+  let end = Math.min(base.length, start + 31)
+  while (end > start && base[end - 1] === '-') end--
+  const slug = base.slice(start, end)
+  return /^[a-z][a-z0-9-]{1,30}$/.test(slug) ? slug : 'app'
 }
 
 /**
