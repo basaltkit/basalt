@@ -15,6 +15,7 @@ import {
   mcpJson,
   pnpmWorkspaceYaml,
   readme,
+  deployConfigTs,
   readmeCliSection,
   readmeMcpSection,
   readmeUiSection,
@@ -331,6 +332,16 @@ export async function planAdd(ctx: ProjectContext, feature: AddableFeature, opti
     const ignore = await readOptional(ctx.dir, '.gitignore')
     plannedEdit(b, '.gitignore', ignore, ignore === undefined ? gitignore(next) : ensureGitignore(ignore, ['node_modules/', 'dist/']), 'ignore web/ build output')
     await plannedReadme(b, regenOptions, '## Web UI', readmeUiSection(next))
+    // The deploy builds web/ too (served as web/dist by the proxy).
+    if ((await readOptional(ctx.dir, 'deploy.config.ts')) !== undefined) {
+      await plannedSource(
+        b,
+        'deploy.config.ts',
+        regenOptions ? () => deployConfigTs(regenOptions) : undefined,
+        (source) => (/\bweb:/.test(source) ? source : /build: \{ ([^}\n]*) \}/.test(source) ? source.replace(/build: \{ ([^}\n]*) \}/, "build: { $1, web: 'web' }") : undefined),
+        "add web: 'web' to build in deploy.config.ts, so the deploy builds the frontend.",
+      )
+    }
     b.notes.push('No CORS change needed: the Vite dev server proxies /api to the API on :3000.')
   }
 

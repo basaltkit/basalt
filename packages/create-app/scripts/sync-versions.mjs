@@ -21,6 +21,7 @@ const SCAFFOLDED = [
   '@basaltkit/cli',
   '@basaltkit/config',
   '@basaltkit/core',
+  '@basaltkit/deploy',
   '@basaltkit/env',
   '@basaltkit/events',
   '@basaltkit/fastify',

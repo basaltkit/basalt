@@ -12,6 +12,20 @@ pnpm add -D @basaltkit/deploy
 ## The config
 
 `deploy.config.ts` at the app root, committed. It holds **no secrets**.
+`basalt-deploy init --domain=<host>` writes it from the project:
+
+| Read from | Fills |
+|---|---|
+| `src/env.ts` (as text — the app is not loaded) | the typed `defineDeploy<typeof env>`; `generate` for each `secret()` the app mints, `ask` for each required key and each provider-issued secret (S3, API, SMTP…) |
+| `package.json`, `prisma.config.ts`, `prisma/tenants/` | `app`, `build.prisma`, `migrate` (`central`/`tenants`, or `command: ['pnpm', 'db:deploy']` when that script is the app's own) |
+| `web/package.json` | `build.web` |
+| a production compose file whose images are variables (`image: ${APP_IMAGE}`) | `runtime: compose(…)`: one image per variable (Dockerfile from `build:`, else `docker/<name>/Dockerfile`), the service on `127.0.0.1` as upstream |
+| otherwise | `runtime: pm2()`, `infra: dockerInfra(app)` for the `DATABASE_URL`, `REDIS_URL`, `S3_*` keys the schema has |
+| `--server`, on the server | the Apache vhosts that already serve the domain (`managed: false`), the ports taken (`avoid`) |
+
+It asks the domain, the tenancy and the branch (or takes `--domain`,
+`--tenants`, `--branch`, `--proxy`), never overwrites a config (`--force`),
+and runs `check` on what it wrote.
 
 ```ts
 import { apache, ask, defineDeploy, dockerInfra, pm2, secret } from '@basaltkit/deploy'

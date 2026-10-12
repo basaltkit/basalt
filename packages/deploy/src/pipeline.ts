@@ -238,6 +238,7 @@ async function build(ctx: DeployContext, values: Map<string, string>, sha: strin
   const frozen = pm === 'npm' ? ['ci'] : pm === 'yarn' ? ['install', '--immutable'] : ['install', '--frozen-lockfile']
   await run(frozen, { unset: ['NODE_ENV'] })
   for (const config of ctx.config.build?.prisma ?? []) await run(['exec', 'prisma', 'generate', '--config', config], { env: values })
+  if (ctx.config.build?.script) await run(['run', ctx.config.build.script], { env: values })
   if (ctx.config.build?.web) await run(['--dir', ctx.config.build.web, 'run', 'build'], { env: values })
   if (isCompose(ctx)) await composeBuild(ctx, sha)
 }
@@ -374,7 +375,7 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
     options.skip?.includes('fetch') ? 'fetch: skipped' : `fetch: git fetch ${config.remote ?? 'origin'} ${config.branch ?? 'main'} && git merge --ff-only`,
     ...describeEnv(env).map((l) => `env: ${l}`),
     ...describeInfra(infra).map((l) => `infra: ${l}`),
-    `build: ${pm} install (frozen), ${(config.build?.prisma ?? []).map((c) => `prisma generate --config ${c}`).join(', ') || 'no prisma'}${config.build?.web ? `, ${config.build.web} build` : ''}${isCompose(ctx) ? `, docker build ${composeOf(ctx).images.map((i) => i.tag).join(', ')} (skipped when the commit's tag exists)` : ''}`,
+    `build: ${pm} install (frozen), ${(config.build?.prisma ?? []).map((c) => `prisma generate --config ${c}`).join(', ') || 'no prisma'}${config.build?.script ? `, ${pm} run ${config.build.script}` : ''}${config.build?.web ? `, ${config.build.web} build` : ''}${isCompose(ctx) ? `, docker build ${composeOf(ctx).images.map((i) => i.tag).join(', ')} (skipped when the commit's tag exists)` : ''}`,
     ...(config.hooks?.infra ?? []).map((h) => `infra hook: ${h.join(' ')}`),
     `validate: ${config.env.schema ?? '(no schema configured)'} against the new .env`,
     ((decision) => decision.run

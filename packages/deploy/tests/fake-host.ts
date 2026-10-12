@@ -109,7 +109,8 @@ export class FakeHost implements Host {
   async remove(path: string) { this.files.delete(path) }
   async list(dir: string) {
     const prefix = `${dir}/`
-    return [...this.files.keys()].filter((p) => p.startsWith(prefix) && !p.slice(prefix.length).includes('/')).map((p) => p.slice(prefix.length))
+    // Like readdir: files and subdirectories (a directory exists when a file is under it).
+    return [...new Set([...this.files.keys()].filter((p) => p.startsWith(prefix)).map((p) => p.slice(prefix.length).split('/')[0] as string))]
   }
   async prompt(question: string) {
     this.prompts.push(question)
