@@ -79,6 +79,29 @@ export interface DeployConfig<E extends object = EnvShape> {
    * `DEPLOY_APP` in their environment. Idempotent — they run on every deploy.
    */
   hooks?: HooksConfig
+  /** Declarative checks after the health check; a failure is a failed release, rolled back (RFC 0007 §6). */
+  verify?: VerifyConfig
+  /** What `basalt-deploy bootstrap` sets up on a fresh server (RFC 0007 §7). */
+  bootstrap?: {
+    /** Swap created when RAM is under 6 GB and there is none; 0 = never. @default 4 */
+    swapGb?: number
+    /** ufw: SSH (+ 80/443 behind a proxy), turned on only when nothing else listens. @default true */
+    firewall?: boolean
+  }
+}
+
+export interface VerifyConfig {
+  /**
+   * Per compose service, text that must not appear in its logs since the
+   * release started — a worker that cannot reach its queue logs, it does not crash.
+   * @example { 'ingest-worker': ['EAI_AGAIN', 'ECONNREFUSED'] }
+   */
+  logs?: Record<string, string[]>
+  /**
+   * More URLs on the API than `health.path`, each answering `expect` (default 200).
+   * @example [{ path: '/readyz' }]
+   */
+  http?: Array<{ path: `/${string}`; expect?: number }>
 }
 
 export interface HooksConfig {
@@ -149,11 +172,49 @@ export interface Question {
   default?: string
 }
 
-export type InfraConfig<E extends object = EnvShape> = ExternalInfra | DockerInfra<E>
+export type InfraConfig<E extends object = EnvShape> = ExternalInfra<E> | DockerInfra<E>
 
-export interface ExternalInfra {
+/**
+ * Containers this deploy does not create (their data outlives any release),
+ * but keeps: checked running in the preflight, the app's database role and the
+ * buckets maintained on every deploy, the database dumped before migrating
+ * (RFC 0007 §4.5). Without services, `external()` means "nothing to do".
+ */
+export interface ExternalInfra<E extends object = EnvShape> {
   kind: 'external'
+  postgres?: ExternalPostgres<E>
+  redis?: { container: string }
+  minio?: { container: string; buckets?: Bucket[] }
 }
+
+export interface ExternalPostgres<E extends object = EnvShape> {
+  container: string
+  /**
+   * The `.env` key with the OWNER's URL (user, password, database): what the
+   * role, the grants and the dump run as.
+   * @default 'DATABASE_URL'
+   */
+  urlKey?: EnvKey<E>
+  appRole?: AppRole<E>
+}
+
+/**
+ * The role the app connects as: no DDL, no superuser (RFC 0007 §4.1). Created
+ * when missing, its password kept equal to the URL at `urlKey` (generated
+ * there when absent), and granted DML through the owner's default privileges.
+ */
+export interface AppRole<E extends object = EnvShape> {
+  /** @example 'mukanda_app' */
+  name: string
+  /** The `.env` key with the app's URL. */
+  urlKey: EnvKey<E>
+}
+
+/**
+ * A bucket name, or one with its policy: `versioned` turns versioning on,
+ * `expireDays` adds an expiry rule — once (RFC 0007 §4.2).
+ */
+export type Bucket = string | { name: string; versioned?: boolean; expireDays?: number }
 
 export interface DockerInfra<E extends object = EnvShape> {
   kind: 'docker'
@@ -175,6 +236,9 @@ export interface PostgresService<E extends object = EnvShape> {
   urlKey: EnvKey<E>
   /** Query parameters appended to the URL (e.g. `{ schema: 'public' }` for Prisma). */
   urlParams: Record<string, string>
+  /** Adopt a container under another name. Default `<app>-pg`. */
+  container?: string
+  appRole?: AppRole<E>
 }
 
 export interface RedisService<E extends object = EnvShape> {
@@ -182,6 +246,8 @@ export interface RedisService<E extends object = EnvShape> {
   port: number | 'auto'
   /** @default 'REDIS_URL' */
   urlKey: EnvKey<E>
+  /** Adopt a container under another name. Default `<app>-redis`. */
+  container?: string
 }
 
 export interface MinioService {
@@ -189,9 +255,11 @@ export interface MinioService {
   port: number | 'auto'
   consolePort: number | 'auto'
   user: string
-  buckets: string[]
+  buckets: Bucket[]
   /** The `.env` keys that receive the endpoint and the credentials. */
   keys: { endpoint: string; accessKey: string; secretKey: string }
+  /** Adopt a container under another name. Default `<app>-minio`. */
+  container?: string
 }
 
 export interface BuildConfig {
@@ -270,6 +338,28 @@ export interface ComposeRuntime {
   env: Record<string, string>
   /** Releases whose images are kept for a rollback without a rebuild. */
   keepImages: number
+  /**
+   * Containers this project does not own, connected to its networks before
+   * `up` — creating the project first on a fresh server, so the first release
+   * is healthy, not the second (RFC 0007 §4.3).
+   * @example { 'myapp-postgres': ['data'], 'myapp-redis': ['data', 'sandbox'] }
+   */
+  attach?: Record<string, string[]>
+  /** One-off commands before `up`, with this commit's images (RFC 0007 §4.4). */
+  jobs?: ComposeJob[]
+}
+
+export interface ComposeJob {
+  /** A service of the compose file; the job runs `docker compose run --rm --no-deps <service> …`. */
+  service: string
+  /** The command; default the service's own. */
+  command?: string[]
+  /**
+   * Skip the job when this path (a glob, inside the service's container)
+   * already exists — e.g. signatures already in a volume.
+   * @example { exists: '/var/lib/clamav/main.c?d' }
+   */
+  once?: { exists: string }
 }
 
 export interface ComposeImage {
@@ -292,7 +382,35 @@ export interface Pm2Runtime {
   avoid: number[]
 }
 
-export type ProxyConfig = ApacheProxy | NoProxy
+export type ProxyConfig = ApacheProxy | CaddyProxy | NoProxy
+
+/**
+ * Caddy on the host (RFC 0007 §8): `install` writes `/etc/caddy/sites/<app>.caddy`
+ * (imported by the main Caddyfile) and reloads after `caddy validate`; deploys
+ * diff it and never rewrite it. TLS is Caddy's own: one certificate per host,
+ * issued on first visit — for tenants, only once the app says the host is
+ * theirs (`onDemandTls.ask`).
+ */
+export interface CaddyProxy {
+  kind: 'caddy'
+  /** Directory served at `/`, relative to the app directory. @default 'web/dist' */
+  webRoot: string
+  /** Path prefix proxied to the API (stripped). @default '/api' */
+  apiPrefix: string
+  /**
+   * Issue certificates on demand, after asking the app (`GET <ask>?domain=<host>`
+   * answering 200) — required for `tenants: 'subdomain'` and customer domains.
+   * Caddy has one such endpoint per server: it lives in the main Caddyfile.
+   * @example { ask: '/tls/allowed' }
+   */
+  onDemandTls?: { ask: `/${string}` }
+  /** More Caddyfile appended to the site file, as is (another host of the app, special routes). */
+  extra?: string
+  /** `false`: the site file is the app's own — checked (imported, C1), never written. */
+  managed?: boolean
+  /** @default '/etc/caddy' */
+  root?: string
+}
 
 export interface ApacheProxy {
   kind: 'apache'
@@ -380,6 +498,16 @@ export const pm2 = (options: { name?: string; script?: string; port?: number | '
   avoid: options.avoid ?? [],
 })
 
+export const caddy = (options: { webRoot?: string; apiPrefix?: string; onDemandTls?: { ask: `/${string}` }; extra?: string; managed?: boolean; root?: string } = {}): CaddyProxy => ({
+  kind: 'caddy',
+  webRoot: options.webRoot ?? 'web/dist',
+  apiPrefix: options.apiPrefix ?? '/api',
+  ...(options.onDemandTls ? { onDemandTls: options.onDemandTls } : {}),
+  ...(options.extra === undefined ? {} : { extra: options.extra }),
+  ...(options.managed === undefined ? {} : { managed: options.managed }),
+  ...(options.root === undefined ? {} : { root: options.root }),
+})
+
 export const apache = (options: { vhost?: string; webRoot?: string; apiPrefix?: string; certName?: string; root?: string; managed?: boolean; vhosts?: string[] } = {}): ApacheProxy => ({
   kind: 'apache',
   ...(options.managed === undefined ? {} : { managed: options.managed }),
@@ -397,6 +525,8 @@ export const compose = (options: {
   upstream: { service: string; port: number }
   env?: Record<string, string>
   keepImages?: number
+  attach?: Record<string, string[]>
+  jobs?: ComposeJob[]
 }): ComposeRuntime => ({
   kind: 'compose',
   file: options.file,
@@ -404,10 +534,15 @@ export const compose = (options: {
   upstream: options.upstream,
   env: options.env ?? {},
   keepImages: options.keepImages ?? 3,
+  ...(options.attach ? { attach: options.attach } : {}),
+  ...(options.jobs ? { jobs: options.jobs } : {}),
 })
 
 export const none = (): NoProxy => ({ kind: 'none' })
-export const external = (): ExternalInfra => ({ kind: 'external' })
+export const external = <E extends object = EnvShape>(services: NoInfer<Omit<ExternalInfra<E>, 'kind'>> = {}): ExternalInfra<E> => ({ kind: 'external', ...services })
+
+/** A bucket's name, whichever form it was given in. */
+export const bucketName = (bucket: Bucket): string => (typeof bucket === 'string' ? bucket : bucket.name)
 
 export const MINIO_IMAGE = 'minio/minio:RELEASE.2025-03-12T18-04-18Z'
 
@@ -512,14 +647,35 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   if (config.infra?.kind === 'docker') {
     const minio = config.infra.minio
     for (const bucket of minio?.buckets ?? []) {
-      if (!/^[a-z0-9][a-z0-9.-]{2,62}$/.test(bucket)) problems.push(`bucket "${bucket}" is not a valid S3 bucket name`)
+      if (!/^[a-z0-9][a-z0-9.-]{2,62}$/.test(bucketName(bucket))) problems.push(`bucket "${bucketName(bucket)}" is not a valid S3 bucket name`)
     }
   }
+  const services = config.infra?.kind === 'external' ? config.infra : undefined
+  for (const bucket of services?.minio?.buckets ?? []) {
+    if (!/^[a-z0-9][a-z0-9.-]{2,62}$/.test(bucketName(bucket))) problems.push(`bucket "${bucketName(bucket)}" is not a valid S3 bucket name`)
+  }
+  for (const bucket of [...(services?.minio?.buckets ?? []), ...(config.infra?.kind === 'docker' ? config.infra.minio?.buckets ?? [] : [])]) {
+    if (typeof bucket === 'object' && bucket.expireDays !== undefined && (!Number.isInteger(bucket.expireDays) || bucket.expireDays < 1)) {
+      problems.push(`bucket "${bucket.name}": expireDays must be a whole number ≥ 1`)
+    }
+  }
+  const containers = [
+    services?.postgres?.container, services?.redis?.container, services?.minio?.container,
+    ...(config.infra?.kind === 'docker' ? [config.infra.postgres?.container, config.infra.redis?.container, config.infra.minio?.container] : []),
+  ]
+  for (const container of containers) {
+    if (container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(container)) problems.push(`container "${container}" is not a container name`)
+  }
+  const role = services?.postgres?.appRole ?? (config.infra?.kind === 'docker' ? config.infra.postgres?.appRole : undefined)
+  if (role && !/^[a-z_][a-z0-9_]{0,62}$/.test(role.name)) problems.push(`appRole "${role.name}" must be a lowercase Postgres identifier`)
   if (config.backup?.keep !== undefined && (!Number.isInteger(config.backup.keep) || config.backup.keep < 1)) {
     problems.push('backup.keep must be a whole number ≥ 1')
   }
   if (config.backup?.container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(config.backup.container)) {
     problems.push(`backup.container "${config.backup.container}" is not a container name`)
+  }
+  if (config.proxy?.kind === 'caddy' && config.tenants === 'subdomain' && !config.proxy.onDemandTls) {
+    problems.push(`tenants: 'subdomain' behind caddy() needs onDemandTls: { ask: '/…' } — a certificate per tenant host, issued only for hosts the app vouches for`)
   }
   if (problems.length > 0) throw new DeployConfigError(problems)
   return typed

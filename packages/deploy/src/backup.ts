@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { DeployError, type DeployContext } from './context.js'
 import type { InfraPlan } from './infra.js'
+import { dumpContainer, dumpUrlKey } from './services.js'
 
 /**
  * `pg_dump -Fc` of the central database before migrating — migrations do not
@@ -27,7 +28,7 @@ export async function backupDatabase(ctx: DeployContext, values: Map<string, str
   } else {
     const url = databaseUrl(ctx, values)
     const password = decodeURIComponent(url.password)
-    const container = config.backup?.container
+    const container = dumpContainer(config)
     if (container) {
       const args = ['exec', '-e', 'PGPASSWORD', container, 'pg_dump', '-U', decodeURIComponent(url.username), '-d', databaseName(url), '--format=custom', '--no-owner', '--no-acl']
       result = await host.exec('docker', args, { stdoutFile: file, env: { PGPASSWORD: password } })
@@ -53,7 +54,7 @@ export async function backupDatabase(ctx: DeployContext, values: Map<string, str
 export function restoreCommand(ctx: DeployContext, infra: InfraPlan, file: string, values: Map<string, string> = new Map()): string {
   const pg = infra.services.find((s) => s.service === 'postgres')
   if (pg) return `docker exec -i ${pg.container} pg_restore --clean --if-exists --no-owner -U ${pg.user ?? ctx.config.app} -d ${pg.database ?? ctx.config.app} < ${file}`
-  const container = ctx.config.backup?.container
+  const container = dumpContainer(ctx.config)
   if (container) {
     const url = databaseUrl(ctx, values)
     return `docker exec -i ${container} pg_restore --clean --if-exists --no-owner -U ${decodeURIComponent(url.username)} -d ${databaseName(url)} < ${file}`
@@ -62,7 +63,7 @@ export function restoreCommand(ctx: DeployContext, infra: InfraPlan, file: strin
 }
 
 function databaseUrl(ctx: DeployContext, values: Map<string, string>): URL {
-  const key = ctx.config.backup?.urlKey ?? 'DATABASE_URL'
+  const key = dumpUrlKey(ctx.config)
   const raw = values.get(key)
   if (!raw) throw new DeployError(`backup: ${key} is not set in the .env`)
   return new URL(raw)
