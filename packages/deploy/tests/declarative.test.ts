@@ -69,6 +69,7 @@ function server(options: {
   const roles = new Set(options.role === 'missing' ? [] : ['mukanda_app'])
   const networks = new Map<string, Set<string>>(options.networks === false ? [] : [['mukanda_data', new Set(['mukanda-postgres'])], ['mukanda_sandbox', new Set()]])
   const images = new Set(['mukanda:aaaaaaa'])
+  const volumes = new Set(options.networks === false ? [] : ['mukanda-clamdb'])
   const rules: string[] = []
   const sql: string[] = []
   const host = new FakeHost().put(API_ENV, options.env ?? `NODE_ENV=production\nMUKANDA_OWNER_DATABASE_URL=${OWNER}\nMUKANDA_DATABASE_URL=${APP}\n`, 0o600)
@@ -102,11 +103,14 @@ function server(options: {
       return members ? ok([...members].map((m) => `${m} `).join('')) : fail('no such network')
     }
     if (verb === 'network' && rest[0] === 'connect') { networks.get(rest[1] as string)?.add(rest[2] as string); return ok() }
+    if (verb === 'volume' && rest[0] === 'inspect') return volumes.has(rest[1] as string) ? ok('[]') : fail('no such volume')
+    if (verb === 'volume' && rest[0] === 'create') { volumes.add(rest[1] as string); return ok() }
     if (verb === 'image' && rest[0] === 'inspect') return images.has(rest[1] as string) ? ok('[]') : fail('No such image')
     if (verb === 'image' && rest[0] === 'ls') return ok('')
     if (verb === 'build') { images.add(args[args.indexOf('-t') + 1] as string); return ok() }
     if (verb === 'compose') {
       if (args.includes('--services')) return ok('api\nworker\ningest-worker\nfreshclam\n')
+      if (args.includes('config') && args.includes('json')) return ok(JSON.stringify({ volumes: { clamdb: { external: true, name: 'mukanda-clamdb' }, cache: {} } }))
       if (args.includes('config')) return ok()
       if (args.includes('--no-start')) { networks.set('mukanda_data', new Set()); networks.set('mukanda_sandbox', new Set()); return ok() }
       if (args.includes('run') && args.includes('--entrypoint')) return options.seeded ? ok('main.cvd\n') : fail('', 2)
@@ -175,6 +179,8 @@ describe('a Mukanda deploy with no scripts', () => {
     expect(world.networks.get('mukanda_sandbox')).toEqual(new Set(['mukanda-redis']))
     expect(world.networks.get('mukanda_data')).toEqual(new Set(['mukanda-postgres', 'mukanda-redis']))
 
+    // A fresh server: the external volume the compose file names, created empty.
+    expect(world.host.transcript).toContain('external volume(s) created: mukanda-clamdb')
     // §4.4 — the job ran (no signatures yet), before up.
     const calls = dockerArgs(world.host)
     const job = calls.findIndex((a) => a.endsWith('run --rm --no-deps freshclam freshclam --stdout'))
