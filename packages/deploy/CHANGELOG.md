@@ -1,5 +1,11 @@
 # @basaltkit/deploy
 
+## 0.4.1
+
+### Patch Changes
+
+- 93fad8d: The preflight no longer reports `runtime.attach: <container> does not exist` for the dedicated infra's own containers: on a new server the infra step creates them before the release.
+
 ## 0.4.0
 
 ### Minor Changes
