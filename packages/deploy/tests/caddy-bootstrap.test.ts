@@ -126,6 +126,17 @@ describe('basalt-deploy bootstrap', () => {
     expect(host.transcript).toContain('OK packages: git')
   })
 
+  it('the SSH port comes from SSH_CONNECTION; a hostile value is ignored, in linear time', async () => {
+    const host = fresh({ listening: 'LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n' })
+    host.env = { SSH_CONNECTION: '10.0.0.5 51234 10.0.0.9 2222' }
+    expect((await planBootstrap(host, DIR, options)).actions.find((a) => a.what.startsWith('ufw'))?.what).toBe('ufw on: SSH (2222), 80, 443 only')
+    const hostile = fresh()
+    hostile.env = { SSH_CONNECTION: '!'.repeat(100_000) }
+    const started = Date.now()
+    expect((await planBootstrap(hostile, DIR, options)).actions.find((a) => a.what.startsWith('ufw'))?.what).toBe('ufw on: SSH (22), 80, 443 only')
+    expect(Date.now() - started).toBeLessThan(500)
+  })
+
   it('outside apt it says so', async () => {
     const host = new FakeHost().on(({ command }) => (command === 'sh' ? fail('', 1) : undefined)).on(({ command }) => (command === 'id' ? ok('1000') : undefined))
     await expect(bootstrap(host, DIR, options)).rejects.toThrow(/Ubuntu or Debian only/)
