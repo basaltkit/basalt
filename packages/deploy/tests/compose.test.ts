@@ -314,3 +314,64 @@ describe('Apache, checked but not owned', () => {
     expect(findings.find((f) => f.id === 'C2')?.message).toMatch(/DIFFERS/)
   })
 })
+
+describe('backup inside a container (0.2.1)', () => {
+  const withPostgres = (state: 'running' | 'stopped' | 'missing' = 'running') => {
+    const s = server()
+    s.host.on(({ command, args }) => {
+      if (command !== 'docker') return undefined
+      if (args[0] === 'inspect') return state === 'missing' ? fail('No such object') : ok(state === 'running' ? 'true\n' : 'false\n')
+      if (args[0] === 'exec' && args.includes('pg_dump')) return ok('PGDMP')
+      return undefined
+    })
+    return s
+  }
+  const config = (extra: Partial<DeployConfig['backup']> = {}) =>
+    mukanda({ backup: { urlKey: 'MUKANDA_OWNER_DATABASE_URL', container: 'mukanda-postgres', beforeMigrate: true, ...extra } })
+
+  it('dumps with docker exec, the password in the environment only, before the migration', async () => {
+    const { host } = withPostgres()
+    const ctx = ctxOf(host, config())
+    expect(await run(ctx, { skip: ['tls'] })).toBe(0)
+    const dump = host.calls.find((c) => c.command === 'docker' && c.args[0] === 'exec')
+    expect(dump?.args).toEqual(['exec', '-e', 'PGPASSWORD', 'mukanda-postgres', 'pg_dump', '-U', 'mukanda_owner', '-d', 'mukanda', '--format=custom', '--no-owner', '--no-acl'])
+    expect(dump?.options.env).toEqual({ PGPASSWORD: 'ownerpw' })
+    expect(host.calls.some((c) => c.command === 'pg_dump')).toBe(false)
+    expect(host.calls.indexOf(dump!)).toBeLessThan(host.calls.findIndex((c) => c.command === './node_modules/.bin/tsx'))
+    const record = (await readReleases(ctx))[0]
+    expect(record?.backup).toMatch(/^\/srv\/mukanda\/backups\/predeploy\/.+-bbbbbbb\.dump$/)
+    expect(host.mode(record!.backup!)).toBe(0o600)
+  })
+
+  it('the restore line names the container, the user and the database', async () => {
+    const { restoreCommand } = await import('../src/backup.js')
+    const values = new Map([['MUKANDA_OWNER_DATABASE_URL', 'postgresql://mukanda_owner:pw@mukanda-postgres:5432/mukanda?schema=public']])
+    expect(restoreCommand(ctxOf(new FakeHost(), config()), { services: [], env: [], findings: [], secrets: {} }, '/b.dump', values))
+      .toBe('docker exec -i mukanda-postgres pg_restore --clean --if-exists --no-owner -U mukanda_owner -d mukanda < /b.dump')
+  })
+
+  it('a stopped or missing container is found in the preflight, not after the build', async () => {
+    for (const state of ['stopped', 'missing'] as const) {
+      const { host } = withPostgres(state)
+      const checked = await preflight(ctxOf(host, config()), { skip: ['tls'] })
+      expect(checked.findings.find((f) => f.id === 'backup')?.message).toMatch(state === 'stopped' ? /is not running/ : /does not exist/)
+    }
+    // --skip=backup, or the backup off: not looked at.
+    const { host } = withPostgres('missing')
+    expect((await preflight(ctxOf(host, config()), { skip: ['tls', 'backup'] })).findings.some((f) => f.id === 'backup')).toBe(false)
+    expect((await preflight(ctxOf(host, config({ beforeMigrate: false })), { skip: ['tls'] })).findings.some((f) => f.id === 'backup')).toBe(false)
+  })
+
+  it('plan says where the dump runs; a bad container name is refused', async () => {
+    const { host } = withPostgres()
+    await plan(ctxOf(host, config()), { skip: ['tls'] })
+    expect(host.transcript).toContain('backup: pg_dump inside mukanda-postgres → backups/predeploy (keep 10)')
+    expect(() => validateConfig(config({ container: 'mukanda postgres; rm' }))).toThrow(DeployConfigError)
+  })
+
+  it('a public URL that answers is said, not silent', async () => {
+    const { host } = withPostgres()
+    expect(await run(ctxOf(host, config()), { skip: ['tls'] })).toBe(0)
+    expect(host.printed).toContain('OK https://mukanda.aipro.ao/api/readyz')
+  })
+})

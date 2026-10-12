@@ -556,3 +556,14 @@ same way.
 3. On the server, as for LexFirma: `plan` first — it must show the existing
    containers and env files adopted, nothing created — then `install` (env
    ownership), then `run`.
+
+### 13.9 After the first Mukanda deploy (0.2.1)
+
+The first `run` on Mukanda (63c710a) passed every step with the backup off:
+the host has no pg_dump of the server's major, and `deploy-prod.sh` never
+dumped either. `backup.container` closes that — `docker exec -e PGPASSWORD
+<container> pg_dump`, user and database from the URL at `backup.urlKey`, the
+password in the environment only — and the preflight refuses a stopped or
+missing container instead of the backup step failing after the build. The
+public health check, silent on success, now prints its URL like the loopback
+one.
