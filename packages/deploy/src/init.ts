@@ -114,8 +114,18 @@ export async function detectProject(host: Host, dir: string, options: { server?:
 
 /** `@acme/My App` → `my-app`, within C4's `[a-z][a-z0-9-]{1,30}`. */
 export function appName(name: string): string {
-  const base = name.replace(/^@[^/]+\//, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '').slice(0, 31).replace(/-+$/, '')
+  const base = slugOf(name)
   return APP_NAME.test(base) ? base : 'app'
+}
+
+/** Lowercase, hyphens for the rest, starting with a letter, no trailing hyphen, at most 31 characters — trimmed in linear time (an anchored `-+$` regex backtracks on long runs of '-'). */
+function slugOf(name: string): string {
+  const base = name.replace(/^@[^/]+\//, '').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  let start = 0
+  while (start < base.length && !((base[start] as string) >= 'a' && (base[start] as string) <= 'z')) start++
+  let end = Math.min(base.length, start + 31)
+  while (end > start && base[end - 1] === '-') end--
+  return base.slice(start, end)
 }
 
 /** The keys of the first `defineEnv({ … })` in `source`, read as text. */
