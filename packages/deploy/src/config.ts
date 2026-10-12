@@ -197,6 +197,13 @@ export interface MinioService {
 export interface BuildConfig {
   /** Prisma config files, each generated with `prisma generate --config <file>`. */
   prisma?: string[]
+  /**
+   * The package.json script that compiles the app, run after `prisma
+   * generate` — needed when `start` runs the compiled output (`node dist/…`),
+   * as a create-basalt app's does.
+   * @example 'build'
+   */
+  script?: string
   /** Frontend directory built with `<pm> --dir <web> build`. */
   web?: string
 }
