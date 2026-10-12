@@ -4,13 +4,13 @@ import { covers, tlsFindings } from '../src/checks.js'
 import { pm2Preflight, pm2Release } from '../src/pm2.js'
 import { context, DIR, FakeHost, fail, jlist, ok, ss } from './fake-host.js'
 
-const AVAILABLE = '/etc/apache2/sites-available/lexfirma.conf'
-const ENABLED = '/etc/apache2/sites-enabled/lexfirma.conf'
+const AVAILABLE = '/etc/apache2/sites-available/acme.conf'
+const ENABLED = '/etc/apache2/sites-enabled/acme.conf'
 
 describe('pm2', () => {
   it('C3: a process running from another clone is re-created here, not restarted (incident 3)', async () => {
     const host = new FakeHost()
-      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'lexfirma-api', cwd: '/home/ubuntu/lexfirma-saas' }, { name: 'api', cwd: '/srv/other' })) : undefined))
+      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'acme-api', cwd: '/home/ubuntu/acme' }, { name: 'api', cwd: '/srv/other' })) : undefined))
       .on(({ command }) => (command === 'pm2' ? ok() : undefined))
       .on(({ command }) => (command === 'ss' ? ok('') : undefined))
     const ctx = context(host)
@@ -19,19 +19,19 @@ describe('pm2', () => {
 
     await pm2Release(ctx, new Map([['PORT', '3002']]))
     expect(host.commands('pm2').filter((c) => c !== 'pm2 jlist')).toEqual([
-      'pm2 delete lexfirma-api',
-      `pm2 start pnpm --name lexfirma-api --cwd ${DIR} -- run start`,
+      'pm2 delete acme-api',
+      `pm2 start pnpm --name acme-api --cwd ${DIR} -- run start`,
       'pm2 save',
     ])
   })
 
   it('restarts in place without the shell and without secrets (pm2 save would persist them), never naming another process (C4)', async () => {
     const host = new FakeHost()
-      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'lexfirma-api', cwd: DIR }, { name: 'api', cwd: '/srv/other' })) : undefined))
+      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'acme-api', cwd: DIR }, { name: 'api', cwd: '/srv/other' })) : undefined))
       .on(({ command }) => (command === 'pm2' ? ok() : undefined))
     await pm2Release(context(host), new Map([['NODE_ENV', 'production'], ['PORT', '3002'], ['APP_SECRET', 'never-in-pm2'], ['DATABASE_URL', 'postgresql://u:p@h/d']]))
     const restart = host.calls.find((c) => c.args[0] === 'restart')
-    expect(restart?.args).toEqual(['restart', 'lexfirma-api', '--update-env'])
+    expect(restart?.args).toEqual(['restart', 'acme-api', '--update-env'])
     expect(restart?.options).toMatchObject({ inheritEnv: false, env: { NODE_ENV: 'production', PORT: '3002' } })
     expect(Object.keys(restart?.options.env ?? {})).toEqual(['NODE_ENV', 'PORT'])
     expect(host.commands('pm2').join('\n')).not.toMatch(/\b(api|all)$/m)
@@ -39,7 +39,7 @@ describe('pm2', () => {
 
   it('C1: refuses a port a foreign process listens on — and accepts our own old process', async () => {
     const host = new FakeHost()
-      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'lexfirma-api', cwd: '/home/ubuntu/old' })) : undefined))
+      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'acme-api', cwd: '/home/ubuntu/old' })) : undefined))
       .on(({ command }) => (command === 'ss' ? ok(ss([3000], [3002, 77])) : undefined))
     host.files.set('/proc/77/cwd', { kind: 'symlink', target: '/home/ubuntu/old' })
     const ctx = context(host)
@@ -60,17 +60,17 @@ describe('apache', () => {
   it('renders a vhost that proxies the API prefix to the app port and serves the tenants wildcard', () => {
     const text = renderVhost(context(new FakeHost()), 3002)
     expect(proxiedPorts(text)).toEqual([3002])
-    expect(text).toContain('ServerAlias *.lexfirma.aipro.ao')
+    expect(text).toContain('ServerAlias *.acme.example.com')
     expect(text).toContain(`DocumentRoot ${DIR}/web/dist`)
     expect(text).toContain('ProxyPass /api/ http://127.0.0.1:3002/ upgrade=websocket')
-    expect(text).toContain('/etc/letsencrypt/live/lexfirma.aipro.ao/fullchain.pem')
+    expect(text).toContain('/etc/letsencrypt/live/acme.example.com/fullchain.pem')
   })
 
   it('C1: the vhost proxies to a port the app does not listen on (incident 1)', async () => {
     const host = vhostHost()
     const ctx = context(host)
     host.put(AVAILABLE, renderVhost(ctx, 3000))
-    host.files.set(ENABLED, { kind: 'symlink', target: '../sites-available/lexfirma.conf' })
+    host.files.set(ENABLED, { kind: 'symlink', target: '../sites-available/acme.conf' })
     const findings = await apachePreflight(ctx, 3002)
     expect(findings.find((f) => f.id === 'C1')?.message).toBe('the vhost proxies to 127.0.0.1:3000, but the app listens on 3002')
     // The difference is shown for audit, and the file is left alone.
@@ -92,7 +92,7 @@ describe('apache', () => {
     const host = vhostHost()
     const ctx = context(host)
     host.put(AVAILABLE, renderVhost(ctx, 3002))
-    host.files.set(ENABLED, { kind: 'symlink', target: '../sites-available/lexfirma.conf' })
+    host.files.set(ENABLED, { kind: 'symlink', target: '../sites-available/acme.conf' })
     expect(await apachePreflight(ctx, 3002)).toEqual([])
   })
 
@@ -104,7 +104,7 @@ describe('apache', () => {
     host.put(AVAILABLE, 'old available\n')
     host.put(ENABLED, 'old copy\n')
     host.confirmations = [true]
-    await expect(apacheInstall(ctx, 3002, '/var/lib/basalt/lexfirma/install-backups')).rejects.toThrow(/configtest failed — every file was put back/)
+    await expect(apacheInstall(ctx, 3002, '/var/lib/basalt/acme/install-backups')).rejects.toThrow(/configtest failed — every file was put back/)
     expect(host.file(AVAILABLE)).toBe('old available\n')
     expect(host.file(ENABLED)).toBe('old copy\n')
     expect(host.commands('systemctl')).toEqual([])
@@ -115,7 +115,7 @@ describe('apache', () => {
     const ctx = context(host)
     await apacheInstall(ctx, 3002, '/backups')
     expect(host.file(AVAILABLE)).toBe(renderVhost(ctx, 3002))
-    expect(await host.readlink(ENABLED)).toBe('../sites-available/lexfirma.conf')
+    expect(await host.readlink(ENABLED)).toBe('../sites-available/acme.conf')
     expect(host.commands('systemctl')).toEqual(['systemctl reload apache2'])
   })
 
@@ -129,23 +129,23 @@ describe('apache', () => {
 
 describe('C8 — certificates as a browser sees them', () => {
   it('wildcards cover exactly one label', () => {
-    expect(covers('*.lexfirma.aipro.ao', 'acme.lexfirma.aipro.ao')).toBe(true)
-    expect(covers('*.lexfirma.aipro.ao', 'lexfirma.aipro.ao')).toBe(false)
-    expect(covers('*.lexfirma.aipro.ao', 'a.b.lexfirma.aipro.ao')).toBe(false)
-    expect(covers('lexfirma.aipro.ao', 'LEXFIRMA.aipro.ao')).toBe(true)
+    expect(covers('*.acme.example.com', 'acme.acme.example.com')).toBe(true)
+    expect(covers('*.acme.example.com', 'acme.example.com')).toBe(false)
+    expect(covers('*.acme.example.com', 'a.b.acme.example.com')).toBe(false)
+    expect(covers('acme.example.com', 'ACME.example.com')).toBe(true)
   })
 
   it('a tenant host served the apex certificate is reported (incident 8)', async () => {
     const host = new FakeHost()
-    host.certificates.set('*', { names: ['lexfirma.aipro.ao'], validTo: new Date('2027-01-01'), trusted: true })
+    host.certificates.set('*', { names: ['acme.example.com'], validTo: new Date('2027-01-01'), trusted: true })
     const findings = await tlsFindings(context(host))
-    expect(findings).toEqual([expect.objectContaining({ id: 'C8', level: 'warning', message: expect.stringMatching(/tenant host .* covers only lexfirma\.aipro\.ao/) })])
+    expect(findings).toEqual([expect.objectContaining({ id: 'C8', level: 'warning', message: expect.stringMatching(/tenant host .* covers only acme\.example\.com/) })])
     expect(findings[0]?.fix).toMatch(/DNS-only/)
   })
 
   it('an untrusted or expiring certificate is reported', async () => {
     const host = new FakeHost()
-    host.certificates.set('*', { names: ['lexfirma.aipro.ao', '*.lexfirma.aipro.ao'], validTo: new Date('2026-10-20'), trusted: false, trustError: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' })
+    host.certificates.set('*', { names: ['acme.example.com', '*.acme.example.com'], validTo: new Date('2026-10-20'), trusted: false, trustError: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' })
     const messages = (await tlsFindings(context(host))).map((f) => f.message)
     expect(messages.some((m) => /not trusted/.test(m))).toBe(true)
     expect(messages.some((m) => /expires in 8 day/.test(m))).toBe(true)

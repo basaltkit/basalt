@@ -107,7 +107,7 @@ async function psql(ctx: DeployContext, pg: PostgresHandle, sql: string, as?: { 
 /**
  * The role exists, logs in with the `.env`'s password, and gets DML on what the
  * owner creates in `public` (default privileges — never on existing tables: an
- * app may keep some append-only, as Mukanda's audit log is).
+ * app may keep some append-only, as Globex's audit log is).
  */
 export async function ensureAppRole(ctx: DeployContext, pg: PostgresHandle, role: AppRole, values: Map<string, string>): Promise<string> {
   const raw = values.get(role.urlKey)

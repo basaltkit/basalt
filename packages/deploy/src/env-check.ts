@@ -70,7 +70,7 @@ const FALSY = new Set(['0', 'false', 'no', 'off'])
 /**
  * C6 — a value written to turn something OFF that the schema reads as ON.
  * `z.coerce.boolean()` is `Boolean(string)`: every non-empty string is true,
- * "0" and "false" included. `PROXYPAY_FAKE="0"` switched the fake payment
+ * "0" and "false" included. `PAYCO_FAKE="0"` switched the fake payment
  * gateway on in production. Generic on purpose: it needs no list of boolean
  * keys, only the parsed result (prefixed names — `MY_APP_FLAG` for `FLAG` —
  * are matched too).
