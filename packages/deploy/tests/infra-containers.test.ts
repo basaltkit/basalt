@@ -93,6 +93,23 @@ describe('dedicated infra for a compose app', () => {
     expect(env).toEqual({ GLOBEX_IMAGE: 'globex:bbbbbbb', GLOBEX_REDIS_URL: 'redis://:pw@globex-redis:6379' })
   })
 
+  it('attach to the dedicated containers is not an error before the infra step creates them', async () => {
+    const { composePreflight } = await import('../src/compose.js')
+    const config = globex({
+      runtime: compose({
+        file: 'docker/compose.prod.yml',
+        images: [{ tag: 'globex', dockerfile: 'docker/app/Dockerfile', env: 'GLOBEX_IMAGE' }],
+        upstream: { service: 'api', port: 3001 },
+        attach: { 'globex-pg': ['data'], 'globex-redis': ['data'], 'other-db': ['data'] },
+      }),
+    })
+    const host = clean().put(`${DIR}/docker/compose.prod.yml`, 'services: {}\n')
+      .on(({ command, args }) => (command === 'docker' && args.includes('--services') ? ok('api\n') : undefined))
+      .on(({ command, args }) => (command === 'docker' && args.includes('config') ? ok() : undefined))
+    const messages = (await composePreflight(ctxOf(host, config), 'b'.repeat(40))).map((f) => f.message)
+    expect(messages).toEqual(['runtime.attach: other-db does not exist'])
+  })
+
   it('a compose app cannot share its compose project with its infra', () => {
     const shared = globex({ infra: dockerInfra('globex', { access: 'containers' }) })
     expect(() => validateConfig(shared)).toThrow(DeployConfigError)
