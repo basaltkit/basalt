@@ -95,16 +95,20 @@ export async function planBootstrap(host: Host, dir: string, options: BootstrapO
   }
 
   if (options.firewall && (await has('ufw'))) {
-    const ssh = /\S+\s+\S+\s+\S+\s+(\d+)/.exec(host.env['SSH_CONNECTION'] ?? '')?.[1] ?? '22'
+    // SSH_CONNECTION = "client-ip client-port server-ip server-port": split, not a regex over input.
+    const sshPort = (host.env['SSH_CONNECTION'] ?? '').trim().split(/\s+/)[3]
+    const ssh = sshPort && /^\d+$/.test(sshPort) ? sshPort : '22'
     const web = options.proxy === 'none' ? [] : [['ufw', 'allow', '80/tcp'], ['ufw', 'allow', '443/tcp']]
     const active = (await host.exec('ufw', ['status'], OUTSIDE)).stdout.includes('Status: active')
     if (active) {
       actions.push({ what: `ufw: SSH (${ssh})${web.length ? ', 80, 443' : ''} allowed`, commands: [['ufw', 'allow', `${ssh}/tcp`], ...web] })
     } else {
       // Turning ufw ON is safe on a fresh machine only: on a shared one it cuts every service not listed.
+      // ss -ltnH: "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*" — the 4th column is the local address.
       const listening = (await host.exec('ss', ['-ltnH'], OUTSIDE)).stdout.split('\n')
-        .map((l) => /\s(\S+):(\d+)\s/.exec(l)).filter((m): m is RegExpExecArray => m !== null)
-        .filter((m) => !/^(127\.|\[::1\]|::1)/.test(m[1] as string)).map((m) => m[2] as string)
+        .map((l) => l.trim().split(/\s+/)[3] ?? '')
+        .filter((local) => local.includes(':') && !/^(127\.|\[::1\]|::1)/.test(local))
+        .map((local) => local.slice(local.lastIndexOf(':') + 1))
       const others = [...new Set(listening.filter((p) => p !== ssh))]
       if (others.length) notes.push(`ufw is off and ports ${others.join(', ')} listen: not turned on, so nothing is cut off — configure it by hand`)
       else actions.push({ what: `ufw on: SSH (${ssh})${web.length ? ', 80, 443' : ''} only`, commands: [['ufw', 'allow', `${ssh}/tcp`], ...web, ['ufw', '--force', 'enable']] })
