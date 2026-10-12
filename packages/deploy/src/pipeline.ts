@@ -193,10 +193,19 @@ export function migratesCentral(config: DeployContext['config']): boolean {
 const migratesAnything = (config: DeployContext['config']) =>
   Boolean(config.migrate?.command) || migratesCentral(config) || Boolean(config.migrate?.tenants)
 
-/** The `.env` as the migration and the dump see it: `migrate.env` on top (host URLs for container names). */
-export function migrationValues(config: DeployContext['config'], values: Map<string, string>): Map<string, string> {
-  const extra = config.migrate?.env?.(values) ?? {}
-  return new Map([...values, ...definedEntries(extra)])
+/**
+ * The `.env` as the migration and the dump see it — they run on the host:
+ * container addresses (`@myapp-pg:5432`) become the published 127.0.0.1 ones,
+ * then `migrate.env` on top.
+ */
+export function migrationValues(config: DeployContext['config'], values: Map<string, string>, hostUrls: Array<[string, string]> = []): Map<string, string> {
+  const onHost = new Map([...values].map(([key, value]) => {
+    let rewritten = value
+    for (const [from, to] of hostUrls) rewritten = rewritten.replace(`@${from}`, `@${to}`).replace(`//${from}`, `//${to}`)
+    return [key, rewritten] as const
+  }))
+  const extra = config.migrate?.env?.(onHost) ?? {}
+  return new Map([...onHost, ...definedEntries(extra)])
 }
 
 /**
@@ -224,6 +233,8 @@ async function prepareEnv(ctx: DeployContext, port: number): Promise<{ env: EnvP
   const document = await readEnv(ctx)
   const infra = await planInfra(ctx, envValues(document))
   const env = planEnv(ctx, document, port, infra.env)
+  ctx.hostUrls = infra.hostUrls ?? []
+  ctx.values = env.values
   return { env, infra }
 }
 
@@ -277,7 +288,7 @@ async function validate(ctx: DeployContext, values: Map<string, string>): Promis
 
 async function migrate(ctx: DeployContext, raw: Map<string, string>): Promise<void> {
   const { host, pm } = ctx
-  const values = migrationValues(ctx.config, raw)
+  const values = migrationValues(ctx.config, raw, ctx.hostUrls)
   const env = { cwd: ctx.dir, stream: true, env: Object.fromEntries(values) }
   const command = ctx.config.migrate?.command
   if (command) {
@@ -490,7 +501,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
     await step(ctx, 'validate', () => validateStep(ctx, values))
     const backup = backupDecision(config, values, skip)
     if (backup.run) {
-      record.backup = await step(ctx, 'backup', () => backupDatabase(ctx, migrationValues(config, values), infra, sha))
+      record.backup = await step(ctx, 'backup', () => backupDatabase(ctx, migrationValues(config, values, infra.hostUrls), infra, sha))
       host.out.ok(record.backup)
     } else {
       host.out.step('backup')

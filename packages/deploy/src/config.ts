@@ -221,6 +221,22 @@ export interface DockerInfra<E extends object = EnvShape> {
   postgres?: PostgresService<E>
   redis?: RedisService<E>
   minio?: MinioService
+  /**
+   * The compose project the containers belong to. Default: the app — what an
+   * older compose file of the app's infra already used. An app whose own
+   * runtime is a compose project named after it needs another one.
+   * @example 'myapp-infra'
+   */
+  project?: string
+  /**
+   * Who reaches the services through the URLs written to the `.env`:
+   * `host` — a process on the host (PM2): `127.0.0.1:<published port>`;
+   * `containers` — the app's containers: `<container>:<internal port>`, on
+   * the networks `runtime.attach` connects them to. Migrations and the dump,
+   * which run on the host, get the `127.0.0.1` form either way.
+   * @default 'host'
+   */
+  access?: 'host' | 'containers'
 }
 
 export interface PostgresService<E extends object = EnvShape> {
@@ -338,6 +354,13 @@ export interface ComposeRuntime {
   env: Record<string, string>
   /** Releases whose images are kept for a rollback without a rebuild. */
   keepImages: number
+  /**
+   * `.env` keys handed to compose for interpolation (`${KEY}` in the file) —
+   * a service without `env_file` that still needs one value, a password among
+   * them. In compose's environment only: never on a command line, never in a file.
+   * @example ['MYAPP_REDIS_URL']
+   */
+  passEnv?: string[]
   /**
    * Containers this project does not own, connected to its networks before
    * `up` — creating the project first on a fresh server, so the first release
@@ -527,6 +550,7 @@ export const compose = (options: {
   keepImages?: number
   attach?: Record<string, string[]>
   jobs?: ComposeJob[]
+  passEnv?: string[]
 }): ComposeRuntime => ({
   kind: 'compose',
   file: options.file,
@@ -536,6 +560,7 @@ export const compose = (options: {
   keepImages: options.keepImages ?? 3,
   ...(options.attach ? { attach: options.attach } : {}),
   ...(options.jobs ? { jobs: options.jobs } : {}),
+  ...(options.passEnv ? { passEnv: options.passEnv } : {}),
 })
 
 export const none = (): NoProxy => ({ kind: 'none' })
@@ -547,6 +572,8 @@ export const bucketName = (bucket: Bucket): string => (typeof bucket === 'string
 export const MINIO_IMAGE = 'minio/minio:RELEASE.2025-03-12T18-04-18Z'
 
 export interface DockerInfraOptions<E extends object = EnvShape> {
+  project?: string
+  access?: 'host' | 'containers'
   postgres?: Partial<PostgresService<E>> | false
   redis?: Partial<RedisService<E>> | false
   minio?: Partial<MinioService> | false
@@ -559,7 +586,7 @@ export interface DockerInfraOptions<E extends object = EnvShape> {
  * duplicated.
  */
 export function dockerInfra<E extends object = EnvShape>(app: string, options: NoInfer<DockerInfraOptions<E>> = {}): DockerInfra<E> {
-  const infra: DockerInfra<E> = { kind: 'docker' }
+  const infra: DockerInfra<E> = { kind: 'docker', ...(options.project ? { project: options.project } : {}), ...(options.access ? { access: options.access } : {}) }
   if (options.postgres !== false) {
     infra.postgres = {
       image: 'postgres:16', port: 'auto', user: app, database: app, urlKey: 'DATABASE_URL' as EnvKey<E>, urlParams: {},
@@ -665,6 +692,12 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   ]
   for (const container of containers) {
     if (container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(container)) problems.push(`container "${container}" is not a container name`)
+  }
+  if (config.infra?.kind === 'docker' && config.infra.project !== undefined && !/^[a-z0-9][a-z0-9_-]*$/.test(config.infra.project)) {
+    problems.push(`infra.project "${config.infra.project}" is not a compose project name`)
+  }
+  if (config.infra?.kind === 'docker' && (config.infra.project ?? config.app) === config.app && config.runtime.kind === 'compose') {
+    problems.push(`infra.project "${config.app}" is the runtime's compose project too: the two would remove each other's containers as orphans — use "${config.app}-infra"`)
   }
   const role = services?.postgres?.appRole ?? (config.infra?.kind === 'docker' ? config.infra.postgres?.appRole : undefined)
   if (role && !/^[a-z_][a-z0-9_]{0,62}$/.test(role.name)) problems.push(`appRole "${role.name}" must be a lowercase Postgres identifier`)

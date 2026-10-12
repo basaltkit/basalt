@@ -25,6 +25,12 @@ export function composeEnv(ctx: DeployContext, sha: string): Record<string, stri
   const rt = composeOf(ctx)
   const env: Record<string, string> = { ...rt.env }
   for (const image of rt.images) env[image.env] = `${image.tag}:${short(sha)}`
+  // From the .env, in compose's environment only (RFC 0007 §4): a password
+  // never goes into deploy.config.ts, a command line or a file.
+  for (const key of rt.passEnv ?? []) {
+    const value = ctx.values?.get(key)
+    if (value !== undefined) env[key] = value
+  }
   return env
 }
 
