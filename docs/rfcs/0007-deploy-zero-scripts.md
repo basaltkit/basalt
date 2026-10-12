@@ -339,3 +339,41 @@ Decided 2026-10-12 by the product owner: the three recommendations below.
    left to the app's runner. **Decided:** the package, for every app with
    `migrate.tenants`. A new company schema without grants is an outage the app
    role only finds at runtime.
+
+## 12. As built
+
+Phase 3 was released as one version (0.3.0) rather than one per PR, so that
+the apps change their config once.
+
+- **§2:** as designed. `NoInfer` keeps the env type from being inferred from
+  the config itself. `check` runs the app's `tsc` with a temporary tsconfig
+  under `node_modules/.cache`, so `types` resolve as they do in the app.
+- **§3:**
+  - `init` reads the compose file with `docker compose config
+    --no-interpolate`.
+  - A compose file is the runtime only when its images are variables;
+    LexFirma's, which is infra only, is not.
+  - Dockerfiles come from `build:`, else from `docker/<name>/Dockerfile`. The
+    build context comes from what the Dockerfile copies.
+  - `secret()` keys a provider issues (S3, API keys, SMTP, tokens) are asked,
+    not generated.
+  - New `build.script`: a `start` that runs `dist/` needs the app's own
+    compile step, which the pipeline did not run.
+- **§4:**
+  - The role's password is proven over TCP before any change, so there is no
+    `ALTER ROLE … PASSWORD` on every deploy (it would land in statement logs).
+  - Grants on `public` go through default privileges only, never on existing
+    tables: Mukanda keeps `audit_log` append-only for its role.
+  - Company schemas get table grants because their tables exist before any
+    default privilege could apply.
+  - `attach` and `jobs` run inside the release step, before `up`, so a
+    rollback goes through them too.
+- **§6:** the public check moved under the health step.
+- **§7:** `bootstrap` runs before `node_modules` exist, through `npx`. It
+  reads `package.json` and the lockfile and takes the proxy from the config
+  when it loads, else from `--proxy`. It ends by running `pnpm install` and
+  `env` as the user and `install` as root, so a new server is `git clone`,
+  `bootstrap`, `run`.
+- **§8:** one on-demand TLS `ask` endpoint per server (Caddy's limit). On a
+  server whose Caddyfile is not the stock one, `install` only adds the import
+  line and says what to add to the global block.
