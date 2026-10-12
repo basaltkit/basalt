@@ -196,6 +196,28 @@ migrate: {
 },
 ```
 
+**Dedicated infra for a compose app** — the containers created by the deploy
+too, in their own compose project, reached by name from the app's containers:
+
+```ts
+infra: dockerInfra('myapp', {
+  project: 'myapp-infra',     // never the runtime's project: each would remove the other's containers
+  access: 'containers',       // URLs name the containers (myapp-pg:5432); migrations get 127.0.0.1:<port>
+  postgres: { user: 'myapp_owner', urlKey: 'OWNER_DATABASE_URL', appRole: { name: 'myapp_app', urlKey: 'DATABASE_URL' } },
+  redis: { urlKey: 'REDIS_URL' },
+  minio: { buckets: [{ name: 'myapp-documents', versioned: true }] },
+}),
+runtime: compose({
+  // …
+  attach: { 'myapp-pg': ['data'], 'myapp-redis': ['data'], 'myapp-minio': ['data'] },
+  passEnv: ['REDIS_URL'],     // a service without env_file gets it through ${REDIS_URL}: from memory only
+}),
+```
+
+Ports are still published on 127.0.0.1 for the host; the app role's URL
+follows the database when it moves (a recreated container) and keeps its
+password.
+
 **Services you keep but do not create** (RFC 0007 §4) — containers that outlive
 any release, adopted by name:
 
