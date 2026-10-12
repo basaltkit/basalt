@@ -44,6 +44,8 @@ export interface ProjectFacts {
   tenants: boolean
   /** A `db:deploy` script that is not plain `prisma migrate deploy`. */
   migrateScript: string | undefined
+  /** `build`, when `start` runs compiled output (`node dist/…`). */
+  buildScript: string | undefined
   web: string | undefined
   compose: ComposeFact | undefined
   server: { vhosts: string[]; busyPorts: number[] } | undefined
@@ -83,6 +85,7 @@ export async function detectProject(host: Host, dir: string, options: { server?:
   const dbDeploy = scripts['db:deploy']
   const migrateScript = dbDeploy !== undefined && dbDeploy.trim() !== 'prisma migrate deploy' ? 'db:deploy' : undefined
 
+  const buildScript = scripts['build'] !== undefined && /\bnode\b[^&|;]*\bdist\//.test(scripts['start'] ?? '') ? 'build' : undefined
   const web = (await host.stat(`${dir}/web/package.json`)) ? 'web' : undefined
   const envSource = await host.readFile(`${dir}/src/env.ts`)
   const env = envSource === undefined ? undefined : parseEnvSchema(envSource)
@@ -102,6 +105,7 @@ export async function detectProject(host: Host, dir: string, options: { server?:
     prisma,
     tenants,
     migrateScript,
+    buildScript,
     web,
     compose,
     server,
@@ -343,6 +347,7 @@ export function renderConfig(facts: ProjectFacts, answers: InitAnswers): string 
 
   const build: string[] = []
   if (facts.prisma.length) build.push(`prisma: [${facts.prisma.map(quote).join(', ')}]`)
+  if (facts.buildScript && !facts.compose) build.push(`script: ${quote(facts.buildScript)}`)
   if (facts.web) build.push(`web: ${quote(facts.web)}`)
   if (build.length) lines.push(`  build: { ${build.join(', ')} },`)
 
