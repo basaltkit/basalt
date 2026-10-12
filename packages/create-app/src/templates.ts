@@ -131,6 +131,9 @@ export function packageJson(options: ProjectOptions): string {
     // The project commands (\`pnpm basalt update | add | doctor | info\`) — dev
     // tooling with no dependencies of its own, never imported by the app.
     'create-basalt': versionOf('create-basalt'),
+    // Production deploy (deploy.config.ts): dev tooling, run on the server as
+    // `node node_modules/@basaltkit/deploy/dist/bin.js run`, never imported by the app.
+    '@basaltkit/deploy': versionOf('@basaltkit/deploy'),
   }
   for (const pkg of ['@types/node', 'pino-pretty', 'tsx', 'typescript', 'vitest']) {
     devDependencies[pkg] = thirdPartyVersionOf(pkg)
@@ -1403,6 +1406,58 @@ export function mcpJson(_options: ProjectOptions): string {
  */
 export function dockerignore(): string {
   return DOCKERIGNORE
+}
+
+/**
+ * The C4 owner label `@basaltkit/deploy` names everything with
+ * (`[a-z][a-z0-9-]{1,30}`), from the package name.
+ */
+export function deployAppName(name: string): string {
+  const base = name.replace(/^@[^/]+\//, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '').slice(0, 31).replace(/-+$/, '')
+  return /^[a-z][a-z0-9-]{1,30}$/.test(base) ? base : 'app'
+}
+
+/**
+ * `deploy.config.ts` (RFC 0007 §3): what `basalt-deploy init` writes for this
+ * scaffold — PM2 behind Apache, a dedicated Postgres when the app has one, the
+ * compiled build, the app's own secret generated on the server. Typed by
+ * src/env.ts. The domain is the one thing to change.
+ */
+export function deployConfigTs(options: ProjectOptions): string {
+  const app = deployAppName(options.name)
+  const helpers = ['apache', 'defineDeploy', ...(options.prisma ? ['dockerInfra'] : []), 'pm2', ...(options.auth ? ['secret'] : [])]
+  const build = [...(options.prisma ? [`prisma: ['prisma.config.ts']`] : []), `script: 'build'`, ...(options.ui ? [`web: 'web'`] : [])]
+  return `/**
+ * Production deploy with @basaltkit/deploy, on one Linux server. Holds no secrets.
+ *
+ *   node node_modules/@basaltkit/deploy/dist/bin.js check   # this file, without a server (CI)
+ *   node node_modules/@basaltkit/deploy/dist/bin.js plan    # on the server: what run would do
+ *   node node_modules/@basaltkit/deploy/dist/bin.js run
+ *
+ * Rewrite it from the project at any time:
+ *   node node_modules/@basaltkit/deploy/dist/bin.js init --force --domain=<host>
+ */
+import type { env } from './src/env.js'
+import { ${helpers.join(', ')} } from '@basaltkit/deploy'
+
+export default defineDeploy<typeof env>({
+  app: '${app}',
+  domain: '${app}.example.com', // the domain the app answers on
+
+  env: {
+    schema: 'src/env.ts',
+    fixed: { NODE_ENV: 'production', HOST: '127.0.0.1' },${options.auth ? `
+    generate: { APP_SECRET: secret(32) },` : ''}
+  },${options.prisma ? `
+  infra: dockerInfra('${app}', { redis: false }),` : ''}
+  build: { ${build.join(', ')} },${options.prisma ? `
+  migrate: { central: true },` : ''}
+
+  runtime: pm2(),
+  proxy: apache(),
+  health: { path: '/health' },
+})
+`
 }
 
 export function gitignore(options: ProjectOptions): string {

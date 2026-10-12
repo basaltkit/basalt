@@ -43,6 +43,16 @@ const typecheckWithBin = (dir: string): string => {
   return typecheck(join(dir, 'tsconfig.check.json'))
 }
 
+/**
+ * deploy.config.ts against the workspace @basaltkit/deploy (RFC 0007): typed by
+ * the scaffold's own src/env.ts — a key the template names that the env does
+ * not declare fails here.
+ */
+const typecheckDeploy = (dir: string): string => {
+  writeFileSync(join(dir, 'tsconfig.deploy.json'), JSON.stringify({ extends: './tsconfig.json', files: ['deploy.config.ts'], include: [] }))
+  return typecheck(join(dir, 'tsconfig.deploy.json'))
+}
+
 /** `create-basalt add <feature>` on an existing scaffold — offline, no install. */
 const addFeature = async (dir: string, feature: string): Promise<number> =>
   runProjectCommand(['add', feature, '--yes', '--offline', '--no-install', '--pm=pnpm'], harness(dir).deps)
@@ -58,6 +68,7 @@ describe('scaffolded apps typecheck out of the box', () => {
     mkdirSync(dir, { recursive: true })
     await createProject({ name: 'scaffold-default', dir })
     expect(typecheck(dir)).toBe('')
+    expect(typecheckDeploy(dir)).toBe('')
   }, 60_000)
 
   it('full preset (billing + cli + mcp)', async () => {
@@ -66,6 +77,7 @@ describe('scaffolded apps typecheck out of the box', () => {
     mkdirSync(dir, { recursive: true })
     await createProject({ name: 'scaffold-full', dir, billing: true, cli: true, mcp: true })
     expect(typecheckWithBin(dir)).toBe('')
+    expect(typecheckDeploy(dir)).toBe('')
   }, 60_000)
 })
 
@@ -148,6 +160,8 @@ describe.skipIf(missingToolchain !== undefined)(
         stdio: 'pipe',
       })
       expect(typecheck(dir)).toBe('')
+      // With a database: dockerInfra types DATABASE_URL against the env too.
+      expect(typecheckDeploy(dir)).toBe('')
     }, 120_000)
   },
 )

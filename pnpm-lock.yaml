@@ -1153,6 +1153,9 @@ importers:
       '@basaltkit/core':
         specifier: workspace:^
         version: link:../core
+      '@basaltkit/deploy':
+        specifier: workspace:^
+        version: link:../deploy
       '@basaltkit/env':
         specifier: workspace:^
         version: link:../env

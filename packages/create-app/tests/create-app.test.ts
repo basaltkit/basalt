@@ -29,6 +29,7 @@ describe('createProject', () => {
       '.gitignore',
       'Dockerfile',
       'README.md',
+      'deploy.config.ts',
       'package.json',
       'pnpm-workspace.yaml',
       'src/app.ts',
@@ -41,8 +42,18 @@ describe('createProject', () => {
       'tsconfig.json',
     ])
 
+    // RFC 0007: a new app deploys with no script — typed by its env, its own secret generated on the server.
+    const deploy = await read(result.dir, 'deploy.config.ts')
+    expect(deploy).toContain(`import type { env } from './src/env.js'`)
+    expect(deploy).toContain('export default defineDeploy<typeof env>({')
+    expect(deploy).toContain(`app: 'my-saas',`)
+    expect(deploy).toContain('generate: { APP_SECRET: secret(32) }')
+    expect(deploy).toContain(`build: { script: 'build' }`)
+    expect(deploy).not.toContain('dockerInfra')
+
     const pkg = JSON.parse(await read(result.dir, 'package.json'))
     expect(pkg.name).toBe('my-saas')
+    expect(pkg.devDependencies['@basaltkit/deploy']).toMatch(/^\^\d+\.\d+\.\d+$/)
     // npm shows "name@undefined" in errors when version is missing.
     expect(pkg.version).toBe('0.1.0')
     // Basalt deps must point at a real published range, never a placeholder.
