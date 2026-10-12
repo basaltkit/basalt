@@ -6,21 +6,64 @@
  * without running anything.
  */
 
-export interface DeployConfig {
-  /** Owner label: names every process, container, volume, vhost and backup. `[a-z][a-z0-9-]{1,30}`. */
+/**
+ * The app's environment, as `defineEnv` returns it: `defineDeploy<typeof env>`
+ * with `import type { env } from './src/env.js'` types every `.env` key the
+ * config names (RFC 0007 §2.1). Type-only — the app is never loaded.
+ */
+export type EnvShape = Record<string, unknown>
+
+/** A key of the app's `.env`: any string until `defineDeploy<typeof env>` narrows it. */
+export type EnvKey<E extends object = EnvShape> = Extract<keyof E, string>
+
+/**
+ * What a `.env` line may hold for a value of type `T`: an enum's members, a
+ * number's digits, `true`/`false` — else any string.
+ */
+export type EnvValue<T> = ValueOf<T & {}>
+
+type ValueOf<N> =
+  [N] extends [never] ? string
+    : N extends string ? (string extends N ? string : N)
+      : N extends number ? `${number}`
+        : N extends boolean ? 'true' | 'false'
+          : string
+
+export interface DeployConfig<E extends object = EnvShape> {
+  /**
+   * Owner label: names every process, container, volume, vhost and backup.
+   * `[a-z][a-z0-9-]{1,30}`.
+   * @example 'lexfirma'
+   */
   app: string
-  /** The apex the app answers on, e.g. `lexfirma.aipro.ao`. */
+  /**
+   * The apex the app answers on.
+   * @example 'lexfirma.aipro.ao'
+   */
   domain: string
-  /** `subdomain` → tenants live on `<id>.<domain>`: the wildcard certificate is checked too. */
+  /**
+   * `subdomain` → tenants live on `<id>.<domain>`: the wildcard certificate is checked too.
+   * @default 'none'
+   */
   tenants?: 'subdomain' | 'none'
+  /**
+   * The branch a deploy fetches and fast-forwards to.
+   * @default 'main'
+   */
   branch?: string
+  /** @default 'origin' */
   remote?: string
-  env: EnvConfig
-  infra?: InfraConfig
+  /** The `.env`: where it lives and what the deploy keeps in it. */
+  env: EnvConfig<E>
+  /** Databases, caches and object storage: `dockerInfra(app)` or `external()`. */
+  infra?: InfraConfig<E>
   build?: BuildConfig
-  migrate?: MigrateConfig
-  backup?: BackupConfig
+  migrate?: MigrateConfig<E>
+  /** The `pg_dump` before migrating (RFC 0006 §8). */
+  backup?: BackupConfig<E>
+  /** How the app runs: `pm2({ … })` or `compose({ … })`. */
   runtime: RuntimeConfig
+  /** What sits in front: `apache({ … })` or `none()`. Default: none. */
   proxy?: ProxyConfig
   health?: HealthConfig
   /**
@@ -45,25 +88,43 @@ export interface HooksConfig {
   verify?: string[][]
 }
 
-export interface EnvConfig {
+export interface EnvConfig<E extends object = EnvShape> {
   /**
-   * Relative to the app directory, or absolute (e.g. `/etc/mukanda/api.env`).
-   * Written 0600, backed up before every change, in its own directory.
+   * Relative to the app directory, or absolute. Written 0600, backed up
+   * before every change, in its own directory.
+   * @default '.env'
+   * @example '/etc/mukanda/api.env'
    */
   file?: string
   /** Exact copies of the file (0600), rewritten with it; one that differs is a C10 error. */
   mirror?: string[]
-  /** The module whose import runs the app's `defineEnv(...)`, e.g. `src/env.ts`. */
+  /**
+   * The module whose import runs the app's `defineEnv(...)`; the new `.env`
+   * is validated against it before migrating.
+   * @example 'src/env.ts'
+   */
   schema?: string
-  /** Always these values — a different one in the file is corrected. */
-  fixed?: Record<string, string>
-  /** Generated once when absent, then kept. */
-  generate?: Record<string, SecretSpec>
-  /** Asked once when absent or empty, then kept. */
-  ask?: Record<string, Question>
+  /**
+   * Always these values — a different one in the file is corrected.
+   * @example { NODE_ENV: 'production' }
+   */
+  fixed?: { [K in EnvKey<E>]?: EnvValue<E[K]> }
+  /**
+   * Generated once when absent, then kept.
+   * @example { APP_SECRET: secret(32) }
+   */
+  generate?: { [K in EnvKey<E>]?: SecretSpec }
+  /**
+   * Asked once when absent or empty, then kept.
+   * @example { SMTP_URL: ask('SMTP URL', { secret: true }) }
+   */
+  ask?: { [K in EnvKey<E>]?: Question }
   /** Computed from the deploy's own values on every run. */
-  derive?: (context: DeriveContext) => Record<string, string>
-  /** Must not exist in the file at all (e.g. a flag whose "0" would read as true). */
+  derive?: (context: DeriveContext) => { [K in EnvKey<E>]?: string }
+  /**
+   * Must not exist in the file at all (e.g. a flag whose "0" would read as
+   * true). Usually keys the schema no longer has, so any string.
+   */
   forbid?: string[]
 }
 
@@ -88,35 +149,39 @@ export interface Question {
   default?: string
 }
 
-export type InfraConfig = ExternalInfra | DockerInfra
+export type InfraConfig<E extends object = EnvShape> = ExternalInfra | DockerInfra<E>
 
 export interface ExternalInfra {
   kind: 'external'
 }
 
-export interface DockerInfra {
+export interface DockerInfra<E extends object = EnvShape> {
   kind: 'docker'
-  postgres?: PostgresService
-  redis?: RedisService
+  postgres?: PostgresService<E>
+  redis?: RedisService<E>
   minio?: MinioService
 }
 
-export interface PostgresService {
+export interface PostgresService<E extends object = EnvShape> {
   image: string
   /** Host port on 127.0.0.1; `auto` keeps the running container's, else the `.env` URL's, else the first free from 5433. */
   port: number | 'auto'
   user: string
   database: string
-  /** The `.env` key that receives the connection URL. */
-  urlKey: string
+  /**
+   * The `.env` key that receives the connection URL.
+   * @default 'DATABASE_URL'
+   */
+  urlKey: EnvKey<E>
   /** Query parameters appended to the URL (e.g. `{ schema: 'public' }` for Prisma). */
   urlParams: Record<string, string>
 }
 
-export interface RedisService {
+export interface RedisService<E extends object = EnvShape> {
   image: string
   port: number | 'auto'
-  urlKey: string
+  /** @default 'REDIS_URL' */
+  urlKey: EnvKey<E>
 }
 
 export interface MinioService {
@@ -136,7 +201,7 @@ export interface BuildConfig {
   web?: string
 }
 
-export interface MigrateConfig {
+export interface MigrateConfig<E extends object = EnvShape> {
   /** `prisma migrate deploy` with the root Prisma config. */
   central?: boolean
   /** `<pm> basalt tenant:migrate` (or the given package.json script arguments). */
@@ -151,16 +216,30 @@ export interface MigrateConfig {
    * dump — e.g. URLs that name a container (`@mukanda-postgres:`) rewritten to
    * reach it from the host (`@127.0.0.1:`).
    */
-  env?: (values: ReadonlyMap<string, string>) => Record<string, string>
+  env?: (values: ReadonlyMap<EnvKey<E>, string>) => { [K in EnvKey<E>]?: string }
 }
 
-export interface BackupConfig {
+export interface BackupConfig<E extends object = EnvShape> {
+  /**
+   * Unsaid: the dump runs when something is migrated and there is a Postgres
+   * to dump. `true`/`false` force it either way.
+   */
   beforeMigrate?: boolean
+  /**
+   * Dumps kept; older ones are removed.
+   * @default 10
+   */
   keep?: number
-  /** Relative to the app directory. Default `backups/predeploy`. */
+  /**
+   * Relative to the app directory.
+   * @default 'backups/predeploy'
+   */
   dir?: string
-  /** With external infra: the `.env` key holding the database URL. Default `DATABASE_URL`. */
-  urlKey?: string
+  /**
+   * With external infra: the `.env` key holding the database URL.
+   * @default 'DATABASE_URL'
+   */
+  urlKey?: EnvKey<E>
   /**
    * With external infra: the Postgres container to dump INSIDE (`docker exec`)
    * — the server's own pg_dump major, and no pg_dump needed on the host. The
@@ -236,16 +315,41 @@ export interface NoProxy {
 }
 
 export interface HealthConfig {
-  /** Path on the API itself (without the proxy prefix). */
-  path?: string
+  /**
+   * Path on the API itself (without the proxy prefix).
+   * @default '/health'
+   * @example '/readyz'
+   */
+  path?: `/${string}`
+  /**
+   * How long the release may take to answer before it is rolled back.
+   * @default 60
+   */
   timeoutSeconds?: number
-  /** Also check `https://<domain><apiPrefix><path>` — what users reach. */
+  /**
+   * Also check `https://<domain><apiPrefix><path>` — what users reach.
+   * @default true with a proxy
+   */
   public?: boolean
+}
+
+/** The entries of an env record, without the keys a mapped type left `undefined`. */
+export function definedEntries<T>(record: { readonly [key: string]: T | undefined } | undefined): [string, T][] {
+  return Object.entries(record ?? {}).filter((entry): entry is [string, T] => entry[1] !== undefined)
 }
 
 // ── helpers used in deploy.config.ts ───────────────────────────────────────
 
-export function defineDeploy(config: DeployConfig): DeployConfig {
+/**
+ * Types `deploy.config.ts`. With the app's env, every `.env` key the config
+ * names is completed and checked (RFC 0007 §2.1):
+ *
+ * ```ts
+ * import type { env } from './src/env.js'
+ * export default defineDeploy<typeof env>({ … })
+ * ```
+ */
+export function defineDeploy<E extends object = EnvShape>(config: NoInfer<DeployConfig<E>>): DeployConfig<E> {
   return config
 }
 
@@ -300,9 +404,9 @@ export const external = (): ExternalInfra => ({ kind: 'external' })
 
 export const MINIO_IMAGE = 'minio/minio:RELEASE.2025-03-12T18-04-18Z'
 
-export interface DockerInfraOptions {
-  postgres?: Partial<PostgresService> | false
-  redis?: Partial<RedisService> | false
+export interface DockerInfraOptions<E extends object = EnvShape> {
+  postgres?: Partial<PostgresService<E>> | false
+  redis?: Partial<RedisService<E>> | false
   minio?: Partial<MinioService> | false
 }
 
@@ -312,16 +416,16 @@ export interface DockerInfraOptions {
  * already runs them (created by hand or by an older script) is adopted, not
  * duplicated.
  */
-export function dockerInfra(app: string, options: DockerInfraOptions = {}): DockerInfra {
-  const infra: DockerInfra = { kind: 'docker' }
+export function dockerInfra<E extends object = EnvShape>(app: string, options: NoInfer<DockerInfraOptions<E>> = {}): DockerInfra<E> {
+  const infra: DockerInfra<E> = { kind: 'docker' }
   if (options.postgres !== false) {
     infra.postgres = {
-      image: 'postgres:16', port: 'auto', user: app, database: app, urlKey: 'DATABASE_URL', urlParams: {},
+      image: 'postgres:16', port: 'auto', user: app, database: app, urlKey: 'DATABASE_URL' as EnvKey<E>, urlParams: {},
       ...options.postgres,
     }
   }
   if (options.redis !== false) {
-    infra.redis = { image: 'redis:7-alpine', port: 'auto', urlKey: 'REDIS_URL', ...options.redis }
+    infra.redis = { image: 'redis:7-alpine', port: 'auto', urlKey: 'REDIS_URL' as EnvKey<E>, ...options.redis }
   }
   if (options.minio !== false && options.minio !== undefined) {
     infra.minio = {
@@ -351,7 +455,9 @@ export const processName = (config: DeployConfig) =>
 export const vhostName = (config: DeployConfig) =>
   config.proxy?.kind === 'apache' ? (config.proxy.vhost ?? `${config.app}.conf`) : undefined
 
-export function validateConfig(config: DeployConfig): DeployConfig {
+export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<E>): DeployConfig<E> {
+  // The checks read keys as plain strings; the app's key types are for the editor.
+  const config = typed as unknown as DeployConfig
   const problems: string[] = []
   if (!APP_NAME.test(config.app)) problems.push(`app "${config.app}" must match ${APP_NAME}`)
   if (!DOMAIN.test(config.domain)) problems.push(`domain "${config.domain}" is not a lowercase host name`)
@@ -409,7 +515,7 @@ export function validateConfig(config: DeployConfig): DeployConfig {
     problems.push(`backup.container "${config.backup.container}" is not a container name`)
   }
   if (problems.length > 0) throw new DeployConfigError(problems)
-  return config
+  return typed
 }
 
 /**
