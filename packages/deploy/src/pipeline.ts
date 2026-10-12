@@ -1,5 +1,6 @@
 import { basename, dirname, join } from 'node:path'
 import { apacheInstall, apachePreflight, vhostPaths } from './apache.js'
+import { caddyInstall, caddyPaths, caddyPreflight } from './caddy.js'
 import { backupDatabase, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, logFindings, pruneImages } from './compose.js'
@@ -109,6 +110,7 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
   findings.push(...await runtimePreflight(ctx, port, head))
   findings.push(...await mirrorFindings(ctx))
   if (ctx.config.proxy?.kind === 'apache') findings.push(...await apachePreflight(ctx, port))
+  if (ctx.config.proxy?.kind === 'caddy') findings.push(...await caddyPreflight(ctx, port))
   if (!options.skip?.includes('tls')) findings.push(...await tlsFindings(ctx))
   findings.push(...await backupFindings(ctx, values, options))
   return { findings, port, values }
@@ -343,7 +345,7 @@ async function verifyDeclared(ctx: DeployContext, sha: string, port: number, sin
 
 async function publicHealthy(ctx: DeployContext): Promise<Finding | undefined> {
   const { config } = ctx
-  if (config.health?.public === false || config.proxy?.kind !== 'apache') return undefined
+  if (config.health?.public === false || (config.proxy?.kind !== 'apache' && config.proxy?.kind !== 'caddy')) return undefined
   const url = `https://${config.domain}${config.proxy.apiPrefix.replace(/\/$/, '')}${config.health?.path ?? '/health'}`
   const answer = await ctx.host.httpGet(url, { timeoutMs: 10_000 })
   if ('status' in answer && answer.status >= 200 && answer.status < 400) {
@@ -354,7 +356,7 @@ async function publicHealthy(ctx: DeployContext): Promise<Finding | undefined> {
     id: 'health',
     level: 'error',
     message: `the app answers on 127.0.0.1 but not at ${url} (${'status' in answer ? `HTTP ${answer.status}` : answer.error}) — the proxy, DNS or TLS, not the code`,
-    fix: 'the [C1]/[C2]/[vhost] findings above, then: apachectl -S',
+    fix: config.proxy.kind === 'caddy' ? 'the [C1]/[C2]/[C8] findings above, then: journalctl -u caddy -n 50' : 'the [C1]/[C2]/[vhost] findings above, then: apachectl -S',
   }
 }
 
@@ -421,7 +423,7 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
     ...(isCompose(ctx) && composeOf(ctx).attach ? [`attach: ${Object.entries(composeOf(ctx).attach ?? {}).map(([c, n]) => `${c} → ${n.join(', ')}`).join('; ')}`] : []),
     ...(isCompose(ctx) ? (composeOf(ctx).jobs ?? []).map((j) => `job: ${j.service}${j.command ? ` ${j.command.join(' ')}` : ''}${j.once ? ` (unless ${j.once.exists} exists)` : ''}`) : []),
     `release: ${describeRelease(ctx, checked.port)}`,
-    `health: http://127.0.0.1:${checked.port}${config.health?.path ?? '/health'} (Host: ${config.domain})${config.proxy?.kind === 'apache' && config.health?.public !== false ? `, then https://${config.domain}${config.proxy.apiPrefix}${config.health?.path ?? '/health'}` : ''}`,
+    `health: http://127.0.0.1:${checked.port}${config.health?.path ?? '/health'} (Host: ${config.domain})${(config.proxy?.kind === 'apache' || config.proxy?.kind === 'caddy') && config.health?.public !== false ? `, then https://${config.domain}${config.proxy.apiPrefix}${config.health?.path ?? '/health'}` : ''}`,
   ]
   for (const hook of config.hooks?.verify ?? []) lines.push(`verify hook: ${hook.join(' ')}`)
   if (config.verify?.logs) lines.push(`verify: no ${[...new Set(Object.values(config.verify.logs).flat())].join(' / ')} in the logs of ${Object.keys(config.verify.logs).join(', ')}`)
@@ -686,6 +688,9 @@ export async function install(ctx: DeployContext, user: string | undefined): Pro
 
   if (config.proxy?.kind === 'apache' && config.proxy.managed !== false) {
     await step(ctx, `Apache vhost ${vhostPaths(ctx).file}`, () => apacheInstall(ctx, port, join(stateDir, 'install-backups')))
+  }
+  if (config.proxy?.kind === 'caddy' && config.proxy.managed !== false) {
+    await step(ctx, `Caddy site ${caddyPaths(ctx).site}`, () => caddyInstall(ctx, port, join(stateDir, 'install-backups')))
   }
 
   if (config.infra?.kind === 'docker') {
