@@ -78,7 +78,7 @@ describe('reading the project', () => {
     expect(appName('42')).toBe('app')
     // Linear on a hostile name (CodeQL js/polynomial-redos).
     const started = Date.now()
-    expect(appName(`a${'-'.repeat(200_000)}!`)).toBe('a')
+    expect(appName(`ab${'-'.repeat(200_000)}!`)).toBe('ab')
     expect(Date.now() - started).toBeLessThan(500)
     expect(appName('a'.repeat(50))).toHaveLength(31)
   })
