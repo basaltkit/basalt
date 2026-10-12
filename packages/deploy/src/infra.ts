@@ -1,8 +1,9 @@
 import { join } from 'node:path'
 import type { DockerInfra } from './config.js'
-import type { DeployContext, Finding } from './context.js'
+import { DeployError, type DeployContext, type Finding } from './context.js'
 import type { EnvChange } from './dotenv.js'
 import { freePort } from './ports.js'
+import { appRoleEnv, appRoleOf, ensureAppRole, ensureBuckets, externalFindings, externalOf, externalPostgres, minioHandle, type PostgresHandle } from './services.js'
 
 /**
  * Dedicated containers, adopted or created (RFC 0006 §6.3).
@@ -38,6 +39,8 @@ export interface InfraPlan {
   findings: Finding[]
   /** Values compose interpolates (`${BASALT_PG_PASSWORD}`); passed in its environment only. */
   secrets: Record<string, string>
+  /** The dedicated Postgres's owner URL, as the `.env` will hold it (the app role's is derived from it). */
+  ownerUrl?: string
 }
 
 interface Inspected {
@@ -83,16 +86,22 @@ function urlParts(value: string | undefined): { user: string; password: string; 
   }
 }
 
-const names = (app: string, service: ServiceName) => {
+const names = (app: string, service: ServiceName, container?: string) => {
   const suffix = service === 'postgres' ? 'pg' : service
   // Compose prefixes volumes with the project name — the app — so this is
   // what an older compose file with the same project name already created.
-  return { container: `${app}-${suffix}`, volumeKey: `${app}-${suffix}-data`, volume: `${app}_${app}-${suffix}-data` }
+  return { container: container ?? `${app}-${suffix}`, volumeKey: `${app}-${suffix}-data`, volume: `${app}_${app}-${suffix}-data` }
 }
 
 export async function planInfra(ctx: DeployContext, values: Map<string, string>): Promise<InfraPlan> {
   const infra = ctx.config.infra
   const plan: InfraPlan = { services: [], env: [], findings: [], secrets: {} }
+  if (infra?.kind === 'external') {
+    plan.findings.push(...await externalFindings(ctx))
+    const pg = infra.postgres
+    if (pg) plan.env.push(...appRoleEnv(ctx, values, values.get(pg.urlKey ?? 'DATABASE_URL')))
+    return plan
+  }
   if (infra?.kind !== 'docker') return plan
   const { app } = ctx.config
   const picked: number[] = []
@@ -113,7 +122,7 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
 
   if (infra.postgres) {
     const pg = infra.postgres
-    const { container, volume } = names(app, 'postgres')
+    const { container, volume } = names(app, 'postgres', pg.container)
     const running = await inspect(ctx, container)
     const fromEnv = urlParts(values.get(pg.urlKey))
     let password = running?.env.get('POSTGRES_PASSWORD')
@@ -128,15 +137,17 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
     const database = running?.env.get('POSTGRES_DB') ?? fromEnv?.database ?? pg.database
     const port = await pick(pg.port, running?.ports.get('5432/tcp') ?? fromEnv?.port, 5433)
     const params = new URLSearchParams(pg.urlParams).toString()
-    setEnv(pg.urlKey, `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:${port}/${database}${params ? `?${params}` : ''}`,
+    plan.ownerUrl = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@127.0.0.1:${port}/${database}${params ? `?${params}` : ''}`
+    setEnv(pg.urlKey, plan.ownerUrl,
       source === 'container' ? `from the running ${container}` : source === 'generated' ? 'new database' : 'port or parameters')
+    plan.env.push(...appRoleEnv(ctx, values, plan.ownerUrl))
     plan.secrets['BASALT_PG_PASSWORD'] = password
     plan.services.push({ service: 'postgres', container, volume, action: running ? 'adopt' : 'create', port, user, database, source })
   }
 
   if (infra.redis) {
     const redis = infra.redis
-    const { container, volume } = names(app, 'redis')
+    const { container, volume } = names(app, 'redis', redis.container)
     const running = await inspect(ctx, container)
     const fromEnv = urlParts(values.get(redis.urlKey))
     let password = running?.env.get('REDIS_PASSWORD')
@@ -153,7 +164,7 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
 
   if (infra.minio) {
     const minio = infra.minio
-    const { container, volume } = names(app, 'minio')
+    const { container, volume } = names(app, 'minio', minio.container)
     const running = await inspect(ctx, container)
     let user = running?.env.get('MINIO_ROOT_USER')
     let password = running?.env.get('MINIO_ROOT_PASSWORD')
@@ -311,14 +322,40 @@ export async function applyInfra(ctx: DeployContext, plan: InfraPlan): Promise<F
         { env: { REDISCLI_AUTH: plan.secrets['BASALT_REDIS_PASSWORD'] ?? '' } })
       if (!check.stdout.includes('PONG')) findings.push({ id: 'C7', level: 'error', message: `redis refuses the password in ${ctx.config.env.file ?? '.env'}` })
     }
-    if (service.service === 'minio' && infra.minio && infra.minio.buckets.length > 0) {
-      const alias = `http://${encodeURIComponent(plan.secrets['BASALT_MINIO_USER'] ?? '')}:${encodeURIComponent(plan.secrets['BASALT_MINIO_PASSWORD'] ?? '')}@127.0.0.1:9000`
-      const made = await host.exec('docker', ['exec', '-e', 'MC_HOST_local', service.container, 'mc', 'mb', '-p', ...infra.minio.buckets.map((b) => `local/${b}`)],
-        { env: { MC_HOST_local: alias } })
-      if (made.code !== 0) findings.push({ id: 'C7', level: 'error', message: `minio refused to create the buckets: ${made.stderr.trim().split('\n')[0] ?? ''}` })
-    }
   }
   return findings
+}
+
+/** The dedicated Postgres as its owner, over TCP — the credentials the `.env` holds. */
+export function dockerPostgres(plan: InfraPlan): PostgresHandle | undefined {
+  const pg = plan.services.find((s) => s.service === 'postgres')
+  if (!pg) return undefined
+  return { container: pg.container, user: pg.user ?? '', database: pg.database ?? '', password: plan.secrets['BASALT_PG_PASSWORD'] ?? '', tcp: true, url: plan.ownerUrl }
+}
+
+/**
+ * After the containers are up (dedicated) or found running (external): the
+ * app role and the buckets (RFC 0007 §4.1–4.2). Returns what it did, one line
+ * per service; throws on what it could not do — before anything is built.
+ */
+export async function maintainServices(ctx: DeployContext, plan: InfraPlan, values: Map<string, string>): Promise<string[]> {
+  const lines: string[] = []
+  const role = appRoleOf(ctx.config)
+  const pg = ctx.config.infra?.kind === 'docker' ? dockerPostgres(plan) : externalPostgres(ctx, values)
+  if (role) {
+    if (!pg) throw new DeployError(`appRole ${role.name}: no Postgres declared to create it in`)
+    lines.push(await ensureAppRole(ctx, pg, role, values))
+  }
+  const infra = ctx.config.infra
+  if (infra?.kind === 'docker' && infra.minio?.buckets.length) {
+    const minio = plan.services.find((s) => s.service === 'minio')
+    if (minio) {
+      lines.push(await ensureBuckets(ctx, { container: minio.container, user: plan.secrets['BASALT_MINIO_USER'] ?? '', password: plan.secrets['BASALT_MINIO_PASSWORD'] ?? '' }, infra.minio.buckets))
+    }
+  }
+  const external = externalOf(ctx.config)?.minio
+  if (external?.buckets?.length) lines.push(await ensureBuckets(ctx, await minioHandle(ctx, external.container), external.buckets))
+  return lines
 }
 
 export function describeInfra(plan: InfraPlan): string[] {

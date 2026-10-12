@@ -57,6 +57,8 @@ export interface ExecOptions {
   stdoutFile?: string
   /** stdout/stderr go to the terminal (long steps), nothing is captured. */
   stream?: boolean
+  /** Written to the child's stdin, then closed — SQL that carries a password, never an argument. */
+  stdin?: string
 }
 
 export interface ExecResult {
@@ -120,8 +122,9 @@ export function nodeHost(output: Output = consoleOutput()): Host {
         const child = spawn(command, args, {
           cwd: options.cwd,
           env,
-          stdio: options.stream ? ['ignore', 'inherit', 'inherit'] : ['ignore', fd ?? 'pipe', 'pipe'],
+          stdio: options.stream ? ['ignore', 'inherit', 'inherit'] : [options.stdin === undefined ? 'ignore' : 'pipe', fd ?? 'pipe', 'pipe'],
         })
+        if (options.stdin !== undefined) child.stdin?.end(options.stdin)
         child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
         child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
         const done = (code: number) => {

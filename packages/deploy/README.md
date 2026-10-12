@@ -86,6 +86,25 @@ CI catches them too.
 
 ## On a new server
 
+A fresh Ubuntu or Debian with Node, three commands:
+
+```sh
+git clone <repo> /srv/myapp && cd /srv/myapp
+sudo npx -y -p @basaltkit/deploy basalt-deploy bootstrap --user=ubuntu   # --dry-run first, to see it
+node node_modules/@basaltkit/deploy/dist/bin.js run                       # as ubuntu, from then on
+```
+
+`bootstrap` installs only what is missing — base packages, Docker with compose,
+Node at `engines.node` (NodeSource), the pnpm the lockfile records, swap when
+RAM is under 6 GB (`bootstrap.swapGb`), ufw with SSH and 80/443 (turned on only
+when nothing else listens; `--no-firewall`), Caddy when the proxy is `caddy()` —
+gives the checkout and the `docker` group to the user (said plainly: that group
+is root on the machine; rootless Docker is a later step), then runs, as the
+user, `pnpm install` and `env` (it asks what it cannot generate) and, as root,
+`install`. A step that fails stops it; running it again redoes nothing done.
+
+By hand, the same thing:
+
 ```sh
 # as the app user (never root), in the checkout:
 pnpm install
@@ -109,8 +128,20 @@ refuses a modified tree.
 preflight probes the remote with prompts disabled, warns at a terminal and
 stops before anything changes when nobody can type them (cron, CI).
 
-The TLS certificate is yours to issue (`certbot --dns-cloudflare -d <domain> -d '*.<domain>'`);
-every deploy checks it.
+With Apache the TLS certificate is yours to issue (`certbot --dns-cloudflare -d <domain> -d '*.<domain>'`);
+every deploy checks it. With Caddy it is Caddy's:
+
+```ts
+proxy: caddy({ onDemandTls: { ask: '/tls/allowed' } }),   // tenants: a certificate per host, for hosts the app vouches for
+```
+
+`install` writes `/etc/caddy/sites/<app>.caddy` — the apex (and `*.<domain>`
+with tenants), `/api/` stripped to the app, `web/dist` with the SPA fallback —
+and, on a server still on the package's Caddyfile, a main file that imports it
+and asks the app before each certificate. Someone's own Caddyfile only gets the
+import line. `caddy validate` runs before the reload; a failure puts every file
+back. Deploys diff the site and never rewrite it; C1, C2 (not imported) and C8
+(no `ask`) are checked as for Apache.
 
 ## Commands
 
@@ -164,6 +195,46 @@ migrate: {
   env: (v) => ({ DATABASE_URL: v.get('DATABASE_URL')!.replace('@myapp-postgres:', '@127.0.0.1:') }),
 },
 ```
+
+**Services you keep but do not create** (RFC 0007 §4) — containers that outlive
+any release, adopted by name:
+
+```ts
+infra: external({
+  postgres: {
+    container: 'myapp-postgres',
+    urlKey: 'OWNER_DATABASE_URL',                          // the owner: role, grants and the dump run as it
+    appRole: { name: 'myapp_app', urlKey: 'DATABASE_URL' }, // what the app connects as: no DDL
+  },
+  redis: { container: 'myapp-redis' },
+  minio: { container: 'minio', buckets: [{ name: 'myapp-documents', versioned: true }, { name: 'myapp-quarantine', expireDays: 1 }] },
+}),
+runtime: compose({
+  // …
+  attach: { 'myapp-postgres': ['data'], 'myapp-redis': ['data', 'sandbox'] },   // onto <app>_<network> before up
+  jobs: [{ service: 'freshclam', command: ['freshclam', '--stdout'], once: { exists: '/var/lib/clamav/main.c?d' } }],
+}),
+verify: {
+  logs: { 'ingest-worker': ['EAI_AGAIN', 'ECONNREFUSED'] },   // since the release started; found → rolled back
+  http: [{ path: '/readyz' }],
+},
+```
+
+- **Preflight:** each container running; every service and container name the
+  config uses exists (`did you mean "ingest-worker"?`).
+- **The role:** created when missing, its password the `.env`'s (generated from
+  the owner's URL when the key is absent), proven over TCP before anything is
+  changed, granted DML through the owner's default privileges — never on
+  existing tables, which an app may keep append-only. With `migrate.tenants`,
+  every `tenant_*` schema too, after the migration.
+- **Buckets:** created; versioning on; the expiry rule added once — the rules
+  are read first. The credentials are the running MinIO's.
+- **Attach:** on a fresh server the project is created first (`up --no-start`)
+  so its networks exist and the first release is healthy, not the second.
+- **Jobs:** `docker compose run --rm --no-deps` with this commit's images,
+  before `up`; `once` skips them when the path exists.
+- **The dump** runs inside `infra.postgres.container` as the owner.
+- `dockerInfra` services take `container` (adopt another name) and `appRole` too.
 
 **Hooks** — what only your app does, as commands that also run by hand:
 
