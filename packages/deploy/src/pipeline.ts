@@ -109,7 +109,22 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
   findings.push(...await mirrorFindings(ctx))
   if (ctx.config.proxy?.kind === 'apache') findings.push(...await apachePreflight(ctx, port))
   if (!options.skip?.includes('tls')) findings.push(...await tlsFindings(ctx))
+  findings.push(...await backupFindings(ctx, values, options))
   return { findings, port, values }
+}
+
+/** `backup.container` running — found now, not after the build, minutes later. */
+async function backupFindings(ctx: DeployContext, values: Map<string, string>, options: RunOptions): Promise<Finding[]> {
+  const container = ctx.config.backup?.container
+  if (!container || !backupDecision(ctx.config, values, options.skip ?? []).run) return []
+  const running = await ctx.host.exec('docker', ['inspect', '--format', '{{.State.Running}}', container])
+  if (running.stdout.trim() === 'true') return []
+  return [{
+    id: 'backup',
+    level: 'error',
+    message: running.code === 0 ? `backup.container ${container} is not running` : `backup.container ${container} does not exist (or docker is not available to this user)`,
+    fix: `docker start ${container}, or deploy with --skip=backup`,
+  }]
 }
 
 const LOCKFILES = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lock']
@@ -307,7 +322,10 @@ async function publicHealthy(ctx: DeployContext): Promise<Finding | undefined> {
   if (config.health?.public === false || config.proxy?.kind !== 'apache') return undefined
   const url = `https://${config.domain}${config.proxy.apiPrefix.replace(/\/$/, '')}${config.health?.path ?? '/health'}`
   const answer = await ctx.host.httpGet(url, { timeoutMs: 10_000 })
-  if ('status' in answer && answer.status >= 200 && answer.status < 400) return undefined
+  if ('status' in answer && answer.status >= 200 && answer.status < 400) {
+    ctx.host.out.ok(url)
+    return undefined
+  }
   return {
     id: 'health',
     level: 'error',
@@ -360,7 +378,7 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
     ...(config.hooks?.infra ?? []).map((h) => `infra hook: ${h.join(' ')}`),
     `validate: ${config.env.schema ?? '(no schema configured)'} against the new .env`,
     ((decision) => decision.run
-      ? `backup: pg_dump → ${config.backup?.dir ?? 'backups/predeploy'} (keep ${config.backup?.keep ?? 10})`
+      ? `backup: pg_dump${config.backup?.container ? ` inside ${config.backup.container}` : ''} → ${config.backup?.dir ?? 'backups/predeploy'} (keep ${config.backup?.keep ?? 10})`
       : `backup: skipped (${decision.why})`)(backupDecision(config, checked.values, options.skip ?? [])),
     `migrate: ${[config.migrate?.command?.join(' ') ?? '', migratesCentral(config) ? 'prisma migrate deploy' : '', config.migrate?.tenants ? 'tenant:migrate' : ''].filter(Boolean).join(' + ') || 'nothing configured'}`,
     `release: ${describeRelease(ctx, checked.port)}`,
@@ -448,7 +466,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
     host.out.error(why)
     if (destructive.length > 0 || sha === previous) {
       if (destructive.length > 0) host.out.error(`not rolled back automatically: ${destructive.join(', ')} ${destructive.length === 1 ? 'is' : 'are'} marked destructive`)
-      if (record.backup) host.out.info(`database before this release: ${restoreCommand(ctx, infra, record.backup)}`)
+      if (record.backup) host.out.info(`database before this release: ${restoreCommand(ctx, infra, record.backup, values)}`)
       record.note = why
       await recordRelease(ctx, record)
       return 1
