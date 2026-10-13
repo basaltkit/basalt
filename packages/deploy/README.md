@@ -3,7 +3,8 @@
 One deploy pipeline for a Basalt app on a single Linux server: the `.env`,
 dedicated Docker infra (Postgres, Redis, MinIO), PM2, Apache, a database dump
 before migrating, a health check, and a rollback when the new release does not
-answer. Design and decisions: [RFC 0006](../../docs/rfcs/0006-basalt-deploy.md).
+answer. Design and decisions: [RFC 0006](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0006-basalt-deploy.md)
+and [RFC 0007](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0007-deploy-zero-scripts.md).
 
 ```sh
 pnpm add -D @basaltkit/deploy
@@ -86,33 +87,39 @@ CI catches them too.
 
 ## On a new server
 
-A fresh Ubuntu or Debian with Node, three commands:
+A fresh Ubuntu or Debian with Node, three commands. Root runs **its own copy**
+of the tool, pinned to the exact version your lockfile records (here `0.5.0`),
+from outside the checkout — never the checkout's `node_modules`, which the app
+user can change ([who runs what](#who-runs-what-the-trust-boundary)):
 
 ```sh
-git clone <repo> /srv/myapp && cd /srv/myapp
-sudo npx -y -p @basaltkit/deploy basalt-deploy bootstrap --user=ubuntu   # --dry-run first, to see it
-node node_modules/@basaltkit/deploy/dist/bin.js run                       # as ubuntu, from then on
+sudo adduser --disabled-password myapp && sudo git clone <repo> /srv/myapp
+cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.5.0 -- basalt-deploy bootstrap --dir=/srv/myapp --user=myapp   # --dry-run first
+sudo -u myapp -H sh -c 'cd /srv/myapp && node node_modules/@basaltkit/deploy/dist/bin.js run'   # as myapp, from then on
 ```
 
 `bootstrap` installs only what is missing — base packages, Docker with compose,
-Node at `engines.node` (NodeSource), the pnpm the lockfile records, swap when
-RAM is under 6 GB (`bootstrap.swapGb`), ufw with SSH and 80/443 (turned on only
-when nothing else listens; `--no-firewall`), Caddy when the proxy is `caddy()` —
-gives the checkout and the `docker` group to the user (said plainly: that group
-is root on the machine; rootless Docker is a later step), then runs, as the
-user, `pnpm install` and `env` (it asks what it cannot generate) and, as root,
-`install`. A step that fails stops it; running it again redoes nothing done.
+Node at `engines.node` (NodeSource), the pnpm the lockfile records — gives the
+checkout and the `docker` group to the user (said plainly: that group is root on
+the machine; rootless Docker is a later step), then, **as the user, in the
+checkout**: `pnpm install`, `env` (it asks what it cannot generate) and
+`install-plan`. From that plan (data, validated) it adds swap when RAM is under
+6 GB (`bootstrap.swapGb`), ufw with SSH and 80/443 (turned on only when nothing
+else listens; `--no-firewall`), Caddy when the proxy is `caddy()`, and runs
+`install`. It never loads `deploy.config.ts` itself. A step that fails stops it;
+running it again redoes nothing done. It warns when the lockfile records
+another `@basaltkit/deploy` version than the one running.
 
 By hand, the same thing:
 
 ```sh
 # as the app user (never root), in the checkout:
 pnpm install
-node node_modules/@basaltkit/deploy/dist/bin.js env    # writes the .env (asks once), starts the containers, validates
+node node_modules/@basaltkit/deploy/dist/bin.js env           # writes the .env (asks once), starts the containers, validates
+node node_modules/@basaltkit/deploy/dist/bin.js install-plan  # writes the install plan (data) and prints the root command
 
-# once, as an administrator — the node path is resolved by YOUR shell, because
-# with a per-user Node (nvm) root has none on its PATH:
-sudo "$(command -v node)" node_modules/@basaltkit/deploy/dist/bin.js install --user="$USER"
+# once, as an administrator — the command install-plan printed, e.g.:
+cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.5.0 -- basalt-deploy install --plan=/srv/myapp/.basalt/install-plan.json --user=myapp
 
 # then, every deploy, as the app user:
 node node_modules/@basaltkit/deploy/dist/bin.js run
@@ -145,17 +152,58 @@ back. Deploys diff the site and never rewrite it; C1, C2 (not imported) and C8
 
 ## Commands
 
+As the app user, in the checkout (`node node_modules/@basaltkit/deploy/dist/bin.js <command>`):
+
 | | |
 |---|---|
+| `init --domain=<host>` | writes `deploy.config.ts` from the project (`--server`: also from this server), then `check` |
 | `check` | the config is valid and types check (your `tsc`). No server needed — for CI. |
 | `plan` | every check, then what `run` would do. Writes nothing, asks nothing. |
 | `run` | preflight → fetch → env → infra → build → validate → backup → migrate → release → health → record |
 | `env` | the `.env` and the containers only |
-| `rollback [--to=<sha>]` | the last healthy release. Code only — the database keeps its migrations. |
-| `status` | the last releases and the process |
-| `install --user=<name>` | root, once: vhost, state directory |
+| `rollback [--to=<sha>]` | the last healthy release. Code only — the database keeps its migrations. Holds the commit it left. |
+| `status` | the last releases (who, from where), the process, the deploy lock, a hold |
+| `install-plan [--out=<file>\|-]` | what `install` needs, as JSON (default `<state dir>/install-plan.json`, 0600), and the root command to run |
 
-`--skip=fetch,backup,tls`, `--config=<file>`, `--overrides=<file>`.
+As root, with a copy of the tool root owns (`cd / && sudo -H npx --yes --package=@basaltkit/deploy@<version> -- basalt-deploy <command>`):
+
+| | |
+|---|---|
+| `bootstrap --user=<name> [--dir=<checkout>] [--dry-run]` | a fresh server, once (above) |
+| `install --plan=<file> --user=<name>` | once per server: the state directory, the proxy site, the env files' owner |
+
+Options: `--skip=fetch,backup,tls`, `--config=<file>`, `--overrides=<file>`,
+`--actor=<name>` (recorded with the release; default `$BASALT_DEPLOY_ACTOR`,
+else `$USER`), `run --unhold`, `--allow-root`, `--unsafe-tool`.
+
+Exit codes: `0` done · `1` failed or refused · `3` another deploy holds the
+lock · `130` stopped by a signal.
+
+### One deploy at a time
+
+`run`, `env`, `rollback` and `install` take `<state dir>/deploy.lock` (created
+exclusively, 0600) with the pid, host, start time, actor and command. A second
+deploy is refused with exit code 3 and says who holds it; a lock whose process
+is gone (same host) is taken over. `status` shows it.
+
+The first Ctrl-C (or SIGTERM/SIGHUP) stops `run`/`env` at the end of the
+current step: `run` puts the code back and records the release as `aborted`.
+From the release on — and during `rollback` and `install` — the command
+finishes first; a second signal stops it at once.
+
+### Releases, rollbacks and holds
+
+Every release in `releases.json` records the sha, the status, the migrations it
+applied, the dump taken before them, the OS user and the actor, the SSH client
+address (`$SSH_CONNECTION`) and how it ran (`ssh`, `ci`, `terminal`, `batch`).
+`audit: { syslog: true }` also sends one line per release to `logger -t
+basalt-deploy`.
+
+A rollback onto a commit that does not answer either exits 1 and records it as
+`rollback-unhealthy`; the next rollback never picks it. A manual rollback
+refuses a checkout with local edits and **holds** the commit it left: a
+scheduled `run` will not deploy that commit again until the branch moves on,
+or `run --unhold`.
 
 ## Docker Compose apps
 
@@ -182,9 +230,11 @@ runtime: compose({
 - Image tags must be `<app>` or `<app>-…` (C4).
 
 **The env file outside the checkout:** `env: { file: '/etc/myapp/api.env', mirror: ['/etc/myapp/worker.env'] }`.
-Mirrors are rewritten as exact copies; one that differs is a C10 error. `install`
-gives the files — and `/etc/myapp` itself, when its name contains the app's —
-to the deploy user.
+Mirrors are rewritten as exact copies; one that differs is a C10 error. Outside
+the checkout an env file lives directly in `/etc/<app>/` — nowhere else (never
+`/etc/environment`). `install` gives `/etc/<app>` (0700) and the files (0600)
+to the deploy user, through descriptors opened without following links: a
+symlink or a hard link planted there is refused.
 
 **Migrations by command**, with values that override the `.env` for them and for
 the pre-migration dump (a container name the host cannot resolve):
@@ -280,6 +330,11 @@ checks C2 and C1 on each vhost on every deploy and never writes them.
 - The dump before migrating — when something is migrated and there is a
   Postgres to dump (dedicated, or a `postgres://` URL in the `.env`);
   `backup.beforeMigrate` forces it either way. `plan` says why when it is skipped.
+  Dumps go to `<state dir>/backups` (0700; `/var/lib/basalt/<app>/backups`
+  once `install` ran) — outside the checkout, so never in an image, a commit or
+  a served directory. `backup.dir` (relative to the checkout) keeps the old
+  place; a new app's `.gitignore`/`.dockerignore` exclude `/backups` and
+  `/.basalt` anyway.
   With external infra in a container, `backup: { container: 'myapp-postgres' }`
   runs `pg_dump` inside it (`docker exec`), as the user and database of the
   URL at `backup.urlKey` — the server's own pg_dump, none needed on the host.
@@ -315,9 +370,47 @@ environment to `~/.pm2/dump.pm2`).
 
 - Before `release` (build, validation, backup, migration): the code on disk is
   put back to the previous commit and rebuilt; nothing running was touched.
+- A failed migration is recorded as `failed-migration`: the database may be
+  part-way, so the `pg_restore` command for the dump taken before it is printed.
 - At `release`/`health`: the previous commit is rebuilt, restarted and checked.
 - A release that applied a migration listed in `destructive` is never rolled
   back automatically — its code would run on a schema it does not know. The
   `pg_restore` command for the dump taken before it is printed instead.
 - Healthy on `127.0.0.1` but not at `https://<domain>`: exit 1, no rollback —
   the problem is the proxy, DNS or TLS, not the code.
+
+## Who runs what: the trust boundary
+
+| Who | Runs | Can change |
+|---|---|---|
+| the app user | `env`, `run`, `rollback`, `plan`, `status`, `install-plan`; the app itself | the checkout: `deploy.config.ts`, `node_modules`, every file in the tree; its `.env`; `<state dir>` |
+| root | `bootstrap`, `install` — from a copy of the tool root owns | everything |
+
+- **Root never runs the app user's code.** `install` reads a data-only plan
+  (`install-plan`), without following a link, and validates every field again:
+  the web root (inside the checkout, no dot directories, not the checkout
+  itself), the API prefix, the certificate name, the env files (only
+  `/etc/<app>/`), the checkout (must be the user's own directory). It never
+  loads `deploy.config.ts`, the checkout's `tsx` or `node_modules`, nor reads
+  the `.env`. Raw Caddy `extra` and a non-default proxy root are shown and need
+  a "yes" at the terminal.
+- **Root writes only where no other user can plant a link**: directories
+  only root can write (`/var/lib/basalt`, `/etc/basalt`, the Apache/Caddy
+  roots), or files changed through an `O_NOFOLLOW` descriptor.
+- **The tool root runs is checked.** As root, `install` and `bootstrap` refuse
+  to run from files another user can change — `sudo node
+  node_modules/@basaltkit/deploy/dist/bin.js` from the checkout, a user's npm
+  cache, a per-user Node (nvm) — unless `--unsafe-tool`. Run the pinned copy:
+  `cd / && sudo -H npx --yes --package=@basaltkit/deploy@<version> -- basalt-deploy …`
+  (`cd /`: inside the checkout npx would pick its own copy; `-H`: root's npm
+  cache, not the user's), or a root-owned global install (`sudo npm install -g
+  @basaltkit/deploy@<version>`) with a root-owned Node (NodeSource's
+  `/usr/bin/node`).
+- **The app user's commands refuse root** (`--allow-root` to insist): as root
+  they would build and run the app's code, and `deploy.config.ts`, as root.
+- **The `docker` group is root on the machine** (a container can mount `/`).
+  `bootstrap` adds the user to it so `dockerInfra` and `compose` work, and says
+  so; with it, the boundary above protects against mistakes and a compromised
+  checkout less than against the app user itself. Rootless Docker for the app
+  user is the real fix (`dockerd-rootless-setuptool.sh install`), and moves
+  every volume — a later step, not done for you.
