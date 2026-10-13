@@ -22,7 +22,8 @@ export const USAGE = `basalt-deploy — deploy this Basalt app on this server (R
   basalt-deploy plan              what a run would do; changes nothing
   basalt-deploy run               fetch, .env, infra, build, backup, migrate, restart, health
   basalt-deploy env               the .env and the dedicated infra only (first setup)
-  basalt-deploy rollback [--to=<sha>]   back to the last healthy release (code only)
+  basalt-deploy rollback [--to=<sha>]   back to the last healthy release (code only); holds the commit it left
+  basalt-deploy run --unhold      deploy the commit a rollback held, deliberately
   basalt-deploy status            the last releases and the process
   sudo "$(command -v node)" node_modules/@basaltkit/deploy/dist/bin.js install --user=<name>
                                   once per server, as root: vhost, state directory
@@ -152,7 +153,7 @@ export async function main(argv: string[], host: Host = nodeHost(), cwd: string 
 
     switch (flags.command) {
       case 'plan': return await plan(ctx, { skip })
-      case 'run': return await run(ctx, { skip })
+      case 'run': return await run(ctx, { skip, unhold: flags.switches.has('unhold') })
       case 'env': return await envCommand(ctx)
       case 'rollback': return await rollback(ctx, flags.values.get('to'))
       case 'status': return await status(ctx)

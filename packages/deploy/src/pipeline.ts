@@ -12,7 +12,7 @@ import { envValues } from './dotenv.js'
 import { applyInfra, describeInfra, dockerPostgres, maintainServices, planInfra, type InfraPlan } from './infra.js'
 import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, externalPostgres, grantTenantSchemas } from './services.js'
 import { pm2List, pm2Preflight, pm2Release, resolvePort } from './pm2.js'
-import { lastGood, migrationNames, readReleases, recordRelease, type Release } from './state.js'
+import { clearHold, lastGood, migrationNames, readHold, readReleases, recordRelease, writeHold, type Release } from './state.js'
 import { acquireLock, describeHolder, readLock } from './lock.js'
 
 /**
@@ -31,6 +31,8 @@ export interface RunOptions {
   skip?: Skippable[]
   /** Who runs it, for the lock and the release record. Default `$USER`. */
   actor?: string
+  /** Deploy the commit a manual rollback left (the hold), deliberately. */
+  unhold?: boolean
 }
 
 /**
@@ -179,6 +181,17 @@ async function backupFindings(ctx: DeployContext, values: Map<string, string>, o
 const LOCKFILES = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lock']
 
 async function gitFindings(ctx: DeployContext, options: RunOptions): Promise<Finding[]> {
+  const findings = await dirtyFindings(ctx)
+  if (findings.some((f) => f.message.endsWith('is not a git checkout'))) return findings
+  const branch = (await ctx.host.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
+  const wanted = ctx.config.branch ?? 'main'
+  if (branch !== wanted) findings.push({ id: 'git', level: 'error', message: `the checkout is on "${branch}", the deploy tracks "${wanted}"`, fix: `git checkout ${wanted}` })
+  if (!options.skip?.includes('fetch')) findings.push(...await remoteFindings(ctx))
+  return findings
+}
+
+/** Tracked files modified on the server: a deploy (or a rollback's reset) would discard them. */
+async function dirtyFindings(ctx: DeployContext): Promise<Finding[]> {
   const findings: Finding[] = []
   const dirty = await ctx.host.exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: ctx.dir })
   if (dirty.code !== 0) return [{ id: 'git', level: 'error', message: `${ctx.dir} is not a git checkout` }]
@@ -194,10 +207,6 @@ async function gitFindings(ctx: DeployContext, options: RunOptions): Promise<Fin
         : 'git stash (or commit them where they belong); a deploy builds what is committed',
     })
   }
-  const branch = (await ctx.host.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
-  const wanted = ctx.config.branch ?? 'main'
-  if (branch !== wanted) findings.push({ id: 'git', level: 'error', message: `the checkout is on "${branch}", the deploy tracks "${wanted}"`, fix: `git checkout ${wanted}` })
-  if (!options.skip?.includes('fetch')) findings.push(...await remoteFindings(ctx))
   return findings
 }
 
@@ -525,8 +534,11 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
     const target = gitTarget(ctx)
     await step(ctx, 'fetch', async () => {
       await git(ctx, ['fetch', '--quiet', '--', target.remote, `${target.head}:${target.tracking}`], { noPrompt: !host.interactive() })
+      await refuseHeld(ctx, await git(ctx, ['rev-parse', '--verify', '--end-of-options', `${target.tracking}^{commit}`]), options)
       await git(ctx, ['merge', '--ff-only', target.tracking])
     })
+  } else {
+    await refuseHeld(ctx, previous, options)
   }
   const sha = await git(ctx, ['rev-parse', 'HEAD'])
   host.out.info(sha === previous ? `already at ${sha.slice(0, 7)}` : `${previous.slice(0, 7)} → ${sha.slice(0, 7)}`)
@@ -585,10 +597,14 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
       await recordRelease(ctx, record)
       return 1
     }
-    await rollbackTo(ctx, previous, values, port)
+    const back = await rollbackTo(ctx, previous, values, port)
     record.status = 'rolled-back'
     record.note = why
     await recordRelease(ctx, record)
+    if (!back.ok) {
+      // The previous commit does not answer either: never a rollback target again.
+      await recordRelease(ctx, { ...record, sha: previous, previous: sha, at: host.now().toISOString(), status: 'rollback-unhealthy', migrations: [], note: back.why })
+    }
     return 1
   }
 
@@ -616,6 +632,8 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
   }
 
   record.status = publicProblem ? 'public-unreachable' : 'ok'
+  // A healthy release on purpose: whatever a rollback held is behind us.
+  await clearHold(ctx)
   // `pnpm run start`, launched by PM2 in the checkout, may rewrite it too.
   await settleLockfile(ctx, lockfileSaid)
   await step(ctx, 'record', () => recordRelease(ctx, record))
@@ -637,7 +655,18 @@ async function retainImages(ctx: DeployContext): Promise<void> {
   if (removed.length > 0) ctx.host.out.info(`removed ${removed.length} image(s) of releases older than the last ${keep}: ${removed.join(', ')}`)
 }
 
-async function rollbackTo(ctx: DeployContext, sha: string, values: Map<string, string>, port: number): Promise<void> {
+/** `run` will not redeploy the commit a manual rollback left, unless asked to (`--unhold`). */
+async function refuseHeld(ctx: DeployContext, incoming: string, options: RunOptions): Promise<void> {
+  const hold = await readHold(ctx)
+  if (!hold || hold.sha !== incoming) return
+  if (options.unhold) {
+    ctx.host.out.warn(`deploying ${incoming.slice(0, 7)} although a rollback held it (--unhold)`)
+    return
+  }
+  throw new DeployError(`${incoming.slice(0, 7)} is held: ${hold.note} by ${hold.actor || 'someone'} at ${hold.at} — nothing was changed. Push a fix (the hold ends when the branch moves on), or deploy it anyway with --unhold`)
+}
+
+async function rollbackTo(ctx: DeployContext, sha: string, values: Map<string, string>, port: number): Promise<{ ok: true } | { ok: false; why: string }> {
   // Compose: the images of `sha` exist (kept by retention), so the rebuild
   // inside restoreCode skips them — a rollback is not a new build.
   await restoreCode(ctx, sha, values)
@@ -646,19 +675,29 @@ async function rollbackTo(ctx: DeployContext, sha: string, values: Map<string, s
   const health = await healthCheck(ctx, port, sha)
   if (health.ok) ctx.host.out.ok(`back on ${sha.slice(0, 7)}`)
   else ctx.host.out.error(`${sha.slice(0, 7)} does not answer either (${health.why}) — ${logsHint(ctx)}`)
+  return health
 }
 
 /** `basalt-deploy rollback [--to=<sha>]` — code only; the database stays as it is. */
 export async function rollback(ctx: DeployContext, to?: string, options: RunOptions = {}): Promise<number> {
-  return locked(ctx, 'rollback', options, false, () => rollbackLocked(ctx, to))
+  return locked(ctx, 'rollback', options, false, () => rollbackLocked(ctx, to, options))
 }
 
-async function rollbackLocked(ctx: DeployContext, to?: string): Promise<number> {
+async function rollbackLocked(ctx: DeployContext, to: string | undefined, options: RunOptions): Promise<number> {
+  // The reset below would discard edits on the server, as a deploy would.
+  stopOnErrors(ctx, await dirtyFindings(ctx), 'rollback')
   const current = await git(ctx, ['rev-parse', 'HEAD'])
   const releases = await readReleases(ctx)
+  let wanted: string | undefined
+  if (to !== undefined) {
+    if (!/^[0-9a-f]{7,40}$/.test(to)) throw new DeployError(`--to=${to}: a commit sha (7 to 40 hex digits)`)
+    const resolved = await ctx.host.exec('git', ['rev-parse', '--verify', '--quiet', '--end-of-options', `${to}^{commit}`], { cwd: ctx.dir })
+    if (resolved.code !== 0) throw new DeployError(`--to=${to} is not a commit in this checkout`)
+    wanted = resolved.stdout.trim()
+  }
   // The last healthy release before this one; on the first recorded deploy,
   // the commit it was deployed over.
-  const target = to ?? lastGood(releases, current)?.sha ?? [...releases].reverse().find((r) => r.sha === current)?.previous
+  const target = wanted ?? lastGood(releases, current)?.sha ?? [...releases].reverse().find((r) => r.sha === current)?.previous
   if (!target || target === current) throw new DeployError('no earlier release to go back to; pass --to=<sha>')
   const document = await readEnv(ctx)
   const values = envValues(document)
@@ -669,8 +708,21 @@ async function rollbackLocked(ctx: DeployContext, to?: string): Promise<number> 
     const destructive = since.filter((name) => ctx.config.destructive?.includes(name))
     if (destructive.length > 0) throw new DeployError(`refused: ${destructive.join(', ')} marked destructive — ${target.slice(0, 7)} cannot run on this schema`)
   }
-  await rollbackTo(ctx, target, values, port)
-  await recordRelease(ctx, { sha: target, previous: current, at: ctx.host.now().toISOString(), user: ctx.host.env['USER'] ?? '', status: 'ok', migrations: [], note: `manual rollback from ${current.slice(0, 7)}` })
+  const back = await rollbackTo(ctx, target, values, port)
+  const at = ctx.host.now().toISOString()
+  const note = `manual rollback from ${current.slice(0, 7)}`
+  await recordRelease(ctx, {
+    sha: target, previous: current, at, user: ctx.host.env['USER'] ?? '', migrations: [],
+    status: back.ok ? 'ok' : 'rollback-unhealthy',
+    note: back.ok ? note : `${note}; ${target.slice(0, 7)} does not answer either: ${back.why}`,
+  })
+  // Whatever the outcome, the commit rolled away from is not redeployed by the next scheduled run.
+  await writeHold(ctx, { sha: current, at, actor: actorOf(ctx, options), note: `rolled back to ${target.slice(0, 7)}` })
+  ctx.host.out.info(`${current.slice(0, 7)} is held: \`run\` will not deploy it again until the branch moves on (or --unhold)`)
+  if (!back.ok) {
+    ctx.host.out.error(`the rollback did not bring a healthy release: ${target.slice(0, 7)} is recorded as rollback-unhealthy — try another with --to=<sha>`)
+    return 1
+  }
   return 0
 }
 
@@ -683,6 +735,8 @@ export async function status(ctx: DeployContext): Promise<number> {
   else if (lock.corrupt) host.out.warn(`${lock.path} is not a deploy lock (empty or unreadable): deploys are refused until it is removed`)
   else if (lock.stale) host.out.warn(`stale lock: ${describeHolder(lock.holder!)} — that process is gone; the next deploy takes it over`)
   else host.out.info(`deploy running: ${describeHolder(lock.holder!)}`)
+  const hold = await readHold(ctx)
+  if (hold) host.out.warn(`held: ${hold.sha.slice(0, 7)} (${hold.note}, by ${hold.actor || 'someone'} at ${hold.at}) — run will not deploy it again; --unhold to override`)
   for (const r of releases) host.out.info(`${r.at}  ${r.sha.slice(0, 7)}  ${r.status.padEnd(18)} ${r.user}${r.migrations.length ? `  +${r.migrations.length} migration(s)` : ''}${r.note ? `  — ${r.note}` : ''}`)
   if (isCompose(ctx)) {
     const head = (await ctx.host.exec('git', ['rev-parse', 'HEAD'], { cwd: ctx.dir })).stdout.trim()

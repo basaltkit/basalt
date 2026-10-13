@@ -41,7 +41,12 @@ export function server(options: {
       if (command !== 'git') return undefined
       const [verb, ...rest] = args
       if (verb === 'status') return ok(options.dirty ?? '')
-      if (verb === 'rev-parse') return ok(rest[0] === '--abbrev-ref' ? 'master\n' : `${head}\n`)
+      if (verb === 'rev-parse') {
+        const ref = rest.indexOf('--end-of-options')
+        // The remote's branch after a fetch is NEW; a sha given to rollback --to resolves to itself.
+        if (ref !== -1) return ok(`${(rest[ref + 1] as string).replace('^{commit}', '').replace(/^refs\/remotes\/.*/, NEW)}\n`)
+        return ok(rest[0] === '--abbrev-ref' ? 'master\n' : `${head}\n`)
+      }
       if (verb === 'fetch') return ok()
       if (verb === 'ls-remote') return options.remote ?? ok(`${NEW}\trefs/heads/master\n`)
       if (verb === 'merge') { head = NEW; return ok() }
