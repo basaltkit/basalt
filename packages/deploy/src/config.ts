@@ -753,8 +753,10 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   // the app user: checked here and again by install on the plan (trust.ts).
   if (config.proxy?.kind === 'apache' || config.proxy?.kind === 'caddy') {
     const proxy = config.proxy
-    if (!isWebRoot(proxy.webRoot)) problems.push(`proxy.webRoot "${String(proxy.webRoot)}" must be a directory inside the checkout (relative; letters, digits, . _ -; no dot directories, not the checkout itself)`)
-    if (typeof proxy.apiPrefix !== 'string' || !API_PREFIX.test(proxy.apiPrefix)) problems.push(`proxy.apiPrefix "${String(proxy.apiPrefix)}" must be a URL path such as /api`)
+    // Unmanaged: root writes nothing from these two, so nothing to hold them to.
+    const managed = proxy.managed !== false
+    if (managed && !isWebRoot(proxy.webRoot)) problems.push(`proxy.webRoot "${String(proxy.webRoot)}" must be a directory inside the checkout (relative; letters, digits, . _ -; no dot directories, not the checkout itself)`)
+    if (managed && (typeof proxy.apiPrefix !== 'string' || !API_PREFIX.test(proxy.apiPrefix))) problems.push(`proxy.apiPrefix "${String(proxy.apiPrefix)}" must be a URL path such as /api`)
     if (proxy.root !== undefined && !isConfigRoot(proxy.root)) problems.push(`proxy.root "${String(proxy.root)}" must be an absolute directory such as ${proxy.kind === 'apache' ? '/etc/apache2' : '/etc/caddy'}`)
     if (proxy.kind === 'apache' && proxy.certName !== undefined && !CERT_NAME.test(proxy.certName)) problems.push(`proxy.certName "${proxy.certName}" is not a certificate name`)
     if (proxy.kind === 'caddy' && proxy.onDemandTls && !ASK_PATH.test(proxy.onDemandTls.ask)) problems.push(`proxy.onDemandTls.ask "${proxy.onDemandTls.ask}" must be a URL path such as /tls/allowed`)

@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { renderVhost } from '../src/apache.js'
 import { main, USAGE } from '../src/cli.js'
 import { caddy, compose, validateConfig } from '../src/config.js'
-import { INSTALL_COMMAND, RUN_COMMAND } from '../src/context.js'
+import { INSTALL_COMMAND, rootInstallCommand, RUN_COMMAND } from '../src/context.js'
 import { nodeHost, type Output } from '../src/host.js'
 import { buildInstallPlan, install, parseInstallPlan, PLAN_KIND, readInstallPlan, servedNames, type InstallPlan } from '../src/install-plan.js'
 import { readReleases, recordRelease } from '../src/state.js'
@@ -79,6 +79,20 @@ describe('the config fields root writes into a proxy file', () => {
       expect(() => validateConfig(acmeConfig({ proxy: { kind: 'apache', webRoot: 'web/dist', apiPrefix: '/api', ...proxy } })), JSON.stringify(proxy)).toThrow(/proxy\./)
     }
     expect(() => validateConfig(acmeConfig({ tenants: 'none', proxy: caddy({ onDemandTls: { ask: '/x }\n}' as `/${string}` } }) }))).toThrow(/onDemandTls/)
+  })
+
+  it('./web/dist is web/dist; an unmanaged proxy is not held to what root would write', () => {
+    expect(() => validateConfig(acmeConfig({ proxy: { kind: 'apache', webRoot: './web/dist', apiPrefix: '/api' } }))).not.toThrow()
+    for (const webRoot of ['./', '.', './.', './../etc']) expect(() => validateConfig(acmeConfig({ proxy: { kind: 'apache', webRoot, apiPrefix: '/api' } })), webRoot).toThrow(/proxy\.webRoot/)
+    expect(renderVhost(context(new FakeHost(), acmeConfig({ proxy: { kind: 'apache', webRoot: './web/dist', apiPrefix: '/api' } })), 3002)).toContain(`DocumentRoot ${DIR}/web/dist\n`)
+    expect(() => validateConfig(acmeConfig({ proxy: { kind: 'apache', managed: false, vhosts: ['acme-app.conf'], webRoot: '', apiPrefix: '' } }))).not.toThrow()
+    expect(() => parseInstallPlan(JSON.stringify(plan({ proxy: { kind: 'apache', managed: false, vhost: 'acme.conf', webRoot: '', apiPrefix: '' } })), 'p.json')).not.toThrow()
+  })
+
+  it('the printed root command quotes a plan path the shell would read as more than a word', () => {
+    expect(rootInstallCommand('0.6.0', '/tmp/x;id;.json', 'ubuntu')).toContain("--plan='/tmp/x;id;.json' --user=ubuntu")
+    expect(rootInstallCommand('0.6.0', "/tmp/it's.json", 'ubuntu')).toContain("--plan='/tmp/it'\\''s.json'")
+    expect(rootInstallCommand('0.6.0', '/var/lib/basalt/acme/install-plan.json', 'ubuntu')).toContain('--plan=/var/lib/basalt/acme/install-plan.json --user')
   })
 
   it('env files live in the checkout or directly in /etc/<app>/', () => {

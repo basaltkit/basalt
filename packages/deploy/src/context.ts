@@ -67,7 +67,12 @@ export const INSTALL_COMMAND = `node ${BIN} install-plan`
  * in root's cache, not the user's.
  */
 export function rootInstallCommand(version: string, plan: string, user: string): string {
-  return `cd / && sudo -H npx --yes --package=@basaltkit/deploy@${version} -- basalt-deploy install --plan=${plan} --user=${user}`
+  return `cd / && sudo -H npx --yes --package=@basaltkit/deploy@${version} -- basalt-deploy install --plan=${shellQuote(plan)} --user=${user}`
+}
+
+/** A word an administrator pastes into a root shell: as is when plain, else single-quoted. */
+export function shellQuote(word: string): string {
+  return /^[A-Za-z0-9_./=:@%+-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`
 }
 
 export const errors = (findings: Finding[]) => findings.filter((f) => f.level === 'error')

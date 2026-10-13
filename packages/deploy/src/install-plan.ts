@@ -163,8 +163,10 @@ export function parseInstallPlan(text: string, source: string): InstallPlan {
       ? ['kind', 'managed', 'vhost', 'webRoot', 'apiPrefix', 'certName', 'root']
       : ['kind', 'managed', 'webRoot', 'apiPrefix', 'onDemandTls', 'extra', 'root'], 'proxy')
     if (typeof proxy['managed'] !== 'boolean') problems.push('proxy.managed must be true or false')
-    if (!isWebRoot(proxy['webRoot'])) problems.push('proxy.webRoot must be a directory inside the checkout (no dot directories, not the checkout itself)')
-    if (typeof proxy['apiPrefix'] !== 'string' || !API_PREFIX.test(proxy['apiPrefix'])) problems.push('proxy.apiPrefix must be a URL path such as /api')
+    // Unmanaged, root writes no site: the two fields go nowhere, but they stay strings.
+    const managed = proxy['managed'] !== false
+    if (managed ? !isWebRoot(proxy['webRoot']) : typeof proxy['webRoot'] !== 'string') problems.push('proxy.webRoot must be a directory inside the checkout (no dot directories, not the checkout itself)')
+    if (managed ? typeof proxy['apiPrefix'] !== 'string' || !API_PREFIX.test(proxy['apiPrefix']) : typeof proxy['apiPrefix'] !== 'string') problems.push('proxy.apiPrefix must be a URL path such as /api')
     if (proxy['root'] !== undefined && !isConfigRoot(proxy['root'])) problems.push('proxy.root must be an absolute directory')
     if (kind === 'apache') {
       const vhost = vhostFileProblem(app ?? '', proxy['vhost'])
