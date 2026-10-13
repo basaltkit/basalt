@@ -112,7 +112,7 @@ export const ERROR_CODES = [
   'locked', 'aborted', 'config', 'refused-root', 'preflight', 'held', 'release-failed', 'failed',
   'answer-missing', 'answer-invalid', 'answer-unknown', 'answer-timeout',
   'protocol', 'protocol-version', 'usage', 'unsupported',
-  'not-found', 'detach-unconfirmed', 'run-vanished', 'unexpected',
+  'not-found', 'detach-unconfirmed', 'run-vanished', 'unexpected', 'already-cancelled',
 ] as const
 export type ErrorCode = typeof ERROR_CODES[number]
 

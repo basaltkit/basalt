@@ -176,7 +176,7 @@ As the app user, in the checkout (`node node_modules/@basaltkit/deploy/dist/bin.
 | `status` | the last releases (who, from where), the process, the deploy lock, a hold |
 | `install-plan [--out=<file>\|-]` | what `install` needs, as JSON (default `<state dir>/install-plan.json`, 0600), and the root command to run |
 | `attach <runId> --json [--from-seq=<n>] [--follow]` | the events of a run, from any point (machine mode, below) |
-| `cancel <runId>` | SIGTERM to a detached run; a second `cancel` stops it at once |
+| `cancel <runId> [--first-only]` | SIGTERM to a detached run; a second `cancel` stops it at once (`--first-only` refuses instead) |
 | `ui` | prints how to start the local UI ([`@basaltkit/deploy-ui`](../deploy-ui#readme)) — on your machine, never on the server |
 
 As root, with a copy of the tool root owns (`cd / && sudo -H npx --yes --package=@basaltkit/deploy@<version> -- basalt-deploy <command>`):
@@ -323,7 +323,10 @@ node node_modules/@basaltkit/deploy/dist/bin.js cancel 20261013T100000Z-5f2c9a1b
   checked by its own command line (Linux). It stops at the next safe point,
   as Ctrl-C does; a second `cancel` stops it at once, with the step it was
   running (its process group). The lock is taken over by the next deploy
-  once no process of that run is left.
+  once no process of that run is left. `cancel --first-only` sends only a
+  first signal: when the run was already cancelled once, from any client, it
+  is refused (`already-cancelled`) and nothing is signalled. A client that
+  asked for the mild cancel never sends the immediate one by surprise.
 - `status --json` reports the lock, the active run and the last run.
 - `--via=ui` records `via: "ui"` with the release; like `--actor`, it
   attributes, it does not authenticate.
