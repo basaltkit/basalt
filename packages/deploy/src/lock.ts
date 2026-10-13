@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { DeployError } from './context.js'
 import type { Host } from './host.js'
+import { RUN_ID, type LockHolder } from './protocol.js'
 
 /**
  * One deploy at a time per app: `<stateDir>/deploy.lock`, created with
@@ -12,13 +13,7 @@ import type { Host } from './host.js'
  * over; anything else is refused, fail-closed, with the way to clear it.
  */
 
-export interface LockHolder {
-  pid: number
-  host: string
-  startedAt: string
-  actor: string
-  command: string
-}
+export type { LockHolder } from './protocol.js'
 
 export const lockFile = (stateDir: string) => join(stateDir, 'deploy.lock')
 /** Held for the few milliseconds a stale lock is replaced: only one process judges and removes it. */
@@ -54,6 +49,11 @@ export interface LockState {
   holder?: LockHolder
   /** The holder's process is gone (same host): the next deploy takes it over. */
   stale: boolean
+  /**
+   * The holder (a detached run) is gone but processes of its group still
+   * run — a build or a migration it started: not stale until they end.
+   */
+  orphans?: true
   /** Not a lock this package wrote (empty, or not JSON): refused until removed by hand. */
   corrupt: boolean
 }
@@ -69,6 +69,7 @@ function parseHolder(text: string | undefined): LockHolder | undefined {
       startedAt: String(value.startedAt ?? ''),
       actor: String(value.actor ?? ''),
       command: String(value.command ?? ''),
+      ...(typeof value.runId === 'string' && RUN_ID.test(value.runId) ? { runId: value.runId } : {}),
     }
   } catch {
     return undefined
@@ -82,8 +83,10 @@ export async function readLock(host: Host, stateDir: string): Promise<LockState 
   if (text === undefined) return undefined
   const holder = parseHolder(text)
   if (!holder) return { path, stale: false, corrupt: true }
-  const stale = holder.host === host.hostname() && !host.processAlive(holder.pid)
-  return { path, holder, stale, corrupt: false }
+  const gone = holder.host === host.hostname() && !host.processAlive(holder.pid)
+  // A detached run leads its own group (its pid is the group's id): what it started may outlive it.
+  const orphans = gone && holder.runId !== undefined && host.processGroupAlive?.(holder.pid) === true
+  return { path, holder, stale: gone && !orphans, corrupt: false, ...(orphans ? { orphans: true as const } : {}) }
 }
 
 export const describeHolder = (h: LockHolder) =>
@@ -97,10 +100,10 @@ export const describeHolder = (h: LockHolder) =>
  * user's while root holds the lock, and a lock swapped for a directory or a
  * link must not lead root into removing anything else.
  */
-export async function acquireLock(host: Host, stateDir: string, command: string, actor: string): Promise<() => Promise<void>> {
+export async function acquireLock(host: Host, stateDir: string, command: string, actor: string, runId?: string): Promise<() => Promise<void>> {
   await host.mkdir(stateDir, 0o700)
   const path = lockFile(stateDir)
-  const mine: LockHolder = { pid: host.pid(), host: host.hostname(), startedAt: host.now().toISOString(), actor, command }
+  const mine: LockHolder = { pid: host.pid(), host: host.hostname(), startedAt: host.now().toISOString(), actor, command, ...(runId ? { runId } : {}) }
   const text = `${JSON.stringify(mine)}\n`
   for (let attempt = 0; attempt < 2; attempt++) {
     if (await host.createExclusive(path, text, 0o600)) {
@@ -117,6 +120,12 @@ export async function acquireLock(host: Host, stateDir: string, command: string,
     if (state.stale && attempt === 0) {
       await takeOver(host, stateDir, holder, mine)
       continue
+    }
+    if (state.orphans) {
+      throw new DeployLockedError(
+        `the deploy that holds the lock is gone, but processes it started still run: ${describeHolder(holder)} — wait for them to end, or stop them (kill -TERM -${holder.pid}); the lock is taken over once none is left`,
+        holder,
+      )
     }
     throw new DeployLockedError(
       `another deploy is running: ${describeHolder(holder)} — wait for it${holder.host === host.hostname() ? '' : `, or, if nothing runs on ${holder.host}: rm ${path}`}`,

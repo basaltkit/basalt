@@ -14,6 +14,9 @@ import { pm2List, pm2Preflight, pm2Release, resolvePort } from './pm2.js'
 import { clearHold, deployedOver, lastGood, migrationNames, readHold, readReleases, recordRelease, writeHold, type Release } from './state.js'
 import { acquireLock, describeHolder, readLock } from './lock.js'
 import { auditOf } from './audit.js'
+import { questionDescriptors } from './env-step.js'
+import type { EnvResult, RunResult, StatusResult, StepId, StepStatus } from './protocol.js'
+import { activeRun, lastRun } from './runs.js'
 
 /**
  * The pipeline (RFC 0006 §4): preflight → fetch → env → infra → build →
@@ -39,12 +42,27 @@ export interface RunOptions {
    * the app user can no longer replace.
    */
   allowRoot?: boolean
+  /** `--via=ui`: recorded as the audit's `via` (RFC 0008 §8.6). */
+  via?: 'ui'
+  /** Set by the CLI under `--json` (RFC 0008); never by a config. */
+  protocol?: ProtocolHooks
+}
+
+export interface ProtocolHooks {
+  /** Written into the lock holder: what `attach` and `cancel` name. */
+  runId?: string
+  /** Before the lock: the answers sent up front are checked (a bad one fails here, nothing changed). */
+  beforeLock?: () => Promise<void>
+  /** Right after the lock is taken (run-log retention). */
+  afterLock?: () => Promise<void>
+  /** The `.env` questions are done: no answer is read after this. */
+  afterAnswers?: () => void
 }
 
 /** run, env and rollback are the app user's (RFC 0006 §11.4): never root unless asked. */
 export function refuseRoot(host: DeployContext['host'], command: string, allowRoot = false): void {
   if (host.uid() !== 0 || allowRoot) return
-  throw new DeployError(`${command} runs as the app user, not root: it builds and runs the app's code. Run it as that user (sudo -u <user> -H …), or pass --allow-root if this server really has no other`)
+  throw new DeployError(`${command} runs as the app user, not root: it builds and runs the app's code. Run it as that user (sudo -u <user> -H …), or pass --allow-root if this server really has no other`, [], 'refused-root')
 }
 
 /**
@@ -81,10 +99,32 @@ export function gitTarget(ctx: DeployContext): { remote: string; branch: string;
  */
 export const fetchArgs = (target: { remote: string; head: string; tracking: string }) => ['fetch', '--quiet', '--', target.remote, `+${target.head}:${target.tracking}`]
 
-async function step<T>(ctx: DeployContext, title: string, run: () => Promise<T>): Promise<T> {
+async function step<T>(ctx: DeployContext, id: StepId, run: () => Promise<T>, title: string = id): Promise<T> {
   throwIfAborted(ctx)
-  ctx.host.out.step(title)
-  return run()
+  return stepped(ctx, id, run, title)
+}
+
+/**
+ * A step as the operator sees it (its title) and as a program does: its id
+ * and, through an output that takes it, how and when it ended (RFC 0008 §5.1).
+ * Not a stop point: `restore` runs after a signal too.
+ */
+async function stepped<T>(ctx: DeployContext, id: StepId, run: () => Promise<T>, title: string = id): Promise<T> {
+  const { out } = ctx.host
+  out.step(title, id)
+  if (!out.stepEnd) return run()
+  const started = ctx.host.now().getTime()
+  let status: StepStatus = 'failed'
+  try {
+    const value = await run()
+    status = 'ok'
+    return value
+  } catch (error) {
+    if (error instanceof DeployAbortedError) status = 'aborted'
+    throw error
+  } finally {
+    out.stepEnd(id, status, ctx.host.now().getTime() - started)
+  }
 }
 
 
@@ -96,8 +136,11 @@ async function step<T>(ctx: DeployContext, title: string, run: () => Promise<T>)
  */
 async function locked<T>(ctx: DeployContext, command: string, options: RunOptions, abortable: boolean, body: () => Promise<T>): Promise<T> {
   refuseRoot(ctx.host, command, options.allowRoot)
-  const audit = auditOf(ctx.host, options.actor)
-  const release = await acquireLock(ctx.host, ctx.stateDir, command, audit.actor)
+  const audit = auditOf(ctx.host, options.actor, options.via)
+  await options.protocol?.beforeLock?.()
+  const take = () => acquireLock(ctx.host, ctx.stateDir, command, audit.actor, options.protocol?.runId)
+  // A program sees the wait for the lock as a step; the terminal's text is unchanged.
+  const release = ctx.host.out.stepEnd ? await stepped(ctx, 'lock', take) : await take()
   ctx.audit = audit
   const abort: AbortState = { deferred: !abortable }
   ctx.abort = abort
@@ -108,6 +151,7 @@ async function locked<T>(ctx: DeployContext, command: string, options: RunOption
       : `${signal}: stopping after this step; what the deploy changed is put back (a second ${signal} stops it at once)`)
   })
   try {
+    await options.protocol?.afterLock?.()
     return await body()
   } finally {
     off()
@@ -257,7 +301,15 @@ async function remoteFindings(ctx: DeployContext): Promise<Finding[]> {
 function stopOnErrors(ctx: DeployContext, findings: Finding[], what: string): void {
   report(ctx.host, findings)
   const blocking = errors(findings)
-  if (blocking.length > 0) throw new DeployError(`${what}: ${blocking.length} problem(s) above — nothing was changed`, blocking)
+  if (blocking.length > 0) throw new DeployError(`${what}: ${blocking.length} problem(s) above — nothing was changed`, blocking, 'preflight')
+}
+
+/** The questions nobody answered: the command stops before anything is written. */
+function missingAnswers(missing: string[], protocol: boolean): DeployError {
+  return new DeployError(
+    `no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`, [], 'answer-missing',
+    protocol ? 'pass them with --answers=stdin (plan --json lists them), or in the environment of the command' : undefined,
+  )
 }
 
 // ── what runs by default ───────────────────────────────────────────────────
@@ -452,10 +504,11 @@ async function publicHealthy(ctx: DeployContext): Promise<Finding | undefined> {
 
 /** Puts the code on disk back to `sha` and rebuilds it. Does not restart anything. */
 async function restoreCode(ctx: DeployContext, sha: string, values: Map<string, string>): Promise<void> {
-  ctx.host.out.step(`restoring the code to ${sha.slice(0, 7)}`)
-  await git(ctx, ['reset', '--hard', sha])
-  await build(ctx, values, sha)
-  await settleLockfile(ctx)
+  await stepped(ctx, 'restore', async () => {
+    await git(ctx, ['reset', '--hard', sha])
+    await build(ctx, values, sha)
+    await settleLockfile(ctx)
+  }, `restoring the code to ${sha.slice(0, 7)}`)
 }
 
 /** The env step's summary: what changed, or that nothing did. */
@@ -503,7 +556,24 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
   const { env, infra } = await prepareEnv(ctx, checked.port)
   report(ctx.host, infra.findings)
   const { host, config, pm } = ctx
-  host.out.step('plan — nothing below has run')
+  const blocking = errors([...checked.findings, ...infra.findings]).length > 0
+  const lines = await stepped(ctx, 'plan', async () => planLines(ctx, options, checked, env, infra), 'plan — nothing below has run')
+  host.out.result?.('plan', {
+    findings: [...checked.findings, ...infra.findings],
+    lines: lines.map((line) => {
+      const at = line.indexOf(': ')
+      return at === -1 ? { step: '', text: line } : { step: line.slice(0, at), text: line.slice(at + 2) }
+    }),
+    // What env/run would ask now — the deploy's own environment answers first, as it does there.
+    questions: questionDescriptors(config, env.questions.filter((key) => host.env[key] === undefined)),
+    blocking,
+  })
+  return blocking ? 1 : 0
+}
+
+/** What `plan` prints, one line per thing a run would do. */
+function planLines(ctx: DeployContext, options: RunOptions, checked: Preflight, env: EnvPlan, infra: InfraPlan): string[] {
+  const { host, config, pm } = ctx
   const lines = [
     options.skip?.includes('fetch') ? 'fetch: skipped' : ((t) => `fetch: git ${fetchArgs(t).filter((a) => a !== '--quiet').join(' ')} && git merge --ff-only ${t.tracking}`)(gitTarget(ctx)),
     ...describeEnv(env).map((l) => `env: ${l}`),
@@ -525,27 +595,40 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
   if (config.verify?.logs) lines.push(`verify: no ${[...new Set(Object.values(config.verify.logs).flat())].join(' / ')} in the logs of ${Object.keys(config.verify.logs).join(', ')}`)
   for (const check of config.verify?.http ?? []) lines.push(`verify: ${check.path} answers ${check.expect ?? 200}`)
   for (const line of lines) host.out.info(line)
-  return errors([...checked.findings, ...infra.findings]).length > 0 ? 1 : 0
+  return lines
 }
 
 /** `basalt-deploy env` — the .env and the infra only (first setup, before `install`). */
 export async function envCommand(ctx: DeployContext, options: RunOptions = {}): Promise<number> {
-  return locked(ctx, 'env', options, true, () => envLocked(ctx))
+  return locked(ctx, 'env', options, true, () => envLocked(ctx, options))
 }
 
-async function envLocked(ctx: DeployContext): Promise<number> {
+/**
+ * The env step: plan the `.env`, ask what is missing, write it (0600). The
+ * questions are asked inside the step, before anything is written.
+ */
+async function envStep(ctx: DeployContext, port: number, options: RunOptions): Promise<{ env: EnvPlan; infra: InfraPlan; changes: EnvResult['changes'] }> {
+  const prepared = await prepareEnv(ctx, port)
+  stopOnErrors(ctx, prepared.infra.findings, 'infra')
+  const protocol = options.protocol !== undefined
+  const missing = await answerQuestions(ctx, prepared.env, { secretsNeverDefault: protocol })
+  options.protocol?.afterAnswers?.()
+  if (missing.length > 0) throw missingAnswers(missing, protocol)
+  reportEnv(ctx, prepared.env)
+  const changes = prepared.env.changes.map((c) => ({ kind: c.kind, key: c.key, reason: c.reason }))
+  await writeEnvSecure(ctx, prepared.env)
+  return { ...prepared, changes }
+}
+
+async function envLocked(ctx: DeployContext, options: RunOptions): Promise<number> {
   const document = await readEnv(ctx)
   stopOnErrors(ctx, [...syntaxFindings(document, ctx.config.env.file ?? '.env'), ...await envModeFindings(ctx)], '.env')
   const port = await resolvePort(ctx, envValues(document))
-  const { env, infra } = await step(ctx, 'env', () => prepareEnv(ctx, port))
-  stopOnErrors(ctx, infra.findings, 'infra')
-  const missing = await answerQuestions(ctx, env)
-  if (missing.length > 0) throw new DeployError(`no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`)
-  reportEnv(ctx, env)
-  await writeEnvSecure(ctx, env)
+  const { env, infra, changes } = await step(ctx, 'env', () => envStep(ctx, port, options))
   await step(ctx, 'infra', () => infraStep(ctx, infra, env.values))
   await step(ctx, 'validate', () => validateStep(ctx, env.values))
   ctx.host.out.ok(isCompose(ctx) ? `${envFile(ctx)} ready` : `.env ready (PORT=${port})`)
+  ctx.host.out.result?.('env', { file: envFile(ctx), changes, ...(isCompose(ctx) ? {} : { port }) })
   return 0
 }
 
@@ -557,25 +640,31 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
   const { host, config } = ctx
   const skip = new Set(options.skip ?? [])
 
-  const checked = await step(ctx, 'preflight', () => preflight(ctx, options))
-  stopOnErrors(ctx, checked.findings, 'preflight')
+  const checked = await step(ctx, 'preflight', async () => {
+    const found = await preflight(ctx, options)
+    stopOnErrors(ctx, found.findings, 'preflight')
+    return found
+  })
   const { port } = checked
 
   const previous = await git(ctx, ['rev-parse', 'HEAD'])
+  let heldOverride = false
   if (!skip.has('fetch')) {
     const target = gitTarget(ctx)
     await step(ctx, 'fetch', async () => {
       await git(ctx, fetchArgs(target), { noPrompt: !host.interactive() })
-      await refuseHeld(ctx, await git(ctx, ['rev-parse', '--verify', '--end-of-options', `${target.tracking}^{commit}`]), options)
+      heldOverride = await refuseHeld(ctx, await git(ctx, ['rev-parse', '--verify', '--end-of-options', `${target.tracking}^{commit}`]), options)
       await git(ctx, ['merge', '--ff-only', target.tracking])
     })
   } else {
-    await refuseHeld(ctx, previous, options)
+    heldOverride = await refuseHeld(ctx, previous, options)
   }
   const sha = await git(ctx, ['rev-parse', 'HEAD'])
   host.out.info(sha === previous ? `already at ${sha.slice(0, 7)}` : `${previous.slice(0, 7)} → ${sha.slice(0, 7)}`)
   const applied = sha === previous ? [] : migrationNames((await git(ctx, ['diff', '--name-only', previous, sha])).split('\n'))
   const record: Release = { sha, previous, at: host.now().toISOString(), user: host.env['USER'] ?? String(host.uid()), status: 'failed', migrations: applied }
+  /** The payload, once the release is recorded (RFC 0008 §4.3). */
+  const result = (url?: string) => host.out.result?.('run', runResult(record, heldOverride, url))
 
   // From here a failure puts the code on disk back before it is reported.
   const lockfileSaid = { warned: false }
@@ -585,13 +674,8 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
   try {
     // Again on the code the fetch brought: preflight saw the commit before it.
     if (sha !== previous) stopOnErrors(ctx, await lockfileFindings(ctx), `the incoming commit ${sha.slice(0, 7)}`)
-    const prepared = await step(ctx, 'env', () => prepareEnv(ctx, port))
+    const prepared = await step(ctx, 'env', () => envStep(ctx, port, options))
     infra = prepared.infra
-    stopOnErrors(ctx, infra.findings, 'infra')
-    const missing = await answerQuestions(ctx, prepared.env)
-    if (missing.length > 0) throw new DeployError(`no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`)
-    reportEnv(ctx, prepared.env)
-    await writeEnvSecure(ctx, prepared.env)
     values = prepared.env.values
 
     await step(ctx, 'infra', async () => { await infraStep(ctx, infra, values); await runHooks(ctx, 'infra', values, sha) })
@@ -602,8 +686,9 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
       record.backup = await step(ctx, 'backup', () => backupDatabase(ctx, migrationValues(config, values, infra.hostUrls), infra, sha))
       host.out.ok(record.backup)
     } else {
-      host.out.step('backup')
+      host.out.step('backup', 'backup')
       host.out.info(`skipped: ${backup.why}`)
+      host.out.stepEnd?.('backup', 'skipped', 0)
     }
     // The last point where a signal stops the deploy. Once a migration has
     // started, the old code may not run on the schema it leaves: the deploy
@@ -624,6 +709,7 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
       else host.out.warn('no dump was taken before this migration (backup skipped): restore from your own backups if needed')
     } else if (signal) record.status = 'aborted'
     await recordRelease(ctx, record).catch(() => undefined)
+    result()
     // A terminal's SIGINT reaches the child too: its failure is the signal's.
     if (signal && !(error instanceof DeployAbortedError)) throw new DeployAbortedError(signal, (error as Error).message)
     throw error
@@ -637,6 +723,7 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
       if (record.backup) host.out.info(`database before this release: ${restoreCommand(ctx, infra, record.backup, values)}`)
       record.note = why
       await recordRelease(ctx, record)
+      result()
       return 1
     }
     const back = await rollbackTo(ctx, previous, values, port)
@@ -647,6 +734,7 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
       // The previous commit does not answer either: never a rollback target again.
       await recordRelease(ctx, { ...record, sha: previous, previous: sha, at: host.now().toISOString(), status: 'rollback-unhealthy', migrations: [], note: back.why })
     }
+    result()
     return 1
   }
 
@@ -682,8 +770,11 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
   if (isCompose(ctx) && !publicProblem) await retainImages(ctx)
   if (publicProblem) {
     report(host, [publicProblem])
+    record.note = publicProblem.message
+    result()
     return 1
   }
+  result(`https://${config.domain}`)
   host.out.ok(`${config.app} ${sha.slice(0, 7)} is live at https://${config.domain}`)
   return 0
 }
@@ -697,27 +788,38 @@ async function retainImages(ctx: DeployContext): Promise<void> {
   if (removed.length > 0) ctx.host.out.info(`removed ${removed.length} image(s) of releases older than the last ${keep}: ${removed.join(', ')}`)
 }
 
-/** `run` will not redeploy the commit a manual rollback left, unless asked to (`--unhold`). */
-async function refuseHeld(ctx: DeployContext, incoming: string, options: RunOptions): Promise<void> {
+function runResult(record: Release, heldOverride: boolean, url?: string): RunResult {
+  return {
+    sha: record.sha, previous: record.previous ?? '', status: record.status, migrations: record.migrations,
+    ...(record.backup ? { backup: record.backup } : {}),
+    ...(url ? { url } : {}),
+    ...(heldOverride ? { heldOverride: true as const } : {}),
+    ...(record.note ? { note: record.note } : {}),
+  }
+}
+
+/** `run` will not redeploy the commit a manual rollback left, unless asked to (`--unhold`). True when it was held and deployed anyway. */
+async function refuseHeld(ctx: DeployContext, incoming: string, options: RunOptions): Promise<boolean> {
   const hold = await readHold(ctx)
-  if (!hold || hold.sha !== incoming) return
+  if (!hold || hold.sha !== incoming) return false
   if (options.unhold) {
     ctx.host.out.warn(`deploying ${incoming.slice(0, 7)} although a rollback held it (--unhold)`)
-    return
+    return true
   }
-  throw new DeployError(`${incoming.slice(0, 7)} is held: ${hold.note} by ${hold.actor || 'someone'} at ${hold.at} — nothing was changed. Push a fix (the hold ends when the branch moves on), or deploy it anyway with --unhold`)
+  throw new DeployError(`${incoming.slice(0, 7)} is held: ${hold.note} by ${hold.actor || 'someone'} at ${hold.at} — nothing was changed. Push a fix (the hold ends when the branch moves on), or deploy it anyway with --unhold`, [], 'held')
 }
 
 async function rollbackTo(ctx: DeployContext, sha: string, values: Map<string, string>, port: number): Promise<{ ok: true } | { ok: false; why: string }> {
   // Compose: the images of `sha` exist (kept by retention), so the rebuild
   // inside restoreCode skips them — a rollback is not a new build.
   await restoreCode(ctx, sha, values)
-  ctx.host.out.step(`release ${sha.slice(0, 7)}`)
-  ctx.host.out.ok(await release(ctx, values, sha))
-  const health = await healthCheck(ctx, port, sha)
-  if (health.ok) ctx.host.out.ok(`back on ${sha.slice(0, 7)}`)
-  else ctx.host.out.error(`${sha.slice(0, 7)} does not answer either (${health.why}) — ${logsHint(ctx)}`)
-  return health
+  return stepped(ctx, 'release', async () => {
+    ctx.host.out.ok(await release(ctx, values, sha))
+    const health = await healthCheck(ctx, port, sha)
+    if (health.ok) ctx.host.out.ok(`back on ${sha.slice(0, 7)}`)
+    else ctx.host.out.error(`${sha.slice(0, 7)} does not answer either (${health.why}) — ${logsHint(ctx)}`)
+    return health
+  }, `release ${sha.slice(0, 7)}`)
 }
 
 /** `basalt-deploy rollback [--to=<sha>]` — code only; the database stays as it is. */
@@ -761,6 +863,7 @@ async function rollbackLocked(ctx: DeployContext, to: string | undefined, option
   // Whatever the outcome, the commit rolled away from is not redeployed by the next scheduled run.
   await writeHold(ctx, { sha: current, at, actor: ctx.audit?.actor ?? '', note: `rolled back to ${target.slice(0, 7)}` })
   ctx.host.out.info(`${current.slice(0, 7)} is held: \`run\` will not deploy it again until the branch moves on (or --unhold)`)
+  ctx.host.out.result?.('rollback', { from: current, to: target, status: back.ok ? 'ok' : 'rollback-unhealthy', held: current })
   if (!back.ok) {
     ctx.host.out.error(`the rollback did not bring a healthy release: ${target.slice(0, 7)} is recorded as rollback-unhealthy — try another with --to=<sha>`)
     return 1
@@ -780,12 +883,34 @@ export async function status(ctx: DeployContext): Promise<number> {
   const hold = await readHold(ctx)
   if (hold) host.out.warn(`held: ${hold.sha.slice(0, 7)} (${hold.note}, by ${hold.actor || 'someone'} at ${hold.at}) — run will not deploy it again; --unhold to override`)
   for (const r of releases) host.out.info(`${r.at}  ${r.sha.slice(0, 7)}  ${r.status.padEnd(18)} ${r.actor && r.actor !== r.user ? `${r.actor} (${r.user})` : r.user}${r.client ? ` from ${r.client}` : ''}${r.migrations.length ? `  +${r.migrations.length} migration(s)` : ''}${r.note ? `  — ${r.note}` : ''}`)
+  let running: StatusResult['process']
   if (isCompose(ctx)) {
     const head = (await ctx.host.exec('git', ['rev-parse', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
-    for (const line of await composeStatus(ctx, head)) host.out.info(line)
-    return 0
+    const lines = await composeStatus(ctx, head)
+    for (const line of lines) host.out.info(line)
+    running = { kind: 'compose', lines }
+  } else {
+    const process = (await pm2List(ctx))?.find((p) => p.name === processName(ctx.config))
+    host.out.info(process ? `pm2 ${process.name}: ${process.status} (pid ${process.pid}, ${process.cwd})` : `pm2 ${processName(ctx.config)}: not running`)
+    running = {
+      kind: 'pm2', name: processName(ctx.config), running: process?.status === 'online',
+      ...(process?.status ? { status: process.status } : {}),
+      ...(typeof process?.pid === 'number' ? { pid: process.pid } : {}),
+    }
   }
-  const process = (await pm2List(ctx))?.find((p) => p.name === processName(ctx.config))
-  host.out.info(process ? `pm2 ${process.name}: ${process.status} (pid ${process.pid}, ${process.cwd})` : `pm2 ${processName(ctx.config)}: not running`)
+  if (host.out.result) {
+    const active = activeRun(host, lock)
+    const last = await lastRun(host, ctx.stateDir)
+    host.out.result('status', {
+      app: ctx.config.app,
+      stateDir: ctx.stateDir,
+      lock: lock ? { ...(lock.holder ? { holder: lock.holder } : {}), stale: lock.stale, corrupt: lock.corrupt } : null,
+      ...(active ? { activeRun: active } : {}),
+      ...(last ? { lastRun: last } : {}),
+      hold: hold ?? null,
+      releases,
+      process: running,
+    })
+  }
   return 0
 }

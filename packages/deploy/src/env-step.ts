@@ -1,7 +1,8 @@
 import { basename, dirname, join, resolve } from 'node:path'
-import { definedEntries } from './config.js'
+import { definedEntries, type DeployConfig, type Question } from './config.js'
 import type { DeployContext, Finding } from './context.js'
 import { applyEnvChanges, envValues, formatValue, parseEnv, UnwritableValueError, type EnvChange, type EnvDocument } from './dotenv.js'
+import type { PromptDescriptor } from './protocol.js'
 
 /**
  * The `.env` step (RFC 0006 §6.1). Order: fixed → generated (only when absent)
@@ -78,14 +79,15 @@ export function planEnv(ctx: DeployContext, document: EnvDocument, port: number,
  * the deploy's own environment under the same name — CI, or a person who
  * prefers `MAILER_URL=… basalt-deploy run`. Returns what is still missing.
  */
-export async function answerQuestions(ctx: DeployContext, plan: EnvPlan): Promise<string[]> {
+export async function answerQuestions(ctx: DeployContext, plan: EnvPlan, options: { secretsNeverDefault?: boolean } = {}): Promise<string[]> {
   const missing: string[] = []
   for (const key of plan.questions) {
     const question = ctx.config.env.ask?.[key]
     if (!question) continue
     let answer = ctx.host.env[key]?.trim()
     for (let attempt = 0; answer === undefined && attempt < 3; attempt++) {
-      const typed = await ctx.host.prompt(`${question.prompt} [${key}]${question.optional ? ' (empty to skip)' : ''}`, { secret: question.secret })
+      const meta = { id: `env.${key}`, key, optional: question.optional, ...(question.default === undefined ? {} : { default: question.default }) }
+      const typed = await ctx.host.prompt(promptText(key, question), { secret: question.secret }, meta)
       if (typed === undefined) break
       const value = typed === '' && question.default !== undefined ? question.default : typed
       if (value === '' && !question.optional) { ctx.host.out.warn(`${key} is required`); continue }
@@ -98,13 +100,32 @@ export async function answerQuestions(ctx: DeployContext, plan: EnvPlan): Promis
       }
     }
     if (answer === undefined) {
-      if (question.optional) answer = question.default ?? ''
-      else { missing.push(key); continue }
+      if (!question.optional) { missing.push(key); continue }
+      // A program's unanswered secret is never defaulted, not even to empty (RFC 0008 §7.3).
+      if (question.secret && options.secretsNeverDefault) {
+        ctx.host.out.warn(`${key} was not answered: left out of the .env`)
+        continue
+      }
+      answer = question.default ?? ''
     }
     plan.changes.push({ kind: 'set', key, value: answer, reason: 'answered' })
   }
   plan.questions = []
   return missing
+}
+
+const promptText = (key: string, question: Question) => `${question.prompt} [${key}]${question.optional ? ' (empty to skip)' : ''}`
+
+/** The questions for `keys`, as a program sees them (`plan --json`): never a value, never a secret's default. */
+export function questionDescriptors(config: DeployConfig, keys: string[]): PromptDescriptor[] {
+  return keys.flatMap((key) => {
+    const question = config.env.ask?.[key as keyof typeof config.env.ask] as Question | undefined
+    if (!question) return []
+    return [{
+      id: `env.${key}`, kind: question.secret ? 'secret' as const : 'text' as const, message: promptText(key, question), key, optional: question.optional,
+      ...(!question.secret && question.default !== undefined ? { default: question.default } : {}),
+    }]
+  })
 }
 
 export function describeEnv(plan: EnvPlan): string[] {

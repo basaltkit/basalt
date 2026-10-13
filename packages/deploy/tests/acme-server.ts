@@ -24,11 +24,14 @@ export function server(options: {
   trueKeys?: string[]
   env?: string
   remote?: ReturnType<typeof ok>
+  /** The checkout (a real directory when `main` loads a config from it). */
+  dir?: string
 } = {}): Server {
   let head = OLD
-  const host = new FakeHost().put(ENV, options.env ?? GOOD_ENV, 0o600)
-  host.put(`${DIR}/package.json`, JSON.stringify({ packageManager: 'pnpm@11.8.0', engines: { node: '>=22.5.0' } }))
-  const ctx = context(host)
+  const dir = options.dir ?? DIR
+  const host = new FakeHost().put(`${dir}/.env`, options.env ?? GOOD_ENV, 0o600)
+  host.put(`${dir}/package.json`, JSON.stringify({ packageManager: 'pnpm@11.8.0', engines: { node: '>=22.5.0' } }))
+  const ctx = context(host, undefined, dir)
   host.put('/etc/apache2/sites-available/acme.conf', renderVhost(ctx, 3002))
   host.files.set('/etc/apache2/sites-enabled/acme.conf', { kind: 'symlink', target: '../sites-available/acme.conf' })
   host.certificates.set('*', { names: ['acme.example.com', '*.acme.example.com'], validTo: new Date('2027-01-01'), trusted: true })
@@ -56,7 +59,7 @@ export function server(options: {
       return undefined
     })
     .on(({ command }) => (command === 'ss' ? ok('') : undefined))
-    .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'acme-api', cwd: DIR })) : undefined))
+    .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist({ name: 'acme-api', cwd: dir })) : undefined))
     .on(({ command }) => (command === 'pm2' ? ok() : undefined))
     .on(({ command, args }) => (command === 'node' && args[0] === '--version' ? ok('v24.17.0\n') : undefined))
     .on(({ command, args }) => (command === 'pnpm' && args[0] === '--version' ? ok('11.8.0\n') : undefined))

@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import type { Audit } from './audit.js'
 import type { DeployConfig } from './config.js'
 import type { Host } from './host.js'
+import type { ErrorCode, Finding } from './protocol.js'
 
 export interface DeployContext {
   config: DeployConfig
@@ -33,14 +34,7 @@ export interface AbortState {
   deferred: boolean
 }
 
-export interface Finding {
-  /** The RFC 0006 §5 check id (`C1`…`C10`) or a step name. */
-  id: string
-  level: 'error' | 'warning'
-  message: string
-  /** One line the operator can act on. */
-  fix?: string
-}
+export type { Finding } from './protocol.js'
 
 /** The tool, run by `node` on its file — never `pnpm exec` (see {@link RUN_COMMAND}). */
 const BIN = 'node_modules/@basaltkit/deploy/dist/bin.js'
@@ -77,9 +71,14 @@ export function shellQuote(word: string): string {
 
 export const errors = (findings: Finding[]) => findings.filter((f) => f.level === 'error')
 
+/** How a finding reads on a terminal: `[id] message` and the fix under it. */
+export const formatFinding = (finding: Finding) => `[${finding.id}] ${finding.message}${finding.fix ? `\n      → ${finding.fix}` : ''}`
+
+/** Findings as text — or structured, to an output that takes them (RFC 0008 `finding` events). */
 export function report(host: Host, findings: Finding[]): void {
   for (const finding of findings) {
-    const line = `[${finding.id}] ${finding.message}${finding.fix ? `\n      → ${finding.fix}` : ''}`
+    if (host.out.finding) { host.out.finding(finding); continue }
+    const line = formatFinding(finding)
     if (finding.level === 'error') host.out.error(line)
     else host.out.warn(line)
   }
@@ -108,7 +107,11 @@ export async function resolveStateDir(host: Host, config: DeployConfig, dir: str
 }
 
 export class DeployError extends Error {
-  constructor(message: string, readonly findings: Finding[] = []) {
+  /**
+   * @param code what the machine protocol reports (RFC 0008 §4.2); the CLI maps the classes otherwise
+   * @param hint one line on what to do, for a program (the message says it to a person)
+   */
+  constructor(message: string, readonly findings: Finding[] = [], readonly code?: ErrorCode, readonly hint?: string) {
     super(message)
     this.name = 'DeployError'
   }

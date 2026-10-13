@@ -1,7 +1,13 @@
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { AnswerChannel, askedQuestions, ANSWER_TIMEOUT_SECONDS } from './answers.js'
 import { bootstrap } from './bootstrap.js'
+import { DETACHED_CHILD_ENV, detach } from './detach.js'
+import { EventWriter, foreignSink, humanReporter, Redactor, type Reporter } from './events.js'
+import { jsonHost, type JsonSession } from './json-host.js'
+import { isErrorCode, RUN_ID, type ErrorCode, type EventBody } from './protocol.js'
+import { attach, cancel, createRunLog, newRunId, pruneRunLogs } from './runs.js'
 import { check } from './check.js'
 import { init } from './init.js'
 import { applyOverrides, DeployConfigError, parseOverrides, validateConfig, type DeployConfig } from './config.js'
@@ -12,7 +18,7 @@ import { VERSION } from './version.js'
 import { DeployLockedError } from './lock.js'
 import { envValues, parseEnv } from './dotenv.js'
 import { nodeHost, type Host } from './host.js'
-import { envCommand, plan, refuseRoot, rollback, run, SKIPPABLE, status, type Skippable } from './pipeline.js'
+import { envCommand, plan, refuseRoot, rollback, run, SKIPPABLE, status, type ProtocolHooks, type RunOptions, type Skippable } from './pipeline.js'
 
 export const USAGE = `basalt-deploy — deploy this Basalt app on this server (RFC 0006)
 
@@ -29,6 +35,9 @@ As the app user, in the checkout (node node_modules/@basaltkit/deploy/dist/bin.j
   install-plan [--out=<file>|-]
                      what install needs, as data (default <state dir>/install-plan.json);
                      prints the root command for install
+  attach <runId> --json [--from-seq=<n>] [--follow]
+                     the events of a run (run/env/rollback --json), from any seq
+  cancel <runId>     SIGTERM to a detached run (a second cancel stops it at once)
 
 As root, with a copy of the tool root owns — never the checkout's node_modules:
   cd / && sudo -H npx --yes --package=@basaltkit/deploy@<exact version> -- basalt-deploy <command>
@@ -42,6 +51,14 @@ Run the app user's commands with \`node\`, not \`pnpm exec\`: pnpm ≥ 12 may re
 pnpm-lock.yaml on any command it runs. As root, nothing loads deploy.config.ts.
 
 Exit codes: 0 done · 1 failed (or refused) · 3 another deploy holds the lock · 130 stopped by a signal
+  (a second signal ends the process at once: 130/129/143)
+
+Machine mode (RFC 0008): stdout carries NDJSON events only
+  --json[=1]          status, check, plan, run, env, rollback, install-plan, attach, cancel
+  --answers=stdin     run/env: answer lines {"v":1,"type":"answer","id":"env.KEY","value":"…"} on stdin
+  --answer-timeout=<s>  how long a prompt waits for its answer (1–3600, default 600)
+  --detach            run/rollback: in their own session; returns the runId once the lock is held
+  --via=ui            recorded as the release's via
 
 Options:
   --config=<file>     default deploy.config.ts
@@ -60,6 +77,8 @@ export const EXIT_ABORTED = 130
 
 interface Flags {
   command: string
+  /** Words after the command (`attach <runId>`). */
+  args: string[]
   values: Map<string, string>
   switches: Set<string>
 }
@@ -68,6 +87,7 @@ function parse(argv: string[]): Flags {
   const values = new Map<string, string>()
   const switches = new Set<string>()
   let command = ''
+  const args: string[] = []
   for (const arg of argv) {
     if (arg === '-h' || arg === '--help') { switches.add('help'); continue }
     const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg)
@@ -77,9 +97,16 @@ function parse(argv: string[]): Flags {
       continue
     }
     if (!command) command = arg
+    else args.push(arg)
   }
-  return { command, values, switches }
+  return { command, args, values, switches }
 }
+
+const COMMANDS = ['init', 'check', 'plan', 'run', 'env', 'rollback', 'status', 'install-plan', 'install', 'bootstrap', 'attach', 'cancel']
+/** The commands that take the deploy lock, and so write a run log under --json. */
+const LOCKED = new Set(['run', 'env', 'rollback'])
+
+const usage = (message: string, hint?: string) => new DeployError(message, [], 'usage', hint)
 
 /** The files root is about to run: node, and this package's own (its directory and modules). */
 async function assertTrustedTool(host: Host, unsafe: boolean): Promise<void> {
@@ -108,6 +135,7 @@ async function writeInstallPlan(host: Host, ctx: DeployContext, cwd: string, out
   const user = host.env['USER'] && USER_NAME.test(host.env['USER']) ? host.env['USER'] : '<this user>'
   host.out.info('then, as an administrator (a pinned copy root owns, never this checkout\'s):')
   host.out.info(`  ${rootInstallCommand(VERSION, path, user)}`)
+  host.out.result?.('install-plan', { plan, path, rootCommand: rootInstallCommand(VERSION, path, user) })
   return 0
 }
 
@@ -149,23 +177,242 @@ export async function createContext(host: Host, dir: string, config: DeployConfi
   }
 }
 
-export async function main(argv: string[], host: Host = nodeHost(), cwd: string = process.cwd()): Promise<number> {
+/** The process's own stdin and stdout, which the machine protocol uses (RFC 0008 §3.3). */
+export interface CliIO {
+  /** stdout as it was before anything replaced `process.stdout.write`. */
+  write(text: string): void
+  stdin(): AsyncIterable<string | Uint8Array>
+  /** Turns writes to `process.stdout` and `process.stderr` into `sink` calls, until the returned function is called. */
+  capture(sink: (text: string) => void): () => void
+  /** One plain line on stderr: the event writer itself failed. */
+  stderr(text: string): void
+}
+
+/** Streams whose reader is gone (EPIPE): written to no more. */
+const broken = new WeakSet<object>()
+const watched = new WeakSet<object>()
+
+export function processIO(stream: NodeJS.WritableStream = process.stdout, input: AsyncIterable<string | Uint8Array> = process.stdin, errors: NodeJS.WritableStream = process.stderr): CliIO {
+  const original = stream.write.bind(stream) as (text: string) => boolean
+  const originalErrors = errors.write.bind(errors) as (text: string) => boolean
+  if (!watched.has(stream)) {
+    watched.add(stream)
+    // The SSH client gone: never a crash mid-migration; the run log keeps every event.
+    stream.on('error', (error: NodeJS.ErrnoException) => { if (error.code === 'EPIPE') broken.add(stream) })
+  }
+  return {
+    write(text) {
+      if (broken.has(stream)) return
+      try {
+        original(text)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EPIPE') throw error
+        broken.add(stream)
+      }
+    },
+    stdin: () => input,
+    capture(sink) {
+      // stderr too: a UI may show it, and the config's console.error is as foreign as its console.log.
+      const targets = stream === errors ? [stream] : [stream, errors]
+      const previous = targets.map((target) => target.write)
+      for (const target of targets) {
+        target.write = ((chunk: string | Uint8Array, encoding?: unknown, callback?: unknown) => {
+          sink(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'))
+          const done = typeof encoding === 'function' ? encoding : callback
+          if (typeof done === 'function') queueMicrotask(() => (done as () => void)())
+          return true
+        }) as typeof target.write
+      }
+      return () => { targets.forEach((target, i) => { target.write = previous[i] as typeof target.write }) }
+    },
+    // The stream as it was before capture: the writer's own failure is never a foreign event.
+    stderr: (text) => {
+      try {
+        originalErrors(text)
+      } catch {
+        // Nobody reads stderr any more: nothing else to tell.
+      }
+    },
+  }
+}
+
+export async function main(argv: string[], host: Host = nodeHost(), cwd: string = process.cwd(), io: CliIO = processIO()): Promise<number> {
   const flags = parse(argv)
+  if (flags.switches.has('json') || flags.values.has('json')) return machine(flags, host, cwd, io)
   if (flags.switches.has('help') || !flags.command || flags.command === 'help') {
     process.stdout.write(USAGE)
     return flags.command && flags.command !== 'help' ? 1 : 0
   }
-  const skip: Skippable[] = []
-  for (const name of (flags.values.get('skip') ?? '').split(',').filter(Boolean)) {
-    if (!(SKIPPABLE as readonly string[]).includes(name)) {
-      host.out.error(`--skip=${name}: only ${SKIPPABLE.join(', ')} can be skipped`)
-      return 1
-    }
-    skip.push(name as Skippable)
-  }
-  if (flags.switches.has('no-fetch')) skip.push('fetch')
+  return session(flags, host, cwd, humanReporter(host.out))
+}
 
+/** What a `--json` session adds to a command (RFC 0008). */
+interface Machine {
+  json: JsonSession
+  writer: EventWriter
+  io: CliIO
+  /** A detached child (`--run-id` with the marker): its stdout is its run log. */
+  child: boolean
+  channel?: AnswerChannel
+  /**
+   * The redactor learns the config's `.env` files (the default `.env` while
+   * no config is known), then the config's held output goes out. Called once
+   * the config is loaded, and before any error is reported.
+   */
+  secretsKnown(config?: DeployConfig): Promise<void>
+}
+
+/** The largest `.env` the redactor reads before the config's own read (createContext). */
+const MAX_ENV_BYTES = 1024 * 1024
+
+/** `--json`: hello first, done last, nothing else on stdout. */
+async function machine(flags: Flags, base: Host, cwd: string, io: CliIO): Promise<number> {
+  const redactor = new Redactor()
+  const given = flags.values.get('run-id')
+  const child = given !== undefined && RUN_ID.test(given) && base.env[DETACHED_CHILD_ENV] === '1' && (flags.command === 'run' || flags.command === 'rollback')
+  const runId = child ? given : LOCKED.has(flags.command) && !flags.switches.has('detach') ? newRunId(base) : undefined
+  const writer = new EventWriter({
+    now: () => base.now(),
+    stdout: (line) => io.write(line),
+    redactor,
+    ...(runId ? { runId } : {}),
+    stdoutIsRunLog: child,
+    expectRunLog: Boolean(runId) && !child,
+    onFailure: (message) => io.stderr(`${message}\n`),
+  })
+  writer.emit({
+    type: 'hello', tool: '@basaltkit/deploy', version: VERSION, protocol: 1, command: flags.command, pid: base.pid(), host: base.hostname(),
+    ...(child || flags.switches.has('detach') ? { detached: true as const } : {}),
+  })
+  const timeout = Number(flags.values.get('answer-timeout'))
+  const json = jsonHost(base, writer, redactor, { answerTimeoutMs: (Number.isInteger(timeout) && timeout >= 1 && timeout <= 3600 ? timeout : ANSWER_TIMEOUT_SECONDS) * 1000 })
+  // The secrets the deploy was started with (a token in its environment), known before anything runs.
+  json.learn(Object.entries(base.env).filter((pair): pair is [string, string] => typeof pair[1] === 'string'))
+  // deploy.config.ts runs in this process: what it prints is data, never an event —
+  // and held until the redactor knows the .env it may print from.
+  const foreign = foreignSink(writer, () => json.output.current)
+  const restore = io.capture((text) => foreign.write(text))
+  const learnt = new Set<string>()
+  const state: Machine = {
+    json, writer, io, child,
+    async secretsKnown(config) {
+      for (const path of envFilesOf(config, cwd)) {
+        if (learnt.has(path)) continue
+        learnt.add(path)
+        const text = await readEnvForRedactor(base, path)
+        if (text !== undefined) json.learn(envValues(parseEnv(text)), config)
+      }
+      foreign.release()
+    },
+  }
+  let code: number
   try {
+    code = await session(flags, json.host, cwd, writer, state)
+  } finally {
+    foreign.end()
+    // No answer is read once the command is over: a late one never becomes an event after `done`.
+    state.channel?.finish()
+    restore()
+  }
+  // attach ends with the run's own exit code; the run's error is in what it replayed.
+  if (code !== 0 && !writer.last.error && flags.command !== 'attach') writer.emit(outcomeError(flags.command, writer))
+  writer.emit({ type: 'done', exitCode: code })
+  writer.close()
+  return code
+}
+
+/** The `.env` files a config names (`.env` while none is known, or one that does not validate). */
+function envFilesOf(config: DeployConfig | undefined, cwd: string): string[] {
+  const env = (config as { env?: { file?: unknown; mirror?: unknown } } | undefined)?.env
+  const file = typeof env?.file === 'string' ? env.file : '.env'
+  const mirrors = Array.isArray(env?.mirror) ? env.mirror.filter((m): m is string => typeof m === 'string') : []
+  return [file, ...mirrors].map((f) => resolve(cwd, f))
+}
+
+/** A `.env` for the redactor only: through its links, a regular file, at most 1 MiB; never an error. */
+async function readEnvForRedactor(host: Host, path: string): Promise<string | undefined> {
+  try {
+    const real = await host.realpath(path)
+    return real === undefined ? undefined : await host.readPlainFile(real, MAX_ENV_BYTES)
+  } catch {
+    return undefined
+  }
+}
+
+/** A command that ended non-zero without throwing says why, with a code (the terminal already read it). */
+function outcomeError(command: string, writer: EventWriter): EventBody {
+  const result = writer.last.result as { data?: { note?: string; findings?: Array<{ level: string }> } } | undefined
+  switch (command) {
+    case 'run':
+    case 'rollback':
+      return { type: 'error', code: 'release-failed', message: result?.data?.note ?? `${command} did not end with a healthy release` }
+    case 'plan':
+      return { type: 'error', code: 'preflight', message: 'plan: the problems above would stop a run' }
+    default:
+      return { type: 'error', code: 'failed', message: `${command} failed` }
+  }
+}
+
+/** The flags that only make sense together (RFC 0008 §3.2); refused before anything runs. */
+function checkFlags(flags: Flags, json: boolean, env: Host['env']): void {
+  const via = flags.values.get('via')
+  if (via !== undefined && via !== 'ui') throw usage('--via takes only ui')
+  const protocolOnly = ['answers', 'answer-timeout', 'detach', 'from-seq', 'follow', 'run-id']
+  if (!json) {
+    for (const name of protocolOnly) if (flags.values.has(name) || flags.switches.has(name)) throw usage(`--${name} needs --json`)
+    if (flags.command === 'attach') throw usage('attach speaks only --json: its output is the run\'s events')
+    if (flags.command === 'cancel' && !flags.args[0]) throw usage('cancel <runId>')
+    return
+  }
+  const version = flags.values.get('json')
+  if (version !== undefined && version !== '1') throw new DeployError(`--json=${version}: this basalt-deploy ${VERSION} speaks protocol 1`, [], 'protocol-version')
+  const { command } = flags
+  if (command === 'init' || command === 'install' || command === 'bootstrap') {
+    throw new DeployError(`${command} does not speak --json: ${command === 'init' ? 'it writes code into the checkout' : 'root\'s confirmations are the control, never a pipe'}`, [], 'unsupported')
+  }
+  if (flags.switches.has('help') || !command || !COMMANDS.includes(command)) throw usage(command && !flags.switches.has('help') ? `unknown command "${command}"` : 'a command is needed', 'basalt-deploy --help lists them')
+  if (flags.switches.has('answers') || (flags.values.has('answers') && flags.values.get('answers') !== 'stdin')) throw usage('--answers takes only stdin')
+  if (flags.values.has('answers') && command !== 'run' && command !== 'env') throw usage(`${command} asks nothing: --answers is for run and env`)
+  if (flags.values.has('answer-timeout') || flags.switches.has('answer-timeout')) {
+    if (!flags.values.has('answers')) throw usage('--answer-timeout needs --answers=stdin')
+    if (!/^\d{1,4}$/.test(flags.values.get('answer-timeout') ?? '') || Number(flags.values.get('answer-timeout')) < 1 || Number(flags.values.get('answer-timeout')) > 3600) throw usage('--answer-timeout takes 1 to 3600 seconds')
+  }
+  if ((flags.switches.has('detach') || flags.values.has('detach')) && command !== 'run' && command !== 'rollback') throw usage(`${command} does not detach: only run and rollback`)
+  if ((flags.values.has('from-seq') || flags.switches.has('follow')) && command !== 'attach') throw usage('--from-seq and --follow are for attach')
+  if (flags.values.has('from-seq') && !/^\d{1,15}$/.test(flags.values.get('from-seq') ?? '')) throw usage('--from-seq takes a whole number')
+  if (flags.values.has('run-id') || flags.switches.has('run-id')) {
+    if (env[DETACHED_CHILD_ENV] !== '1') throw usage('--run-id is set by run --detach, never by hand')
+    if (!RUN_ID.test(flags.values.get('run-id') ?? '') || (command !== 'run' && command !== 'rollback') || flags.switches.has('detach')) throw usage('--run-id is malformed or misplaced')
+  }
+  if (command === 'install-plan' && flags.values.get('out') === '-') throw usage('install-plan --json: the plan is in the result event, not on stdout (--out=- is refused)')
+  if ((command === 'attach' || command === 'cancel') && !flags.args[0]) throw usage(`${command} <runId>`)
+}
+
+/** The flags a detached child gets again — never an answer. */
+function forwarded(flags: Flags): string[] {
+  const out: string[] = []
+  for (const name of ['actor', 'via', 'skip', 'to', 'config', 'overrides']) {
+    const value = flags.values.get(name)
+    if (value !== undefined) out.push(`--${name}=${value}`)
+  }
+  for (const name of ['unhold', 'no-fetch', 'allow-root']) if (flags.switches.has(name)) out.push(`--${name}`)
+  if (flags.values.has('answers')) out.push('--answers=stdin')
+  return out
+}
+
+/** One command, as the terminal and the protocol both run it; `reporter` says how it ended. */
+async function session(flags: Flags, host: Host, cwd: string, reporter: Reporter, machine?: Machine): Promise<number> {
+  /** The config as far as it loaded: which `.env` the redactor reads before an error is reported. */
+  let loaded: DeployConfig | undefined
+  try {
+    checkFlags(flags, machine !== undefined, host.env)
+    const skip: Skippable[] = []
+    for (const name of (flags.values.get('skip') ?? '').split(',').filter(Boolean)) {
+      if (!(SKIPPABLE as readonly string[]).includes(name)) throw usage(`--skip=${name}: only ${SKIPPABLE.join(', ')} can be skipped`)
+      skip.push(name as Skippable)
+    }
+    if (flags.switches.has('no-fetch')) skip.push('fetch')
+
     const file = flags.values.get('config') ?? 'deploy.config.ts'
     // Root's commands: never deploy.config.ts, never the checkout's code.
     if (flags.command === 'bootstrap' || flags.command === 'install') {
@@ -204,49 +451,131 @@ export async function main(argv: string[], host: Host = nodeHost(), cwd: string 
       return await check(host, cwd, file, created)
     }
     let config = await loadConfig(cwd, file)
+    loaded = config
     validateConfig(config)
+    await machine?.secretsKnown(config)
     if (flags.command === 'check') return await check(host, cwd, file, config)
     const overridesPath = flags.values.get('overrides') ?? `/etc/basalt/${config.app}.json`
     const overrides = await host.readFile(overridesPath)
     if (overrides !== undefined) config = validateConfig(applyOverrides(config, parseOverrides(overrides, overridesPath)))
+    loaded = config
+    if (machine) {
+      await machine.secretsKnown(config)
+      prepareMachine(machine, flags, config, cwd)
+    }
     const ctx = await createContext(host, cwd, config)
-    const actor = { ...(flags.values.has('actor') ? { actor: flags.values.get('actor') as string } : {}), allowRoot }
+    const via = flags.values.get('via') === 'ui' ? { via: 'ui' as const } : {}
+    const actor = { ...(flags.values.has('actor') ? { actor: flags.values.get('actor') as string } : {}), allowRoot, ...via }
+    const detaching = machine !== undefined && flags.switches.has('detach')
+    const options: RunOptions = { ...actor, ...(machine && LOCKED.has(flags.command) && !detaching ? { protocol: await protocolHooks(machine, ctx) } : {}) }
+    const detachRequest = (command: 'run' | 'rollback') => ({
+      command, forward: forwarded(flags), ...(machine?.channel ? { answers: machine.channel } : {}),
+      execPath: process.execPath, binPath: fileURLToPath(new URL('./bin.js', import.meta.url)),
+    })
 
     switch (flags.command) {
       case 'plan': return await plan(ctx, { skip })
-      case 'run': return await run(ctx, { ...actor, skip, unhold: flags.switches.has('unhold') })
-      case 'env': return await envCommand(ctx, actor)
-      case 'rollback': return await rollback(ctx, flags.values.get('to'), actor)
+      case 'run':
+        if (detaching) return await detach(ctx, detachRequest('run'), reporter)
+        return await run(ctx, { ...options, skip, unhold: flags.switches.has('unhold') })
+      case 'env': return await envCommand(ctx, options)
+      case 'rollback':
+        if (detaching) return await detach(ctx, detachRequest('rollback'), reporter)
+        return await rollback(ctx, flags.values.get('to'), options)
       case 'status': return await status(ctx)
       case 'install-plan': return await writeInstallPlan(host, ctx, cwd, flags.values.get('out'))
+      case 'attach': {
+        const runId = flags.args[0] as string
+        const exit = await attach(host, ctx.stateDir, runId, {
+          fromSeq: Number(flags.values.get('from-seq') ?? 0),
+          follow: flags.switches.has('follow'),
+          emit: (event) => reporter.emit({ type: 'event', event }),
+        })
+        if (exit !== undefined) return exit
+        host.out.info(`run ${runId} is still running: attach --follow waits for its end`)
+        return 0
+      }
+      case 'cancel': {
+        const runId = flags.args[0] as string
+        const sent = await cancel(host, ctx.stateDir, runId)
+        host.out.ok(`SIGTERM sent to run ${runId} (pid ${sent.pid})${sent.second ? ' — the second one: it stops at once, mid-step, and leaves a stale lock' : ' — it stops at the next safe point'}`)
+        host.out.result?.('cancel', { runId, pid: sent.pid, signal: 'SIGTERM', second: sent.second })
+        return 0
+      }
       default:
         host.out.error(`unknown command "${flags.command}"`)
         process.stdout.write(USAGE)
         return 1
     }
   } catch (error) {
-    // Distinct codes a wrapper (cron, CI) can act on: 3 = another deploy holds the lock.
-    if (error instanceof DeployLockedError) {
-      host.out.error(error.message)
-      return EXIT_LOCKED
-    }
-    if (error instanceof DeployAbortedError) {
-      host.out.error(error.message)
-      return EXIT_ABORTED
-    }
-    if (error instanceof DeployError) {
-      host.out.error(error.message)
-      return 1
-    }
-    if (error instanceof DeployConfigError) {
-      host.out.error(error.message)
-      return 1
-    }
-    // Anything else is a bug or an environment we did not foresee: say what
-    // failed, keep the stack for BASALT_DEBUG=1.
-    host.out.error(`unexpected: ${(error as Error).message ?? String(error)}`)
-    if (host.env['BASALT_DEBUG']) host.out.info((error as Error).stack ?? '')
-    return 1
+    // A config that failed to load may quote a .env value in its error: the redactor reads the .env first.
+    await machine?.secretsKnown(loaded)
+    return reportError(error, reporter, host.env['BASALT_DEBUG'] !== undefined && host.env['BASALT_DEBUG'] !== '')
   }
 }
 
+/** The config is known: the redactor learns its secret keys, the answers start being read. */
+function prepareMachine(machine: Machine, flags: Flags, config: DeployConfig, cwd: string): void {
+  machine.json.watchEnv(config, cwd)
+  if (!flags.values.has('answers') || machine.channel) return
+  const channel = new AnswerChannel(askedQuestions(config.env.ask as Record<string, { secret: boolean }> | undefined), (key, value) => machine.json.secret(key, value))
+  channel.start(machine.io.stdin())
+  machine.json.useAnswers(channel)
+  machine.channel = channel
+}
+
+/** A locked command under --json: its run log, the answers checked before the lock, retention after it. */
+async function protocolHooks(machine: Machine, ctx: DeployContext): Promise<ProtocolHooks> {
+  const { writer, channel, child } = machine
+  const runId = writer.runId
+  if (runId && !child) {
+    if (ctx.host.createLog) machine.writer.attachLog((await createRunLog(ctx.host, ctx.stateDir, runId)).handle)
+    else writer.dropBacklog()
+  }
+  return {
+    ...(runId ? { runId } : {}),
+    beforeLock: async () => {
+      // A detached child's answers are complete (the parent closed its stdin); an attended run's may still come.
+      if (channel) await (child ? channel.drain() : channel.settle())
+    },
+    afterLock: async () => {
+      if (runId && ctx.host.readFileRange) await pruneRunLogs(ctx.host, ctx.stateDir, runId)
+    },
+    afterAnswers: () => {
+      // A bad line that arrived after the lock and found no prompt still fails, before the .env is written.
+      channel?.throwIfFatal()
+      for (const key of channel?.finish() ?? []) ctx.host.out.warn(`the answer for ${key} was not needed (already in the .env, or given by the environment): dropped`)
+    },
+  }
+}
+
+/** Every failure, as an `error` event and its exit code — the terminal shows the message, as it always did. */
+function reportError(error: unknown, reporter: Reporter, debug: boolean): number {
+  // Distinct codes a wrapper (cron, CI) can act on: 3 = another deploy holds the lock.
+  if (error instanceof DeployLockedError) {
+    reporter.emit({ type: 'error', code: 'locked', message: error.message, ...(error.holder ? { holder: error.holder } : {}) })
+    return EXIT_LOCKED
+  }
+  if (error instanceof DeployAbortedError) {
+    reporter.emit({ type: 'error', code: 'aborted', message: error.message })
+    return EXIT_ABORTED
+  }
+  if (error instanceof DeployError) {
+    const code: ErrorCode = error.code && isErrorCode(error.code) ? error.code : 'failed'
+    reporter.emit({
+      type: 'error', code, message: error.message,
+      ...(error.hint ? { hint: error.hint } : {}),
+      ...(error.findings.length ? { findings: error.findings } : {}),
+    })
+    return 1
+  }
+  if (error instanceof DeployConfigError) {
+    reporter.emit({ type: 'error', code: 'config', message: error.message })
+    return 1
+  }
+  // Anything else is a bug or an environment we did not foresee: say what
+  // failed, keep the stack for BASALT_DEBUG=1.
+  reporter.emit({ type: 'error', code: 'unexpected', message: `unexpected: ${(error as Error).message ?? String(error)}` })
+  if (debug) reporter.emit({ type: 'log', stream: 'tool', level: 'info', text: (error as Error).stack ?? '', redacted: false })
+  return 1
+}

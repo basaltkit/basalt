@@ -63,7 +63,8 @@ export interface InitAnswers {
 const COMPOSE_FILES = ['docker/compose.prod.yml', 'docker/compose.prod.yaml', 'compose.prod.yml', 'compose.prod.yaml', 'docker-compose.prod.yml']
 const PRISMA_CENTRAL = 'prisma.config.ts'
 const PRISMA_TENANTS = 'prisma/tenants/prisma.config.ts'
-const SENSITIVE = /SECRET|TOKEN|PASSWORD|PASS\b|_KEY\b|^KEY_|CREDENTIAL|_URL$|_DSN$/
+/** Key names whose values are secrets (what `init` asks as `ask.secret`, what JSON mode redacts). */
+export const SENSITIVE = /SECRET|TOKEN|PASSWORD|PASS\b|_KEY\b|^KEY_|CREDENTIAL|_URL$|_DSN$/
 /**
  * A `secret()` the app can mint for itself (signing, encryption): generated on
  * the server. One a provider issues (S3, an API, SMTP) is asked instead — a
