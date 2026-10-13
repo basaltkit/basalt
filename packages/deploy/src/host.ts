@@ -4,6 +4,7 @@ import { constants, openSync, closeSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, readFile, readdir, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import https from 'node:https'
+import { hostname } from 'node:os'
 import { dirname } from 'node:path'
 import { createInterface } from 'node:readline'
 import tls from 'node:tls'
@@ -42,6 +43,21 @@ export interface Host {
   /** Whether a person can answer a prompt (a terminal, not CI). */
   interactive(): boolean
   uid(): number
+  /** This process's id (recorded in the deploy lock). */
+  pid(): number
+  hostname(): string
+  /** Whether a process with this id runs on this host (a stale lock's holder does not). */
+  processAlive(pid: number): boolean
+  /**
+   * Creates `path` with `content` only when nothing is there — O_EXCL, so a
+   * symlink planted at `path` is not followed. `false` when it already exists.
+   */
+  createExclusive(path: string, content: string, mode: number): Promise<boolean>
+  /**
+   * SIGINT, SIGTERM and SIGHUP while a deploy runs: the listener hears the
+   * first; a second one ends the process at once. Returns the unsubscribe.
+   */
+  onSignal(listener: (signal: string) => void): () => void
   out: Output
 }
 
@@ -101,6 +117,38 @@ export function nodeHost(output: Output = consoleOutput()): Host {
     out: output,
     env: process.env,
     uid: () => (typeof process.getuid === 'function' ? process.getuid() : -1),
+    pid: () => process.pid,
+    hostname: () => hostname(),
+    processAlive(pid) {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch (error) {
+        // EPERM: it exists, under another user.
+        return (error as NodeJS.ErrnoException).code === 'EPERM'
+      }
+    },
+    async createExclusive(path, content, mode) {
+      try {
+        await writeFile(path, content, { mode, flag: 'wx' })
+        return true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+        throw error
+      }
+    },
+    onSignal(listener) {
+      const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
+      let heard = 0
+      const handler = (signal: NodeJS.Signals) => {
+        heard++
+        if (heard === 1) { listener(signal); return }
+        output.error(`${signal} again: stopping now, mid-step — the lock is cleared by the next deploy (its process is gone)`)
+        process.exit(signal === 'SIGINT' ? 130 : signal === 'SIGHUP' ? 129 : 143)
+      }
+      for (const signal of SIGNALS) process.on(signal, handler)
+      return () => { for (const signal of SIGNALS) process.off(signal, handler) }
+    },
     interactive: () => Boolean(process.stdin.isTTY) && !process.env['CI'],
     now: () => new Date(),
     randomHex: (bytes) => randomBytes(bytes).toString('hex'),

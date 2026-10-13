@@ -7,7 +7,10 @@ export interface Release {
   previous?: string
   at: string
   user: string
-  status: 'ok' | 'rolled-back' | 'failed' | 'public-unreachable'
+  /**
+   * `aborted`: a signal stopped it before the release (code put back).
+   */
+  status: 'ok' | 'rolled-back' | 'failed' | 'public-unreachable' | 'aborted'
   /** Migration directories this release applied for the first time. */
   migrations: string[]
   backup?: string

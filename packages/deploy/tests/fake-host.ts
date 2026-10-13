@@ -34,6 +34,11 @@ export class FakeHost implements Host {
   userId = 1000
   tty = false
   clock = new Date('2026-10-11T12:00:00Z').getTime()
+  processId = 4100
+  name = 'server-1'
+  /** Pids that run on this host; the deploy's own is always among them. */
+  alive = new Set<number>([4100])
+  signalListeners: Array<(signal: string) => void> = []
   private counter = 0
 
   out = {
@@ -131,6 +136,20 @@ export class FakeHost implements Host {
   }
   async httpGet(url: string, options: { host?: string } = {}) { return this.http(url, options.host) }
   uid() { return this.userId }
+  pid() { return this.processId }
+  hostname() { return this.name }
+  processAlive(pid: number) { return this.alive.has(pid) }
+  async createExclusive(path: string, content: string, mode: number) {
+    if (this.files.has(path)) return false
+    this.put(path, content, mode)
+    return true
+  }
+  onSignal(listener: (signal: string) => void) {
+    this.signalListeners.push(listener)
+    return () => { this.signalListeners = this.signalListeners.filter((l) => l !== listener) }
+  }
+  /** Delivers a signal as the terminal would (the first one reaches the listeners). */
+  signal(name = 'SIGINT') { for (const listener of [...this.signalListeners]) listener(name) }
   interactive() { return this.tty }
 }
 

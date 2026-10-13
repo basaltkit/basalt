@@ -5,7 +5,7 @@ import { backupDatabase, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, logFindings, pruneImages } from './compose.js'
 import { definedEntries, isBranchName, processName, REMOTE_NAME } from './config.js'
-import { DeployError, errors, INSTALL_COMMAND, report, RUN_COMMAND, type DeployContext, type Finding } from './context.js'
+import { DeployAbortedError, DeployError, errors, INSTALL_COMMAND, report, RUN_COMMAND, throwIfAborted, type AbortState, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
 import { answerQuestions, describeEnv, envFile, envMirrors, mirrorFindings, planEnv, readEnv, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
 import { envValues } from './dotenv.js'
@@ -13,6 +13,7 @@ import { applyInfra, describeInfra, dockerPostgres, maintainServices, planInfra,
 import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, externalPostgres, grantTenantSchemas } from './services.js'
 import { pm2List, pm2Preflight, pm2Release, resolvePort } from './pm2.js'
 import { lastGood, migrationNames, readReleases, recordRelease, type Release } from './state.js'
+import { acquireLock, describeHolder, readLock } from './lock.js'
 
 /**
  * The pipeline (RFC 0006 §4): preflight → fetch → env → infra → build →
@@ -28,6 +29,8 @@ export const SKIPPABLE: readonly Skippable[] = ['fetch', 'backup', 'tls']
 
 export interface RunOptions {
   skip?: Skippable[]
+  /** Who runs it, for the lock and the release record. Default `$USER`. */
+  actor?: string
 }
 
 /**
@@ -57,8 +60,36 @@ export function gitTarget(ctx: DeployContext): { remote: string; branch: string;
 }
 
 async function step<T>(ctx: DeployContext, title: string, run: () => Promise<T>): Promise<T> {
+  throwIfAborted(ctx)
   ctx.host.out.step(title)
   return run()
+}
+
+const actorOf = (ctx: DeployContext, options: RunOptions) => options.actor ?? ctx.host.env['USER'] ?? String(ctx.host.uid())
+
+/**
+ * The deploy lock around a command that changes the server, and its signal
+ * handling: the first SIGINT/SIGTERM/SIGHUP stops an `abortable` command at
+ * the next step boundary (the command puts back what it changed); one that
+ * is not finishes first. The lock is released in every case.
+ */
+async function locked<T>(ctx: DeployContext, command: string, options: RunOptions, abortable: boolean, body: () => Promise<T>): Promise<T> {
+  const release = await acquireLock(ctx.host, ctx.stateDir, command, actorOf(ctx, options))
+  const abort: AbortState = { deferred: !abortable }
+  ctx.abort = abort
+  const off = ctx.host.onSignal((signal) => {
+    abort.signal = signal
+    ctx.host.out.warn(abort.deferred
+      ? `${signal}: ${command} cannot stop safely at this point — it finishes, then exits (a second ${signal} stops it at once)`
+      : `${signal}: stopping after this step; what the deploy changed is put back (a second ${signal} stops it at once)`)
+  })
+  try {
+    return await body()
+  } finally {
+    off()
+    delete ctx.abort
+    await release()
+  }
 }
 
 // ── the runtime: PM2 on the host, or a compose project ────────────────────
@@ -457,7 +488,11 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
 }
 
 /** `basalt-deploy env` — the .env and the infra only (first setup, before `install`). */
-export async function envCommand(ctx: DeployContext): Promise<number> {
+export async function envCommand(ctx: DeployContext, options: RunOptions = {}): Promise<number> {
+  return locked(ctx, 'env', options, true, () => envLocked(ctx))
+}
+
+async function envLocked(ctx: DeployContext): Promise<number> {
   const document = await readEnv(ctx)
   stopOnErrors(ctx, syntaxFindings(document, ctx.config.env.file ?? '.env'), '.env')
   const port = await resolvePort(ctx, envValues(document))
@@ -474,6 +509,10 @@ export async function envCommand(ctx: DeployContext): Promise<number> {
 }
 
 export async function run(ctx: DeployContext, options: RunOptions = {}): Promise<number> {
+  return locked(ctx, 'run', options, true, () => runLocked(ctx, options))
+}
+
+async function runLocked(ctx: DeployContext, options: RunOptions): Promise<number> {
   const { host, config } = ctx
   const skip = new Set(options.skip ?? [])
 
@@ -522,12 +561,19 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
       host.out.info(`skipped: ${backup.why}`)
     }
     await step(ctx, 'migrate', async () => { await migrate(ctx, values); await tenantGrants(ctx, infra, values); await settleLockfile(ctx, lockfileSaid) })
+    // The last point where a signal stops the deploy: from the release on, it finishes.
+    throwIfAborted(ctx)
   } catch (error) {
     if (sha !== previous) await restoreCode(ctx, previous, values).catch((e: unknown) => host.out.error(`could not restore the code: ${(e as Error).message}`))
     record.note = (error as Error).message
+    const signal = ctx.abort?.signal
+    if (signal) record.status = 'aborted'
     await recordRelease(ctx, record).catch(() => undefined)
+    // A terminal's SIGINT reaches the child too: its failure is the signal's.
+    if (signal && !(error instanceof DeployAbortedError)) throw new DeployAbortedError(signal, (error as Error).message)
     throw error
   }
+  if (ctx.abort) ctx.abort.deferred = true
 
   const destructive = applied.filter((name) => config.destructive?.includes(name))
   const recover = async (why: string): Promise<number> => {
@@ -603,7 +649,11 @@ async function rollbackTo(ctx: DeployContext, sha: string, values: Map<string, s
 }
 
 /** `basalt-deploy rollback [--to=<sha>]` — code only; the database stays as it is. */
-export async function rollback(ctx: DeployContext, to?: string): Promise<number> {
+export async function rollback(ctx: DeployContext, to?: string, options: RunOptions = {}): Promise<number> {
+  return locked(ctx, 'rollback', options, false, () => rollbackLocked(ctx, to))
+}
+
+async function rollbackLocked(ctx: DeployContext, to?: string): Promise<number> {
   const current = await git(ctx, ['rev-parse', 'HEAD'])
   const releases = await readReleases(ctx)
   // The last healthy release before this one; on the first recorded deploy,
@@ -628,6 +678,11 @@ export async function status(ctx: DeployContext): Promise<number> {
   const { host } = ctx
   const releases = (await readReleases(ctx)).slice(-10).reverse()
   host.out.step(`${ctx.config.app} — last ${releases.length} release(s)`)
+  const lock = await readLock(host, ctx.stateDir)
+  if (!lock) host.out.info('no deploy running')
+  else if (lock.corrupt) host.out.warn(`${lock.path} is not a deploy lock (empty or unreadable): deploys are refused until it is removed`)
+  else if (lock.stale) host.out.warn(`stale lock: ${describeHolder(lock.holder!)} — that process is gone; the next deploy takes it over`)
+  else host.out.info(`deploy running: ${describeHolder(lock.holder!)}`)
   for (const r of releases) host.out.info(`${r.at}  ${r.sha.slice(0, 7)}  ${r.status.padEnd(18)} ${r.user}${r.migrations.length ? `  +${r.migrations.length} migration(s)` : ''}${r.note ? `  — ${r.note}` : ''}`)
   if (isCompose(ctx)) {
     const head = (await ctx.host.exec('git', ['rev-parse', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
