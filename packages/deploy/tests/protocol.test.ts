@@ -196,6 +196,17 @@ describe('the redactor', () => {
   })
 })
 
+describe('the JSON host and signals', () => {
+  it('the second signal\'s line is an event, never text on stderr', () => {
+    const base = new FakeHost()
+    let second: ((signal: string) => void) | undefined
+    Object.assign(base, { onSignal: (_listener: unknown, options?: { second?: (signal: string) => void }) => { second = options?.second; return () => undefined } })
+    const { w, events } = writer()
+    jsonHost(base, w, new Redactor()).host.onSignal(() => undefined)
+    second?.('SIGTERM')
+    expect(events()).toEqual([expect.objectContaining({ type: 'log', stream: 'tool', level: 'error', text: expect.stringMatching(/^SIGTERM again: stopping now/) })])
+  })})
+
 describe('text from outside', () => {
   it('sanitises escapes and control characters, keeps tabs (and newlines when asked)', () => {
     expect(sanitize('\u001b[31mred\u001b[0m\ttab\u0007\u0000\u009b1m\u001b]0;title\u0007end\u001bPdcs\u001b\\\u001bc')).toBe('red\ttabend')

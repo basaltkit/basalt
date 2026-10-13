@@ -48,6 +48,25 @@ describe('the deploy lock', () => {
     expect(host.files.has(LOCK)).toBe(false)
   })
 
+  it('a detached run that is gone while processes of its group still run: not stale until they end', async () => {
+    const { host } = server()
+    const detached = JSON.stringify({ pid: 999, host: 'server-1', startedAt: '2026-10-11T11:59:00.000Z', actor: 'alice', command: 'run', runId: '20261011T115900Z-0123456789ab' })
+    host.put(LOCK, detached, 0o600)
+    const groups = new Set([999])
+    Object.assign(host, { processGroupAlive: (pgid: number) => groups.has(pgid) })
+    await expect(run(context(host, config()))).rejects.toThrow(/the deploy that holds the lock is gone, but processes it started still run: .*kill -TERM -999/)
+    expect(host.file(LOCK)).toBe(detached)
+    expect(host.commands('git')).toEqual([])
+    // An attended holder (no runId) is judged by its own pid, as before.
+    host.put(LOCK, holder(999), 0o600)
+    expect(await run(context(host, config()))).toBe(0)
+    // The group's last process ended: the detached run's lock is stale and taken over.
+    host.put(LOCK, detached, 0o600)
+    groups.clear()
+    expect(await run(context(host, config()))).toBe(0)
+    expect(host.transcript).toContain('removed a stale lock: run by alice (pid 999 on server-1')
+  })
+
   it('never guesses about another host or an unreadable lock', async () => {
     const { host } = server()
     host.put(LOCK, holder(999, 'server-2'), 0o600)
