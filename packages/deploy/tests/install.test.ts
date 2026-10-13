@@ -152,6 +152,11 @@ describe('install (root\'s half)', () => {
     const host = rootServer()
     host.put('/etc/acme/api.env', 'A=1\n', 0o644, ROOT)
     host.dir('/etc/acme', 0o755, ROOT)
+    // A directory root made by hand: shown, and given only after a yes.
+    await expect(install(host, plan({ envFiles: ['/etc/acme/api.env'] }), 'ubuntu')).rejects.toThrow(/\/etc\/acme not handed over \(not confirmed\)/)
+    expect(await host.stat('/etc/acme')).toMatchObject({ uid: 0, mode: 0o755 })
+    expect(host.transcript).toContain('/etc/acme exists and is root\'s (api.env): install would give it and the env files to ubuntu')
+    host.confirmations.push(true)
     expect(await install(host, plan({ envFiles: ['/etc/acme/api.env', '/etc/acme/worker.env'] }), 'ubuntu')).toBe(0)
     expect(await host.stat('/etc/acme')).toMatchObject({ uid: 1000, mode: 0o700 })
     expect(await host.stat('/etc/acme/api.env')).toMatchObject({ uid: 1000, mode: 0o600 })
@@ -159,6 +164,51 @@ describe('install (root\'s half)', () => {
     const fresh = rootServer()
     expect(await install(fresh, plan({ envFiles: ['/etc/acme/api.env'] }), 'ubuntu')).toBe(0)
     expect(await fresh.stat('/etc/acme')).toMatchObject({ kind: 'dir', uid: 1000, mode: 0o700 })
+  })
+
+  it('EXPLOIT: an app named after a system directory never gets /etc/<that> (systemd, ssh, apt, basalt…)', async () => {
+    for (const app of ['systemd', 'ssh', 'apt', 'docker', 'apache2', 'caddy', 'security', 'netplan', 'basalt']) {
+      expect(() => parseInstallPlan(JSON.stringify(plan({ app, envFiles: [`/etc/${app}/system.conf`] })), 'p.json'), app).toThrow(/is a system directory/)
+      expect(() => validateConfig(acmeConfig({ app, env: { file: `/etc/${app}/api.env` }, runtime: { kind: 'pm2', script: 'start', port: 'auto', avoid: [] } })), app).toThrow(/is a system directory/)
+    }
+    // The probe itself, a plan built in code (no parse first): nothing changes hands.
+    const host = rootServer().dir('/etc/systemd', 0o755, ROOT).put('/etc/systemd/system.conf', '[Manager]\n', 0o644, ROOT)
+    await expect(install(host, plan({ app: 'systemd', envFiles: ['/etc/systemd/system.conf'] }), 'ubuntu')).rejects.toThrow(/system directory/)
+    expect(await host.stat('/etc/systemd')).toMatchObject({ uid: 0, mode: 0o755 })
+    expect(await host.stat('/etc/systemd/system.conf')).toMatchObject({ uid: 0, mode: 0o644 })
+    expect(host.prompts).toEqual([])
+    // A name not on the list: a directory a Debian package ships is refused too; one with subdirectories also.
+    const shipped = rootServer().dir('/etc/fwupd', 0o755, ROOT).put('/etc/fwupd/fwupd.conf', 'x', 0o644, ROOT)
+    shipped.handlers.unshift(({ command, args }) => (command === 'dpkg-query' && args[1] === '/etc/fwupd' ? ok('fwupd: /etc/fwupd\n') : undefined))
+    await expect(install(shipped, plan({ app: 'fwupd', envFiles: ['/etc/fwupd/fwupd.conf'] }), 'ubuntu')).rejects.toThrow(/\/etc\/fwupd belongs to an installed package/)
+    expect(await shipped.stat('/etc/fwupd')).toMatchObject({ uid: 0 })
+    const tree = rootServer().dir('/etc/acme', 0o755, ROOT).dir('/etc/acme/conf.d', 0o755, ROOT)
+    tree.confirmations.push(true)
+    await expect(install(tree, plan({ envFiles: ['/etc/acme/api.env'] }), 'ubuntu')).rejects.toThrow(/\/etc\/acme holds conf\.d \(not plain files\)/)
+    expect(await tree.stat('/etc/acme')).toMatchObject({ uid: 0 })
+  })
+
+  it('EXPLOIT: another app\'s state directory and env files are never handed over', async () => {
+    const OTHER = { uid: 1001, gid: 1001 }
+    const host = rootServer()
+    host.dir('/var/lib/basalt', 0o755, ROOT).dir('/var/lib/basalt/billing', 0o700, OTHER).put('/var/lib/basalt/billing/backups/x.dump', 'db', 0o600, OTHER)
+    host.dir('/etc/billing', 0o700, OTHER).put('/etc/billing/api.env', 'SECRET=1\n', 0o600, OTHER)
+    await expect(install(host, plan({ app: 'billing', envFiles: ['/etc/billing/api.env'] }), 'ubuntu')).rejects.toThrow('refused: the state directory /var/lib/basalt/billing belongs to uid 1001, not ubuntu')
+    expect(await host.stat('/var/lib/basalt/billing')).toMatchObject({ uid: 1001 })
+    // Its state directory was never made: the env directory is checked on its own too.
+    const env = rootServer()
+    env.dir('/etc/billing', 0o700, OTHER).put('/etc/billing/api.env', 'SECRET=1\n', 0o600, OTHER)
+    await expect(install(env, plan({ app: 'billing', envFiles: ['/etc/billing/api.env'] }), 'ubuntu')).rejects.toThrow('refused: the env directory /etc/billing belongs to uid 1001')
+    expect(await env.stat('/etc/billing/api.env')).toMatchObject({ uid: 1001, mode: 0o600 })
+    // A file in the user's own directory that another account owns: refused as well.
+    const file = rootServer()
+    file.dir('/etc/acme', 0o700, USER).put('/etc/acme/api.env', 'A=1\n', 0o600, OTHER)
+    await expect(install(file, plan({ envFiles: ['/etc/acme/api.env'] }), 'ubuntu')).rejects.toThrow('refused: the env file /etc/acme/api.env belongs to uid 1001')
+    // Re-running install for the user's own directories is quiet.
+    const again = rootServer()
+    again.dir('/etc/acme', 0o700, USER).put('/etc/acme/api.env', 'A=1\n', 0o600, USER)
+    expect(await install(again, plan({ envFiles: ['/etc/acme/api.env'] }), 'ubuntu')).toBe(0)
+    expect(again.prompts).toEqual([])
   })
 
   it('serves the app user\'s own checkout only', async () => {

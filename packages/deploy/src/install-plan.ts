@@ -251,6 +251,7 @@ export async function install(host: Host, plan: InstallPlan, user: string | unde
   const stateDir = join(stateRoot, plan.app)
   const backups = join(stateRoot, `${plan.app}.install-backups`)
   host.out.step(`state directory ${stateDir}`)
+  await refuseForeign(host, stateDir, owner, 'the state directory')
   await host.mkdir(stateDir, 0o700)
   await secure(host, stateDir, { uid: owner.uid, gid: owner.gid, mode: 0o700, kind: 'dir' })
   // Root's own: the copies of the proxy files it replaces. Not in stateDir, which the user owns.
@@ -315,21 +316,51 @@ async function secure(host: Host, path: string, owner: { uid: number; gid: numbe
 }
 
 /**
+ * An existing path install would hand to the app user: refused when another
+ * account owns it — another app's state, its dumps, its secrets.
+ */
+async function refuseForeign(host: Host, path: string, owner: Account, what: string): Promise<void> {
+  const stat = await host.stat(path)
+  if (!stat || stat.uid === undefined || stat.uid === 0 || stat.uid === owner.uid) return
+  throw new DeployError(`refused: ${what} ${path} belongs to uid ${stat.uid}, not ${owner.name} — another app's? Nothing is handed over from one account to another; name this app something else`)
+}
+
+/**
  * The env files in `/etc/<app>/` (deploys run as the app user and rewrite
  * them): the directory and each existing file become the user's, 0700/0600 —
  * through O_NOFOLLOW descriptors, so a link planted there is refused, never
  * followed (`ln -sf /etc/sudoers /etc/<app>/api.env` changes nothing).
+ *
+ * The app name chooses the directory, so it may name one that is not the
+ * app's: install creates `/etc/<app>` or keeps it the user's; it never takes
+ * one a Debian package ships, one another user owns, or one with
+ * subdirectories, and it asks before taking one root made by hand.
  */
 async function envOwnership(host: Host, plan: InstallPlan, owner: Account): Promise<void> {
   if (plan.envFiles.length === 0) return
   host.out.step('env files outside the checkout')
   const dir = `/etc/${plan.app}`
   await assertRootOwnedDir(host, '/etc', 'env files')
-  if (!(await host.stat(dir))) await host.mkdir(dir, 0o700)
+  for (const file of plan.envFiles) if (dirname(file) !== dir) throw new DeployError(`refused: ${file} is not directly in ${dir}`)
+  const existing = await host.stat(dir)
+  if (existing) {
+    if ((await host.exec('dpkg-query', ['-S', dir])).code === 0) throw new DeployError(`refused: ${dir} belongs to an installed package — it is not the app's to own; keep the env inside the checkout, or name the app something else`)
+    await refuseForeign(host, dir, owner, 'the env directory')
+    if (existing.kind === 'dir' && existing.uid === 0) {
+      const entries = await host.list(dir)
+      const kinds = await Promise.all(entries.map(async (name) => ({ name, stat: await host.stat(join(dir, name)) })))
+      const odd = kinds.filter((e) => e.stat?.kind !== 'file').map((e) => e.name)
+      if (odd.length > 0) throw new DeployError(`refused: ${dir} holds ${odd.join(', ')} (not plain files) — an app's env directory holds env files only`)
+      host.out.warn(`${dir} exists and is root's${entries.length ? ` (${entries.join(', ')})` : ''}: install would give it and the env files to ${owner.name}`)
+      if (!(await host.confirm(`Give ${dir} to ${owner.name}?`))) throw new DeployError(`${dir} not handed over (not confirmed) — nothing else was changed there (a terminal must answer)`)
+    }
+  } else {
+    await host.mkdir(dir, 0o700)
+  }
   await secure(host, dir, { uid: owner.uid, gid: owner.gid, mode: 0o700, kind: 'dir' })
   for (const file of plan.envFiles) {
-    if (dirname(file) !== dir) throw new DeployError(`refused: ${file} is not directly in ${dir}`)
     if (!(await host.stat(file))) { host.out.info(`${file} does not exist yet — the first env or run creates it`); continue }
+    await refuseForeign(host, file, owner, 'the env file')
     await secure(host, file, { uid: owner.uid, gid: owner.gid, mode: 0o600, kind: 'file' })
   }
   host.out.ok(`${dir} and its env files (${plan.envFiles.map((f) => basename(f)).join(', ')}) owned by ${owner.name}, 0700/0600`)
