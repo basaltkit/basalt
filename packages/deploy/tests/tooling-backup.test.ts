@@ -41,19 +41,28 @@ describe('backup with dedicated infra', () => {
 
   it('dumps inside the container (same pg_dump major as the server) and keeps the newest N', async () => {
     const h = new FakeHost().on(({ command }) => (command === 'docker' ? ok('PGDMP') : undefined))
-    for (let i = 0; i < 3; i++) h.put(`${DIR}/backups/predeploy/2026010${i}T000000-aaaaaaa.dump`, 'old', 0o600)
+    for (let i = 0; i < 3; i++) h.put(`${DIR}/.basalt/backups/2026010${i}T000000-aaaaaaa.dump`, 'old', 0o600)
     const ctx = context(h, acmeConfig({ backup: { keep: 2 } }))
     const file = await backupDatabase(ctx, new Map(), infra, 'b'.repeat(40))
     expect(h.commands('docker')).toEqual(['docker exec acme-pg pg_dump -U acme -d acme --format=custom --no-owner --no-acl'])
     expect(h.mode(file)).toBe(0o600)
-    expect((await h.list(`${DIR}/backups/predeploy`)).sort()).toEqual(['20260102T000000-aaaaaaa.dump', '20261011T120000-bbbbbbb.dump'])
+    expect((await h.list(`${DIR}/.basalt/backups`)).sort()).toEqual(['20260102T000000-aaaaaaa.dump', '20261011T120000-bbbbbbb.dump'])
+    expect((await h.stat(`${DIR}/.basalt/backups`))?.mode).toBe(0o700)
     expect(restoreCommand(ctx, infra, file)).toBe(`docker exec -i acme-pg pg_restore --clean --if-exists --no-owner -U acme -d acme < ${file}`)
+  })
+
+  it('backup.dir keeps the old place inside the checkout; a loose existing directory is made 0700', async () => {
+    const h = new FakeHost().on(({ command }) => (command === 'docker' ? ok('PGDMP') : undefined))
+    h.dir(`${DIR}/backups/predeploy`, 0o755)
+    const file = await backupDatabase(context(h, acmeConfig({ backup: { dir: 'backups/predeploy' } })), new Map(), infra, 'b'.repeat(40))
+    expect(file).toBe(`${DIR}/backups/predeploy/20261011T120000-bbbbbbb.dump`)
+    expect((await h.stat(`${DIR}/backups/predeploy`))?.mode).toBe(0o700)
   })
 
   it('refuses an empty dump and leaves no file behind', async () => {
     const h = new FakeHost().on(({ command }) => (command === 'docker' ? ok('') : undefined))
     await expect(backupDatabase(context(h), new Map(), infra, 'b'.repeat(40))).rejects.toThrow(/pg_dump failed — nothing was changed/)
-    expect(await h.list(`${DIR}/backups/predeploy`)).toEqual([])
+    expect(await h.list(`${DIR}/.basalt/backups`)).toEqual([])
   })
 
   it('with external infra, needs the URL and prints a generic restore', async () => {

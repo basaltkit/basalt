@@ -35,7 +35,7 @@ describe('basalt-deploy run', () => {
     expect(dump?.options.env).toEqual({ PGPASSWORD: 'pw' })
     const [release] = await readReleases(ctx)
     expect(release).toMatchObject({ sha: NEW, previous: OLD, status: 'ok', user: 'deployer' })
-    expect(release?.backup).toMatch(/backups\/predeploy\/20261011T120000-bbbbbbb\.dump$/)
+    expect(release?.backup).toMatch(/^\/srv\/acme\/\.basalt\/backups\/20261011T120000-bbbbbbb\.dump$/)
     expect(host.transcript).not.toContain('tok-SECRET')
     expect(host.transcript).not.toContain('s3cr3t')
   })

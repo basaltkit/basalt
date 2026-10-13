@@ -328,8 +328,10 @@ export interface BackupConfig<E extends object = EnvShape> {
    */
   keep?: number
   /**
-   * Relative to the app directory.
-   * @default 'backups/predeploy'
+   * Relative to the app directory. Unset, the dumps go to
+   * `<stateDir>/backups` (0700): `/var/lib/basalt/<app>/backups` once
+   * `install` ran — outside the checkout, so never in an image or a commit.
+   * @default '<stateDir>/backups'
    */
   dir?: string
   /**
@@ -630,6 +632,12 @@ export function isBranchName(name: unknown): boolean {
   return !/\.\.|\/\/|\/\.|\.lock\//.test(name)
 }
 
+/** A relative path that stays inside its base: no absolute path, no `..`, no empty segment. */
+export function isInsidePath(path: unknown): boolean {
+  if (typeof path !== 'string' || path === '' || path.startsWith('/') || path.includes('\0')) return false
+  return path.replace(/\/$/, '').split('/').every((segment) => segment !== '' && segment !== '..')
+}
+
 const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 
 export class DeployConfigError extends Error {
@@ -726,6 +734,9 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   if (role && !/^[a-z_][a-z0-9_]{0,62}$/.test(role.name)) problems.push(`appRole "${role.name}" must be a lowercase Postgres identifier`)
   if (config.backup?.keep !== undefined && (!Number.isInteger(config.backup.keep) || config.backup.keep < 1)) {
     problems.push('backup.keep must be a whole number ≥ 1')
+  }
+  if (config.backup?.dir !== undefined && !isInsidePath(config.backup.dir)) {
+    problems.push(`backup.dir "${config.backup.dir}" must be a path inside the checkout (relative, no "..")`)
   }
   if (config.backup?.container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(config.backup.container)) {
     problems.push(`backup.container "${config.backup.container}" is not a container name`)

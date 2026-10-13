@@ -14,10 +14,20 @@ import { dumpContainer, dumpUrlKey } from './services.js'
  * when there is one, travels in the environment (`docker exec -e PGPASSWORD`,
  * no value), never on a command line.
  */
+/**
+ * Where the dumps go: `<stateDir>/backups` (0700) — outside the checkout, so
+ * never in a `COPY . .` image, a commit or a served directory. `backup.dir`
+ * (relative to the checkout) keeps the old place for those who chose it.
+ */
+export const backupDir = (ctx: DeployContext) => (ctx.config.backup?.dir ? join(ctx.dir, ctx.config.backup.dir) : join(ctx.stateDir, 'backups'))
+
 export async function backupDatabase(ctx: DeployContext, values: Map<string, string>, infra: InfraPlan, sha: string): Promise<string> {
   const { host, config } = ctx
-  const dir = join(ctx.dir, config.backup?.dir ?? 'backups/predeploy')
+  const dir = backupDir(ctx)
   await host.mkdir(dir, 0o700)
+  // A directory made earlier with a looser mode: every dump is the whole database.
+  const made = await host.stat(dir)
+  if (made?.kind === 'dir' && made.uid === host.uid() && made.mode !== undefined && (made.mode & 0o077) !== 0) await host.chmod(dir, 0o700)
   const stamp = host.now().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '')
   const file = join(dir, `${stamp}-${sha.slice(0, 7)}.dump`)
 

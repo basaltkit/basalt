@@ -1,7 +1,7 @@
 import { basename, dirname, join } from 'node:path'
 import { apacheInstall, apachePreflight, vhostPaths } from './apache.js'
 import { caddyInstall, caddyPaths, caddyPreflight } from './caddy.js'
-import { backupDatabase, restoreCommand } from './backup.js'
+import { backupDatabase, backupDir, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, logFindings, pruneImages } from './compose.js'
 import { definedEntries, isBranchName, processName, REMOTE_NAME } from './config.js'
@@ -504,7 +504,7 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
     ...(config.hooks?.infra ?? []).map((h) => `infra hook: ${h.join(' ')}`),
     `validate: ${config.env.schema ?? '(no schema configured)'} against the new .env`,
     ((decision) => decision.run
-      ? `backup: pg_dump${dumpContainer(config) ? ` inside ${dumpContainer(config)}` : ''} → ${config.backup?.dir ?? 'backups/predeploy'} (keep ${config.backup?.keep ?? 10})`
+      ? `backup: pg_dump${dumpContainer(config) ? ` inside ${dumpContainer(config)}` : ''} → ${backupDir(ctx)} (keep ${config.backup?.keep ?? 10})`
       : `backup: skipped (${decision.why})`)(backupDecision(config, checked.values, options.skip ?? [])),
     `migrate: ${[config.migrate?.command?.join(' ') ?? '', migratesCentral(config) ? 'prisma migrate deploy' : '', config.migrate?.tenants ? 'tenant:migrate' : ''].filter(Boolean).join(' + ') || 'nothing configured'}`,
     ...(isCompose(ctx) && composeOf(ctx).attach ? [`attach: ${Object.entries(composeOf(ctx).attach ?? {}).map(([c, n]) => `${c} → ${n.join(', ')}`).join('; ')}`] : []),
