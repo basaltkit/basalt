@@ -4,7 +4,7 @@ import { caddyInstall, caddyPaths, caddyPreflight } from './caddy.js'
 import { backupDatabase, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, logFindings, pruneImages } from './compose.js'
-import { definedEntries, processName } from './config.js'
+import { definedEntries, isBranchName, processName, REMOTE_NAME } from './config.js'
 import { DeployError, errors, INSTALL_COMMAND, report, RUN_COMMAND, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
 import { answerQuestions, describeEnv, envFile, envMirrors, mirrorFindings, planEnv, readEnv, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
@@ -40,6 +40,20 @@ async function git(ctx: DeployContext, args: string[], options: { noPrompt?: boo
   const result = await ctx.host.exec('git', args, { cwd: ctx.dir, ...(options.noPrompt ? { env: NO_PROMPT } : {}) })
   if (result.code !== 0) throw new DeployError(`git ${args[0]} failed: ${result.stderr.trim()}`)
   return result.stdout.trim()
+}
+
+/**
+ * The remote and branch a deploy fetches, checked again here (a config built
+ * in code may skip validateConfig): each reaches git as an argument, and a
+ * name starting with `-` would be an option (`--upload-pack=<cmd>`). The
+ * fetch names both refs in full, after `--`.
+ */
+export function gitTarget(ctx: DeployContext): { remote: string; branch: string; head: string; tracking: string } {
+  const remote = ctx.config.remote ?? 'origin'
+  const branch = ctx.config.branch ?? 'main'
+  if (!REMOTE_NAME.test(remote)) throw new DeployError(`remote "${remote}" is not a git remote name`)
+  if (!isBranchName(branch)) throw new DeployError(`branch "${branch}" is not a plain git branch name`)
+  return { remote, branch, head: `refs/heads/${branch}`, tracking: `refs/remotes/${remote}/${branch}` }
 }
 
 async function step<T>(ctx: DeployContext, title: string, run: () => Promise<T>): Promise<T> {
@@ -160,9 +174,8 @@ const CREDENTIALS = /terminal prompts disabled|could not read (Username|Password
 
 /** Can the fetch reach the branch without asking anyone for anything? */
 async function remoteFindings(ctx: DeployContext): Promise<Finding[]> {
-  const remote = ctx.config.remote ?? 'origin'
-  const branch = ctx.config.branch ?? 'main'
-  const probe = await ctx.host.exec('git', ['ls-remote', '--exit-code', remote, `refs/heads/${branch}`], { cwd: ctx.dir, env: NO_PROMPT })
+  const { remote, branch, head } = gitTarget(ctx)
+  const probe = await ctx.host.exec('git', ['ls-remote', '--exit-code', '--', remote, head], { cwd: ctx.dir, env: NO_PROMPT })
   if (probe.code === 0) return []
   if (probe.code === 2) return [{ id: 'git', level: 'error', message: `the branch "${branch}" does not exist on ${remote}` }]
   const reason = probe.stderr.trim().split('\n').find((l) => l.trim()) ?? `exit ${probe.code}`
@@ -420,7 +433,7 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
   const { host, config, pm } = ctx
   host.out.step('plan — nothing below has run')
   const lines = [
-    options.skip?.includes('fetch') ? 'fetch: skipped' : `fetch: git fetch ${config.remote ?? 'origin'} ${config.branch ?? 'main'} && git merge --ff-only`,
+    options.skip?.includes('fetch') ? 'fetch: skipped' : ((t) => `fetch: git fetch -- ${t.remote} ${t.head}:${t.tracking} && git merge --ff-only ${t.tracking}`)(gitTarget(ctx)),
     ...describeEnv(env).map((l) => `env: ${l}`),
     ...describeInfra(infra).map((l) => `infra: ${l}`),
     ...describeServices(config).map((l) => `infra: ${l}`),
@@ -470,9 +483,10 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
 
   const previous = await git(ctx, ['rev-parse', 'HEAD'])
   if (!skip.has('fetch')) {
+    const target = gitTarget(ctx)
     await step(ctx, 'fetch', async () => {
-      await git(ctx, ['fetch', '--quiet', config.remote ?? 'origin', config.branch ?? 'main'], { noPrompt: !host.interactive() })
-      await git(ctx, ['merge', '--ff-only', `${config.remote ?? 'origin'}/${config.branch ?? 'main'}`])
+      await git(ctx, ['fetch', '--quiet', '--', target.remote, `${target.head}:${target.tracking}`], { noPrompt: !host.interactive() })
+      await git(ctx, ['merge', '--ff-only', target.tracking])
     })
   }
   const sha = await git(ctx, ['rev-parse', 'HEAD'])
