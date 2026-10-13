@@ -1,0 +1,138 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`human mode, byte for byte > env with answers at a terminal 1`] = `
+[
+  "exit 0",
+  "STEP env",
+  "WARN PAYCO_SECRET_TOKEN is required",
+  "INFO add APP_SECRET (generated)",
+  "INFO add PAYCO_CALLBACK_URL (derived from the domain/port)",
+  "INFO add PAYCO_SECRET_TOKEN (answered)",
+  "INFO add SUPPORT_EMAIL (answered)",
+  "STEP infra",
+  "OK nothing to start (external infra)",
+  "STEP validate",
+  "OK .env is valid for src/env.ts",
+  "OK .env ready (PORT=3002)",
+]
+`;
+
+exports[`human mode, byte for byte > env without a terminal 1`] = `
+[
+  "exit 1",
+  "STEP env",
+  "ERROR no answer for PAYCO_SECRET_TOKEN (no terminal to ask): set them in the environment of this command",
+]
+`;
+
+exports[`human mode, byte for byte > plan 1`] = `
+[
+  "exit 0",
+  "STEP preflight",
+  "STEP plan — nothing below has run",
+  "INFO fetch: git fetch -- origin +refs/heads/master:refs/remotes/origin/master && git merge --ff-only refs/remotes/origin/master",
+  "INFO env: add APP_SECRET (generated)",
+  "INFO env: add PAYCO_CALLBACK_URL (derived from the domain/port)",
+  "INFO env: ask PAYCO_SECRET_TOKEN",
+  "INFO env: ask SUPPORT_EMAIL",
+  "INFO build: pnpm install (frozen), prisma generate --config prisma.config.ts, web build",
+  "INFO validate: src/env.ts against the new .env",
+  "INFO backup: skipped (backup.beforeMigrate is false)",
+  "INFO migrate: prisma migrate deploy + tenant:migrate",
+  "INFO release: pm2 acme-api on 127.0.0.1:3002",
+  "INFO health: http://127.0.0.1:3002/health (Host: acme.example.com), then https://acme.example.com/api/health",
+]
+`;
+
+exports[`human mode, byte for byte > rollback with nothing to go back to 1`] = `
+[
+  "exit 1",
+  "ERROR no earlier release to go back to; pass --to=<sha>",
+]
+`;
+
+exports[`human mode, byte for byte > run 1`] = `
+[
+  "exit 0",
+  "STEP preflight",
+  "STEP fetch",
+  "INFO aaaaaaa → bbbbbbb",
+  "STEP env",
+  "OK .env unchanged",
+  "STEP infra",
+  "OK nothing to start (external infra)",
+  "STEP build",
+  "INFO pnpm install --frozen-lockfile",
+  "INFO pnpm exec prisma generate --config prisma.config.ts",
+  "INFO pnpm --dir web run build",
+  "STEP validate",
+  "OK .env is valid for src/env.ts",
+  "STEP backup",
+  "INFO skipped: backup.beforeMigrate is false",
+  "STEP migrate",
+  "INFO pnpm exec prisma migrate deploy",
+  "INFO pnpm run basalt tenant:migrate",
+  "STEP release",
+  "OK acme-api restarted (pnpm run start, port 3002)",
+  "STEP health",
+  "OK http://127.0.0.1:3002/health",
+  "OK https://acme.example.com/api/health",
+  "STEP record",
+  "OK acme bbbbbbb is live at https://acme.example.com",
+]
+`;
+
+exports[`human mode, byte for byte > run stopped at preflight 1`] = `
+[
+  "exit 1",
+  "STEP preflight",
+  "ERROR [git] tracked files are modified on the server:
+         M src/app.ts
+      → git stash (or commit them where they belong); a deploy builds what is committed",
+  "ERROR preflight: 1 problem(s) above — nothing was changed",
+]
+`;
+
+exports[`human mode, byte for byte > run that rolls back 1`] = `
+[
+  "exit 1",
+  "STEP preflight",
+  "STEP fetch",
+  "INFO aaaaaaa → bbbbbbb",
+  "STEP env",
+  "OK .env unchanged",
+  "STEP infra",
+  "OK nothing to start (external infra)",
+  "STEP build",
+  "INFO pnpm install --frozen-lockfile",
+  "INFO pnpm exec prisma generate --config prisma.config.ts",
+  "INFO pnpm --dir web run build",
+  "STEP validate",
+  "OK .env is valid for src/env.ts",
+  "STEP backup",
+  "INFO skipped: backup.beforeMigrate is false",
+  "STEP migrate",
+  "INFO pnpm exec prisma migrate deploy",
+  "INFO pnpm run basalt tenant:migrate",
+  "STEP release",
+  "OK acme-api restarted (pnpm run start, port 3002)",
+  "STEP health",
+  "ERROR the app does not answer on http://127.0.0.1:3002/health",
+  "STEP restoring the code to aaaaaaa",
+  "INFO pnpm install --frozen-lockfile",
+  "INFO pnpm exec prisma generate --config prisma.config.ts",
+  "INFO pnpm --dir web run build",
+  "STEP release aaaaaaa",
+  "OK acme-api restarted (pnpm run start, port 3002)",
+  "OK back on aaaaaaa",
+]
+`;
+
+exports[`human mode, byte for byte > status 1`] = `
+[
+  "exit 0",
+  "STEP acme — last 0 release(s)",
+  "INFO no deploy running",
+  "INFO pm2 acme-api: online (pid 4242, <dir>)",
+]
+`;
