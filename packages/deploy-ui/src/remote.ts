@@ -145,7 +145,7 @@ function describeFailure(reader: ProtocolReader, how: { spawnError: NodeJS.Errno
       ? { code: 'ssh-missing', message: 'no ssh client was found', hint: 'install OpenSSH (on Windows: the OpenSSH Client optional feature), or pass --ssh=<absolute path>' }
       : { code: 'ssh', message: `ssh could not start: ${how.spawnError.message}` }
   }
-  if (reader.failure) return { code: reader.failure.kind, message: reader.failure.message }
+  if (reader.failure && reader.failure.kind !== 'truncated') return { code: reader.failure.kind, message: reader.failure.message }
   if (how.cancelled) return { code: 'cancelled', message: 'stopped by the UI' }
   if (how.timedOut) return { code: 'timeout', message: 'the command took too long and was stopped' }
   if (reader.done) return undefined
@@ -157,7 +157,8 @@ function describeFailure(reader: ProtocolReader, how: { spawnError: NodeJS.Errno
       hint: 'is the account\'s login shell POSIX (sh, bash, zsh)? Does the app\'s @basaltkit/deploy speak protocol 1 (the release with RFC 0008)? Upgrade it in the app and deploy once from a terminal',
     }
   }
-  return { code: 'abnormal', message: `the output ended without done (exit ${how.exit ?? 'by signal'}) — never a success`, ...(ssh ? { hint: ssh.message } : {}) }
+  const cut = reader.failure ? `${reader.failure.message}, ` : ''
+  return { code: 'abnormal', message: `the output ended without done (${cut}exit ${how.exit ?? 'by signal'}) — never a success`, ...(ssh ? { hint: ssh.message } : {}) }
 }
 
 /** The reply of a collected command: it succeeded only with `done` exit 0 and no failure. */
@@ -231,6 +232,13 @@ export async function follow(runner: SshRunner, target: Target, runId: string, f
     }
     if (outcome.error) {
       emit({ kind: 'state', state: 'ended', code: outcome.error.code, reason: outcome.error.message, ...(outcome.error.hint ? { hint: outcome.error.hint } : {}) })
+      return
+    }
+    if (outcome.done && !outcome.failure) {
+      // Attach ended cleanly without the run's `done` in this window: the run's
+      // `done` came before `fromSeq` (RFC 0008 §8.4 — attach's exit code is the
+      // run's). The run has finished; reconnecting would never see more.
+      emit({ kind: 'state', state: 'ended', exitCode: outcome.done.exitCode, reason: 'the run had already finished' })
       return
     }
     const failure = outcome.failure ?? { code: 'abnormal', message: 'attach ended without the run\'s done' }

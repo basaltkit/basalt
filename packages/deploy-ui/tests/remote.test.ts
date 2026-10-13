@@ -34,6 +34,14 @@ beforeAll(async () => {
     },
     'denied.example.com': { attach: { stderr: 'Permission denied (publickey).\n', exit: 255 } },
     'gone.example.com': { attach: { transcript: 'attach-not-found' } },
+    'midline.example.com': {
+      status: { transcript: 'status-ok', cut: 2, partial: '{"v":1,"ts":"2026-10-11T12:0', stderr: 'Connection to midline.example.com closed by remote host.\n', exit: 255 },
+      attach: [
+        { transcript: 'attach-from-0', cut: 11, partial: '{"v":1,"ts":"2026-10-11T12:0', stderr: 'Connection to midline.example.com closed by remote host.\n', exit: 255, expectFromSeq: 0 },
+        { transcript: 'attach-from-10', expectFromSeq: 10 },
+      ],
+    },
+    'finished.example.com': { attach: { lines: [ev(0, { type: 'hello', tool: '@basaltkit/deploy', version: '0.0.0', protocol: 1, command: 'attach', pid: 1, host: 'server-1' }), ev(1, { type: 'done', exitCode: 0 })], expectFromSeq: 47 } },
     'flaky.example.com': { attach: [{ transcript: 'attach-from-0', cut: 5, expectFromSeq: 0 }, { transcript: 'attach-from-0', cut: 0, exit: 255 }] },
   })
 })
@@ -110,12 +118,32 @@ describe('one remote command', () => {
 })
 
 describe('follow (attach that reconnects)', () => {
-  const collect = async (host: string, options: Partial<Parameters<typeof follow>[5]> = {}) => {
+  const collect = async (host: string, options: Partial<Parameters<typeof follow>[5]> = {}, fromSeq = 0) => {
     const messages: StreamMessage[] = []
     let now = 0
-    await follow(ssh.runner, t(host), RUN, 0, (m) => messages.push(m), { signal: new AbortController().signal, sleep: async (ms) => { now += ms }, now: () => now, ...options })
+    await follow(ssh.runner, t(host), RUN, fromSeq, (m) => messages.push(m), { signal: new AbortController().signal, sleep: async (ms) => { now += ms }, now: () => now, ...options })
     return messages
   }
+
+  it('a connection that drops mid-line resumes from the last complete run event (never "corrupt")', async () => {
+    const before = (await ssh.calls()).length
+    const messages = await collect('midline.example.com')
+    const seqs = messages.flatMap((m) => (m.kind === 'event' ? [m.event.seq] : []))
+    expect(seqs).toEqual(Array.from({ length: 46 }, (_, i) => i))
+    expect(messages.find((m) => m.kind === 'state' && m.state === 'reconnecting')).toMatchObject({ code: 'abnormal', reason: expect.stringMatching(/cut mid-line/) })
+    expect(messages.at(-1)).toEqual({ kind: 'state', state: 'ended', exitCode: 0 })
+    expect((await ssh.calls()).length - before).toBe(2)
+    // A collected command cut mid-line is abnormal (never a success), not corrupt.
+    expect((await execRemote(ssh.runner, t('midline.example.com'), { command: 'status' })).failure).toMatchObject({ code: 'abnormal', message: expect.stringMatching(/cut mid-line/) })
+  })
+
+  it('attaching past the run\'s done ends at once with the run\'s exit code — no reconnect loop', async () => {
+    const before = (await ssh.calls()).length
+    const messages = await collect('finished.example.com', { windowMs: 60_000 }, 47)
+    expect(messages.map((m) => (m.kind === 'state' ? m.state : m.kind))).toEqual(['connecting', 'hello', 'ended'])
+    expect(messages.at(-1)).toEqual({ kind: 'state', state: 'ended', exitCode: 0, reason: 'the run had already finished' })
+    expect((await ssh.calls()).length - before).toBe(1)
+  })
 
   it('a refused key ends it at once, with the hint', async () => {
     const messages = await collect('denied.example.com')
