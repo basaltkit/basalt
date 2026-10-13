@@ -339,7 +339,7 @@ describe('backup inside a container (0.2.1)', () => {
     expect(host.calls.some((c) => c.command === 'pg_dump')).toBe(false)
     expect(host.calls.indexOf(dump!)).toBeLessThan(host.calls.findIndex((c) => c.command === './node_modules/.bin/tsx'))
     const record = (await readReleases(ctx))[0]
-    expect(record?.backup).toMatch(/^\/srv\/globex\/backups\/predeploy\/.+-bbbbbbb\.dump$/)
+    expect(record?.backup).toMatch(/^\/srv\/globex\/\.basalt\/backups\/.+-bbbbbbb\.dump$/)
     expect(host.mode(record!.backup!)).toBe(0o600)
   })
 
@@ -365,7 +365,7 @@ describe('backup inside a container (0.2.1)', () => {
   it('plan says where the dump runs; a bad container name is refused', async () => {
     const { host } = withPostgres()
     await plan(ctxOf(host, config()), { skip: ['tls'] })
-    expect(host.transcript).toContain('backup: pg_dump inside globex-postgres → backups/predeploy (keep 10)')
+    expect(host.transcript).toContain('backup: pg_dump inside globex-postgres → /srv/globex/.basalt/backups (keep 10)')
     expect(() => validateConfig(config({ container: 'globex postgres; rm' }))).toThrow(DeployConfigError)
   })
 
