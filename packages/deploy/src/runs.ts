@@ -147,6 +147,11 @@ export async function lastRun(host: Host, stateDir: string): Promise<StatusResul
 
 export const ATTACH_POLL_MS = 250
 export const VANISH_GRACE_MS = 2000
+/**
+ * Without `--follow`: how long a run that released its lock gets to write
+ * its last events (`error`, `done`) before it is called vanished.
+ */
+export const LAST_EVENTS_GRACE_MS = 500
 const CHUNK = 64 * 1024
 
 export interface AttachOptions {
@@ -172,6 +177,7 @@ export async function attach(host: Host, stateDir: string, runId: string, option
   let expected: number | undefined
   let lineNo = 0
   let quietSince: number | undefined
+  let graced = false
   for (;;) {
     const range = await readRange(host, path, offset, CHUNK)
     offset += range.data.length
@@ -196,6 +202,12 @@ export async function attach(host: Host, stateDir: string, runId: string, option
     const alive = await runAlive(host, stateDir, runId)
     if (!options.follow) {
       if (alive) return undefined
+      // The lock is released before `done` is written: one more look before calling the run gone.
+      if (!graced) {
+        graced = true
+        await host.sleep(LAST_EVENTS_GRACE_MS)
+        continue
+      }
       throw new DeployError(`run ${runId} ended without its last event (stopped at once by a second signal, killed, or out of memory)`, [], 'run-vanished')
     }
     if (alive) quietSince = undefined

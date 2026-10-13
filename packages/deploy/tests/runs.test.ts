@@ -246,6 +246,19 @@ describe('attach', () => {
     expect(snapshot.code).toBe(0)
     expect(ofType(snapshot.events, 'log').at(-1)?.text).toMatch(/still running/)
 
+    // The run released its lock and writes its last events a moment later: attach waits for them.
+    const ending = patient(host())
+    const endingPath = runLogPath(state(), RUN)
+    put(ending, runLog([hello, ...lockStep]))
+    ending.sleep = async (ms) => {
+      ending.put(endingPath, runLog([hello, ...lockStep, { type: 'error', code: 'release-failed', message: 'm' }, { type: 'done', exitCode: 1 }]), 0o600)
+      ending.clock += ms
+    }
+    const ended = await runJson(['attach', RUN, '--json', CONFIG], ending, dir)
+    expectFramed(ended)
+    expect(ended.code).toBe(1)
+    expect(ofType(ended.events, 'event').map((e) => e.event.type)).toEqual(['hello', 'step-start', 'step-end', 'error', 'done'])
+
     // The holder is gone (a second signal, SIGKILL): 2 s later, run-vanished.
     live.alive.delete(5100)
     const gone = await runJson(['attach', RUN, '--json', '--follow', CONFIG], live, dir)
