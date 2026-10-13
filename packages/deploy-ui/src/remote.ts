@@ -21,6 +21,8 @@ export interface SshRunner {
   spawn: Spawn
   /** The UI process's own environment, unchanged: nothing is added to it. */
   env: NodeJS.ProcessEnv
+  /** Where ssh starts: the operator's home, never the directory the UI was started from (a cloned app). */
+  cwd?: string
 }
 
 export interface ExecOptions {
@@ -88,6 +90,7 @@ export async function execRemote(runner: SshRunner, target: Target, spec: Remote
         windowsHide: true,
         stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         env: runner.env,
+        ...(runner.cwd ? { cwd: runner.cwd } : {}),
       })
     } catch (caught) {
       spawnError = caught as NodeJS.ErrnoException

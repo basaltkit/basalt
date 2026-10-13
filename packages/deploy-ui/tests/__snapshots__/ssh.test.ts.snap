@@ -180,7 +180,7 @@ exports[`ssh argv > win32: the program, the safety options, -- before the destin
     "deploy@203.0.113.10",
     "cd '/srv/myapp' && exec 'node' 'node_modules/@basaltkit/deploy/dist/bin.js' 'status' '--json=1'",
   ],
-  "program": "ssh.exe",
+  "program": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
 }
 `;
 
