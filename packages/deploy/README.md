@@ -200,12 +200,15 @@ lock · `130` stopped by a signal (a second signal ends the process at once:
 `run`, `env`, `rollback` and `install` take `<state dir>/deploy.lock` (created
 exclusively, 0600) with the pid, host, start time, actor and command. A second
 deploy is refused with exit code 3 and says who holds it; a lock whose process
-is gone (same host) is taken over. `status` shows it.
+is gone (same host) is taken over — for a detached run, once no process it
+started is left. `status` shows it.
 
 The first Ctrl-C (or SIGTERM/SIGHUP) stops `run`/`env` at the end of the
 current step: `run` puts the code back and records the release as `aborted`.
 From the release on — and during `rollback` and `install` — the command
-finishes first; a second signal stops it at once.
+finishes first; a second signal stops it at once, and with it the step's
+processes when the deploy leads its process group (started from a shell, or
+detached).
 
 ### Releases, rollbacks and holds
 
@@ -251,14 +254,20 @@ only NDJSON events, one per line:
   `prompt`, `result`, `error`, `done` (and `event`, from `attach`). `error`
   carries a `code` (`locked`, `aborted`, `preflight`, `held`,
   `release-failed`, `answer-missing`, …); the exit codes are the ones above.
-- What a build, a hook, a migration or `deploy.config.ts` prints is always
-  the `text` of a `log` event (`stream: "child"` or `"foreign"`), stripped of
-  terminal escapes and cut at 8 KiB — data, never interpreted.
+- What a build, a hook, a migration or `deploy.config.ts` prints (on stdout
+  or stderr) is always the `text` of a `log` event (`stream: "child"` or
+  `"foreign"`), stripped of terminal escapes, redacted, then cut at 8 KiB —
+  data, never interpreted. Every other string of every event is stripped of
+  escapes too.
 - **No event carries a secret.** Every string is redacted before it is
   written: the values of generated, asked-secret and secret-named `.env` keys,
-  passwords inside URLs, the infra passwords, every secret answer — raw and
-  URL-encoded — become `[redacted:KEY]`. A value shorter than 6 characters
-  cannot be matched; a `secret-short` warning names its key.
+  passwords inside URLs, the infra passwords, secret-named variables of the
+  deploy's own environment, every secret answer — raw and URL-encoded —
+  become `[redacted:KEY]`. What the config prints while it loads waits until
+  its `.env` has been read. A bare origin in a `*_URL` key
+  (`APP_URL=https://app.example.com`) is the app's address and is not
+  redacted. A value shorter than 6 characters cannot be matched; a
+  `secret-short` warning names its key.
 - Types and a validating parser for a program written in TypeScript:
 
   ```ts
@@ -310,7 +319,9 @@ node node_modules/@basaltkit/deploy/dist/bin.js cancel 20261013T100000Z-5f2c9a1b
   stops taking output lines at 64 MiB.
 - `cancel` sends SIGTERM only to the process holding the lock for that run,
   checked by its own command line (Linux). It stops at the next safe point,
-  as Ctrl-C does; a second `cancel` stops it at once and leaves a stale lock.
+  as Ctrl-C does; a second `cancel` stops it at once, with the step it was
+  running (its process group). The lock is taken over by the next deploy
+  once no process of that run is left.
 - `status --json` reports the lock, the active run and the last run.
 - `--via=ui` records `via: "ui"` with the release; like `--actor`, it
   attributes, it does not authenticate.

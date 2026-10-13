@@ -104,8 +104,11 @@ neither flag, every command behaves byte-for-byte as today.
   first line is always `hello`; the last line of a process that ends normally is
   always `done`.
 - **stderr:** the tool writes nothing to it, except one plain line if the event
-  writer itself fails (e.g. it cannot serialise). Node's own warnings may still
-  appear there; the UI may show stderr as raw diagnostics and must never parse it.
+  writer itself fails (e.g. it cannot serialise). Writes to `process.stderr`
+  from inside the process (the config's `console.error`, Node's own warnings)
+  become `foreign` log events like stdout's (§5.4); what bypasses
+  `process.stderr` may still appear there. The UI may show stderr as raw
+  diagnostics and must never parse it.
 - `-h/--help`, an unknown command, `install-plan --out=-` and `--out=<file>`
   together with `--json`: an `error` event (`usage`), exit 1 — `USAGE` is never
   written to stdout in this mode.
@@ -286,9 +289,20 @@ bars — also ends a line), each line:
 1. decoded as UTF-8 (invalid sequences replaced),
 2. stripped of ANSI/VT escape sequences (CSI, OSC, DCS) and of C0/C1 control
    characters except tab,
-3. cut at 8 KiB (`truncated: true`),
-4. redacted,
+3. redacted,
+4. cut at 8 KiB (`truncated: true`) — after the redactor, so a secret across
+   the cut is never half-shown, and never inside a `[redacted:KEY]` marker,
 5. emitted as `log{stream:'child', level: stdout ? 'info' : 'warn', source, step}`.
+
+A line with no end past 64 Ki characters keeps only its first 64 Ki
+(`truncated: true`), less the last `longest secret − 1` characters (the most
+of a secret a cut can split); the rest of it, up to its newline, is dropped —
+never emitted as a second piece the redactor could not match.
+
+Under `--json` a streamed child's `exec` ends when the child exits; its output
+may keep arriving for 1.5 s more. A process the child leaves behind that still
+holds the pipes (`sleep 30 &` in a hook) is no longer read: it would otherwise
+hold the deploy, and its lock, until it ends — which a terminal never did.
 
 A child's text is **data**: it is never parsed as an event, never matched for
 control, and cannot break framing (it is a JSON string inside our line). A
@@ -307,7 +321,15 @@ events (split, sanitised and redacted as in §5.3); `console.log` goes through
 it. The writer keeps the original. A write to fd 1 that bypasses
 `process.stdout` (`fs.writeSync(1, …)`) is not caught — that is code of the app
 user doing something deliberate, and §10 covers what the reader does with a
-line that is not a valid next event.
+line that is not a valid next event. `process.stderr` is captured the same way.
+
+The config prints while it loads — before the redactor has read the `.env`.
+Its lines are therefore held (at most 1 MiB; past that they are dropped and a
+`tool` warning counts them) until the config's `.env` files have been learnt,
+then emitted. An error the config throws while it loads is reported only after
+the default `<cwd>/.env` has been learnt (its links resolved, a regular file,
+at most 1 MiB). The deploy's own environment (`process.env`) is learnt before
+anything else runs. A last line without a newline is emitted at the end.
 
 ## 6. Secret safety
 
@@ -328,7 +350,11 @@ every string field of every event. Each occurrence becomes `[redacted:KEY]`
 1. the `.env` as read by `createContext` and after every `prepareEnv`/`writeEnv`:
    the value of every key that is declared `env.generate`, declared
    `ask.secret`, or whose name matches the `SENSITIVE` pattern `init.ts`
-   already uses (`SECRET|TOKEN|PASSWORD|PASS\b|_KEY\b|^KEY_|CREDENTIAL|_URL$|_DSN$`);
+   already uses (`SECRET|TOKEN|PASSWORD|PASS\b|_KEY\b|^KEY_|CREDENTIAL|_URL$|_DSN$`)
+   — except a key that matches only by its `_URL`/`_DSN` suffix and holds a
+   bare origin (`APP_URL=https://app.example.com`: no user, path, query or
+   fragment), which is the app's public address, not a secret. A URL with a
+   path or a query (a webhook URL) is still learnt whole;
 2. the password component of every URL-shaped value in the `.env`
    (`scheme://user:password@…`), decoded and as written;
 3. `InfraPlan.secrets` (`BASALT_PG_PASSWORD`, `BASALT_REDIS_PASSWORD`,
@@ -537,9 +563,15 @@ exactly as phase 0 defines it: before the migration `run` stops at the next
 step boundary and puts the code back (`aborted`, 130); from the migration on,
 and in `rollback`, it finishes first. A second `cancel` sends the second
 `SIGTERM` (`second: true` in the result), which ends the child at once (exit
-143, no `done`, stale lock) — the UI must say so before sending it. Only the
-deploy process is signalled, not its group: the current step's child finishes,
-as with a `SIGTERM` from `kill` today.
+143, no `done`) — the UI must say so before sending it. `cancel` signals only
+the deploy process; on its second signal the deploy, which leads its own
+process group (setsid), sends `SIGTERM` to that group before it exits, so the
+current step's child (a build, `prisma migrate deploy`, `docker compose`) stops
+too instead of going on, orphaned, against the checkout and the database. A
+child that ignores `SIGTERM` can outlive it: the lock of a detached run whose
+process is gone is therefore not stale while any process of its group is
+alive — the next deploy is refused (`locked`, naming `kill -TERM -<pid>`) and
+takes the lock over once the group is empty.
 
 ### 8.6 Audit
 
@@ -788,7 +820,8 @@ above, and why.
   The child's `hello` also carries `detached: true`.
 - **`attach`** without `--follow` on a run still alive replays what exists and
   exits 0 with a `log` line saying so; a run whose process is gone without
-  `done` is `run-vanished`. When the run's exit code is not 0, attach exits
+  `done` is `run-vanished` — after one more look 500 ms later, because a run
+  releases its lock just before it writes its outcome and `done`. When the run's exit code is not 0, attach exits
   with it but writes no `error` of its own (the run's is in the replay).
 - **`cancel`** requires `--run-id=<runId>` in the process's own argv (Q3
   resolved as proposed: refused, `unsupported`, where `/proc` cannot be
@@ -803,10 +836,34 @@ above, and why.
   did not end `ok`). Blank lines a child prints are not events.
 - **Retention never fails a deploy:** an entry that cannot be unlinked (a
   directory with a log's name) is left alone.
+- **`hello.runId` names a run log that may not exist.** The id is chosen
+  before the config is loaded (it is on every event, `hello` included); a
+  locked command that fails before its state directory is known (a config
+  that does not load or validate, a usage error) writes no run log, so
+  `attach` on that id answers `not-found`. Its stdout still carried every
+  event.
+- **The writer sanitises every string** of every event (escapes and control
+  characters out, newlines and tabs kept), not only `log` text: a child's
+  stderr quoted in an `error`, a `finding`, a `hint` or a step title carries
+  no escape. It writes nothing after `done`, and the answer channel stops
+  reading when the command ends, so a late answer never becomes an event.
+- **A bad answer line that arrived after the lock** and found no prompt fails
+  the `env` step when the questions are done (before the `.env` is written),
+  instead of being dropped.
+- **The second signal** under `--json` is a `log{level:'error'}` event, not
+  text on stderr; `Host.onSignal` takes an optional `second` for it, and
+  `Host` gains the optional `processGroupAlive` (§8.5).
+- **`@basaltkit/deploy/protocol` imports nothing:** `Finding`, `LockHolder`,
+  `Release`, `Hold`, `InstallPlan` and `PlanProxy` are declared in it (and
+  re-exported where the code uses them), so its declarations type-check
+  without `@types/node`.
 
 Known limits, unchanged from the text: a secret re-encoded by a child
-(base64, hex) is not recognised; a write to fd 1 that bypasses
-`process.stdout` is not captured; human mode is not redacted (Q1); run logs
+(base64, hex) is not recognised; a write to fd 1 or 2 that bypasses
+`process.stdout`/`process.stderr` is not captured; a child that ignores
+`SIGTERM` survives a second signal (its group then keeps the lock);
+a process that changed its own group (setsid) is not stopped with the run;
+answer lines sent after the questions are done are never read; human mode is not redacted (Q1); run logs
 are not tamper-evident against the app user itself; the detaching parent
 reads at most the first 1 MiB of the run log while it waits for the `lock`
 step (which a run writes within its first few events).
