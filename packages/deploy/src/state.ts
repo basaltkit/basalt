@@ -9,10 +9,12 @@ export interface Release {
   user: string
   /**
    * `aborted`: a signal stopped it before the release (code put back).
+   * `failed-migration`: the migration step failed — the database may be
+   * part-way; the restore command for `backup` was printed.
    * `rollback-unhealthy`: this commit was released by a rollback and did
    * not answer either — never a rollback target again.
    */
-  status: 'ok' | 'rolled-back' | 'failed' | 'public-unreachable' | 'aborted' | 'rollback-unhealthy'
+  status: 'ok' | 'rolled-back' | 'failed' | 'failed-migration' | 'public-unreachable' | 'aborted' | 'rollback-unhealthy'
   /** Migration directories this release applied for the first time. */
   migrations: string[]
   backup?: string

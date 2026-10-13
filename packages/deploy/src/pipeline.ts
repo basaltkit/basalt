@@ -549,6 +549,7 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
   const lockfileSaid = { warned: false }
   let values = checked.values
   let infra: InfraPlan = { services: [], env: [], findings: [], secrets: {} }
+  let migrating = false
   try {
     // Again on the code the fetch brought: preflight saw the commit before it.
     if (sha !== previous) stopOnErrors(ctx, await lockfileFindings(ctx), `the incoming commit ${sha.slice(0, 7)}`)
@@ -572,14 +573,22 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
       host.out.step('backup')
       host.out.info(`skipped: ${backup.why}`)
     }
+    migrating = true
     await step(ctx, 'migrate', async () => { await migrate(ctx, values); await tenantGrants(ctx, infra, values); await settleLockfile(ctx, lockfileSaid) })
+    migrating = false
     // The last point where a signal stops the deploy: from the release on, it finishes.
     throwIfAborted(ctx)
   } catch (error) {
     if (sha !== previous) await restoreCode(ctx, previous, values).catch((e: unknown) => host.out.error(`could not restore the code: ${(e as Error).message}`))
     record.note = (error as Error).message
     const signal = ctx.abort?.signal
-    if (signal) record.status = 'aborted'
+    if (migrating) {
+      // The code is back; the database may not be — a migration does not undo itself.
+      record.status = 'failed-migration'
+      host.out.error(`the migration failed: the database may be part-way migrated, and the code is back on ${previous.slice(0, 7)}`)
+      if (record.backup) host.out.info(`to put the database back as it was before this deploy: ${restoreCommand(ctx, infra, record.backup, values)}`)
+      else host.out.warn('no dump was taken before this migration (backup skipped): restore from your own backups if needed')
+    } else if (signal) record.status = 'aborted'
     await recordRelease(ctx, record).catch(() => undefined)
     // A terminal's SIGINT reaches the child too: its failure is the signal's.
     if (signal && !(error instanceof DeployAbortedError)) throw new DeployAbortedError(signal, (error as Error).message)
