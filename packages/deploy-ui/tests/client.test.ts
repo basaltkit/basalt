@@ -304,6 +304,32 @@ describe('the page on its own', () => {
       expect(view.resumeSeq()).toBe(0)
     })
 
+    it('a resumed attach names a step that started before the resume point by its id', () => {
+      const view = new RunView(fakeApp(), target, 'run', RUN)
+      view.handle(event(20, { type: 'step-end', id: 'build', status: 'failed', durationMs: 1200 }))
+      expect(view.element.querySelector('.steps li')?.textContent).toBe('✗ build — failed, 1.2 s')
+    })
+
+    it('a run whose done was seen offers a replay, never a re-attach (it would only find the end again)', async () => {
+      const view = new RunView(fakeApp(async () => new Response(`${JSON.stringify({ kind: 'state', state: 'ended', exitCode: 0, reason: 'the run had already finished' })}\n`, { status: 200 })), target, 'run', RUN)
+      document.body.append(view.element)
+      await view.attach(47)
+      expect(view.element.textContent).toContain('the run had already finished')
+      expect(view.element.textContent).toContain('Finished: exit 0')
+      expect(buttons('Re-attach')).toHaveLength(0)
+      expect(buttons('Show from the start')[0]?.className).toBe('primary')
+      view.element.remove()
+      // Seen as the run's own done event in the stream, the same.
+      const live = new RunView(fakeApp(async () => new Response([
+        JSON.stringify(event(45, { type: 'done', exitCode: 1 })),
+        JSON.stringify({ kind: 'state', state: 'ended', exitCode: 1 }),
+      ].join('\n'), { status: 200 })), target, 'run', RUN)
+      document.body.append(live.element)
+      await live.attach(45)
+      expect(buttons('Re-attach')).toHaveLength(0)
+      live.element.remove()
+    })
+
     it('cancel: two separate confirmations, the second one warns about a half-applied migration', async () => {
       const sent: Array<Record<string, unknown>> = []
       let streamClose: (() => void) | undefined
@@ -348,6 +374,21 @@ describe('the page on its own', () => {
       streamClose?.()
       await attached
     })
+  })
+
+  it('a destructive dialog opens with focus on Cancel, never on the destructive button; a typed name takes focus when asked', async () => {
+    const danger = confirmDialog({ title: 'Stop the deploy NOW?', lines: [], confirmLabel: 'Stop it now', danger: true })
+    expect(document.activeElement?.textContent).toBe('Cancel')
+    ;(document.activeElement as HTMLButtonElement).click()
+    expect(await danger).toBe(false)
+    const typed = confirmDialog({ title: 'Deploy?', lines: [], confirmLabel: 'Deploy', danger: true, typeToConfirm: 'production' })
+    expect(document.activeElement?.id).toBe('confirm-name')
+    dialog()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(await typed).toBe(false)
+    const mild = confirmDialog({ title: 'Quit?', lines: [], confirmLabel: 'Quit' })
+    expect(document.activeElement?.textContent).toBe('Quit')
+    dialog()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(await mild).toBe(false)
   })
 
   it('a dialog cancels on Escape and needs the exact name when asked', async () => {
