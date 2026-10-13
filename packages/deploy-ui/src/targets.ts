@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
-import { mkdir, open, rename, rm } from 'node:fs/promises'
-import { dirname, isAbsolute, join, win32 } from 'node:path'
+import { lstat, mkdir, open, rename, rm, stat as statPath } from 'node:fs/promises'
+import { dirname, isAbsolute, join, resolve, win32 } from 'node:path'
 
 /**
  * Deploy targets (RFC 0009 §5): where the operator's SSH key and the `.env`
@@ -143,12 +143,57 @@ export interface LoadedTargets {
 }
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0
+const STICKY = 0o1000
+
+/** What the ownership checks need from the OS: injectable, since a test cannot chown. */
+export interface TargetsFs {
+  platform?: NodeJS.Platform
+  /** The operator's uid (default: `process.getuid()`). */
+  uid?: number
+  /** `stat` of a directory (follows links, as path resolution does). */
+  statDir?: (path: string) => Promise<{ uid: number; mode: number; isDirectory(): boolean }>
+}
+
+const operatorUid = (fs: TargetsFs): number | undefined => fs.uid ?? (typeof process.getuid === 'function' ? process.getuid() : undefined)
+const posix = (fs: TargetsFs) => (fs.platform ?? process.platform) !== 'win32'
+
+/**
+ * Every directory from the file's up to `/` must be owned by the operator or
+ * root, and writable by nobody else unless sticky (as `/tmp` is): whoever can
+ * rename an entry in one of them can swap the file for their own (the checks
+ * sshd's StrictModes makes). POSIX only.
+ */
+async function checkDirectories(path: string, fs: TargetsFs): Promise<void> {
+  const uid = operatorUid(fs)
+  if (!posix(fs) || uid === undefined) return
+  const statDir = fs.statDir ?? statPath
+  let dir = dirname(resolve(path))
+  for (;;) {
+    let info
+    try {
+      info = await statDir(dir)
+    } catch (error) {
+      throw new TargetsFileError(`cannot check ${dir}: ${(error as Error).message}`)
+    }
+    if (!info.isDirectory()) throw new TargetsFileError(`${dir} is not a directory — refused`)
+    if (info.uid !== uid && info.uid !== 0) {
+      throw new TargetsFileError(`${dir} belongs to another user (uid ${info.uid}): they choose where your secrets go — keep the targets file in your own directory (the default is ~/.config/basalt)`)
+    }
+    if ((info.mode & 0o022) !== 0 && (info.mode & STICKY) === 0) {
+      throw new TargetsFileError(`${dir} is writable by other users (mode ${(info.mode & 0o7777).toString(8)}) and not sticky: anyone who can write it can replace the targets file — keep it in your own directory`)
+    }
+    const parent = dirname(dir)
+    if (parent === dir) return
+    dir = parent
+  }
+}
 
 /**
  * Reads the targets file without following a link (O_NOFOLLOW), and only if
- * it is a regular file nobody else can write. Missing → an empty file.
+ * it is a regular file the operator owns and nobody else can write, in
+ * directories nobody else can rename it in. Missing → an empty file.
  */
-export async function readTargets(path: string, platform: NodeJS.Platform = process.platform): Promise<LoadedTargets> {
+export async function readTargets(path: string, fs: TargetsFs = {}): Promise<LoadedTargets> {
   let handle
   try {
     handle = await open(path, constants.O_RDONLY | NOFOLLOW)
@@ -161,8 +206,15 @@ export async function readTargets(path: string, platform: NodeJS.Platform = proc
   try {
     const stat = await handle.stat()
     if (!stat.isFile()) throw new TargetsFileError(`${path} is not a regular file — refused`)
-    if (platform !== 'win32' && (stat.mode & 0o022) !== 0) {
-      throw new TargetsFileError(`${path} is writable by other users (mode ${(stat.mode & 0o777).toString(8)}): anyone who can change it chooses where your secrets go — chmod 600 ${path}`)
+    if (posix(fs)) {
+      if ((stat.mode & 0o022) !== 0) {
+        throw new TargetsFileError(`${path} is writable by other users (mode ${(stat.mode & 0o777).toString(8)}): anyone who can change it chooses where your secrets go — chmod 600 ${path}`)
+      }
+      const uid = operatorUid(fs)
+      if (uid !== undefined && stat.uid !== uid) {
+        throw new TargetsFileError(`${path} belongs to another user (uid ${stat.uid}, you are ${uid}): its owner chooses where your secrets go — refused`)
+      }
+      await checkDirectories(path, fs)
     }
     if (stat.size > MAX_FILE_BYTES) throw new TargetsFileError(`${path} is larger than ${MAX_FILE_BYTES} bytes — refused`)
     const text = await handle.readFile({ encoding: 'utf8' })
@@ -182,12 +234,22 @@ export async function readTargets(path: string, platform: NodeJS.Platform = proc
   }
 }
 
-/** Written 0600 to a new temp file in the same directory (0700 when created), then renamed over the old one. */
-export async function writeTargets(path: string, file: TargetsFile): Promise<void> {
+/**
+ * Written 0600 to a new temp file in the same directory (0700 when created),
+ * then renamed over the old one — only into directories that pass the same
+ * ownership checks as a read, and never over a file another user owns.
+ */
+export async function writeTargets(path: string, file: TargetsFile, fs: TargetsFs = {}): Promise<void> {
   const checked = checkTargetsFile(file)
   if (!checked.ok) throw new TargetsFileError(`refused: ${Object.entries(checked.errors).map(([k, v]) => `${k}: ${v}`).join('; ')}`)
   const dir = dirname(path)
   await mkdir(dir, { recursive: true, mode: 0o700 })
+  await checkDirectories(path, fs)
+  const uid = operatorUid(fs)
+  if (posix(fs) && uid !== undefined) {
+    const existing = await lstat(path).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error })
+    if (existing && existing.uid !== uid) throw new TargetsFileError(`${path} belongs to another user (uid ${existing.uid}): not replaced`)
+  }
   const temp = join(dir, `.deploy-targets.${randomBytes(6).toString('hex')}.tmp`)
   const handle = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600)
   try {

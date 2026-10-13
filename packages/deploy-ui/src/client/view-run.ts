@@ -99,6 +99,7 @@ export class RunView {
       if (!this.controller.signal.aborted) {
         this.failed = { code: 'local', reason: describe(error) }
         replace(this.outcome, problem(undefined, error))
+        void this.app.noticeChange(error)
       }
     } finally {
       this.following = false

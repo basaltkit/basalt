@@ -249,7 +249,7 @@ describe('the page on its own', () => {
     const target: TargetView = { name: 'staging', ssh: 'deploy@staging.example.com', dir: '/srv/myapp' }
     function fakeApp(fetchImpl: Fetch = async () => json(200, {})) {
       const storage = sessionStorage
-      return { api: new Api('tok', fetchImpl), storage, hello: undefined, renderBar: () => undefined, watch: () => undefined, refreshStatus: async () => undefined, show: () => undefined } as unknown as App
+      return { api: new Api('tok', fetchImpl), storage, hello: undefined, renderBar: () => undefined, watch: () => undefined, refreshStatus: async () => undefined, show: () => undefined, noticeChange: async () => undefined } as unknown as App
     }
     const event = (seq: number, body: Record<string, unknown>): StreamMessage => ({ kind: 'event', known: true, event: { v: 1, ts: '2026-10-11T12:00:00.000Z', seq, ...body } as never })
 

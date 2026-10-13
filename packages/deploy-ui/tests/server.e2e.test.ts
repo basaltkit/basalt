@@ -16,6 +16,10 @@ import { control, transcript, type Control } from './helpers.js'
  */
 
 const SECRET = 'sk_live_UI_SECRET_5b1d'
+/** The targets as the page shows them: what a confirmation names. */
+const STAGING = { name: 'staging', ssh: 'deploy@staging.example.com', dir: '/srv/myapp' }
+const PRODUCTION = { name: 'production', ssh: 'deploy@prod.example.com', port: 2222, dir: '/srv/myapp', node: '/usr/local/bin/node', protected: true }
+const BADKEY = { name: 'badkey', ssh: 'deploy@badkey.example.com', dir: '/srv/myapp' }
 let home: string
 let targetsPath: string
 let clientDir: string
@@ -211,12 +215,20 @@ describe('the local server, end to end', () => {
     expect((plan.result as { questions: Array<{ id: string; kind: string }> }).questions.map((q) => [q.id, q.kind])).toEqual([['env.PAYCO_SECRET_TOKEN', 'secret'], ['env.SUPPORT_EMAIL', 'text']])
     const answers = [{ id: 'env.PAYCO_SECRET_TOKEN', value: SECRET }]
     expect((await api('run', { target: 'staging', answers })).status).toBe(428)
-    expect((await api('run', { target: 'staging', confirm: true, answers: [{ id: 'env.NOT_ASKED', value: 'x' }] })).status).toBe(400)
-    expect((await api('run', { target: 'staging', confirm: true, answers: [{ id: 'env.PAYCO_SECRET_TOKEN', value: 'a\u0000b' }] })).status).toBe(400)
-    expect((await api('run', { target: 'staging', confirm: true, answers: [...answers, ...answers] })).status).toBe(400)
-    expect((await api('run', { target: 'badkey', confirm: true, answers })).status).toBe(409)
+    expect((await api('run', { target: 'staging', confirmedTarget: STAGING, confirm: true, answers: [{ id: 'env.NOT_ASKED', value: 'x' }] })).status).toBe(400)
+    expect((await api('run', { target: 'staging', confirmedTarget: STAGING, confirm: true, answers: [{ id: 'env.PAYCO_SECRET_TOKEN', value: 'a\u0000b' }] })).status).toBe(400)
+    expect((await api('run', { target: 'staging', confirmedTarget: STAGING, confirm: true, answers: [...answers, ...answers] })).status).toBe(400)
+    expect((await api('run', { target: 'badkey', confirmedTarget: BADKEY, confirm: true, answers })).status).toBe(409)
+    // The confirmation names the target as the page showed it: missing, or no longer what the file says, nothing is sent.
+    const sentBefore = (await ssh.calls()).length
+    expect((await api('run', { target: 'staging', confirm: true, answers })).status).toBe(400)
+    const moved = await api('run', { target: 'staging', confirmedTarget: { ...STAGING, ssh: 'deploy@old.example.com' }, confirm: true, answers })
+    expect(moved.status).toBe(409)
+    expect(JSON.parse(moved.body)).toMatchObject({ changed: true, error: expect.stringMatching(/changed in the targets file after you confirmed/) })
+    expect((await api('run', { target: 'staging', confirmedTarget: { ...STAGING, protected: true }, confirm: true, answers })).status).toBe(409)
+    expect((await ssh.calls()).length).toBe(sentBefore)
     const before = (await ssh.calls()).length
-    const run = await ok<CommandReply>('run', { target: 'staging', confirm: true, answers })
+    const run = await ok<CommandReply>('run', { target: 'staging', confirmedTarget: STAGING, confirm: true, answers })
     expect(run.ok).toBe(true)
     expect(run.result).toMatchObject({ runId: '20261011T120000Z-aaaaaaaaaaa2', pid: 5100 })
     const call = (await ssh.calls())[before]
@@ -275,11 +287,11 @@ describe('the local server, end to end', () => {
 
   it('a protected target needs its name typed; rollback --to a picked release', async () => {
     const to = 'a'.repeat(40)
-    expect((await api('rollback', { target: 'production', confirm: true, to })).status).toBe(428)
-    expect((await api('rollback', { target: 'production', confirm: true, confirmName: 'staging', to })).status).toBe(428)
-    expect((await api('rollback', { target: 'production', confirm: true, confirmName: 'production', to: 'HEAD~1' })).status).toBe(400)
+    expect((await api('rollback', { target: 'production', confirmedTarget: PRODUCTION, confirm: true, to })).status).toBe(428)
+    expect((await api('rollback', { target: 'production', confirmedTarget: PRODUCTION, confirm: true, confirmName: 'staging', to })).status).toBe(428)
+    expect((await api('rollback', { target: 'production', confirmedTarget: PRODUCTION, confirm: true, confirmName: 'production', to: 'HEAD~1' })).status).toBe(400)
     const before = (await ssh.calls()).length
-    const reply = await ok<CommandReply>('rollback', { target: 'production', confirm: true, confirmName: 'production', to })
+    const reply = await ok<CommandReply>('rollback', { target: 'production', confirmedTarget: PRODUCTION, confirm: true, confirmName: 'production', to })
     expect(reply.result).toMatchObject({ runId: '20261011T120000Z-aaaaaaaaaaa3' })
     const call = (await ssh.calls())[before]
     expect(call?.port).toBe(2222)
@@ -287,12 +299,12 @@ describe('the local server, end to end', () => {
     expect(call?.words.slice(6)).toEqual(['rollback', '--json=1', '--detach', `--to=${to}`, '--via=ui', '--actor=ops.alice'])
     // The server's refusal comes back as its error event.
     expect((await api('plan', { target: 'production' })).status).toBe(200)
-    const locked = await ok<CommandReply>('run', { target: 'production', confirm: true, confirmName: 'production' })
+    const locked = await ok<CommandReply>('run', { target: 'production', confirmedTarget: PRODUCTION, confirm: true, confirmName: 'production' })
     expect(locked).toMatchObject({ ok: false, exitCode: 3, error: { code: 'locked', holder: { pid: 5100 } } })
   })
 
   it('env streams the attended command; the secret goes to ssh stdin and nowhere else', async () => {
-    const res = await api('env', { target: 'staging', confirm: true, answers: [{ id: 'env.PAYCO_SECRET_TOKEN', value: SECRET }, { id: 'env.SUPPORT_EMAIL', value: 'help@example.com' }] })
+    const res = await api('env', { target: 'staging', confirmedTarget: STAGING, confirm: true, answers: [{ id: 'env.PAYCO_SECRET_TOKEN', value: SECRET }, { id: 'env.SUPPORT_EMAIL', value: 'help@example.com' }] })
     expect(res.status).toBe(200)
     const stream = messages(res)
     expect(stream[0]).toEqual({ kind: 'state', state: 'connecting' })

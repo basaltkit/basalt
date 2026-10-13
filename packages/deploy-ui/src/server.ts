@@ -347,9 +347,19 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     return Buffer.from(`${lines.join('\n')}\n`, 'utf8')
   }
 
+  /**
+   * The operator confirmed a destination their page showed; the file is read
+   * again for each request. Both must be the same target, field for field, or
+   * nothing is sent: a file changed in between never redirects the answers.
+   */
   function confirmed(body: Body, t: Target, what: string): void {
     if (body['confirm'] !== true) throw new HttpError(428, `${what} needs a confirmation`)
     if (t.protected && body['confirmName'] !== t.name) throw new HttpError(428, `${t.name} is protected: type its name to confirm ${what}`)
+    const shown = checkTarget(body['confirmedTarget'])
+    if (!shown.ok) throw new HttpError(400, 'confirmedTarget: the target as the confirmation showed it')
+    if (JSON.stringify(shown.value) !== JSON.stringify(t)) {
+      throw new HttpError(409, `${t.name} changed in the targets file after you confirmed (${shown.value.ssh} · ${shown.value.dir} → ${t.ssh} · ${t.dir}): nothing was sent — check it and confirm again`, { changed: true })
+    }
   }
 
   function runIdOf(body: Body): string {
