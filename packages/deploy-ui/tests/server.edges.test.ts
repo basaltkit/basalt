@@ -16,6 +16,10 @@ beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'basalt-deploy-ui-edges-'))
   ssh = await control({
     'slow.example.com': { status: { transcript: 'status-ok', pauseMs: 1500 }, env: { transcript: 'env-answers', pauseMs: 1500 }, plan: { transcript: 'plan-questions' } },
+    'hold.example.com': {
+      status: { transcript: 'status-ok', pauseMs: 800 },
+      attach: { lines: ['{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":0,"type":"hello","tool":"@basaltkit/deploy","version":"0.0.0","protocol":1,"command":"attach","pid":4100,"host":"server-1"}'], pauseMs: 20_000 },
+    },
     'fast.example.com': { run: { transcript: 'env-answers', stderr: 'a warning on stderr\n' }, plan: { transcript: 'plan-questions' }, env: { stderr: 'Permission denied (publickey).\n', exit: 255 } },
   })
 })
@@ -105,7 +109,7 @@ describe('limits', () => {
 })
 
 describe('lifetime', () => {
-  it('stops after the idle time; an open stream holds it; close is idempotent', async () => {
+  it('stops after the idle time; close is idempotent', async () => {
     const pending: Array<() => void> = []
     let stopped: string | undefined
     const { server } = await serverWith([], {
@@ -118,6 +122,48 @@ describe('lifetime', () => {
     expect(stopped).toBe('idle')
     await expect(fetch(server.url)).rejects.toThrow()
     await server.close()
+  })
+
+  it('an open attach stream and a remote command in flight hold the idle stop; it fires once both are over', async () => {
+    const pending: Array<() => void> = []
+    let stopped: string | undefined
+    const fireAll = () => { for (const callback of pending.splice(0)) callback() }
+    const { server, api } = await serverWith([{ name: 'hold', ssh: 'deploy@hold.example.com' }], {
+      idleMinutes: 1,
+      timers: { set: (callback) => { pending.push(callback); return pending.length }, clear: () => undefined },
+      onStop: (reason) => { stopped = reason },
+    })
+    try {
+      // A status that takes a while: every armed idle callback fires while it is in flight.
+      const before = (await ssh.calls()).length
+      const status = api('status', { target: 'hold' })
+      while ((await ssh.calls()).length === before) await new Promise((r) => setTimeout(r, 20))
+      fireAll()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(stopped).toBeUndefined()
+      expect((await status).status).toBe(200)
+
+      // An open attach: the same.
+      const leaving = new AbortController()
+      const attach = await api('attach', { target: 'hold', runId: '20261011T120000Z-aaaaaaaaaaa2' }, leaving.signal)
+      expect(attach.status).toBe(200)
+      fireAll()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(stopped).toBeUndefined()
+      expect((await api('targets')).status).toBe(200)
+      fireAll()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(stopped).toBeUndefined()
+
+      // The page goes away: the stream closes, the count starts again, and then it stops.
+      leaving.abort()
+      await new Promise((r) => setTimeout(r, 300))
+      fireAll()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(stopped).toBe('idle')
+    } finally {
+      await server.close()
+    }
   })
 
   it('serves the compiled client from dist/client by default (none when it is not built)', async () => {
