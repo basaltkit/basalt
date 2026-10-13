@@ -690,3 +690,13 @@ internal it uses to hide the echo; a compose job's `once.exists` reaches the
 shell as `$1`.
 
 Not in phase 0: a remote/SSH UI and a `--json` protocol (phase 1).
+
+## 15. Phase 1 — the machine protocol
+
+Specified and implemented in [RFC 0008](0008-deploy-machine-protocol.md):
+`--json` (NDJSON events on stdout, one choke point that redacts secrets),
+`--answers=stdin` (the `.env` questions answered by a program, fail-closed),
+`run`/`rollback --detach` with `attach` and `cancel`, and run logs under
+`<stateDir>/runs`. Without `--json` every command prints what it printed
+after phase 0, byte for byte. The local UI that drives it over the system
+`ssh` is phase 2.

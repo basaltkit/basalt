@@ -1,32 +1,9 @@
 import { join } from 'node:path'
 import { syslogRelease } from './audit.js'
 import type { DeployContext } from './context.js'
+import type { Hold, Release } from './protocol.js'
 
-/** One line per release in `<stateDir>/releases.json` (RFC 0006 §8). */
-export interface Release {
-  sha: string
-  previous?: string
-  at: string
-  user: string
-  /**
-   * `aborted`: a signal stopped it before the release (code put back).
-   * `failed-migration`: the migration step failed — the database may be
-   * part-way; the restore command for `backup` was printed.
-   * `rollback-unhealthy`: this commit was released by a rollback and did
-   * not answer either — never a rollback target again.
-   */
-  status: 'ok' | 'rolled-back' | 'failed' | 'failed-migration' | 'public-unreachable' | 'aborted' | 'rollback-unhealthy'
-  /** Migration directories this release applied for the first time. */
-  migrations: string[]
-  backup?: string
-  note?: string
-  /** Who ran it: `--actor`, `$BASALT_DEPLOY_ACTOR` or `$USER` (`user` is always the OS account). */
-  actor?: string
-  /** The SSH client address, when run over SSH. */
-  client?: string
-  /** `ssh`, `ci`, `terminal` or `batch`. */
-  via?: string
-}
+export type { Hold, Release } from './protocol.js'
 
 const KEEP = 100
 
@@ -89,17 +66,6 @@ export function deployedOver(releases: Release[], current: string): string | und
   return target
 }
 
-/**
- * Written by a manual rollback: the commit it left. A scheduled `run` would
- * otherwise fetch and redeploy it at once; it refuses that commit until the
- * branch moves on, or `--unhold`.
- */
-export interface Hold {
-  sha: string
-  at: string
-  actor: string
-  note: string
-}
 
 export const holdFile = (ctx: DeployContext) => join(ctx.stateDir, 'hold.json')
 
