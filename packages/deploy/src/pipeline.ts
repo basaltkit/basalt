@@ -1,6 +1,6 @@
 import { apachePreflight } from './apache.js'
 import { caddyPreflight } from './caddy.js'
-import { backupDatabase, backupDir, restoreCommand } from './backup.js'
+import { backupDatabase, backupDir, backupPlaceFindings, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, logFindings, pruneImages } from './compose.js'
 import { definedEntries, isBranchName, processName, REMOTE_NAME } from './config.js'
@@ -190,11 +190,13 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
 /** The dump's container running — found now, not after the build, minutes later. */
 async function backupFindings(ctx: DeployContext, values: Map<string, string>, options: RunOptions): Promise<Finding[]> {
   const container = ctx.config.backup?.container
+  const runs = backupDecision(ctx.config, values, options.skip ?? []).run
+  const place = runs ? await backupPlaceFindings(ctx) : []
   // An external infra.postgres is checked with the rest of the infra.
-  if (!container || !backupDecision(ctx.config, values, options.skip ?? []).run) return []
+  if (!container || !runs) return place
   const running = await ctx.host.exec('docker', ['inspect', '--format', '{{.State.Running}}', container])
-  if (running.stdout.trim() === 'true') return []
-  return [{
+  if (running.stdout.trim() === 'true') return place
+  return [...place, {
     id: 'backup',
     level: 'error',
     message: running.code === 0 ? `backup.container ${container} is not running` : `backup.container ${container} does not exist (or docker is not available to this user)`,
