@@ -375,11 +375,17 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         if (exchange.ok) {
           idle.touch()
           options.log('the browser session is open')
-          return json(res, 200, { token: exchange.token })
+          return json(res, 200, { token: exchange.token, serverKey: exchange.serverKey })
         }
         if (exchange.status === 409) options.log('a second browser tried to claim the session: refused (if that was not you, quit and restart)')
         else options.log(`a session request was refused: ${exchange.reason}`)
         return refuse(res, exchange.status, exchange.reason)
+      }
+      case 'hello': {
+        // The page's check that it still talks to this process (see Session).
+        const proof = session.prove(body['nonce'])
+        if (!proof) throw new HttpError(400, 'nonce: 22 to 128 base64url characters')
+        return json(res, 200, { proof })
       }
       case 'targets':
         return json(res, 200, await targetsReply())

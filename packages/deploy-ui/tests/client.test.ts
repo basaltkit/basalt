@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
+import { createHmac, webcrypto } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { Api, ApiError, readLines, type Fetch } from '../src/client/api.js'
-import type { App } from '../src/client/app.js'
+import { Api, ApiError, PROOF_CONTEXT, readLines, ServerGone, type Fetch } from '../src/client/api.js'
+import { SERVER_KEY, TOKEN_KEY, type App } from '../src/client/app.js'
 import { confirmDialog } from '../src/client/dialog.js'
 import { el, text } from '../src/client/dom.js'
 import { boot, type Env } from '../src/client/main.js'
@@ -13,6 +15,7 @@ import { clean } from '../src/client/sanitize.js'
 import { MAX_LOG_LINES, RunView } from '../src/client/view-run.js'
 import { INDEX_HTML } from '../src/page.js'
 import { startUiServer, type UiServer } from '../src/server.js'
+import { PROOF_CONTEXT as SERVER_PROOF_CONTEXT } from '../src/session.js'
 import { control, type Control } from './helpers.js'
 
 /**
@@ -22,6 +25,7 @@ import { control, type Control } from './helpers.js'
  */
 
 const SECRET = 'sk_live_UI_SECRET_5b1d'
+const CRYPTO = webcrypto as unknown as Crypto
 const RUN = '20261011T120000Z-aaaaaaaaaaa2'
 let ssh: Control
 let home: string
@@ -91,11 +95,13 @@ describe('the page against the real local server', () => {
       storage: sessionStorage,
       fetch: browserFetch(ui),
       document,
+      crypto: CRYPTO,
     }
     app = await boot(env) as App
     expect(app).toBeDefined()
     expect(replaced).toBe('/')
-    expect(sessionStorage.getItem('basalt-deploy-ui:token')).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(sessionStorage.getItem(TOKEN_KEY)).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(sessionStorage.getItem(SERVER_KEY)).toMatch(/^[A-Za-z0-9_-]{43}$/)
     // First launch, no target: the add form is open.
     expect(document.getElementById('target-name')).not.toBeNull()
   })
@@ -187,12 +193,15 @@ describe('the page against the real local server', () => {
 
   it('a page reload reuses the tab\'s token; quit stops the server', async () => {
     shell()
-    const again = await boot({ location: { hash: '', pathname: '/' }, history: { replaceState: () => undefined }, storage: sessionStorage, fetch: browserFetch(ui), document }) as App
+    const again = await boot({ location: { hash: '', pathname: '/' }, history: { replaceState: () => undefined }, storage: sessionStorage, fetch: browserFetch(ui), document, crypto: CRYPTO }) as App
     expect(again.targets.targets.map((t) => t.name)).toEqual(['staging', 'production'])
     click('Quit')
     await confirmOpen('Quit')
     await until(() => document.body.textContent?.includes('has stopped') === true, 'stopped')
     await expect(fetch(ui.url)).rejects.toThrow()
+    // Quit forgets the tab's session.
+    expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull()
+    expect(sessionStorage.getItem(SERVER_KEY)).toBeNull()
   })
 })
 
@@ -202,7 +211,7 @@ describe('the page on its own', () => {
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
   it('a second claim of the session fails loudly; no code and no token says what to do', async () => {
-    const env = (hash: string, fetchImpl: Fetch): Env => ({ location: { hash, pathname: '/' }, history: { replaceState: () => undefined }, storage: sessionStorage, fetch: fetchImpl, document })
+    const env = (hash: string, fetchImpl: Fetch): Env => ({ location: { hash, pathname: '/' }, history: { replaceState: () => undefined }, storage: sessionStorage, fetch: fetchImpl, document, crypto: CRYPTO })
     expect(await boot(env('#launch=abc', async () => new Response('this UI already has its browser session\n', { status: 409, headers: { 'content-type': 'text/plain' } })))).toBeUndefined()
     expect(document.querySelector('[role="alert"]')?.textContent).toMatch(/already has its browser session.*stop basalt-deploy-ui/s)
     shell()
@@ -212,9 +221,116 @@ describe('the page on its own', () => {
     expect(await boot(env('', async () => json(200, {})))).toBeUndefined()
     expect(document.body.textContent).toMatch(/No session/)
     shell()
-    sessionStorage.setItem('basalt-deploy-ui:token', 'tok')
-    expect(await boot(env('', async () => json(401, { error: 'no session' })))).toBeUndefined()
+    // A token without its server key (or the reverse) is no session: both are forgotten.
+    sessionStorage.setItem(TOKEN_KEY, 'tok')
+    expect(await boot(env('', async () => json(200, {})))).toBeUndefined()
+    expect(document.body.textContent).toMatch(/No session/)
+    expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull()
+    shell()
+    const key = Buffer.alloc(32, 9).toString('base64url')
+    const proving: Fetch = async (input, init) => {
+      if (input === '/api/hello') {
+        const { nonce } = JSON.parse(String(init.body)) as { nonce: string }
+        return json(200, { proof: createHmac('sha256', Buffer.from(key, 'base64url')).update(`${PROOF_CONTEXT}${nonce}`).digest('base64url') })
+      }
+      return json(401, { error: 'no session' })
+    }
+    sessionStorage.setItem(TOKEN_KEY, 'tok')
+    sessionStorage.setItem(SERVER_KEY, key)
+    expect(await boot(env('', proving))).toBeUndefined()
     expect(document.body.textContent).toMatch(/could not start.*no session/s)
+    // A server that cannot prove the key: the page stops before anything else, and forgets the session.
+    shell()
+    expect(await boot(env('', async () => json(200, { proof: 'A'.repeat(43) })))).toBeUndefined()
+    expect(document.body.textContent).toMatch(/no longer talks to your deploy UI/)
+    expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull()
+  })
+
+  it('after the UI stops, a listener that takes its port gets no answer: the page asks for the proof first, then stops and forgets', async () => {
+    const server = await startUiServer({ targetsPath: join(home, 'squat-targets.json'), runner: ssh.runner, clientDir: null, log: () => undefined })
+    const app = await boot({
+      location: { hash: `#launch=${server.launchUrl.split('#launch=')[1]}`, pathname: '/' }, history: { replaceState: () => undefined },
+      storage: sessionStorage, fetch: browserFetch(server), document, crypto: CRYPTO,
+    }) as App
+    expect(app).toBeDefined()
+    // The real server proves itself, as often as asked.
+    await app.api.verifyServer()
+    await app.api.verifyServer()
+    // It stops (idle, Ctrl-C); another local user's process binds the same port and answers everything.
+    await server.close()
+    const seen: Array<{ url: string | undefined; auth: string | undefined; body: string }> = []
+    const squatter = createServer((req, res) => {
+      const chunks: Buffer[] = []
+      req.on('data', (c: Buffer) => chunks.push(c))
+      req.on('end', () => {
+        seen.push({ url: req.url, auth: req.headers.authorization, body: Buffer.concat(chunks).toString('utf8') })
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ proof: 'A'.repeat(43), ok: true, token: 'x' }))
+      })
+    })
+    await new Promise<void>((resolve, reject) => { squatter.once('error', reject); squatter.listen(server.port, '127.0.0.1', () => resolve()) })
+    try {
+      const error = await app.api.post('run', { target: 'prod', confirm: true, answers: [{ id: 'env.DATABASE_PASSWORD', value: SECRET }] }).catch((e: unknown) => e)
+      expect(error).toBeInstanceOf(ServerGone)
+      expect((error as ServerGone).why).toBe('unverified')
+      // It saw a hello with a nonce, and nothing else: never the answer.
+      expect(seen.map((r) => r.url)).toEqual(['/api/hello'])
+      expect(JSON.stringify(seen)).not.toContain(SECRET)
+      expect(document.querySelector('[role="alert"]')?.textContent).toMatch(/no longer talks to your deploy UI.*Nothing was sent/s)
+      expect(document.querySelector('form')).toBeNull()
+      expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull()
+      expect(sessionStorage.getItem(SERVER_KEY)).toBeNull()
+      // Nothing more leaves the page.
+      await expect(app.api.post('targets')).rejects.toBeInstanceOf(ServerGone)
+      await expect(app.api.stream('attach', {}, () => undefined)).rejects.toBeInstanceOf(ServerGone)
+      expect(seen).toHaveLength(1)
+    } finally {
+      await new Promise((r) => squatter.close(r))
+    }
+  })
+
+  it('a stopped UI (nothing on the port) turns the page into a "stopped" notice, with the session forgotten', async () => {
+    const server = await startUiServer({ targetsPath: join(home, 'stop-targets.json'), runner: ssh.runner, clientDir: null, log: () => undefined })
+    const app = await boot({
+      location: { hash: `#launch=${server.launchUrl.split('#launch=')[1]}`, pathname: '/' }, history: { replaceState: () => undefined },
+      storage: sessionStorage, fetch: browserFetch(server), document, crypto: CRYPTO,
+    }) as App
+    await server.close()
+    const error = await app.api.post('status', { target: 'staging' }).catch((e: unknown) => e)
+    expect(error).toMatchObject({ why: 'unreachable' })
+    expect(document.querySelector('[role="alert"]')?.textContent).toMatch(/The deploy UI has stopped/)
+    expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull()
+    expect(document.getElementById('nav')?.childElementCount).toBe(0)
+  })
+
+  it('the proof: the same context string on both sides; no key, no WebCrypto or a refusal stops the page; a stream cut is a stop, a page bug is not', async () => {
+    expect(PROOF_CONTEXT).toBe(SERVER_PROOF_CONTEXT)
+    const answers = { answers: [{ id: 'env.A', value: 'x' }] }
+    const sent: string[] = []
+    const record: Fetch = async (input) => { sent.push(input); return json(200, {}) }
+    for (const api of [new Api('tok', record), new Api('tok', record, { serverKey: 'k' }), new Api('tok', record, { crypto: CRYPTO })]) {
+      await expect(api.post('run', answers)).rejects.toMatchObject({ why: 'unverified' })
+    }
+    expect(sent).toEqual([])
+    // Without answers, no proof is needed.
+    await new Api('tok', record).post('run', { answers: [] })
+    expect(sent).toEqual(['/api/run'])
+    const refusing = new Api('tok', async () => json(401, { error: 'no session' }), { serverKey: 'k', crypto: CRYPTO })
+    let gone: ServerGone | undefined
+    refusing.onGone = (e) => { gone = e }
+    await expect(refusing.stream('env', answers, () => undefined)).rejects.toMatchObject({ why: 'unverified' })
+    expect(gone?.why).toBe('unverified')
+
+    const cut = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode('{"kind":"state","state":"connecting"}\n')); c.error(new TypeError('network error')) } })
+    await expect(new Api('tok', async () => new Response(cut, { status: 200 })).stream('attach', {}, () => undefined)).rejects.toMatchObject({ why: 'unreachable' })
+    const bug = new Api('tok', async () => new Response('{"kind":"diagnostic","text":"x"}\n', { status: 200 }))
+    let bugGone: ServerGone | undefined
+    bug.onGone = (e) => { bugGone = e }
+    await expect(bug.stream('attach', {}, () => { throw new RangeError('a page bug') })).rejects.toBeInstanceOf(RangeError)
+    expect(bugGone).toBeUndefined()
+    const aborted = new AbortController()
+    aborted.abort()
+    await expect(new Api('tok', async (_i, init) => { if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError'); return json(200, {}) }).stream('attach', {}, () => undefined, aborted.signal)).rejects.toMatchObject({ name: 'AbortError' })
   })
 
   it('the API client: bearer header, JSON errors, text errors, NDJSON split anywhere', async () => {

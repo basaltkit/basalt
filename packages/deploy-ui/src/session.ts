@@ -1,11 +1,20 @@
-import { randomBytes as nodeRandomBytes, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes as nodeRandomBytes, timingSafeEqual } from 'node:crypto'
 
 /**
  * The one browser session of a UI process (RFC 0009 §4.2): a one-time launch
  * code (in the URL fragment, valid 120 s) exchanged once for a session token
  * sent as `Authorization: Bearer`. The first exchange wins; any later one —
  * right code or not — is refused, and the terminal says so.
+ *
+ * The exchange also hands the page a server key that the page never sends
+ * back: the page checks this process with a challenge (HMAC of a fresh nonce)
+ * before any answer leaves it. Once the UI has stopped, another local process
+ * may bind the same port; it can have seen the bearer token, never the key.
  */
+
+/** Bound into every proof, so a proof is never anything but this. */
+export const PROOF_CONTEXT = 'basalt-deploy-ui hello v1\n'
+export const NONCE = /^[A-Za-z0-9_-]{22,128}$/
 
 export const LAUNCH_TTL_MS = 120_000
 const SECRET_BYTES = 32
@@ -23,12 +32,13 @@ export function safeEqual(given: string, expected: string): boolean {
 }
 
 export type Exchange =
-  | { ok: true; token: string }
+  | { ok: true; token: string; serverKey: string }
   | { ok: false; status: 401 | 409; reason: string }
 
 export class Session {
   readonly launchCode: string
   private readonly token: string
+  private readonly serverKey: string
   private readonly createdAt: number
   private claimed = false
 
@@ -38,6 +48,7 @@ export class Session {
   ) {
     this.launchCode = random(SECRET_BYTES).toString('base64url')
     this.token = random(SECRET_BYTES).toString('base64url')
+    this.serverKey = random(SECRET_BYTES).toString('base64url')
     this.createdAt = now()
   }
 
@@ -50,7 +61,13 @@ export class Session {
     if (typeof code !== 'string' || !safeEqual(code, this.launchCode)) return { ok: false, status: 401, reason: 'wrong launch code' }
     if (this.now() - this.createdAt > LAUNCH_TTL_MS) return { ok: false, status: 401, reason: 'the launch code expired (120 s); restart basalt-deploy-ui' }
     this.claimed = true
-    return { ok: true, token: this.token }
+    return { ok: true, token: this.token, serverKey: this.serverKey }
+  }
+
+  /** HMAC-SHA256(serverKey, context + nonce), base64url; undefined for a malformed nonce. */
+  prove(nonce: unknown): string | undefined {
+    if (typeof nonce !== 'string' || !NONCE.test(nonce)) return undefined
+    return createHmac('sha256', Buffer.from(this.serverKey, 'base64url')).update(`${PROOF_CONTEXT}${nonce}`).digest('base64url')
   }
 
   /** `Authorization: Bearer <token>`, exactly. */

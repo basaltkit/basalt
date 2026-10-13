@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
+import { createHmac, webcrypto } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { PlanResult, StatusResult } from '@basaltkit/deploy/protocol'
-import { Api, ApiError, type Fetch } from '../src/client/api.js'
+import { Api, ApiError, PROOF_CONTEXT, type Fetch } from '../src/client/api.js'
 import { App } from '../src/client/app.js'
 import type { CommandReply, TargetsReply } from '../src/client/messages.js'
 import { problem } from '../src/client/reply.js'
@@ -44,6 +45,10 @@ const plan = (over: Partial<PlanResult> = {}): PlanResult => ({
 })
 const reply = (result: unknown, over: Partial<CommandReply> = {}): CommandReply => ({ ok: true, hello: hello as never, result, exitCode: 0, diagnostics: [], ...over })
 
+const SERVER_KEY = Buffer.alloc(32, 7).toString('base64url')
+/** The local server's answer to the page's check (Session.prove). */
+const prove = (body: Record<string, unknown>) => json({ proof: createHmac('sha256', Buffer.from(SERVER_KEY, 'base64url')).update(`${PROOF_CONTEXT}${String(body['nonce'])}`).digest('base64url') })
+
 let routes: Record<string, Handler>
 let sent: Array<{ route: string; body: Record<string, unknown> }>
 let app: App
@@ -78,7 +83,7 @@ const confirmDialog = async (label: string) => {
 
 async function start(): Promise<void> {
   document.documentElement.innerHTML = INDEX_HTML.replace(/^<!doctype html>\n/, '')
-  app = new App(new Api('tok', fetchImpl), {
+  app = new App(new Api('tok', fetchImpl, { serverKey: SERVER_KEY, crypto: webcrypto as unknown as Crypto }), {
     nav: document.getElementById('nav') as HTMLElement,
     bar: document.getElementById('target-bar') as HTMLElement,
     main: main(),
@@ -91,6 +96,7 @@ beforeEach(() => {
   sent = []
   sessionStorage.clear()
   routes = {
+    hello: prove,
     targets: () => json(targets),
     status: () => json(reply(status())),
     plan: () => json(reply(plan())),
@@ -242,7 +248,11 @@ describe('plan & deploy', () => {
     click('Deploy…')
     await confirmDialog('Deploy')
     await until(() => document.getElementById('run-title')?.textContent === 'run on staging (attended)')
+    // The page checked its server first (answers go with it), then streamed.
+    await until(() => sent.some((s) => s.route === 'run' && s.body['attended'] === true), 'the attended run')
     expect(sent.find((s) => s.route === 'run' && s.body['attended'])?.body).toMatchObject({ attended: true, confirm: true })
+    const attendedAt = sent.findIndex((s) => s.route === 'run' && s.body['attended'] === true)
+    expect(sent[attendedAt - 1]?.route).toBe('hello')
     click('Plan & deploy')
     click('Write .env only…')
     await until(() => document.querySelector('dialog')?.textContent?.includes('Write the .env') === true)

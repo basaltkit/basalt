@@ -1,6 +1,7 @@
+import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { checkRequest, CLIENT_FILE, type RequestFacts } from '../src/security.js'
-import { IdleTimer, LAUNCH_TTL_MS, safeEqual, Session } from '../src/session.js'
+import { IdleTimer, LAUNCH_TTL_MS, PROOF_CONTEXT, safeEqual, Session } from '../src/session.js'
 
 const PORT = 45123
 const api = (headers: Record<string, string | undefined> = {}, method = 'POST', url = '/api/status'): RequestFacts => ({
@@ -50,7 +51,16 @@ describe('checkRequest', () => {
 describe('the session', () => {
   const fixed = (byte: number) => (size: number) => Buffer.alloc(size, byte)
 
-  it('32 random bytes each for the launch code and the token; the first exchange wins, any later one is 409', () => {
+  it('the server key proves this process: HMAC-SHA256 of the context and a well-formed nonce, nothing else', () => {
+    const session = new Session(() => 0, fixed(5))
+    const key = Buffer.alloc(32, 5)
+    const nonce = Buffer.alloc(32, 1).toString('base64url')
+    expect(session.prove(nonce)).toBe(createHmac('sha256', key).update(`${PROOF_CONTEXT}${nonce}`).digest('base64url'))
+    expect(session.prove(`${nonce}x`)).not.toBe(session.prove(nonce))
+    for (const bad of [undefined, 1, '', 'short', 'x'.repeat(129), 'a b'.repeat(10), '../../../../../../../../x']) expect(session.prove(bad), String(bad)).toBeUndefined()
+  })
+
+  it('32 random bytes each for the launch code, the token and the server key; the first exchange wins, any later one is 409', () => {
     let calls = 0
     const random = (size: number) => { calls++; expect(size).toBe(32); return Buffer.alloc(size, calls) }
     const session = new Session(() => 0, random)
@@ -59,7 +69,7 @@ describe('the session', () => {
     expect(session.exchange(undefined)).toMatchObject({ ok: false, status: 401 })
     expect(session.authorizes(`Bearer ${Buffer.alloc(32, 2).toString('base64url')}`)).toBe(false)
     const first = session.exchange(session.launchCode)
-    expect(first).toEqual({ ok: true, token: Buffer.alloc(32, 2).toString('base64url') })
+    expect(first).toEqual({ ok: true, token: Buffer.alloc(32, 2).toString('base64url'), serverKey: Buffer.alloc(32, 3).toString('base64url') })
     expect(session.exchange(session.launchCode)).toMatchObject({ ok: false, status: 409 })
     expect(session.exchange('wrong')).toMatchObject({ ok: false, status: 409 })
     expect(session.isClaimed).toBe(true)
