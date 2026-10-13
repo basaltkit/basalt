@@ -48,6 +48,7 @@ export function server(options: {
         return ok(rest[0] === '--abbrev-ref' ? 'master\n' : `${head}\n`)
       }
       if (verb === 'fetch') return ok()
+      if (verb === 'check-ignore') return ok()
       if (verb === 'ls-remote') return options.remote ?? ok(`${NEW}\trefs/heads/master\n`)
       if (verb === 'merge') { head = NEW; return ok() }
       if (verb === 'reset') { head = rest[1] as string; return ok() }

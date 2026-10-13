@@ -103,8 +103,12 @@ export interface Hold {
 
 export const holdFile = (ctx: DeployContext) => join(ctx.stateDir, 'hold.json')
 
+/** Where the hold was kept before `install` moved the state out of the checkout. */
+const legacyHold = (ctx: DeployContext) => join(ctx.dir, '.basalt', 'hold.json')
+
+/** The hold — from `<stateDir>/hold.json`, else (after `install`) the checkout's `.basalt/hold.json`, like the release history. */
 export async function readHold(ctx: DeployContext): Promise<Hold | undefined> {
-  const text = await ctx.host.readFile(holdFile(ctx))
+  const text = (await ctx.host.readFile(holdFile(ctx))) ?? (holdFile(ctx) === legacyHold(ctx) ? undefined : await ctx.host.readFile(legacyHold(ctx)))
   if (!text) return undefined
   try {
     const value = JSON.parse(text) as Partial<Hold>
@@ -120,7 +124,7 @@ export async function writeHold(ctx: DeployContext, hold: Hold): Promise<void> {
 }
 
 export async function clearHold(ctx: DeployContext): Promise<void> {
-  if (await ctx.host.exists(holdFile(ctx))) await ctx.host.remove(holdFile(ctx))
+  for (const file of new Set([holdFile(ctx), legacyHold(ctx)])) if (await ctx.host.exists(file)) await ctx.host.removeFile(file)
 }
 
 /** Migration directory names among changed paths (`…/migrations/<name>/migration.sql`). */
