@@ -256,6 +256,9 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     const release = claim(t.name, spec.command)
     const controller = new AbortController()
     controllers.add(controller)
+    // A slow plan or a run --detach still detaching is not idleness: stopping
+    // now would SIGTERM it and lose its runId.
+    idle.hold()
     try {
       options.log(`${t.name}: ${spec.command}`)
       const outcome = await execRemote(options.runner, t, spec, {
@@ -266,6 +269,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
       return toReply(outcome)
     } finally {
       controllers.delete(controller)
+      idle.release()
       release()
     }
   }
@@ -276,7 +280,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     res.flushHeaders()
     const controller = new AbortController()
     controllers.add(controller)
-    idle.streamOpened()
+    idle.hold()
     let open = true
     // The page went away: an attended command stops (its ssh session ends), a follow stops watching.
     res.on('close', () => { if (open) controller.abort() })
@@ -289,7 +293,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         if (!open) return
         open = false
         controllers.delete(controller)
-        idle.streamClosed()
+        idle.release()
         res.end()
       },
     }

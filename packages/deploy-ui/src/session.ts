@@ -73,12 +73,12 @@ const realTimers: TimerApi = {
 
 /**
  * Idle shutdown (RFC 0009 §4.5): fires after `ms` with no authenticated
- * request and no open stream. An open stream holds it; closing the last one
- * restarts the count.
+ * request, no open stream and no remote command in flight. Each of those
+ * holds it; releasing the last hold restarts the count.
  */
 export class IdleTimer {
   private handle: unknown
-  private streams = 0
+  private holds = 0
   private stopped = false
 
   constructor(private readonly ms: number, private readonly onIdle: () => void, private readonly timers: TimerApi = realTimers) {
@@ -89,13 +89,14 @@ export class IdleTimer {
     this.arm()
   }
 
-  streamOpened(): void {
-    this.streams++
+  /** An open stream or a remote command in flight: the UI is not idle. */
+  hold(): void {
+    this.holds++
     this.disarm()
   }
 
-  streamClosed(): void {
-    this.streams = Math.max(0, this.streams - 1)
+  release(): void {
+    this.holds = Math.max(0, this.holds - 1)
     this.arm()
   }
 
@@ -111,10 +112,10 @@ export class IdleTimer {
 
   private arm(): void {
     this.disarm()
-    if (this.stopped || this.streams > 0) return
+    if (this.stopped || this.holds > 0) return
     this.handle = this.timers.set(() => {
       this.handle = undefined
-      if (!this.stopped && this.streams === 0) this.onIdle()
+      if (!this.stopped && this.holds === 0) this.onIdle()
     }, this.ms)
   }
 }
