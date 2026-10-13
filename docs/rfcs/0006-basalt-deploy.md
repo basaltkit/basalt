@@ -64,7 +64,7 @@ and hostnames, not tooling (§7).
 | Infra | `ensure_vm_infra` (pg, redis, minio, clamav containers) | `docker-compose.server.yml` (pg, redis, minio), reuses passwords from running containers |
 | Code | `git pull --ff-only` | `git pull --ff-only`, refuses a dirty tree |
 | Build | Docker images tagged by SHA | `pnpm install`, 2× `prisma generate`, `web` build |
-| Backup | — | `pg_dump` to `backups/predeploy/`, keeps 10 |
+| Backup | — | `pg_dump` to `<stateDir>/backups/` (was `backups/predeploy/`; §14.3), keeps 10 |
 | Migrate | in a one-off container | `prisma migrate deploy` + `basalt tenant:migrate` |
 | Release | `compose up -d` | `pm2 restart` (recreated when its cwd differs) |
 | Proxy | Caddy, or `PROXY=none` | none (Apache configured by hand) |
@@ -188,7 +188,7 @@ do, and is skippable by name (`--skip=backup`) only where skipping is safe.
 | 4 | **infra** | containers | adopt-or-create (§6.3); waits for health; creates buckets |
 | 5 | **build** | `node_modules`, generated clients, `web/dist` | install with `NODE_ENV` unset; a failure here stops **before** anything running changed |
 | 6 | **validate** | nothing | the env schema check again, against the **new** code's `env.ts` |
-| 7 | **backup** | `backups/predeploy/<sha>-<time>.dump` | `pg_dump -Fc` of the central database; keeps N |
+| 7 | **backup** | `<stateDir>/backups/<time>-<sha>.dump` (was `backups/predeploy/`; §14.3) | `pg_dump -Fc` of the central database; keeps N |
 | 8 | **migrate** | database | central, then tenants |
 | 9 | **release** | process | runtime target |
 | 10 | **proxy** | vhost | proxy target; `apachectl configtest` before reload |
@@ -600,11 +600,30 @@ the config as root too, and ran `sh -c "cd '${dir}' && …"`.
   `--unsafe-tool`. The printed command is `cd / && sudo -H npx --yes
   --package=@basaltkit/deploy@<exact version> -- basalt-deploy install …`:
   outside the checkout (npx would pick the checkout's copy), with root's
-  `HOME` (root's npm cache).
+  `HOME` (root's npm cache). The check is a guardrail against a mistake, not
+  a boundary: it runs inside the copy it checks, which a hostile app user can
+  edit. The control is running the pinned, root-owned copy.
 - **Validated fields.** `webRoot` (inside the checkout, no dot directories,
   not the checkout), `apiPrefix`, `certName`, `proxy.root`, `onDemandTls.ask`;
   env files only inside the checkout or directly in `/etc/<app>/`. Raw Caddy
-  `extra` and a non-default proxy root are shown and need a "yes".
+  `extra` and a non-default proxy root are shown and need a "yes"; `extra`
+  may hold no control or direction character (a CR hid a directive from the
+  confirmation) and no `import`.
+- **Names bound to the app.** The app name chooses `/etc/<app>` and
+  `/var/lib/basalt/<app>`; an app named `systemd` got `/etc/systemd`, one
+  named after a co-hosted app got its secrets and dumps. Reserved names
+  (`systemd`, `ssh`, `apt`, `docker`, `basalt`, …) may not keep env files in
+  `/etc`; `install` refuses an `/etc/<app>` a Debian package ships
+  (`dpkg-query -S`), one with subdirectories, any directory or env file
+  another account owns, and asks before taking one root made by hand. The
+  managed vhost is `<app>.conf` or `<app>-*.conf`, and a domain another
+  vhost or Caddy site serves (or a name under its wildcard) is refused.
+- **bootstrap's checkout.** `--dir` is required (root runs from `cd /`; the
+  working directory once became `chown -R <user>: /`), and must be a
+  link-free absolute path holding `package.json` and `.git`, not a system
+  directory; the `chown -R` asks. The user's steps run off root's terminal
+  (`setsid -w`; `env` in a pty `script` relays): on sudo < 1.9.14 and a
+  kernel < 6.2 a postinstall script could TIOCSTI into root's shell.
 - **Writes.** Only under directories root alone can write; `/etc/<app>` and
   its env files are handed over through `O_NOFOLLOW` descriptors (`fchown`,
   `fchmod`), refusing links and hard links. Root's backups of the proxy files
@@ -617,19 +636,25 @@ the config as root too, and ran `sh -c "cd '${dir}' && …"`.
 **What remains:** the `docker` group the app user is in (`bootstrap` adds it,
 §11.4) is root-equivalent, so for `dockerInfra`/`compose` apps the boundary
 protects against a compromised checkout and mistakes more than against the app
-user; rootless Docker is still the fix. The proxy follows symlinks inside the
-web root (Apache's default `FollowSymLinks`, Caddy's `file_server`): the app
-user can expose what the web server user can read; `SymLinksIfOwnerMatch` in
-the vhost is a follow-up (it changes every installed vhost's diff).
+user; rootless Docker is still the fix. The vhost now sets
+`-FollowSymLinks +SymLinksIfOwnerMatch` and `AllowOverride None` on the
+checkout and the web root (a one-time diff on installed vhosts, whose header
+now names the install-plan flow); Caddy's `file_server` has no equivalent, so
+with `caddy()` a planted link still exposes what the `caddy` user can read.
 
 ### 14.2 One deploy at a time, and signals
 
 `<stateDir>/deploy.lock`, created with `O_EXCL`, holds pid, host, start,
 actor and command; `run`, `env`, `rollback` and `install` take it, a stale
-one (dead pid, same host) is taken over, anything else is exit code 3. The
+one (dead pid, same host) is taken over — by one process only, through an
+`O_EXCL` takeover file, re-reading the holder it judged stale — anything else
+is exit code 3. The lock is read with `O_NOFOLLOW` and removed with
+`unlink(2)` only (root takes it in the user's directory during `install`). The
 first SIGINT/SIGTERM/SIGHUP stops `run`/`env` at a step boundary (`run` puts
 the code back and records `aborted`, exit 130); from the release on, and in
-`rollback`/`install`, the command finishes first.
+`rollback`/`install`, the command finishes first. A migration counts as the
+release: once it starts, `run` finishes instead of putting the old code back
+on the migrated schema.
 
 ### 14.3 Rollback, migrations, backups
 
@@ -637,14 +662,23 @@ the code back and records `aborted`, exit 130); from the release on, and in
   `rollback-unhealthy`; `lastGood` skips a commit marked unhealthy after its
   last healthy run. A manual rollback refuses a dirty tree, takes `--to` as a
   verified sha, and writes a **hold**: `run` refuses that commit until the
-  branch moves on, or `--unhold`.
+  branch moves on, or `--unhold`. With no healthy release on record, a bare
+  `rollback` falls back to the commit HEAD's own release was deployed over —
+  never a rollback record's `previous` (the commit rolled away from), never a
+  commit recorded unhealthy; otherwise it asks for `--to`.
 - A failed migration is recorded `failed-migration` and prints the
   `pg_restore` of the dump taken before it.
-- Dumps default to `<stateDir>/backups` (0700), outside the checkout;
-  `create-basalt` ignores `/backups` and `/.basalt` in git and the image.
+- Dumps default to `<stateDir>/backups` (0700) — outside the checkout once
+  `install` ran; before, `<checkout>/.basalt/backups`. `create-basalt`
+  ignores `/backups` and `/.basalt` in git and the image, and the preflight
+  warns (`dumps`) for an app that does not, and for dumps left in the old
+  `backups/predeploy`. A hold written before `install` is read from the
+  checkout like the release history.
 - `branch`/`remote` are validated (`check-ref-format --branch`, no leading
   `-`): a branch `--upload-pack=<cmd>` ran a command. The fetch names
-  `refs/heads/<b>:refs/remotes/<r>/<b>` after `--`.
+  `+refs/heads/<b>:refs/remotes/<r>/<b>` after `--` — forced, like the
+  default refspec, so a branch rewritten upstream after a rollback still
+  deploys; `merge --ff-only` guards the checkout.
 
 ### 14.4 Smaller
 

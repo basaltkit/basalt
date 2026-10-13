@@ -239,8 +239,10 @@ verify: {
 
 ## 7. `basalt-deploy bootstrap`
 
-`sudo basalt-deploy bootstrap --user=<deploy user>`, once per server, on Ubuntu
-or Debian. Each piece is installed only when missing, and `--dry-run` shows the
+`cd / && sudo -H npx --yes --package=@basaltkit/deploy@<exact version> --
+basalt-deploy bootstrap --dir=<checkout> --user=<deploy user>`, once per
+server, on Ubuntu or Debian, with a copy of the tool root owns (RFC 0006 §14.1;
+`--dir` is required). Each piece is installed only when missing, and `--dry-run` shows the
 list:
 
 - the base packages, Docker with compose, and Node at `engines.node`;
