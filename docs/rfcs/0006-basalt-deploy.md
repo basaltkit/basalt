@@ -1,6 +1,6 @@
 # RFC 0006 — `basalt deploy`: one deploy pipeline for Basalt apps on a single server
 
-- **Status:** Accepted — phase 1 implemented in `packages/deploy` (§12)
+- **Status:** Accepted — phase 1 implemented in `packages/deploy` (§12); phase 2 (§13); phase 0 hardening of the trust boundary, locking and rollback (§14, 2026-10-13)
 - **Author:** Marcio Zebedeu
 - **Date:** 2026-10-11
 - **Affects:** new package `@basaltkit/deploy`; `create-basalt` (the `bin/basalt.ts` prelude forwards `deploy`); no change to any runtime package
@@ -381,6 +381,10 @@ Decided 2026-10-11 by the product owner.
 
    (`reload caddy` instead for the Caddy target; nothing for `none`.)
 
+   *As built (§14):* `install` never loads the config. The app user runs
+   `install-plan` (data only); root runs `install --plan=<file>` from a copy
+   of the tool root owns, which validates the plan again.
+
    **Docker is the limit of this model.** Access to the Docker socket is root on
    the host (a container can mount `/`), so for `dockerInfra` and the `compose`
    runtime an unprivileged user is only real with **rootless Docker** for that
@@ -567,3 +571,88 @@ password in the environment only — and the preflight refuses a stopped or
 missing container instead of the backup step failing after the build. The
 public health check, silent on success, now prints its URL like the loopback
 one.
+
+## 14. Phase 0 hardening (2026-10-13)
+
+A review of the package found that the boundary §11.4 draws — root once, the
+app user for everything else — was not held by the code, and that two
+deploys, a failed migration or an unhealthy rollback could leave the server in
+a state the release history did not describe. Fixed in one minor (0.x), with a
+test for each.
+
+### 14.1 Root never runs the app user's code
+
+`sudo node node_modules/@basaltkit/deploy/dist/bin.js install` imported
+`deploy.config.ts` and the checkout's `tsx` — the app user's code, as root —
+and `chown`/`chmod` followed links inside `/etc/<app>/`, a directory install
+itself gave the user: `ln -sf /etc/sudoers /etc/myapp/api.env`, then the
+next `sudo … install`, handed `/etc/sudoers` to the user. `bootstrap` loaded
+the config as root too, and ran `sh -c "cd '${dir}' && …"`.
+
+- **Two halves.** `install-plan` (app user) loads the config and writes a
+  data-only JSON plan; `install --plan=<file>` (root) reads it with
+  `O_NOFOLLOW`, validates every field with fixed patterns and never loads the
+  config, `tsx`, `node_modules` or the `.env`. `bootstrap` gets the same plan
+  from the user's `install-plan --out=-` and runs `install` in-process.
+- **A root-owned tool.** As root, `install` and `bootstrap` refuse to run
+  from files another user can change (the node binary and the package's own
+  files, after symlinks, in directories only root can write) unless
+  `--unsafe-tool`. The printed command is `cd / && sudo -H npx --yes
+  --package=@basaltkit/deploy@<exact version> -- basalt-deploy install …`:
+  outside the checkout (npx would pick the checkout's copy), with root's
+  `HOME` (root's npm cache).
+- **Validated fields.** `webRoot` (inside the checkout, no dot directories,
+  not the checkout), `apiPrefix`, `certName`, `proxy.root`, `onDemandTls.ask`;
+  env files only inside the checkout or directly in `/etc/<app>/`. Raw Caddy
+  `extra` and a non-default proxy root are shown and need a "yes".
+- **Writes.** Only under directories root alone can write; `/etc/<app>` and
+  its env files are handed over through `O_NOFOLLOW` descriptors (`fchown`,
+  `fchmod`), refusing links and hard links. Root's backups of the proxy files
+  live in `/var/lib/basalt/<app>.install-backups`, not in the user's state
+  directory; the release history is moved by the user's next record, not
+  copied by root.
+- **The app user's commands refuse root** (`--allow-root`), before the config
+  is imported.
+
+**What remains:** the `docker` group the app user is in (`bootstrap` adds it,
+§11.4) is root-equivalent, so for `dockerInfra`/`compose` apps the boundary
+protects against a compromised checkout and mistakes more than against the app
+user; rootless Docker is still the fix. The proxy follows symlinks inside the
+web root (Apache's default `FollowSymLinks`, Caddy's `file_server`): the app
+user can expose what the web server user can read; `SymLinksIfOwnerMatch` in
+the vhost is a follow-up (it changes every installed vhost's diff).
+
+### 14.2 One deploy at a time, and signals
+
+`<stateDir>/deploy.lock`, created with `O_EXCL`, holds pid, host, start,
+actor and command; `run`, `env`, `rollback` and `install` take it, a stale
+one (dead pid, same host) is taken over, anything else is exit code 3. The
+first SIGINT/SIGTERM/SIGHUP stops `run`/`env` at a step boundary (`run` puts
+the code back and records `aborted`, exit 130); from the release on, and in
+`rollback`/`install`, the command finishes first.
+
+### 14.3 Rollback, migrations, backups
+
+- A rollback onto a commit that does not answer exits 1 and records
+  `rollback-unhealthy`; `lastGood` skips a commit marked unhealthy after its
+  last healthy run. A manual rollback refuses a dirty tree, takes `--to` as a
+  verified sha, and writes a **hold**: `run` refuses that commit until the
+  branch moves on, or `--unhold`.
+- A failed migration is recorded `failed-migration` and prints the
+  `pg_restore` of the dump taken before it.
+- Dumps default to `<stateDir>/backups` (0700), outside the checkout;
+  `create-basalt` ignores `/backups` and `/.basalt` in git and the image.
+- `branch`/`remote` are validated (`check-ref-format --branch`, no leading
+  `-`): a branch `--upload-pack=<cmd>` ran a command. The fetch names
+  `refs/heads/<b>:refs/remotes/<r>/<b>` after `--`.
+
+### 14.4 Smaller
+
+The `.env`'s mode and owner are checked (and the mode fixed); releases record
+the actor, the SSH client and how the deploy ran (`audit.syslog` optional);
+the TLS probe reports an untrusted chain with its names (C8's branch was
+dead); the secret prompt refuses to ask on a Node without the readline
+internal it uses to hide the echo; a compose job's `once.exists` reaches the
+shell as `$1`.
+
+Not in phase 0: a remote/SSH UI and a `--json` protocol (phase 1).
