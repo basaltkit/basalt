@@ -19,6 +19,15 @@ export interface DeployContext {
   values?: Map<string, string>
   /** Container addresses → their 127.0.0.1 form, for what runs on the host (`dockerInfra({ access: 'containers' })`). */
   hostUrls?: Array<[string, string]>
+  /** Set while a locked command runs; a signal marks it, the next step boundary acts on it. */
+  abort?: AbortState
+}
+
+export interface AbortState {
+  /** The first SIGINT/SIGTERM/SIGHUP heard. */
+  signal?: string
+  /** Past the point where stopping is safe (release, rollback, install): finish, then exit. */
+  deferred: boolean
 }
 
 export interface Finding {
@@ -85,4 +94,18 @@ export class DeployError extends Error {
     super(message)
     this.name = 'DeployError'
   }
+}
+
+/** A signal stopped the command at a step boundary (after putting the code back). */
+export class DeployAbortedError extends DeployError {
+  constructor(readonly signal: string, detail?: string) {
+    super(`stopped by ${signal}${detail ? ` — ${detail}` : ''}`)
+    this.name = 'DeployAbortedError'
+  }
+}
+
+/** Throws {@link DeployAbortedError} when a signal arrived and stopping is still safe. */
+export function throwIfAborted(ctx: DeployContext): void {
+  const abort = ctx.abort
+  if (abort?.signal && !abort.deferred) throw new DeployAbortedError(abort.signal)
 }

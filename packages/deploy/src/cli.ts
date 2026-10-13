@@ -5,7 +5,8 @@ import { bootstrap } from './bootstrap.js'
 import { check } from './check.js'
 import { init } from './init.js'
 import { applyOverrides, DeployConfigError, parseOverrides, validateConfig, type DeployConfig } from './config.js'
-import { DeployError, detectPackageManager, resolveStateDir, type DeployContext } from './context.js'
+import { DeployAbortedError, DeployError, detectPackageManager, resolveStateDir, type DeployContext } from './context.js'
+import { DeployLockedError } from './lock.js'
 import { envValues, parseEnv } from './dotenv.js'
 import { nodeHost, type Host } from './host.js'
 import { envCommand, install, plan, rollback, run, SKIPPABLE, status, type Skippable } from './pipeline.js'
@@ -29,12 +30,19 @@ export const USAGE = `basalt-deploy — deploy this Basalt app on this server (R
 Run it as \`node node_modules/@basaltkit/deploy/dist/bin.js <command>\`, not
 \`pnpm exec\`: pnpm ≥ 12 may rewrite pnpm-lock.yaml on any command it runs.
 
+Exit codes: 0 done · 1 failed (or refused) · 3 another deploy holds the lock · 130 stopped by a signal
+
 Options:
   --config=<file>     default deploy.config.ts
   --overrides=<file>  server-local values, default /etc/basalt/<app>.json
   --skip=<steps>      ${SKIPPABLE.join(', ')} (comma-separated); --no-fetch = --skip=fetch
   -h, --help
 `
+
+/** Another deploy holds the lock: nothing was done. */
+export const EXIT_LOCKED = 3
+/** A signal stopped the command at a step boundary. */
+export const EXIT_ABORTED = 130
 
 interface Flags {
   command: string
@@ -155,6 +163,15 @@ export async function main(argv: string[], host: Host = nodeHost(), cwd: string 
         return 1
     }
   } catch (error) {
+    // Distinct codes a wrapper (cron, CI) can act on: 3 = another deploy holds the lock.
+    if (error instanceof DeployLockedError) {
+      host.out.error(error.message)
+      return EXIT_LOCKED
+    }
+    if (error instanceof DeployAbortedError) {
+      host.out.error(error.message)
+      return EXIT_ABORTED
+    }
     if (error instanceof DeployError) {
       host.out.error(error.message)
       return 1
