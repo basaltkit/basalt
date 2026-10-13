@@ -161,6 +161,10 @@ export class FakeHost implements Host {
     if (!this.files.has(path)) this.files.set(path, { kind: 'dir', ...(mode === undefined ? {} : { mode }), ...(this.userId === 0 ? { uid: 0, gid: 0 } : {}) })
   }
   async remove(path: string) { this.files.delete(path) }
+  async removeFile(path: string) {
+    if (this.files.get(path)?.kind === 'dir') throw new Error(`EISDIR ${path}`)
+    this.files.delete(path)
+  }
   async list(dir: string) {
     const prefix = `${dir}/`
     // Like readdir: files and subdirectories (a directory exists when a file is under it).
