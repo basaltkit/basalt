@@ -6,6 +6,7 @@ import { DeployError, RUN_COMMAND, type DeployContext } from './context.js'
 import { envValues } from './dotenv.js'
 import { envFile, envMirrors, readEnv } from './env-step.js'
 import type { Host } from './host.js'
+import type { InstallPlan, PlanProxy } from './protocol.js'
 import { acquireLock } from './lock.js'
 import { covers } from './checks.js'
 import { API_PREFIX, ASK_PATH, assertRootOwnedDir, caddyExtraProblem, CERT_NAME, envLocationProblem, isConfigRoot, isWebRoot, USER_NAME, vhostFileProblem } from './trust.js'
@@ -28,34 +29,9 @@ import { API_PREFIX, ASK_PATH, assertRootOwnedDir, caddyExtraProblem, CERT_NAME,
  * a "yes" at the terminal.
  */
 
-export const PLAN_KIND = 'basalt-deploy/install-plan'
+export const PLAN_KIND: InstallPlan['kind'] = 'basalt-deploy/install-plan'
+export type { InstallPlan, PlanProxy } from './protocol.js'
 const MAX_PLAN_BYTES = 64 * 1024
-
-export type PlanProxy =
-  | { kind: 'none' }
-  | { kind: 'apache'; managed: boolean; vhost: string; webRoot: string; apiPrefix: string; certName?: string; root?: string }
-  | { kind: 'caddy'; managed: boolean; webRoot: string; apiPrefix: string; onDemandTls?: { ask: string }; extra?: string; root?: string }
-
-export interface InstallPlan {
-  kind: typeof PLAN_KIND
-  version: 1
-  app: string
-  domain: string
-  tenants: 'subdomain' | 'none'
-  /** The checkout, absolute. install checks it is the app user's own directory. */
-  dir: string
-  /** The upstream port the proxy site points at. */
-  port: number
-  proxy: PlanProxy
-  /** The `.env` and mirrors OUTSIDE the checkout — always directly in `/etc/<app>/`. */
-  envFiles: string[]
-  /** The app uses Docker (dedicated infra or the compose runtime). */
-  docker: boolean
-  /** `bootstrap` settings, for `bootstrap` only. */
-  bootstrap?: { swapGb?: number; firewall?: boolean }
-  /** The @basaltkit/deploy version that wrote the plan (informational). */
-  tool: string
-}
 
 // ── the app user's half ────────────────────────────────────────────────────
 

@@ -159,6 +159,15 @@ describe('the writer', () => {
   })
 })
 
+describe('the protocol module', () => {
+  it('imports nothing: its declarations need no Node types (a browser UI type-checks against them)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync(new URL('../src/protocol.ts', import.meta.url), 'utf8')
+    expect(source).not.toMatch(/^\s*import\b/m)
+    expect(source).not.toMatch(/\bNodeJS\b|\bBuffer\b/)
+  })
+})
+
 describe('the redactor', () => {
   it('replaces raw and URL-encoded values, longest first; ignores values shorter than 6, naming them', () => {
     const r = new Redactor()

@@ -8,10 +8,95 @@
  * imports it as `@basaltkit/deploy/protocol` without loading the CLI.
  */
 
-import type { Finding } from './context.js'
-import type { InstallPlan } from './install-plan.js'
-import type { LockHolder } from './lock.js'
-import type { Hold, Release } from './state.js'
+// ── the data the payloads carry ────────────────────────────────────────────
+// Declared here, and re-exported where the code uses them, so that this
+// module imports nothing: its declarations need no Node types (a renderer or
+// browser UI type-checks against them without @types/node).
+
+export interface Finding {
+  /** The RFC 0006 §5 check id (`C1`…`C10`) or a step name. */
+  id: string
+  level: 'error' | 'warning'
+  message: string
+  /** One line the operator can act on. */
+  fix?: string
+}
+
+/** Who holds `deploy.lock`. */
+export interface LockHolder {
+  pid: number
+  host: string
+  startedAt: string
+  actor: string
+  command: string
+  /** The run this deploy writes its events to (`--json`, RFC 0008 §8.3): what `attach` and `cancel` name. */
+  runId?: string
+}
+
+/** One line per release in `<stateDir>/releases.json` (RFC 0006 §8). */
+export interface Release {
+  sha: string
+  previous?: string
+  at: string
+  user: string
+  /**
+   * `aborted`: a signal stopped it before the release (code put back).
+   * `failed-migration`: the migration step failed — the database may be
+   * part-way; the restore command for `backup` was printed.
+   * `rollback-unhealthy`: this commit was released by a rollback and did
+   * not answer either — never a rollback target again.
+   */
+  status: 'ok' | 'rolled-back' | 'failed' | 'failed-migration' | 'public-unreachable' | 'aborted' | 'rollback-unhealthy'
+  /** Migration directories this release applied for the first time. */
+  migrations: string[]
+  backup?: string
+  note?: string
+  /** Who ran it: `--actor`, `$BASALT_DEPLOY_ACTOR` or `$USER` (`user` is always the OS account). */
+  actor?: string
+  /** The SSH client address, when run over SSH. */
+  client?: string
+  /** `ssh`, `ci`, `terminal` or `batch`. */
+  via?: string
+}
+
+/**
+ * Written by a manual rollback: the commit it left. A scheduled `run` would
+ * otherwise fetch and redeploy it at once; it refuses that commit until the
+ * branch moves on, or `--unhold`.
+ */
+export interface Hold {
+  sha: string
+  at: string
+  actor: string
+  note: string
+}
+
+export type PlanProxy =
+  | { kind: 'none' }
+  | { kind: 'apache'; managed: boolean; vhost: string; webRoot: string; apiPrefix: string; certName?: string; root?: string }
+  | { kind: 'caddy'; managed: boolean; webRoot: string; apiPrefix: string; onDemandTls?: { ask: string }; extra?: string; root?: string }
+
+/** What `install` needs, written by `install-plan` as plain JSON (RFC 0006 §11.4): data only, validated again by root. */
+export interface InstallPlan {
+  kind: 'basalt-deploy/install-plan'
+  version: 1
+  app: string
+  domain: string
+  tenants: 'subdomain' | 'none'
+  /** The checkout, absolute. install checks it is the app user's own directory. */
+  dir: string
+  /** The upstream port the proxy site points at. */
+  port: number
+  proxy: PlanProxy
+  /** The `.env` and mirrors OUTSIDE the checkout — always directly in `/etc/<app>/`. */
+  envFiles: string[]
+  /** The app uses Docker (dedicated infra or the compose runtime). */
+  docker: boolean
+  /** `bootstrap` settings, for `bootstrap` only. */
+  bootstrap?: { swapGb?: number; firewall?: boolean }
+  /** The @basaltkit/deploy version that wrote the plan (informational). */
+  tool: string
+}
 
 /** The protocol version: `--json` and `--json=1`. */
 export const PROTOCOL_VERSION = 1

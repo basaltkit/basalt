@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { DeployError } from './context.js'
 import type { Host } from './host.js'
-import { RUN_ID } from './protocol.js'
+import { RUN_ID, type LockHolder } from './protocol.js'
 
 /**
  * One deploy at a time per app: `<stateDir>/deploy.lock`, created with
@@ -13,15 +13,7 @@ import { RUN_ID } from './protocol.js'
  * over; anything else is refused, fail-closed, with the way to clear it.
  */
 
-export interface LockHolder {
-  pid: number
-  host: string
-  startedAt: string
-  actor: string
-  command: string
-  /** The run this deploy writes its events to (`--json`, RFC 0008 §8.3): what `attach` and `cancel` name. */
-  runId?: string
-}
+export type { LockHolder } from './protocol.js'
 
 export const lockFile = (stateDir: string) => join(stateDir, 'deploy.lock')
 /** Held for the few milliseconds a stale lock is replaced: only one process judges and removes it. */

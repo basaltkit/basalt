@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import type { Audit } from './audit.js'
 import type { DeployConfig } from './config.js'
 import type { Host } from './host.js'
-import type { ErrorCode } from './protocol.js'
+import type { ErrorCode, Finding } from './protocol.js'
 
 export interface DeployContext {
   config: DeployConfig
@@ -34,14 +34,7 @@ export interface AbortState {
   deferred: boolean
 }
 
-export interface Finding {
-  /** The RFC 0006 §5 check id (`C1`…`C10`) or a step name. */
-  id: string
-  level: 'error' | 'warning'
-  message: string
-  /** One line the operator can act on. */
-  fix?: string
-}
+export type { Finding } from './protocol.js'
 
 /** The tool, run by `node` on its file — never `pnpm exec` (see {@link RUN_COMMAND}). */
 const BIN = 'node_modules/@basaltkit/deploy/dist/bin.js'
