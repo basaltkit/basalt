@@ -3,7 +3,7 @@ import { ANSWER_TIMEOUT_SECONDS, type AnswerChannel } from './answers.js'
 import type { DeployConfig } from './config.js'
 import { DeployError } from './context.js'
 import { childSink, eventOutput, learnEnvText, type EventOutput, learnSecrets, urlPasswords, type EventWriter, type Redactor } from './events.js'
-import type { ExecOptions, Host, PromptMeta } from './host.js'
+import { secondSignalMessage, type ExecOptions, type Host, type PromptMeta } from './host.js'
 
 /**
  * The machine protocol's host (RFC 0008 §5.1): the real host, with
@@ -89,6 +89,10 @@ export function jsonHost(base: Host, writer: EventWriter, redactor: Redactor, op
         ...(!secret && meta.default !== undefined ? { default: meta.default } : {}),
       })
       return (await answers.take(meta.id, timeout))?.trim()
+    },
+    // The second signal's line is an event like any other, never text on stderr.
+    onSignal(listener) {
+      return base.onSignal(listener, { second: (signal) => output.error(secondSignalMessage(signal)) })
     },
     async confirm(question) {
       // No app-user command confirms; a confirmation is never assumed (RFC 0008 §5.1).

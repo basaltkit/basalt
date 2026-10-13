@@ -49,6 +49,11 @@ export interface LockState {
   holder?: LockHolder
   /** The holder's process is gone (same host): the next deploy takes it over. */
   stale: boolean
+  /**
+   * The holder (a detached run) is gone but processes of its group still
+   * run — a build or a migration it started: not stale until they end.
+   */
+  orphans?: true
   /** Not a lock this package wrote (empty, or not JSON): refused until removed by hand. */
   corrupt: boolean
 }
@@ -78,8 +83,10 @@ export async function readLock(host: Host, stateDir: string): Promise<LockState 
   if (text === undefined) return undefined
   const holder = parseHolder(text)
   if (!holder) return { path, stale: false, corrupt: true }
-  const stale = holder.host === host.hostname() && !host.processAlive(holder.pid)
-  return { path, holder, stale, corrupt: false }
+  const gone = holder.host === host.hostname() && !host.processAlive(holder.pid)
+  // A detached run leads its own group (its pid is the group's id): what it started may outlive it.
+  const orphans = gone && holder.runId !== undefined && host.processGroupAlive?.(holder.pid) === true
+  return { path, holder, stale: gone && !orphans, corrupt: false, ...(orphans ? { orphans: true as const } : {}) }
 }
 
 export const describeHolder = (h: LockHolder) =>
@@ -113,6 +120,12 @@ export async function acquireLock(host: Host, stateDir: string, command: string,
     if (state.stale && attempt === 0) {
       await takeOver(host, stateDir, holder, mine)
       continue
+    }
+    if (state.orphans) {
+      throw new DeployLockedError(
+        `the deploy that holds the lock is gone, but processes it started still run: ${describeHolder(holder)} — wait for them to end, or stop them (kill -TERM -${holder.pid}); the lock is taken over once none is left`,
+        holder,
+      )
     }
     throw new DeployLockedError(
       `another deploy is running: ${describeHolder(holder)} — wait for it${holder.host === host.hostname() ? '' : `, or, if nothing runs on ${holder.host}: rm ${path}`}`,

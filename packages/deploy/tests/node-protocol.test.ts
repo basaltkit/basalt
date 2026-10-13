@@ -1,9 +1,9 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { nodeHost, type Output } from '../src/host.js'
+import { nodeHost, stopOwnGroup, type Output } from '../src/host.js'
 
 const quiet: Output = { step() {}, info() {}, ok() {}, warn() {}, error() {} }
 let dir: string
@@ -78,5 +78,70 @@ describe('the real host, for the machine protocol', () => {
     host.kill!(pid, 'SIGTERM')
     await vi.waitFor(() => expect(host.processAlive(pid)).toBe(false), { timeout: 5000 })
     expect(await host.processCmdline!(2 ** 22 + 7)).toBeUndefined()
+  })
+})
+
+describe('the real host: no step outlives the deploy, no step holds it forever', () => {
+  const gone = (pid: number) => { try { process.kill(pid, 0); return false } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' } }
+  const pidIn = async (path: string) => Number((await readFile(path, 'utf8').catch(() => '')).trim())
+
+  it('a streamed child that leaves a process holding its pipes: exec returns when the child exits, with its output', async () => {
+    const host = nodeHost(quiet)
+    const background = join(dir, 'background.pid')
+    const chunks: string[] = []
+    const started = Date.now()
+    try {
+      const result = await host.exec('sh', ['-c', `echo hi; sleep 8 & echo $! > ${background}`], { stream: true, onOutput: (text) => chunks.push(text) })
+      expect(result.code).toBe(0)
+      expect(Date.now() - started).toBeLessThan(4000)
+      expect(chunks.join('')).toContain('hi')
+    } finally {
+      const pid = await pidIn(background)
+      if (pid > 0) try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
+    }
+  })
+
+  it('a second signal to a deploy that leads its group (a detached run) stops the step\'s child too', async () => {
+    const stepPid = join(dir, 'step.pid')
+    const script = [
+      `import { nodeHost } from ${JSON.stringify(new URL('../src/host.ts', import.meta.url).href)}`,
+      'const quiet = { step() {}, info() {}, ok() {}, warn() {}, error() {} }',
+      'const host = nodeHost(quiet)',
+      'host.onSignal(() => {})',
+      `void host.exec('sh', ['-c', 'echo $$ > ${stepPid}; exec sleep 30'], { stream: true, onOutput: () => {} })`,
+      'setInterval(() => {}, 1000)',
+    ].join('\n')
+    // As spawnDetached starts a run: setsid, so the deploy leads its own process group.
+    const deploy = spawn(process.execPath, ['--input-type=module', '-e', script], { detached: true, stdio: 'ignore' })
+    const exited = new Promise<number | null>((resolve) => deploy.once('exit', (code) => resolve(code)))
+    let step = 0
+    try {
+      await vi.waitFor(async () => { step = await pidIn(stepPid); expect(step).toBeGreaterThan(0) }, { timeout: 5000 })
+      process.kill(deploy.pid as number, 'SIGTERM')
+      await new Promise((r) => setTimeout(r, 100))
+      expect(gone(step)).toBe(false)
+      process.kill(deploy.pid as number, 'SIGTERM')
+      expect(await exited).toBe(143)
+      await vi.waitFor(() => expect(gone(step)).toBe(true), { timeout: 3000 })
+    } finally {
+      if (step > 0 && !gone(step)) process.kill(step, 'SIGKILL')
+      if (!gone(deploy.pid as number)) process.kill(deploy.pid as number, 'SIGKILL')
+    }
+  })
+
+  it('signals its group only when it leads one; never another program\'s group', () => {
+    const sent: Array<[number, string | number]> = []
+    const leader = (pid: number, signal: NodeJS.Signals | 0) => { sent.push([pid, signal]) }
+    expect(stopOwnGroup(4100, leader)).toBe(true)
+    expect(sent).toEqual([[-4100, 0], [-4100, 'SIGTERM']])
+    const notLeader = (pid: number, signal: NodeJS.Signals | 0) => {
+      sent.push([pid, signal])
+      throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' })
+    }
+    sent.length = 0
+    expect(stopOwnGroup(4100, notLeader)).toBe(false)
+    expect(sent).toEqual([[-4100, 0]])
+    // No group has that id: nothing of it is alive.
+    expect(nodeHost(quiet).processGroupAlive!(2 ** 22 + 7)).toBe(false)
   })
 })

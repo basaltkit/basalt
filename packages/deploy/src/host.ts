@@ -85,9 +85,13 @@ export interface Host {
   createExclusive(path: string, content: string, mode: number): Promise<boolean>
   /**
    * SIGINT, SIGTERM and SIGHUP while a deploy runs: the listener hears the
-   * first; a second one ends the process at once. Returns the unsubscribe.
+   * first; a second one ends the process at once — and, when the deploy
+   * leads its own process group (a detached run always does), SIGTERM goes
+   * to that group first, so the step's child never outlives the deploy that
+   * held the lock. `second` says so in place of the default line on the
+   * terminal. Returns the unsubscribe.
    */
-  onSignal(listener: (signal: string) => void): () => void
+  onSignal(listener: (signal: string) => void, options?: { second?: (signal: string) => void }): () => void
   out: Output
 
   // ── optional: the machine protocol (RFC 0008). A host without them refuses --detach and cancel. ──
@@ -112,6 +116,12 @@ export interface Host {
   spawnDetached?(command: string, args: string[], options: { cwd: string; env: Record<string, string | undefined>; stdin: string; stdout: LogHandle }): Promise<{ pid: number }>
   /** kill(2) of one process (never its group). */
   kill?(pid: number, signal: 'SIGTERM'): void
+  /**
+   * Whether a process group with this id still has a process in it. A dead
+   * detached run's group (its id is the run's pid) with a process left is a
+   * step's child still working on the checkout: its lock is not stale.
+   */
+  processGroupAlive?(pgid: number): boolean
   /** The process's argv (Linux /proc/<pid>/cmdline), or `undefined` when it cannot be known. */
   processCmdline?(pid: number): Promise<string[] | undefined>
 }
@@ -216,6 +226,34 @@ export function consoleOutput(stream: NodeJS.WriteStream = process.stderr): Outp
   }
 }
 
+/** How long a piped child's output may keep arriving after it exited (its pipes held by a process it left behind). */
+export const PIPE_GRACE_MS = 1500
+
+/** What a second signal says before the deploy stops. */
+export const secondSignalMessage = (signal: string) =>
+  `${signal} again: stopping now, mid-step — the step's processes are stopped too; the lock is cleared by the next deploy once they are gone`
+
+/**
+ * SIGTERM to this process's group, when this process leads one (a detached
+ * run: setsid; a command started from a shell). `kill(-pid, 0)` fails with
+ * ESRCH when no group has this pid as its id, i.e. when it is not a leader:
+ * then nothing is sent — a deploy started by another program never signals
+ * that program's group.
+ */
+export function stopOwnGroup(pid = process.pid, kill: (pid: number, signal: NodeJS.Signals | 0) => void = (p, s) => { process.kill(p, s) }): boolean {
+  try {
+    kill(-pid, 0)
+  } catch {
+    return false
+  }
+  try {
+    kill(-pid, 'SIGTERM')
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function nodeHost(output: Output = consoleOutput()): Host {
   return {
     out: output,
@@ -241,13 +279,17 @@ export function nodeHost(output: Output = consoleOutput()): Host {
         throw error
       }
     },
-    onSignal(listener) {
+    onSignal(listener, options = {}) {
       const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
       let heard = 0
       const handler = (signal: NodeJS.Signals) => {
         heard++
         if (heard === 1) { listener(signal); return }
-        output.error(`${signal} again: stopping now, mid-step — the lock is cleared by the next deploy (its process is gone)`)
+        // Our own SIGTERM to the group below comes back here: already stopping.
+        if (heard > 2) return
+        if (options.second) options.second(signal)
+        else output.error(secondSignalMessage(signal))
+        stopOwnGroup()
         process.exit(signal === 'SIGINT' ? 130 : signal === 'SIGHUP' ? 129 : 143)
       }
       for (const signal of SIGNALS) process.on(signal, handler)
@@ -294,11 +336,27 @@ export function nodeHost(output: Output = consoleOutput()): Host {
           if (finished) return
           finished = true
           if (fd !== undefined) closeSync(fd)
-          if (sink) { sink(decoders.stdout.end(), 'stdout'); sink(decoders.stderr.end(), 'stderr') }
+          if (sink) {
+            // A process the child left behind may still hold the pipes: stop reading them.
+            child.stdout?.destroy()
+            child.stderr?.destroy()
+            sink(decoders.stdout.end(), 'stdout')
+            sink(decoders.stderr.end(), 'stderr')
+          }
           resolve({ code, stdout, stderr })
         }
         child.on('error', (error) => { stderr += error.message; done(127) })
         child.on('close', (code) => done(code ?? 1))
+        if (sink) {
+          // Piped (--json), 'close' waits for every holder of the pipes — a
+          // background process a hook or a build started would hold the deploy
+          // (and its lock) forever, where the terminal's inherited stdio would
+          // not. The child's exit ends it; what it wrote just before still
+          // arrives within the grace period.
+          child.on('exit', (code) => {
+            setTimeout(() => done(code ?? 1), PIPE_GRACE_MS)
+          })
+        }
       })
     },
 
@@ -469,6 +527,14 @@ export function nodeHost(output: Output = consoleOutput()): Host {
       })
     },
     kill(pid, signal) { process.kill(pid, signal) },
+    processGroupAlive(pgid) {
+      try {
+        process.kill(-pgid, 0)
+        return true
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'EPERM'
+      }
+    },
     async processCmdline(pid) {
       if (process.platform !== 'linux') return undefined
       try {
