@@ -22,7 +22,9 @@ export interface Host {
   writeFile(path: string, content: string, mode?: number): Promise<void>
   copyFile(from: string, to: string, mode?: number): Promise<void>
   exists(path: string): Promise<boolean>
-  stat(path: string): Promise<{ kind: 'file' | 'dir' | 'symlink' | 'other'; size: number } | undefined>
+  /** lstat: a symlink is reported as one, never followed. */
+  stat(path: string): Promise<FileStat | undefined>
+  chmod(path: string, mode: number): Promise<void>
   readlink(path: string): Promise<string | undefined>
   symlink(target: string, path: string): Promise<void>
   mkdir(path: string, mode?: number): Promise<void>
@@ -59,6 +61,15 @@ export interface Host {
    */
   onSignal(listener: (signal: string) => void): () => void
   out: Output
+}
+
+export interface FileStat {
+  kind: 'file' | 'dir' | 'symlink' | 'other'
+  size: number
+  /** Permission bits (`& 0o7777`). */
+  mode?: number
+  uid?: number
+  gid?: number
 }
 
 export interface ExecOptions {
@@ -213,7 +224,7 @@ export function nodeHost(output: Output = consoleOutput()): Host {
       try {
         const s = await lstat(path)
         const kind = s.isSymbolicLink() ? 'symlink' : s.isFile() ? 'file' : s.isDirectory() ? 'dir' : 'other'
-        return { kind, size: s.size }
+        return { kind, size: s.size, mode: s.mode & 0o7777, uid: s.uid, gid: s.gid }
       } catch {
         return undefined
       }
@@ -226,6 +237,7 @@ export function nodeHost(output: Output = consoleOutput()): Host {
       }
     },
     symlink: (target, path) => symlink(target, path),
+    chmod: (path, mode) => chmod(path, mode),
     async mkdir(path, mode) {
       await mkdir(path, { recursive: true, ...(mode === undefined ? {} : { mode }) })
     },

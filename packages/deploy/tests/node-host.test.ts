@@ -88,7 +88,7 @@ describe('the real host: files, network, terminal', () => {
     await host.copyFile(join(sub, 'a'), join(sub, 'b'), 0o600)
     await host.symlink('a', join(sub, 'link'))
     expect((await host.list(sub)).sort()).toEqual(['a', 'b', 'link'])
-    expect(await host.stat(join(sub, 'link'))).toEqual({ kind: 'symlink', size: expect.any(Number) })
+    expect(await host.stat(join(sub, 'link'))).toMatchObject({ kind: 'symlink', size: expect.any(Number), uid: process.getuid?.() })
     expect((await host.stat(sub))?.kind).toBe('dir')
     expect(await host.readlink(join(sub, 'link'))).toBe('a')
     expect(await host.readlink(join(sub, 'a'))).toBeUndefined()

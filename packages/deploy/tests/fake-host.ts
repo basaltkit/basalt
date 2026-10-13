@@ -2,7 +2,8 @@ import type { DeployConfig } from '../src/config.js'
 import type { DeployContext } from '../src/context.js'
 import type { ExecOptions, ExecResult, Host, TlsCertificate } from '../src/host.js'
 
-type Node = { kind: 'file'; content: string; mode: number } | { kind: 'symlink'; target: string } | { kind: 'dir' }
+interface Owner { uid?: number; gid?: number }
+type Node = ({ kind: 'file'; content: string; mode: number } | { kind: 'symlink'; target: string } | { kind: 'dir'; mode?: number }) & Owner
 
 export interface Call {
   command: string
@@ -34,6 +35,8 @@ export class FakeHost implements Host {
   userId = 1000
   tty = false
   clock = new Date('2026-10-11T12:00:00Z').getTime()
+  /** The owner of files and directories that do not name one: the app user. */
+  defaultUid = 1000
   processId = 4100
   name = 'server-1'
   /** Pids that run on this host; the deploy's own is always among them. */
@@ -74,8 +77,14 @@ export class FakeHost implements Host {
     return node?.kind === 'file' ? node.mode : undefined
   }
 
-  put(path: string, content: string, mode = 0o644): this {
-    this.files.set(path, { kind: 'file', content, mode })
+  put(path: string, content: string, mode = 0o644, owner: Owner = {}): this {
+    this.files.set(path, { kind: 'file', content, mode, ...owner })
+    return this
+  }
+
+  /** A directory with an owner and mode (for the checks that read them). */
+  dir(path: string, mode = 0o755, owner: Owner = {}): this {
+    this.files.set(path, { kind: 'dir', mode, ...owner })
     return this
   }
 
@@ -103,7 +112,13 @@ export class FakeHost implements Host {
   async stat(path: string) {
     const node = this.files.get(path)
     if (!node) return undefined
-    return { kind: node.kind, size: node.kind === 'file' ? node.content.length : 0 }
+    const mode = node.kind === 'file' ? node.mode : node.kind === 'dir' ? (node.mode ?? 0o755) : 0o777
+    return { kind: node.kind, size: node.kind === 'file' ? node.content.length : 0, mode, uid: node.uid ?? this.defaultUid, gid: node.gid ?? node.uid ?? this.defaultUid }
+  }
+  async chmod(path: string, mode: number) {
+    const node = this.files.get(path)
+    if (!node) throw new Error(`ENOENT ${path}`)
+    if (node.kind !== 'symlink') node.mode = mode
   }
   async readlink(path: string) {
     const node = this.files.get(path)

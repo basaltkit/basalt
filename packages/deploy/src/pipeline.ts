@@ -7,7 +7,7 @@ import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, 
 import { definedEntries, isBranchName, processName, REMOTE_NAME } from './config.js'
 import { DeployAbortedError, DeployError, errors, INSTALL_COMMAND, report, RUN_COMMAND, throwIfAborted, type AbortState, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
-import { answerQuestions, describeEnv, envFile, envMirrors, mirrorFindings, planEnv, readEnv, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
+import { answerQuestions, describeEnv, envFile, envMirrors, envModeFindings, mirrorFindings, planEnv, readEnv, secureEnvModes, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
 import { envValues } from './dotenv.js'
 import { applyInfra, describeInfra, dockerPostgres, maintainServices, planInfra, type InfraPlan } from './infra.js'
 import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, externalPostgres, grantTenantSchemas } from './services.js'
@@ -166,6 +166,7 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
   const document = await readEnv(ctx)
   const values = envValues(document)
   findings.push(...syntaxFindings(document, ctx.config.env.file ?? '.env'))
+  findings.push(...await envModeFindings(ctx))
   const port = await resolvePort(ctx, values)
   findings.push(...await toolingFindings(ctx))
   findings.push(...await lockfileFindings(ctx))
@@ -455,6 +456,12 @@ function reportEnv(ctx: DeployContext, plan: EnvPlan): void {
   for (const line of lines) ctx.host.out.info(line)
 }
 
+/** Writes the `.env` and puts its mode (and its mirrors') back to 0600. */
+async function writeEnvSecure(ctx: DeployContext, plan: EnvPlan): Promise<void> {
+  await writeEnv(ctx, plan)
+  for (const file of await secureEnvModes(ctx)) ctx.host.out.ok(`${file} is 0600 again (other users could read it)`)
+}
+
 async function infraStep(ctx: DeployContext, infra: InfraPlan, values: Map<string, string>): Promise<void> {
   stopOnErrors(ctx, await applyInfra(ctx, infra), 'infra')
   const external = externalOf(ctx.config)
@@ -519,14 +526,14 @@ export async function envCommand(ctx: DeployContext, options: RunOptions = {}): 
 
 async function envLocked(ctx: DeployContext): Promise<number> {
   const document = await readEnv(ctx)
-  stopOnErrors(ctx, syntaxFindings(document, ctx.config.env.file ?? '.env'), '.env')
+  stopOnErrors(ctx, [...syntaxFindings(document, ctx.config.env.file ?? '.env'), ...await envModeFindings(ctx)], '.env')
   const port = await resolvePort(ctx, envValues(document))
   const { env, infra } = await step(ctx, 'env', () => prepareEnv(ctx, port))
   stopOnErrors(ctx, infra.findings, 'infra')
   const missing = await answerQuestions(ctx, env)
   if (missing.length > 0) throw new DeployError(`no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`)
   reportEnv(ctx, env)
-  await writeEnv(ctx, env)
+  await writeEnvSecure(ctx, env)
   await step(ctx, 'infra', () => infraStep(ctx, infra, env.values))
   await step(ctx, 'validate', () => validateStep(ctx, env.values))
   ctx.host.out.ok(isCompose(ctx) ? `${envFile(ctx)} ready` : `.env ready (PORT=${port})`)
@@ -575,7 +582,7 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
     const missing = await answerQuestions(ctx, prepared.env)
     if (missing.length > 0) throw new DeployError(`no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`)
     reportEnv(ctx, prepared.env)
-    await writeEnv(ctx, prepared.env)
+    await writeEnvSecure(ctx, prepared.env)
     values = prepared.env.values
 
     await step(ctx, 'infra', async () => { await infraStep(ctx, infra, values); await runHooks(ctx, 'infra', values, sha) })

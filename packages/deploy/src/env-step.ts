@@ -145,6 +145,40 @@ export async function writeMirrors(ctx: DeployContext, text: string): Promise<vo
   }
 }
 
+/**
+ * The `.env` and its mirrors readable by anyone but their owner, or owned by
+ * someone else than the deploy user: the secrets are exposed, or the deploy
+ * cannot keep them 0600. `env` (and `run`) puts the mode right; an owner only
+ * root can change.
+ */
+export async function envModeFindings(ctx: DeployContext): Promise<Finding[]> {
+  const findings: Finding[] = []
+  const me = ctx.host.uid()
+  for (const file of [envFile(ctx), ...envMirrors(ctx)]) {
+    const stat = await ctx.host.stat(file)
+    if (stat?.kind !== 'file' || stat.mode === undefined) continue
+    if (stat.uid !== undefined && stat.uid !== me) {
+      findings.push({ id: 'env-owner', level: 'warning', message: `${file} is owned by uid ${stat.uid}, not by the deploy user (uid ${me})`, fix: `sudo chown "$USER": ${file} && chmod 600 ${file}` })
+    } else if ((stat.mode & 0o077) !== 0) {
+      findings.push({ id: 'env-mode', level: 'warning', message: `${file} is ${(stat.mode & 0o777).toString(8).padStart(3, '0')}: its secrets are readable by other users of this server`, fix: 'this deploy sets it to 0600 (env and run do)' })
+    }
+  }
+  return findings
+}
+
+/** Puts the `.env` and its mirrors back to 0600 when the deploy user owns them. Returns the files changed. */
+export async function secureEnvModes(ctx: DeployContext): Promise<string[]> {
+  const fixed: string[] = []
+  const me = ctx.host.uid()
+  for (const file of [envFile(ctx), ...envMirrors(ctx)]) {
+    const stat = await ctx.host.stat(file)
+    if (stat?.kind !== 'file' || stat.mode === undefined || stat.uid !== me || (stat.mode & 0o077) === 0) continue
+    await ctx.host.chmod(file, 0o600)
+    fixed.push(file)
+  }
+  return fixed
+}
+
 /** C10 — a mirror that is not an exact copy: two env files that disagree are two configurations. */
 export async function mirrorFindings(ctx: DeployContext): Promise<Finding[]> {
   const mirrors = envMirrors(ctx)
