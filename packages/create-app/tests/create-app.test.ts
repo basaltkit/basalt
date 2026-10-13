@@ -380,9 +380,9 @@ describe('environment precedence (BK-018)', () => {
     expect(env).toMatch(/fallback/)
 
     // The prefix is derived from the project name, whatever its shape.
-    const scoped = await createProject({ name: '@acme/kepya-api', dir: join(root, 'scoped') })
-    expect(await read(scoped.dir, 'src/env.ts')).toContain("prefix: 'KEPYA_API'")
-    expect(await read(scoped.dir, '.env.example')).toMatch(/^KEPYA_API_PORT=/m)
+    const scoped = await createProject({ name: '@acme/shop-api', dir: join(root, 'scoped') })
+    expect(await read(scoped.dir, 'src/env.ts')).toContain("prefix: 'SHOP_API'")
+    expect(await read(scoped.dir, '.env.example')).toMatch(/^SHOP_API_PORT=/m)
   })
 
   it('the README has an Environment section covering the pitfall and the prefix', async () => {

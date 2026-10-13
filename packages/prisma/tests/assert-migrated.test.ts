@@ -8,7 +8,7 @@ import { assertMigrated, DatabaseNotMigratedError, prismaPlugin, redactCredentia
  */
 function fakeDb({
   tables = ['_prisma_migrations'],
-  identity = { database: 'mukanda', host: '10.0.0.5', port: 5432 },
+  identity = { database: 'myapp', host: '192.0.2.10', port: 5432 },
   failWith,
 }: {
   tables?: string[]
@@ -45,7 +45,7 @@ describe('assertMigrated — BK-018', () => {
     const error = await assertMigrated(fakeDb({ tables: [] })).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(DatabaseNotMigratedError)
     expect((error as DatabaseNotMigratedError).code).toBe('PRISMA_NOT_MIGRATED')
-    expect((error as Error).message).toContain('"mukanda" on 10.0.0.5:5432')
+    expect((error as Error).message).toContain('"myapp" on 192.0.2.10:5432')
     expect((error as Error).message).toContain('_prisma_migrations')
     expect((error as Error).message).toMatch(/DATABASE_URL/)
   })
@@ -72,11 +72,11 @@ describe('assertMigrated — BK-018', () => {
   it('never prints credentials from a driver error', async () => {
     const error = (await assertMigrated(
       // URL built at runtime so secret scanners do not flag the fake credential.
-      fakeDb({ failWith: new Error(`Can't reach ${['postgresql://app', 's3cr3t@db.internal:5432/mukanda'].join(':')}`) }),
+      fakeDb({ failWith: new Error(`Can't reach ${['postgresql://app', 's3cr3t@db.internal:5432/myapp'].join(':')}`) }),
     ).catch((e: unknown) => e)) as Error
     expect(error).toBeInstanceOf(DatabaseNotMigratedError)
     expect(error.message).not.toContain('s3cr3t')
-    expect(error.message).toContain('db.internal:5432/mukanda')
+    expect(error.message).toContain('db.internal:5432/myapp')
   })
 
   it('redacts credentials linearly, including in adversarial input', () => {
