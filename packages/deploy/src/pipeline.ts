@@ -14,6 +14,7 @@ import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, ext
 import { pm2List, pm2Preflight, pm2Release, resolvePort } from './pm2.js'
 import { clearHold, lastGood, migrationNames, readHold, readReleases, recordRelease, writeHold, type Release } from './state.js'
 import { acquireLock, describeHolder, readLock } from './lock.js'
+import { auditOf } from './audit.js'
 
 /**
  * The pipeline (RFC 0006 §4): preflight → fetch → env → infra → build →
@@ -67,7 +68,6 @@ async function step<T>(ctx: DeployContext, title: string, run: () => Promise<T>)
   return run()
 }
 
-const actorOf = (ctx: DeployContext, options: RunOptions) => options.actor ?? ctx.host.env['USER'] ?? String(ctx.host.uid())
 
 /**
  * The deploy lock around a command that changes the server, and its signal
@@ -76,7 +76,9 @@ const actorOf = (ctx: DeployContext, options: RunOptions) => options.actor ?? ct
  * is not finishes first. The lock is released in every case.
  */
 async function locked<T>(ctx: DeployContext, command: string, options: RunOptions, abortable: boolean, body: () => Promise<T>): Promise<T> {
-  const release = await acquireLock(ctx.host, ctx.stateDir, command, actorOf(ctx, options))
+  const audit = auditOf(ctx.host, options.actor)
+  const release = await acquireLock(ctx.host, ctx.stateDir, command, audit.actor)
+  ctx.audit = audit
   const abort: AbortState = { deferred: !abortable }
   ctx.abort = abort
   const off = ctx.host.onSignal((signal) => {
@@ -90,6 +92,7 @@ async function locked<T>(ctx: DeployContext, command: string, options: RunOption
   } finally {
     off()
     delete ctx.abort
+    delete ctx.audit
     await release()
   }
 }
@@ -726,7 +729,7 @@ async function rollbackLocked(ctx: DeployContext, to: string | undefined, option
     note: back.ok ? note : `${note}; ${target.slice(0, 7)} does not answer either: ${back.why}`,
   })
   // Whatever the outcome, the commit rolled away from is not redeployed by the next scheduled run.
-  await writeHold(ctx, { sha: current, at, actor: actorOf(ctx, options), note: `rolled back to ${target.slice(0, 7)}` })
+  await writeHold(ctx, { sha: current, at, actor: ctx.audit?.actor ?? '', note: `rolled back to ${target.slice(0, 7)}` })
   ctx.host.out.info(`${current.slice(0, 7)} is held: \`run\` will not deploy it again until the branch moves on (or --unhold)`)
   if (!back.ok) {
     ctx.host.out.error(`the rollback did not bring a healthy release: ${target.slice(0, 7)} is recorded as rollback-unhealthy — try another with --to=<sha>`)
@@ -746,7 +749,7 @@ export async function status(ctx: DeployContext): Promise<number> {
   else host.out.info(`deploy running: ${describeHolder(lock.holder!)}`)
   const hold = await readHold(ctx)
   if (hold) host.out.warn(`held: ${hold.sha.slice(0, 7)} (${hold.note}, by ${hold.actor || 'someone'} at ${hold.at}) — run will not deploy it again; --unhold to override`)
-  for (const r of releases) host.out.info(`${r.at}  ${r.sha.slice(0, 7)}  ${r.status.padEnd(18)} ${r.user}${r.migrations.length ? `  +${r.migrations.length} migration(s)` : ''}${r.note ? `  — ${r.note}` : ''}`)
+  for (const r of releases) host.out.info(`${r.at}  ${r.sha.slice(0, 7)}  ${r.status.padEnd(18)} ${r.actor && r.actor !== r.user ? `${r.actor} (${r.user})` : r.user}${r.client ? ` from ${r.client}` : ''}${r.migrations.length ? `  +${r.migrations.length} migration(s)` : ''}${r.note ? `  — ${r.note}` : ''}`)
   if (isCompose(ctx)) {
     const head = (await ctx.host.exec('git', ['rev-parse', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
     for (const line of await composeStatus(ctx, head)) host.out.info(line)

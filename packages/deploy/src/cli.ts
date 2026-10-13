@@ -36,6 +36,7 @@ Exit codes: 0 done · 1 failed (or refused) · 3 another deploy holds the lock �
 Options:
   --config=<file>     default deploy.config.ts
   --overrides=<file>  server-local values, default /etc/basalt/<app>.json
+  --actor=<name>      who deploys, recorded with the release (default $BASALT_DEPLOY_ACTOR, else $USER)
   --skip=<steps>      ${SKIPPABLE.join(', ')} (comma-separated); --no-fetch = --skip=fetch
   -h, --help
 `
@@ -150,12 +151,13 @@ export async function main(argv: string[], host: Host = nodeHost(), cwd: string 
     const overrides = await host.readFile(overridesPath)
     if (overrides !== undefined) config = validateConfig(applyOverrides(config, parseOverrides(overrides, overridesPath)))
     const ctx = await createContext(host, cwd, config)
+    const actor = flags.values.has('actor') ? { actor: flags.values.get('actor') as string } : {}
 
     switch (flags.command) {
       case 'plan': return await plan(ctx, { skip })
-      case 'run': return await run(ctx, { skip, unhold: flags.switches.has('unhold') })
-      case 'env': return await envCommand(ctx)
-      case 'rollback': return await rollback(ctx, flags.values.get('to'))
+      case 'run': return await run(ctx, { skip, unhold: flags.switches.has('unhold'), ...actor })
+      case 'env': return await envCommand(ctx, actor)
+      case 'rollback': return await rollback(ctx, flags.values.get('to'), actor)
       case 'status': return await status(ctx)
       case 'install': return await install(ctx, flags.values.get('user') ?? host.env['SUDO_USER'])
       default:

@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import type { Audit } from './audit.js'
 import type { DeployConfig } from './config.js'
 import type { Host } from './host.js'
 
@@ -21,6 +22,8 @@ export interface DeployContext {
   hostUrls?: Array<[string, string]>
   /** Set while a locked command runs; a signal marks it, the next step boundary acts on it. */
   abort?: AbortState
+  /** Who runs the command, from where — stamped on every release it records. */
+  audit?: Audit
 }
 
 export interface AbortState {

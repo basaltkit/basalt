@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { syslogRelease } from './audit.js'
 import type { DeployContext } from './context.js'
 
 /** One line per release in `<stateDir>/releases.json` (RFC 0006 §8). */
@@ -19,6 +20,12 @@ export interface Release {
   migrations: string[]
   backup?: string
   note?: string
+  /** Who ran it: `--actor`, `$BASALT_DEPLOY_ACTOR` or `$USER` (`user` is always the OS account). */
+  actor?: string
+  /** The SSH client address, when run over SSH. */
+  client?: string
+  /** `ssh`, `ci`, `terminal` or `batch`. */
+  via?: string
 }
 
 const KEEP = 100
@@ -36,10 +43,13 @@ export async function readReleases(ctx: DeployContext): Promise<Release[]> {
   }
 }
 
+/** Appends a release (stamped with the command's audit fields) — under the deploy lock, so no write is lost. */
 export async function recordRelease(ctx: DeployContext, release: Release): Promise<void> {
-  const releases = [...(await readReleases(ctx)), release].slice(-KEEP)
+  const stamped: Release = { ...ctx.audit, ...release }
+  const releases = [...(await readReleases(ctx)), stamped].slice(-KEEP)
   await ctx.host.mkdir(ctx.stateDir, 0o700)
   await ctx.host.writeFile(releasesFile(ctx), `${JSON.stringify(releases, null, 2)}\n`, 0o600)
+  await syslogRelease(ctx, stamped)
 }
 
 /** Statuses that say the commit's code did not answer when released. */
