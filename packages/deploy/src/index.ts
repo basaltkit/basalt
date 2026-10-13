@@ -51,17 +51,54 @@ export {
   type HealthConfig,
   type ServerOverrides,
 } from './config.js'
-export { main, loadConfig, createContext, USAGE } from './cli.js'
-export { nodeHost, consoleOutput, type Host, type ExecOptions, type ExecResult, type FileStat, type Output, type TlsCertificate } from './host.js'
+export { main, loadConfig, createContext, processIO, USAGE, type CliIO } from './cli.js'
+export { nodeHost, consoleOutput, type Host, type ExecOptions, type ExecResult, type FileStat, type Output, type TlsCertificate, type PromptMeta, type LogHandle, type FileRange } from './host.js'
 export { DeployAbortedError, DeployError, INSTALL_COMMAND, RUN_COMMAND, rootInstallCommand, type DeployContext, type Finding } from './context.js'
 export { parseEnv, applyEnvChanges, formatValue, envValues, UnwritableValueError, type EnvDocument, type EnvChange } from './dotenv.js'
 export { renderVhost, proxiedPorts } from './apache.js'
 export { renderCompose } from './infra.js'
 export { coercionFindings } from './env-check.js'
 export { covers } from './checks.js'
-export { plan, run, envCommand, rollback, status, preflight, refuseRoot, SKIPPABLE, type Skippable, type RunOptions } from './pipeline.js'
+export { plan, run, envCommand, rollback, status, preflight, refuseRoot, SKIPPABLE, type Skippable, type RunOptions, type ProtocolHooks } from './pipeline.js'
 export { install, buildInstallPlan, parseInstallPlan, readInstallPlan, type InstallPlan, type InstallOptions, type PlanProxy } from './install-plan.js'
 export { DeployLockedError, type LockHolder } from './lock.js'
 export { EXIT_ABORTED, EXIT_LOCKED } from './cli.js'
 export type { Hold, Release } from './state.js'
 export type { Audit } from './audit.js'
+export {
+  parseEvent,
+  parseAnswerLine,
+  PROTOCOL_VERSION,
+  STEP_IDS,
+  ERROR_CODES,
+  EVENT_TYPES,
+  RUN_ID,
+  type DeployEvent,
+  type EventBody,
+  type EventType,
+  type Envelope,
+  type HelloEvent,
+  type StepStartEvent,
+  type StepEndEvent,
+  type LogEvent,
+  type FindingEvent,
+  type PromptEvent,
+  type PromptDescriptor,
+  type ResultEvent,
+  type ErrorEvent,
+  type DoneEvent,
+  type AttachedEvent,
+  type StepId,
+  type StepStatus,
+  type ErrorCode,
+  type AnswerLine,
+  type StatusResult,
+  type CheckResult,
+  type PlanResult,
+  type RunResult,
+  type RollbackResult,
+  type EnvResult,
+  type DetachResult,
+  type CancelResult,
+  type InstallPlanResult,
+} from './protocol.js'
