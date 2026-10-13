@@ -37,7 +37,9 @@ As the app user, in the checkout (node node_modules/@basaltkit/deploy/dist/bin.j
                      prints the root command for install
   attach <runId> --json [--from-seq=<n>] [--follow]
                      the events of a run (run/env/rollback --json), from any seq
-  cancel <runId>     SIGTERM to a detached run (a second cancel stops it at once)
+  cancel <runId> [--first-only]
+                     SIGTERM to a detached run (a second cancel stops it at once;
+                     --first-only refuses when the run was already cancelled)
   ui                 how to start the local UI — on YOUR machine, never on the server
 
 As root, with a copy of the tool root owns — never the checkout's node_modules:
@@ -376,6 +378,7 @@ function outcomeError(command: string, writer: EventWriter): EventBody {
 function checkFlags(flags: Flags, json: boolean, env: Host['env']): void {
   const via = flags.values.get('via')
   if (via !== undefined && via !== 'ui') throw usage('--via takes only ui')
+  if ((flags.switches.has('first-only') || flags.values.has('first-only')) && (flags.command !== 'cancel' || flags.values.has('first-only'))) throw usage('--first-only is a switch of cancel')
   const protocolOnly = ['answers', 'answer-timeout', 'detach', 'from-seq', 'follow', 'run-id']
   if (!json) {
     for (const name of protocolOnly) if (flags.values.has(name) || flags.switches.has(name)) throw usage(`--${name} needs --json`)
@@ -522,7 +525,7 @@ async function session(flags: Flags, host: Host, cwd: string, reporter: Reporter
       }
       case 'cancel': {
         const runId = flags.args[0] as string
-        const sent = await cancel(host, ctx.stateDir, runId)
+        const sent = await cancel(host, ctx.stateDir, runId, { firstOnly: flags.switches.has('first-only') })
         host.out.ok(`SIGTERM sent to run ${runId} (pid ${sent.pid})${sent.second ? ' — the second one: it stops at once, mid-step, and leaves a stale lock' : ' — it stops at the next safe point'}`)
         host.out.result?.('cancel', { runId, pid: sent.pid, signal: 'SIGTERM', second: sent.second })
         return 0
