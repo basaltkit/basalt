@@ -52,7 +52,7 @@ export {
   type ServerOverrides,
 } from './config.js'
 export { main, loadConfig, createContext, USAGE } from './cli.js'
-export { nodeHost, consoleOutput, type Host, type ExecOptions, type ExecResult, type Output, type TlsCertificate } from './host.js'
+export { nodeHost, consoleOutput, type Host, type ExecOptions, type ExecResult, type FileStat, type Output, type TlsCertificate } from './host.js'
 export { DeployError, INSTALL_COMMAND, RUN_COMMAND, type DeployContext, type Finding } from './context.js'
 export { parseEnv, applyEnvChanges, formatValue, envValues, UnwritableValueError, type EnvDocument, type EnvChange } from './dotenv.js'
 export { renderVhost, proxiedPorts } from './apache.js'
