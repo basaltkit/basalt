@@ -265,7 +265,10 @@ export class RunView {
       }
       : {
         title: `Cancel the run on ${this.target.name}?`,
-        lines: ['It stops at the next step boundary before the migration; from the migration on, the deploy finishes first.', 'A second cancel would stop it at once.'],
+        lines: [
+          'It stops at the next step boundary before the migration; from the migration on, the deploy finishes first.',
+          'A second cancel would stop it at once. If this run was already cancelled once (from a terminal or another session), nothing is sent now: you are asked again first.',
+        ],
         confirmLabel: 'Cancel the run',
         danger: true,
       })

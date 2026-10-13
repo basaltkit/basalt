@@ -82,7 +82,7 @@ beforeAll(async () => {
           expectFromSeq: 47,
         },
       ],
-      cancel: [{ transcript: 'cancel-first' }, { transcript: 'cancel-second' }],
+      cancel: [{ transcript: 'cancel-first' }, { transcript: 'cancel-already' }, { transcript: 'cancel-second' }],
     },
     'prod.example.com': {
       rollback: { transcript: 'rollback-detach' },
@@ -252,17 +252,25 @@ describe('the local server, end to end', () => {
     expect((await ssh.calls()).length - before).toBe(1)
   })
 
-  it('cancel needs a confirmation, and the second one its own', async () => {
+  it('cancel needs a confirmation, and the second one its own — decided by the server, not by this UI\'s memory', async () => {
     const runId = '20261011T120000Z-0123456789ab'
     expect((await api('cancel', { target: 'staging', runId })).status).toBe(428)
     expect((await api('cancel', { target: 'staging', runId: '../../x', confirm: true })).status).toBe(400)
+    const before = (await ssh.calls()).length
     const first = await ok<CommandReply>('cancel', { target: 'staging', runId, confirm: true })
     expect(first.result).toMatchObject({ second: false })
+    // The server says the run was already cancelled (the marker is there): no signal was sent, the page must confirm the second.
     const again = await api('cancel', { target: 'staging', runId, confirm: true })
     expect(again.status).toBe(428)
-    expect(JSON.parse(again.body)).toMatchObject({ second: true })
+    expect(JSON.parse(again.body)).toMatchObject({ second: true, error: expect.stringMatching(/from a terminal/) })
     const second = await ok<CommandReply>('cancel', { target: 'staging', runId, confirm: true, second: true })
     expect(second.result).toMatchObject({ second: true })
+    const calls = (await ssh.calls()).slice(before).map((c) => c.words.slice(6))
+    expect(calls).toEqual([
+      ['cancel', runId, '--json=1', '--first-only'],
+      ['cancel', runId, '--json=1', '--first-only'],
+      ['cancel', runId, '--json=1'],
+    ])
   })
 
   it('a protected target needs its name typed; rollback --to a picked release', async () => {

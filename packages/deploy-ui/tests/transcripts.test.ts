@@ -92,7 +92,7 @@ function detachInProcess(parent: FakeHost): { done: () => Promise<number> } {
 }
 
 describe('transcripts from the real @basaltkit/deploy --json', () => {
-  it('status, plan, env, run --detach, attach, rollback --detach, cancel and their refusals', async () => {
+  it('status, plan, env, run --detach, attach, rollback --detach, cancel (--first-only) and their refusals', async () => {
     // plan on a first setup: the questions a run would ask.
     const bare = server({ dir, env: BARE_ENV }).host
     await keep('plan-questions', (await runJson(['plan', '--json=1', CONFIG], bare, dir)).raw)
@@ -129,13 +129,15 @@ describe('transcripts from the real @basaltkit/deploy --json', () => {
     await back.done()
     await keep('rollback-detach', rolled.raw)
 
-    // cancel, twice, of a live detached run.
+    // cancel of a live detached run: the UI's first (--first-only), the same again
+    // (refused: it was already cancelled), then the explicit second.
     const live = server({ dir, env: COMPLETE_ENV }).host
     const RUN = '20261011T120000Z-0123456789ab'
     live.alive.add(5100)
     live.put(lockFile(state()), JSON.stringify({ pid: 5100, host: 'server-1', startedAt: TS, actor: 'alice', command: 'run', runId: RUN }), 0o600)
     live.cmdlines.set(5100, [process.execPath, '/srv/myapp/node_modules/@basaltkit/deploy/dist/bin.js', 'run', '--json=1', `--run-id=${RUN}`])
-    await keep('cancel-first', (await runJson(['cancel', RUN, '--json=1', CONFIG], live, dir)).raw)
+    await keep('cancel-first', (await runJson(['cancel', RUN, '--json=1', '--first-only', CONFIG], live, dir)).raw)
+    await keep('cancel-already', (await runJson(['cancel', RUN, '--json=1', '--first-only', CONFIG], live, dir)).raw)
     await keep('cancel-second', (await runJson(['cancel', RUN, '--json=1', CONFIG], live, dir)).raw)
 
     // Refusals the UI shows: the lock is held; an answer is missing; no such run.

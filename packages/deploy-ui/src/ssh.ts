@@ -52,6 +52,8 @@ export interface RemoteSpec {
   fromSeq?: number
   /** attach. */
   follow?: boolean
+  /** cancel: refused by the server when the run was already cancelled once. */
+  firstOnly?: boolean
 }
 
 export class UnsafeValueError extends Error {}
@@ -93,6 +95,10 @@ export function remoteCommand(target: Target, spec: RemoteSpec, actor?: string):
   if (spec.to !== undefined) {
     if (spec.command !== 'rollback' || !SHA.test(spec.to)) refuse('the rollback commit')
     words.push(`--to=${spec.to}`)
+  }
+  if (spec.firstOnly) {
+    if (spec.command !== 'cancel') refuse('--first-only off cancel')
+    words.push('--first-only')
   }
   if (spec.command === 'attach') {
     const from = spec.fromSeq ?? 0
