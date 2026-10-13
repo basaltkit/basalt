@@ -1,6 +1,6 @@
 # RFC 0008 — `basalt-deploy` machine protocol: `--json`, `--answers=stdin`, detached runs
 
-- **Status:** Proposed (2026-10-13) — not yet implemented
+- **Status:** Accepted — implemented in `@basaltkit/deploy` 0.5.0 (2026-10-13); where the code differs from this text, §17 says so
 - **Author:** Marcio Zebedeu
 - **Date:** 2026-10-13
 - **Affects:** `@basaltkit/deploy` only (the CLI, `Host`, the pipeline's step reporting, the lock holder, the audit record). No runtime package, no AI package.
@@ -745,3 +745,69 @@ All on `FakeHost` unless noted; every existing test keeps passing.
   later additive change.
 - **Q6. Retention numbers** (50 logs, 30 days, 64 MiB) — and whether they belong
   in `deploy.config.ts`.
+
+## 17. As built — where the implementation differs
+
+The code is the reference; these are the places it departs from the text
+above, and why.
+
+- **Hooks, by name.** `Output` gains `step(title, id?)`, `stepEnd?`,
+  `finding?` and also `result?` (each command hands its payload to it).
+  `ExecOptions.onOutput(text, stream)` hands a streamed child's decoded
+  output over in chunks (the line splitting is the writer's, §5.3), not an
+  `onLine`. `Host` gains the optional `createLog`, `readFileRange`,
+  `spawnDetached`, `kill` and `processCmdline`; `RunOptions` gains `via` and
+  `protocol` (`runId`, `beforeLock`, `afterLock`, `afterAnswers`), set only by
+  the CLI. `DeployError` gains `code` and `hint`. `processIO()` and `CliIO`
+  are the CLI's stdin/stdout, injectable for tests.
+- **Steps hold what they decide.** The `env` step now covers the questions
+  and the `.env` write, and `preflight` stops inside its own step, so a
+  `prompt` belongs to `env` and a blocking preflight ends `failed`. The
+  human output is the same (a snapshot recorded on the code before this RFC
+  is in the tests).
+- **`secret-short`** is a `finding` emitted when the short value is learnt
+  (the `.env` read by `createContext`, a child's environment), not an entry in
+  the preflight's list; it exists only under `--json`.
+- **The redactor also learns every child's environment** — keys matching the
+  sensitive pattern or `BASALT_(PG|REDIS|MINIO)_*`, and URL passwords —
+  which is where `InfraPlan.secrets` (and `PGPASSWORD`) reach a child.
+- **The log cap applies to stdout too.** `seq` is shared by stdout and the
+  run log, so a `log` event dropped from one is dropped from both; past
+  64 MiB an attended run's stdout carries the notice and the non-`log`
+  events, like its run log.
+- **Answers.** Without `--answers`, no `prompt` event is written: the command
+  fails `answer-missing`. With it, an attended run checks the lines sent so
+  far before the lock (it waits for EOF or 50 ms, so a channel left open for
+  live answers does not hold it up); a bad line arriving later fails at the
+  next prompt. Reading stops when the `.env` questions are done
+  (`afterAnswers`): later lines are never read. A detached run's parent and
+  child read stdin to EOF first, as specified.
+- **Detach.** The parent computes the questions with `planEnv` on the `.env`
+  as it is, with its `PORT` (a `derive` that depends on a port not yet chosen
+  could differ; the child asks nothing and fails `answer-missing` if so).
+  The child's `hello` also carries `detached: true`.
+- **`attach`** without `--follow` on a run still alive replays what exists and
+  exits 0 with a `log` line saying so; a run whose process is gone without
+  `done` is `run-vanished`. When the run's exit code is not 0, attach exits
+  with it but writes no `error` of its own (the run's is in the replay).
+- **`cancel`** requires `--run-id=<runId>` in the process's own argv (Q3
+  resolved as proposed: refused, `unsupported`, where `/proc` cannot be
+  read). Only a detached run carries it, so an attended run is not
+  cancellable this way — it stops with its SSH session (SIGHUP, phase 0). A
+  second `cancel` is recognised by `<runId>.cancel`, created `O_EXCL` in the
+  runs directory and pruned with the log.
+- **Outcomes without an exception.** A `run`/`rollback` that returns 1 after
+  recording (rolled back, public URL unreachable, rollback unhealthy) emits
+  `error{code:'release-failed'}`, a blocking `plan` `error{code:'preflight'}`,
+  a failing `check` `error{code:'failed'}`. `RunResult` gains `note` (why it
+  did not end `ok`). Blank lines a child prints are not events.
+- **Retention never fails a deploy:** an entry that cannot be unlinked (a
+  directory with a log's name) is left alone.
+
+Known limits, unchanged from the text: a secret re-encoded by a child
+(base64, hex) is not recognised; a write to fd 1 that bypasses
+`process.stdout` is not captured; human mode is not redacted (Q1); run logs
+are not tamper-evident against the app user itself; the detaching parent
+reads at most the first 1 MiB of the run log while it waits for the `lock`
+step (which a run writes within its first few events).
+
