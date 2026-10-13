@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { DeployError } from './context.js'
 import type { Host } from './host.js'
+import { RUN_ID } from './protocol.js'
 
 /**
  * One deploy at a time per app: `<stateDir>/deploy.lock`, created with
@@ -18,6 +19,8 @@ export interface LockHolder {
   startedAt: string
   actor: string
   command: string
+  /** The run this deploy writes its events to (`--json`, RFC 0008 §8.3): what `attach` and `cancel` name. */
+  runId?: string
 }
 
 export const lockFile = (stateDir: string) => join(stateDir, 'deploy.lock')
@@ -69,6 +72,7 @@ function parseHolder(text: string | undefined): LockHolder | undefined {
       startedAt: String(value.startedAt ?? ''),
       actor: String(value.actor ?? ''),
       command: String(value.command ?? ''),
+      ...(typeof value.runId === 'string' && RUN_ID.test(value.runId) ? { runId: value.runId } : {}),
     }
   } catch {
     return undefined
@@ -97,10 +101,10 @@ export const describeHolder = (h: LockHolder) =>
  * user's while root holds the lock, and a lock swapped for a directory or a
  * link must not lead root into removing anything else.
  */
-export async function acquireLock(host: Host, stateDir: string, command: string, actor: string): Promise<() => Promise<void>> {
+export async function acquireLock(host: Host, stateDir: string, command: string, actor: string, runId?: string): Promise<() => Promise<void>> {
   await host.mkdir(stateDir, 0o700)
   const path = lockFile(stateDir)
-  const mine: LockHolder = { pid: host.pid(), host: host.hostname(), startedAt: host.now().toISOString(), actor, command }
+  const mine: LockHolder = { pid: host.pid(), host: host.hostname(), startedAt: host.now().toISOString(), actor, command, ...(runId ? { runId } : {}) }
   const text = `${JSON.stringify(mine)}\n`
   for (let attempt = 0; attempt < 2; attempt++) {
     if (await host.createExclusive(path, text, 0o600)) {

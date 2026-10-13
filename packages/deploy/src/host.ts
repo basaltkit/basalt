@@ -1,13 +1,16 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { constants, openSync, closeSync } from 'node:fs'
+import { constants, openSync, closeSync, writeSync } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, readlink, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import https from 'node:https'
 import { hostname } from 'node:os'
 import { dirname } from 'node:path'
 import { createInterface } from 'node:readline'
+import { StringDecoder } from 'node:string_decoder'
 import tls from 'node:tls'
+import type { Finding } from './context.js'
+import type { ResultCommand, ResultPayloads, StepId, StepStatus } from './protocol.js'
 
 /**
  * Every side effect the pipeline has goes through this interface: processes,
@@ -51,8 +54,12 @@ export interface Host {
    */
   removeFile(path: string): Promise<void>
   list(dir: string): Promise<string[]>
-  /** A line typed by a person, or `undefined` when nobody can answer (no TTY). */
-  prompt(question: string, options: { secret: boolean }): Promise<string | undefined>
+  /**
+   * A line typed by a person, or `undefined` when nobody can answer (no TTY).
+   * `meta` names the question for a program answering it (RFC 0008 §7.2);
+   * the terminal ignores it.
+   */
+  prompt(question: string, options: { secret: boolean }, meta?: PromptMeta): Promise<string | undefined>
   confirm(question: string): Promise<boolean>
   randomHex(bytes: number): string
   now(): Date
@@ -82,6 +89,56 @@ export interface Host {
    */
   onSignal(listener: (signal: string) => void): () => void
   out: Output
+
+  // ── optional: the machine protocol (RFC 0008). A host without them refuses --detach and cancel. ──
+
+  /**
+   * Creates `path` for appending — O_CREAT|O_EXCL|O_NOFOLLOW, `mode` — and
+   * returns a handle: a run log. Something already there (a planted symlink
+   * included) is an error, never followed or reused.
+   */
+  createLog?(path: string, mode: number): Promise<LogHandle>
+  /**
+   * Up to `length` bytes of `path` from `offset`, read through a descriptor
+   * opened with O_NOFOLLOW, with what fstat says of that file. Throws for a
+   * symlink or a non-regular file.
+   */
+  readFileRange?(path: string, offset: number, length: number): Promise<FileRange>
+  /**
+   * Starts `command` in its own session (setsid: no controlling terminal, no
+   * SIGHUP when the SSH session ends), stdin a pipe that receives `stdin` and
+   * is closed, stdout the log handle, stderr /dev/null; not waited for.
+   */
+  spawnDetached?(command: string, args: string[], options: { cwd: string; env: Record<string, string | undefined>; stdin: string; stdout: LogHandle }): Promise<{ pid: number }>
+  /** kill(2) of one process (never its group). */
+  kill?(pid: number, signal: 'SIGTERM'): void
+  /** The process's argv (Linux /proc/<pid>/cmdline), or `undefined` when it cannot be known. */
+  processCmdline?(pid: number): Promise<string[] | undefined>
+}
+
+/** Who a prompt is for, for a program that answers it (RFC 0008 §7.2). */
+export interface PromptMeta {
+  /** `env.<KEY>`. */
+  id: string
+  key: string
+  optional: boolean
+  default?: string
+}
+
+export interface LogHandle {
+  append(text: string): void
+  close(): void
+  /** The descriptor, for a detached child's stdout. */
+  readonly fd?: number
+}
+
+export interface FileRange {
+  data: Uint8Array
+  /** The whole file's size. */
+  size: number
+  uid: number
+  /** Permission bits. */
+  mode: number
 }
 
 export interface FileStat {
@@ -109,6 +166,11 @@ export interface ExecOptions {
   stdin?: string
   /** The child gets this terminal (stdin too): it may ask questions. Nothing is captured. */
   interactive?: boolean
+  /**
+   * With `stream`: stdout/stderr are piped (stdin stays closed) and handed
+   * here as decoded text, instead of going to the terminal (RFC 0008 §5.3).
+   */
+  onOutput?: (text: string, stream: 'stdout' | 'stderr') => void
 }
 
 export interface ExecResult {
@@ -127,11 +189,19 @@ export interface TlsCertificate {
 }
 
 export interface Output {
-  step(title: string): void
+  /** A step begins; `id` names it for a program (the terminal shows the title). */
+  step(title: string, id?: StepId): void
   info(message: string): void
   ok(message: string): void
   warn(message: string): void
   error(message: string): void
+  // Optional: implemented by the machine protocol's output (RFC 0008 §5.1); the terminal has none.
+  /** The step `id` ended. */
+  stepEnd?(id: StepId, status: StepStatus, durationMs: number): void
+  /** A finding, structured (the terminal gets it as text). */
+  finding?(finding: Finding): void
+  /** The command's payload. */
+  result?<C extends ResultCommand>(command: C, data: ResultPayloads[C]): void
 }
 
 export function consoleOutput(stream: NodeJS.WriteStream = process.stderr): Output {
@@ -201,16 +271,30 @@ export function nodeHost(output: Output = consoleOutput()): Host {
       return new Promise((resolve) => {
         let stdout = ''
         let stderr = ''
+        const sink = options.stream ? options.onOutput : undefined
         const child = spawn(command, args, {
           cwd: options.cwd,
           env,
-          stdio: options.interactive ? 'inherit' : options.stream ? ['ignore', 'inherit', 'inherit'] : [options.stdin === undefined ? 'ignore' : 'pipe', fd ?? 'pipe', 'pipe'],
+          stdio: options.interactive ? 'inherit'
+            : sink ? ['ignore', 'pipe', 'pipe']
+            : options.stream ? ['ignore', 'inherit', 'inherit']
+            : [options.stdin === undefined ? 'ignore' : 'pipe', fd ?? 'pipe', 'pipe'],
         })
         if (options.stdin !== undefined) child.stdin?.end(options.stdin)
-        child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-        child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+        const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }
+        if (sink) {
+          child.stdout?.on('data', (chunk: Buffer) => sink(decoders.stdout.write(chunk), 'stdout'))
+          child.stderr?.on('data', (chunk: Buffer) => sink(decoders.stderr.write(chunk), 'stderr'))
+        } else {
+          child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+          child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+        }
+        let finished = false
         const done = (code: number) => {
+          if (finished) return
+          finished = true
           if (fd !== undefined) closeSync(fd)
+          if (sink) { sink(decoders.stdout.end(), 'stdout'); sink(decoders.stderr.end(), 'stderr') }
           resolve({ code, stdout, stderr })
         }
         child.on('error', (error) => { stderr += error.message; done(127) })
@@ -337,6 +421,62 @@ export function nodeHost(output: Output = consoleOutput()): Host {
     },
 
     tlsCertificate: (servername) => probeTls(servername, { host: servername, port: 443 }),
+
+    async createLog(path, mode) {
+      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_APPEND, mode)
+      return {
+        fd,
+        append(text) {
+          const bytes = Buffer.from(text, 'utf8')
+          for (let written = 0; written < bytes.length;) written += writeSync(fd, bytes, written)
+        },
+        close() { closeSync(fd) },
+      }
+    },
+    async readFileRange(path, offset, length) {
+      const handle = await openNoFollow(path, constants.O_RDONLY | constants.O_NONBLOCK)
+      try {
+        const s = await handle.stat()
+        if (!s.isFile()) throw new Error(`${path} is not a regular file`)
+        const data = Buffer.alloc(Math.max(0, Math.min(length, s.size - offset)))
+        let read = 0
+        while (read < data.length) {
+          const { bytesRead } = await handle.read(data, read, data.length - read, offset + read)
+          if (bytesRead === 0) break
+          read += bytesRead
+        }
+        return { data: data.subarray(0, read), size: s.size, uid: s.uid, mode: s.mode & 0o7777 }
+      } finally {
+        await handle.close()
+      }
+    },
+    spawnDetached(command, args, options) {
+      return new Promise((resolve, reject) => {
+        if (options.stdout.fd === undefined) { reject(new Error('the run log has no descriptor')); return }
+        const child = spawn(command, args, {
+          cwd: options.cwd,
+          env: options.env,
+          // setsid(2): its own session and process group, no controlling terminal.
+          detached: true,
+          stdio: ['pipe', options.stdout.fd, 'ignore'],
+        })
+        child.once('error', reject)
+        child.once('spawn', () => {
+          child.stdin?.end(options.stdin)
+          child.unref()
+          resolve({ pid: child.pid as number })
+        })
+      })
+    },
+    kill(pid, signal) { process.kill(pid, signal) },
+    async processCmdline(pid) {
+      if (process.platform !== 'linux') return undefined
+      try {
+        return (await readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\u0000').filter(Boolean)
+      } catch {
+        return undefined
+      }
+    },
 
     httpGet(url, options = {}) {
       return new Promise((resolve) => {
