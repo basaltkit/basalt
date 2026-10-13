@@ -177,6 +177,7 @@ As the app user, in the checkout (`node node_modules/@basaltkit/deploy/dist/bin.
 | `install-plan [--out=<file>\|-]` | what `install` needs, as JSON (default `<state dir>/install-plan.json`, 0600), and the root command to run |
 | `attach <runId> --json [--from-seq=<n>] [--follow]` | the events of a run, from any point (machine mode, below) |
 | `cancel <runId>` | SIGTERM to a detached run; a second `cancel` stops it at once |
+| `ui` | prints how to start the local UI ([`@basaltkit/deploy-ui`](../deploy-ui#readme)) — on your machine, never on the server |
 
 As root, with a copy of the tool root owns (`cd / && sudo -H npx --yes --package=@basaltkit/deploy@<version> -- basalt-deploy <command>`):
 
@@ -226,8 +227,9 @@ or `run --unhold`.
 
 ## Machine mode (`--json`)
 
-For a program that drives the deploy — the local UI of phase 2, a script —
-over the system `ssh`, as the app user, exactly as a person would type it.
+For a program that drives the deploy — the local UI
+([`@basaltkit/deploy-ui`](../deploy-ui#readme), RFC 0009), a script — over the
+system `ssh`, as the app user, exactly as a person would type it.
 There is no daemon, no listener and no new credential: the program can do what
 the SSH account can, nothing more. Design and threat model:
 [RFC 0008](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0008-deploy-machine-protocol.md)
@@ -325,6 +327,16 @@ node node_modules/@basaltkit/deploy/dist/bin.js cancel 20261013T100000Z-5f2c9a1b
 - `status --json` reports the lock, the active run and the last run.
 - `--via=ui` records `via: "ui"` with the release; like `--actor`, it
   attributes, it does not authenticate.
+
+## The local UI
+
+[`@basaltkit/deploy-ui`](../deploy-ui#readme) is a browser UI for all of the
+above that runs on **your** machine (`npx @basaltkit/deploy-ui@<exact version>`),
+listens on `127.0.0.1` only and drives each server over your own `ssh` with the
+machine mode — status, plan, the `.env` questions, a detached run with its live
+log, cancel, rollback, history. Never add it to the app's `package.json`: this
+package installs the app's devDependencies on the server. Design and security
+model: [RFC 0009](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0009-deploy-local-ui.md).
 
 ## Docker Compose apps
 
