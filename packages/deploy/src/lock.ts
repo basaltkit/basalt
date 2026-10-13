@@ -21,6 +21,26 @@ export interface LockHolder {
 }
 
 export const lockFile = (stateDir: string) => join(stateDir, 'deploy.lock')
+/** Held for the few milliseconds a stale lock is replaced: only one process judges and removes it. */
+export const takeoverFile = (stateDir: string) => join(stateDir, 'deploy.lock.takeover')
+const MAX_LOCK_BYTES = 4096
+
+/**
+ * The lock file's text, read without following a link and at most 4 KiB —
+ * the state directory is the app user's, and root takes this lock too
+ * (`install`): a link to /dev/zero or a FIFO there must not hang root.
+ * `undefined` when it is not there; '' when it is not a plain small file.
+ */
+async function readLockText(host: Host, path: string): Promise<string | undefined> {
+  if (!(await host.exists(path))) return undefined
+  try {
+    return await host.readPlainFile(path, MAX_LOCK_BYTES)
+  } catch {
+    return (await host.exists(path)) ? '' : undefined
+  }
+}
+
+const sameHolder = (a: LockHolder | undefined, b: LockHolder) => a !== undefined && a.pid === b.pid && a.host === b.host && a.startedAt === b.startedAt
 
 export class DeployLockedError extends DeployError {
   constructor(message: string, readonly holder?: LockHolder) {
@@ -58,8 +78,9 @@ function parseHolder(text: string | undefined): LockHolder | undefined {
 /** The lock as it is now, or `undefined` when no deploy holds it. */
 export async function readLock(host: Host, stateDir: string): Promise<LockState | undefined> {
   const path = lockFile(stateDir)
-  if (!(await host.exists(path))) return undefined
-  const holder = parseHolder(await host.readFile(path))
+  const text = await readLockText(host, path)
+  if (text === undefined) return undefined
+  const holder = parseHolder(text)
   if (!holder) return { path, stale: false, corrupt: true }
   const stale = holder.host === host.hostname() && !host.processAlive(holder.pid)
   return { path, holder, stale, corrupt: false }
@@ -71,6 +92,10 @@ export const describeHolder = (h: LockHolder) =>
 /**
  * Takes the lock or throws {@link DeployLockedError}. Returns the release,
  * which removes the file only while it is still this process's lock.
+ *
+ * Every removal is unlink(2), never recursive: the directory may be the app
+ * user's while root holds the lock, and a lock swapped for a directory or a
+ * link must not lead root into removing anything else.
  */
 export async function acquireLock(host: Host, stateDir: string, command: string, actor: string): Promise<() => Promise<void>> {
   await host.mkdir(stateDir, 0o700)
@@ -80,19 +105,17 @@ export async function acquireLock(host: Host, stateDir: string, command: string,
   for (let attempt = 0; attempt < 2; attempt++) {
     if (await host.createExclusive(path, text, 0o600)) {
       return async () => {
-        const now = parseHolder(await host.readFile(path))
-        if (now && now.pid === mine.pid && now.host === mine.host && now.startedAt === mine.startedAt) await host.remove(path)
+        if (sameHolder(parseHolder(await readLockText(host, path)), mine)) await host.removeFile(path)
       }
     }
     const state = await readLock(host, stateDir)
     if (!state) continue
     if (state.corrupt) {
-      throw new DeployLockedError(`${path} exists but is not a deploy lock (empty or unreadable) — if no deploy is running: rm ${path}`)
+      throw new DeployLockedError(`${path} exists but is not a deploy lock (empty, unreadable or not a plain file) — if no deploy is running: rm ${path}`)
     }
     const holder = state.holder as LockHolder
     if (state.stale && attempt === 0) {
-      host.out.warn(`removed a stale lock: ${describeHolder(holder)} — that process is gone`)
-      await host.remove(path)
+      await takeOver(host, stateDir, holder, mine)
       continue
     }
     throw new DeployLockedError(
@@ -101,4 +124,27 @@ export async function acquireLock(host: Host, stateDir: string, command: string,
     )
   }
   throw new DeployLockedError(`could not take ${path}`)
+}
+
+/**
+ * Removes a stale lock — only the one judged stale. Two deploys that both
+ * read the same dead holder would otherwise each remove "it": the second
+ * removal would hit the first one's fresh lock, and both would run. The
+ * takeover file (O_EXCL) lets one process at a time re-read and remove; the
+ * other is told a deploy is starting.
+ */
+async function takeOver(host: Host, stateDir: string, stale: LockHolder, mine: LockHolder): Promise<void> {
+  const path = lockFile(stateDir)
+  const guard = takeoverFile(stateDir)
+  if (!(await host.createExclusive(guard, `${JSON.stringify(mine)}\n`, 0o600))) {
+    throw new DeployLockedError(`another deploy is taking over the stale lock in ${stateDir} — if none runs (a takeover lasts milliseconds): rm ${guard}`)
+  }
+  try {
+    if (sameHolder(parseHolder(await readLockText(host, path)), stale)) {
+      host.out.warn(`removed a stale lock: ${describeHolder(stale)} — that process is gone`)
+      await host.removeFile(path)
+    }
+  } finally {
+    await host.removeFile(guard)
+  }
 }

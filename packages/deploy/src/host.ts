@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { constants, openSync, closeSync } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, readlink, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import https from 'node:https'
 import { hostname } from 'node:os'
@@ -43,7 +43,13 @@ export interface Host {
   readlink(path: string): Promise<string | undefined>
   symlink(target: string, path: string): Promise<void>
   mkdir(path: string, mode?: number): Promise<void>
+  /** Recursive and forced (`rm -rf`): never as root under a directory another user can write. */
   remove(path: string): Promise<void>
+  /**
+   * unlink(2) of one entry: a file, or a symlink itself (never its target);
+   * a directory is an error, never descended into. Nothing there is fine.
+   */
+  removeFile(path: string): Promise<void>
   list(dir: string): Promise<string[]>
   /** A line typed by a person, or `undefined` when nobody can answer (no TTY). */
   prompt(question: string, options: { secret: boolean }): Promise<string | undefined>
@@ -291,6 +297,13 @@ export function nodeHost(output: Output = consoleOutput()): Host {
       await mkdir(path, { recursive: true, ...(mode === undefined ? {} : { mode }) })
     },
     remove: (path) => rm(path, { force: true, recursive: true }),
+    async removeFile(path) {
+      try {
+        await unlink(path)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    },
     async list(dir) {
       try {
         return await readdir(dir)
