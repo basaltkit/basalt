@@ -81,6 +81,12 @@ export interface DeployConfig<E extends object = EnvShape> {
   hooks?: HooksConfig
   /** Declarative checks after the health check; a failure is a failed release, rolled back (RFC 0007 §6). */
   verify?: VerifyConfig
+  /**
+   * Every release record already says who (`--actor` or `$USER`), from where
+   * (`$SSH_CONNECTION`) and how. `syslog: true` also sends one line per
+   * release to the system log (`logger -t basalt-deploy`).
+   */
+  audit?: { syslog?: boolean }
   /** What `basalt-deploy bootstrap` sets up on a fresh server (RFC 0007 §7). */
   bootstrap?: {
     /** Swap created when RAM is under 6 GB and there is none; 0 = never. @default 4 */
