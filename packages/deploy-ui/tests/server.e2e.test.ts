@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { request } from 'node:http'
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -159,9 +160,19 @@ describe('the local server, end to end', () => {
     expect(wrong.status).toBe(401)
     const first = await raw('POST', '/api/session', apiHeaders(), JSON.stringify({ code: launchCode }))
     expect(first.status).toBe(200)
-    token = (JSON.parse(first.body) as { token: string }).token
+    const credentials = JSON.parse(first.body) as { token: string; serverKey: string }
+    token = credentials.token
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(token).not.toBe(launchCode)
+    expect(credentials.serverKey).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(new Set([launchCode, token, credentials.serverKey]).size).toBe(3)
+    // The page's check: only with the token, only a well-formed nonce, and the proof is the HMAC under the key it was given.
+    const nonce = Buffer.alloc(32, 4).toString('base64url')
+    expect((await raw('POST', '/api/hello', apiHeaders({ authorization: '' }), JSON.stringify({ nonce }))).status).toBe(401)
+    expect((await api('hello', { nonce: 'short' })).status).toBe(400)
+    const hello = JSON.parse((await api('hello', { nonce })).body) as { proof: string }
+    expect(hello.proof).toBe(createHmac('sha256', Buffer.from(credentials.serverKey, 'base64url')).update(`basalt-deploy-ui hello v1\n${nonce}`).digest('base64url'))
+    expect(logs.join('\n')).not.toContain(credentials.serverKey)
     const second = await raw('POST', '/api/session', apiHeaders(), JSON.stringify({ code: launchCode }))
     expect(second.status).toBe(409)
     expect(logs.filter((l) => l.includes('a second browser tried to claim the session'))).toHaveLength(1)

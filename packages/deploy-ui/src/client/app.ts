@@ -1,5 +1,5 @@
 import type { HelloEvent, PlanResult, StatusResult } from '@basaltkit/deploy/protocol'
-import { ApiError, type Api } from './api.js'
+import { ApiError, type Api, type ServerGone } from './api.js'
 import { confirmDialog } from './dialog.js'
 import { button, el, replace } from './dom.js'
 import type { CommandReply, TargetsReply, TargetView } from './messages.js'
@@ -11,6 +11,20 @@ import { renderStatus } from './view-status.js'
 import { renderTargets } from './view-targets.js'
 
 export type Screen = 'targets' | 'status' | 'plan' | 'history' | 'run'
+
+/** This tab's session (sessionStorage): the bearer token, and the key the server proves itself with. */
+export const TOKEN_KEY = 'basalt-deploy-ui:token'
+export const SERVER_KEY = 'basalt-deploy-ui:server-key'
+
+/** Forgets this tab's session: after a stop it is worth nothing, and nothing should look like it still works. */
+export function forgetSession(storage: Storage | undefined): void {
+  try {
+    storage?.removeItem(TOKEN_KEY)
+    storage?.removeItem(SERVER_KEY)
+  } catch {
+    // No storage: nothing kept.
+  }
+}
 
 export interface Shell {
   nav: HTMLElement
@@ -34,7 +48,28 @@ export class App {
   planBusy = false
   stopped = false
 
-  constructor(readonly api: Api, readonly shell: Shell, readonly storage: Storage | undefined) {}
+  constructor(readonly api: Api, readonly shell: Shell, readonly storage: Storage | undefined) {
+    api.onGone = (error) => this.serverGone(error)
+  }
+
+  /**
+   * The local server stopped, or something else answers on its port: every
+   * form goes (typed answers with it), the session is forgotten, and the page
+   * says what happened. Nothing is sent from here on.
+   */
+  serverGone(error: ServerGone): void {
+    if (this.stopped) return
+    this.stopped = true
+    this.run?.stop()
+    forgetSession(this.storage)
+    replace(this.shell.main, el('div', { class: 'banner err', role: 'alert' },
+      el('strong', {}, error.why === 'unverified' ? 'This page no longer talks to your deploy UI.' : 'The deploy UI has stopped.'),
+      el('p', {}, error.message),
+      el('p', {}, 'Nothing was sent. Detached runs go on on the server. Start basalt-deploy-ui again and open the URL it prints.')))
+    replace(this.shell.nav)
+    replace(this.shell.bar)
+    replace(this.shell.session)
+  }
 
   get status(): StatusResult | undefined {
     return this.statusReply?.result as StatusResult | undefined
@@ -199,6 +234,7 @@ export class App {
       // Already gone.
     }
     this.stopped = true
+    forgetSession(this.storage)
     replace(this.shell.main, el('p', {}, 'The deploy UI has stopped. You can close this tab.'))
     replace(this.shell.nav)
     replace(this.shell.session)
