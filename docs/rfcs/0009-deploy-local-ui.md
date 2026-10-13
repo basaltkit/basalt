@@ -191,8 +191,8 @@ Every rule below answers one of those.
 
 ### 4.2 Launch and the session
 
-1. At start: `launchCode` and `sessionToken`, each 32 bytes from
-   `crypto.randomBytes`, base64url.
+1. At start: `launchCode`, `sessionToken` and `serverKey`, each 32 bytes
+   from `crypto.randomBytes`, base64url.
 2. The browser is opened at `http://127.0.0.1:<port>/#launch=<launchCode>`
    (§4.6). The fragment is never sent in a request, a `Referer` or a server
    log.
@@ -200,7 +200,7 @@ Every rule below answers one of those.
    (`history.replaceState`), and posts `{code}` to `POST /api/session`.
 4. The server compares in constant time (`timingSafeEqual` on equal-length
    buffers). On the **first** match within 120 s it returns `{token:
-   sessionToken}` and burns the launch code. Any later exchange — right code or
+   sessionToken, serverKey}` and burns the launch code. Any later exchange — right code or
    not — is refused (409 "this UI already has its browser session; restart
    basalt-deploy-ui for a new one"), and the terminal prints one line each time
    ("a second browser tried to claim the session"), so a stolen code is
@@ -208,7 +208,24 @@ Every rule below answers one of those.
 5. The tab keeps the token in `sessionStorage` (scoped to scheme + host +
    **port** and to this tab; survives a reload; never `localStorage`, never a
    cookie) and sends it as `Authorization: Bearer <token>` on every API call,
-   the event streams included.
+   the event streams included. It keeps `serverKey` next to it and **never
+   sends it**.
+6. The page makes the server prove itself (below) once after every load, and
+   again before every `run` or `env` that carries answers.
+
+**The server proves itself.** The bearer token authenticates the page to the
+server, not the other way round. Once the UI stops (idle, Quit, `Ctrl-C`),
+its port is free, and any local process — another user's included — may bind
+it. A tab still open would then post the token, and any `.env` answers typed
+into it, to that listener. So the page checks its server before an answer
+leaves it: it sends `POST /api/hello {nonce}` (32 random bytes from WebCrypto),
+the server answers `HMAC-SHA256(serverKey, "basalt-deploy-ui hello v1\n" +
+nonce)`, and the page verifies it with WebCrypto. A listener that took the
+port has at most seen the bearer token, never the key. A wrong or missing
+proof, a refused connection, or a stream cut short puts the page in a
+**stopped** state: every form is removed (typed values with it), the token
+and the key are removed from `sessionStorage`, and nothing more is sent. Quit
+removes them too. What this does not cover is stated in §15.
 
 **Why a bearer header and not a cookie.** Cookies are not port-scoped: a cookie
 for `127.0.0.1` is sent to **every** server on `127.0.0.1`, whatever its port —
@@ -276,7 +293,8 @@ No inline script, no inline style (`style-src 'self'` without
 ### 4.5 Lifetime
 
 - **Idle shutdown:** the process exits after `--idle-minutes` (default 15, max
-  240) with no authenticated request **and** no open event stream. A tab
+  240) with no authenticated request, no open event stream **and** no remote
+  command in flight (a slow `plan`, a `run --detach` still detaching). A tab
   watching a run keeps it alive; a forgotten tab with nothing running does not.
 - `Ctrl-C` in the terminal, or "Quit" in the page (`POST /api/quit`), stops it.
 - On exit: open `ssh` children of **attended** commands get SIGTERM (an
@@ -289,8 +307,10 @@ No inline script, no inline style (`style-src 'self'` without
 ### 4.6 Opening the browser
 
 Argv, no shell: macOS `open <url>`, Linux and BSD `xdg-open <url>`, Windows
-`rundll32 url.dll,FileProtocolHandler <url>` (not `cmd /c start`, which needs a
-shell and mangles `&`/`#`). `--no-open` prints the URL to the terminal
+`%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` (not
+`cmd /c start`, which needs a shell and mangles `&`/`#`; an absolute path,
+because Windows looks a bare name up in the working directory first, §6.1).
+The opener starts in the operator's home directory. `--no-open` prints the URL to the terminal
 instead. If the opener fails, the URL is printed. The URL (with the launch
 code) is in the opener's argv for an instant, visible to other local users on
 a shared machine: the code is one-time, expires in 120 s, and a claim by
@@ -317,8 +337,24 @@ connected to, but not one they have.) Keeping targets per-operator also keeps
 The file is created 0600 (on POSIX; on Windows in the user's profile) by the
 UI's "add target" form, written to a temp file in the same directory and
 renamed. It holds **no secret**: no password, no key, no passphrase, no `.env`
-value. The UI refuses to read a file that is a symlink, not a regular file, or
-(POSIX) writable by group or others.
+value. The UI refuses to read a file that is a symlink or not a regular file.
+On POSIX it also refuses a file that is writable by group or others, or that
+another user owns: the owner of a file can rewrite it, so a root-owned 0644
+file in `/etc` is refused as well. It refuses any directory from the file's
+up to `/` that another user owns (root excepted) or that others can write to
+without the sticky bit. This is the check sshd's `StrictModes` makes:
+whoever can rename an entry in such a directory can replace the file. It
+applies to reads and to saves, and a save never replaces a file another user
+owns. A `--targets=/tmp/t.json` that someone else created first is
+therefore refused, not trusted.
+
+The file is read again for every request, so it could change between the
+moment the page shows a confirmation and the moment the server acts on it.
+`run`, `env` and `rollback` therefore carry `confirmedTarget`, the target as
+the page showed it when the operator confirmed. The server compares it field
+by field with the target it has just read. If they differ, it answers 409
+`{changed: true}` and sends nothing, and the page reloads the targets so the
+operator can check them and confirm again.
 
 ### 5.2 Shape
 
@@ -356,8 +392,15 @@ operator's, read by `ssh` itself, and the UI never parses it.
 ### 6.1 The binary and the spawn
 
 `child_process.spawn(sshPath, argv, { shell: false, windowsHide: true, stdio:
-[stdin, 'pipe', 'pipe'] })`. `sshPath` is `ssh` (resolved through `PATH`;
-`ssh.exe` on Windows — Windows OpenSSH or Git's) or `--ssh=<absolute path>`.
+[stdin, 'pipe', 'pipe'], cwd: <home> })`. `sshPath` is `--ssh=<absolute path>`,
+or `ssh` resolved through `PATH` on POSIX. On Windows a bare program name is
+looked up in the **working directory before `PATH`**: started from a cloned
+repository that holds a planted `ssh.exe`, the UI would hand that program the
+answers. So on Windows `sshPath` is always absolute:
+`%SystemRoot%\System32\OpenSSH\ssh.exe` (the OpenSSH Client feature), else
+the first `ssh.exe` found in an absolute `PATH` entry (`.`, relative and empty
+entries are skipped; Git's `ssh.exe` qualifies). Every spawn starts in the
+operator's home directory, never in the folder the UI was started from.
 The environment is the UI process's own, unchanged (it carries
 `SSH_AUTH_SOCK`, `HOME`/`USERPROFILE`); **nothing is added to it**, so no
 secret can reach `ssh` or, through `SendEnv`, the server. Never `exec`, never a
@@ -456,7 +499,11 @@ event the moment it is parsed).
   and rendered as "an event this UI does not know".
 - **`attach`:** the outer `seq` (attach's stream) and the inner `event.seq`
   (the run's) are both checked for continuity; the inner one is the resume key.
-- **EOF without `done`:** an abnormal end, never success (RFC 0008 §4.4).
+- **EOF without `done`:** an abnormal end, never success (RFC 0008 §4.4). A
+  last line cut **mid-line** before `done` is a cut connection, not a corrupt
+  server: a TCP or SSH drop can end the output at any byte. The stream is
+  `abnormal` (transient), and `attach` resumes from the last complete run
+  event. A partial line **after** `done` is still corrupt.
 - **stderr:** kept up to 64 KiB (the rest counted), sanitised, shown only as
   diagnostics. Exit 255 with nothing on stdout is classified for a useful
   message: `Permission denied (publickey` → "the SSH key was refused — is it
@@ -487,17 +534,18 @@ or a flag.
 
 | Route | Body | Remote command | Response |
 |---|---|---|---|
-| `/api/session` | `{code}` | — | `{token}` once |
+| `/api/session` | `{code}` | — | `{token, serverKey}` once |
+| `/api/hello` | `{nonce}` | — | `{proof}`: the server's proof (§4.2) |
 | `/api/targets` | — | — | the targets (no secret exists to hide) and the file path |
 | `/api/targets/save` | `{target}` | — | validated, written atomically; errors by field |
 | `/api/targets/remove` | `{name}` | — | — |
 | `/api/status` | `{target}` | `status --json=1` | `{hello, result \| error, diagnostics}` |
 | `/api/plan` | `{target}` | `plan --json=1` | same, `PlanResult` |
-| `/api/env` | `{target, answers}` | `env --json=1 --answers=stdin --via=ui --actor=…` | NDJSON stream |
-| `/api/run` | `{target, answers, unhold?, attended?}` | `run --json=1 --detach --answers=stdin --via=ui --actor=…` | `DetachResult`, or the error (`locked` with holder, `answer-missing`, …) |
-| `/api/rollback` | `{target, to?}` | `rollback --json=1 --detach --via=ui --actor=… [--to=]` | `DetachResult` or error |
+| `/api/env` | `{target, confirmedTarget, answers}` | `env --json=1 --answers=stdin --via=ui --actor=…` | NDJSON stream |
+| `/api/run` | `{target, confirmedTarget, answers, unhold?, attended?}` | `run --json=1 --detach --answers=stdin --via=ui --actor=…` | `DetachResult`, or the error (`locked` with holder, `answer-missing`, …) |
+| `/api/rollback` | `{target, confirmedTarget, to?}` | `rollback --json=1 --detach --via=ui --actor=… [--to=]` | `DetachResult` or error |
 | `/api/attach` | `{target, runId, fromSeq}` | `attach <runId> --json=1 --follow --from-seq=n` | NDJSON stream |
-| `/api/cancel` | `{target, runId}` | `cancel <runId> --json=1` | `CancelResult` (with `second`) or error |
+| `/api/cancel` | `{target, runId, second?}` | `cancel <runId> --json=1 --first-only`; with `second: true`, without `--first-only` | `CancelResult` (with `second`), 428 `{second: true}` when the server says the run was already cancelled, or error |
 | `/api/quit` | — | — | — |
 
 `answers` is `[{id, value}]`, each checked against `ANSWER_ID` and the
@@ -513,7 +561,10 @@ never confused with a server event:
 (laptop sleep, network change), the server retries with `--from-seq=<last
 inner seq + 1>` — 1 s, 2 s, 4 s … capped at 30 s, for up to 10 minutes — and
 emits `reconnecting`; the browser never sees a duplicate or a gap. After that
-the page offers "re-attach". `run-vanished` and `not-found` end it.
+the page offers "re-attach". `run-vanished` and `not-found` end it. An attach
+from past the run's `done` (a re-attach after the run ended) prints only
+`hello` and `done` with the run's exit code (RFC 0008 §8.4): it ends at once
+with that exit code, and the page then offers only "Show from the start".
 
 **Attended runs.** `/api/run` detaches by default: the deploy then survives the
 UI, the laptop and the network. `attended: true` (an advanced toggle) runs
@@ -548,7 +599,9 @@ Every screen shows, at the top, the target's **name, `ssh` destination,
    and drops the in-memory copy; the values are never put in `sessionStorage`,
    the URL, a `console` call or an error message. A refusal comes back by key
    and reason; the operator retypes.
-5. **Run.** Confirm dialog (native `<dialog>`, focus trapped, Escape cancels)
+5. **Run.** Confirm dialog (native `<dialog>`, focus trapped, Escape cancels;
+   a destructive one opens with focus on *Cancel*, or on the typed-name field
+   for a `protected` target, never on the destructive button)
    naming target, host, branch head if known, and "this will migrate the
    database" when the plan says so; `protected` targets require typing the
    target name. Then the live view: steps as a list (`step-start`/`step-end`
@@ -561,7 +614,12 @@ Every screen shows, at the top, the target's **name, `ssh` destination,
    drop: `attach` from `seq` 0, or from the last seen `seq + 1` when this tab
    saw part of it (`runId → last seq` kept in `sessionStorage`; not a secret).
 7. **Cancel.** First confirm: "stops at the next step boundary before the
-   migration; from the migration on, the deploy finishes first". Second cancel
+   migration; from the migration on, the deploy finishes first". Whether a
+   cancel is the first is the **server's** state (`<runId>.cancel`, RFC 0008
+   §8.5), and a terminal or an earlier UI session may have sent one already.
+   So the first is sent as `cancel --first-only`. When the server answers
+   `already-cancelled`, nothing was signalled, and the page asks for the
+   second confirmation before it sends the plain `cancel`. Second cancel
    (`second: true` expected) has its own, sterner confirm: "ends the deploy at
    once, mid-step; a migration may be left half-applied — the restore command
    is in the log". Only for a detached run (RFC 0008 §17: attended runs are not
@@ -608,6 +666,9 @@ compose lines, ssh's stderr — is **data**:
 | **Framing / clickjacking** | `frame-ancestors 'none'`, `X-Frame-Options: DENY`. |
 | **XSS via server output** (a build printing `<script>`, a hostile `deploy.config.ts`, a compromised server) | Text-only DOM (§9), CSP `script-src 'self'` with no inline/eval, so even an injection could not run; bidi and escape stripping. |
 | **Another local user** | Can reach the port, but needs the session token (256 bits) or the launch code; the code is one-time, 120 s, and visible in the opener's argv for an instant — a stolen claim makes the operator's tab fail and the terminal say so (Q1 for shared machines). They cannot read the targets file (0600) and there is no secret in it. |
+| **A listener on the UI's port after it stopped** (another local user binds the freed port; the operator's tab is still open) | The page makes the server prove the `serverKey` it never sends (§4.2) before any answer leaves it and after every load. A refused connection or a failed proof empties the page and forgets the session. |
+| **A targets file someone else controls** (`--targets=/tmp/t.json` created first by another user, a file in a directory others can write) | Refused unless the operator owns the file and every directory up to `/` is theirs or root's and not writable by others without the sticky bit (§5.1). The confirmed target is bound to the request (`confirmedTarget`). |
+| **A planted `ssh.exe` / `rundll32.exe`** in the folder the UI was started from (Windows looks there first) | Absolute paths on Windows; every spawn in the home directory (§6.1, §4.6). |
 | **The operator's other local servers** (a dev server on 127.0.0.1:3000) | No cookie exists to leak across ports; the token is in this origin's `sessionStorage` only. |
 | **A malicious repository** repointing a target | Targets are not read from the repo (§5.1); `StrictHostKeyChecking=yes` refuses hosts never verified. |
 | **Option or command injection into `ssh`** | argv array, no shell; `--` before the destination; closed grammars for every field; each remote piece single-quoted; flags built by code from a closed set; no request field reaches argv unvalidated. |
@@ -685,7 +746,8 @@ The real server on a random port with the fake ssh, driven by `fetch`:
 launch → session → targets save → status → plan → run (detach) → attach with
 a drop and resume (no duplicate, no gap in the events the client receives) →
 cancel twice → rollback `--to`; plus each refusal of §4.3 against the live
-server, and idle shutdown.
+server, and idle shutdown (an open attach and a remote command in flight
+hold it; it stops once they end).
 
 ### 11.4 Client and coverage
 
@@ -726,7 +788,8 @@ Each lands with its tests, green on the gate, independently reviewable:
    framework.
 3. Loopback-only random port; one-time launch code in the fragment →
    one session token as a bearer header (not a cookie: ports share cookies);
-   exact `Host`/`Origin`; POST-only API; strict CSP; no CORS; idle shutdown.
+   exact `Host`/`Origin`; POST-only API; strict CSP; no CORS; idle shutdown;
+   the server proves a key the page never sends before an answer leaves it.
 4. Targets per operator, outside the repo, closed grammar, unknown fields
    refused; ssh specifics live in `~/.ssh/config`.
 5. System `ssh` with `BatchMode=yes`, `StrictHostKeyChecking=yes`, forwarding
@@ -779,10 +842,14 @@ the text above:
 1. **Server-side confirmation.** The page's dialogs are not the only gate: the
    API itself refuses `run`, `rollback` and `env` without `confirm: true`
    (428), a `protected` target without `confirmName` equal to its name, and a
-   second `cancel` of a run this UI already cancelled without `second: true`
-   (428 with `{second: true}`, which the page answers with the sterner
-   dialog). A buggy or scripted client cannot skip them. `env` needs a
-   confirmation too (it writes the server's `.env`).
+   `confirmedTarget` that is no longer what the file says (409). `env` needs a
+   confirmation too (it writes the server's `.env`). A `cancel` without
+   `second: true` goes out as `cancel --first-only`. When the server answers
+   `already-cancelled`, the API answers 428 with `{second: true}`, and the
+   page then shows the sterner dialog. The server decides from its own
+   marker, so a cancel sent from a terminal or by an earlier UI process
+   counts. (The first version kept this in the UI process's memory, and after
+   a restart its mild first dialog sent the immediate second signal.)
 2. **Stream envelope.** Besides `event`, `diagnostic` and `state`, a stream
    carries `{kind: 'hello', hello}` once (the target bar shows `hello.host`);
    for `attach` the `event`s are the run's own, unwrapped by the server after
@@ -809,7 +876,35 @@ the text above:
    build config is unchanged (`rootDir: src`, `src/client` excluded and
    compiled by `tsconfig.client.json`).
 
+8. **Review fixes.** After an independent review: the server proves itself
+   (§4.2); the targets file is checked for ownership, up to `/` (§5.1);
+   `confirmedTarget` binds a confirmation to what it showed; absolute
+   `ssh.exe`/`rundll32.exe` and a home-directory `cwd` on Windows (§6.1); a
+   line cut mid-way resumes instead of ending as corrupt (§6.5); an attach
+   past `done` ends with the run's exit code instead of reconnecting for 10
+   minutes (§7); a remote command in flight holds the idle stop (§4.5);
+   destructive dialogs focus *Cancel* (§8); a resumed step without its
+   `step-start` is named by its id.
+9. **Residual risks**, stated rather than hidden:
+   - The proof is checked immediately before an answer is sent, not bound to
+     the request that carries it. A UI that stops in the milliseconds between
+     the two, with a listener that binds its port in that window, would
+     receive one request. The window is one loopback round trip, and the
+     squatter must be waiting for exactly that port.
+   - After a reload, the page that loads is whatever answers on the port. A
+     squatter can serve its own lookalike page; it cannot read a session the
+     stopped page already forgot, and it has no `serverKey` to drive anything
+     the operator cares about. The operator's defence is the terminal: a
+     stopped UI says so there, and a fresh start prints a new URL.
+   - The UI does not push a "stopping" notice on open streams. The page
+     learns of the stop on its next request, or when the stream breaks.
+   - The cancel gate relies on `--first-only`, which the deploy ships in
+     the same release as protocol 1. A protocol-1 deploy without it does not
+     exist.
+
 Open questions Q1–Q7 stay open; Q4 (a Windows job) in particular: the argv
 is the same on every platform and is snapshot-tested with `linux`, `darwin`
-and `win32`; the real `ssh.exe` quoting is not exercised in CI.
+and `win32`; the real `ssh.exe` quoting is not exercised in CI. The Windows
+release checklist also covers the program resolution: start the UI from a
+folder containing a dummy `ssh.exe` and check that the OpenSSH one runs.
 

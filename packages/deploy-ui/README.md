@@ -29,7 +29,7 @@ secrets.
 | Option | |
 |---|---|
 | `--targets=<file>` | the targets file (default below) |
-| `--ssh=<absolute path>` | the ssh client (default: `ssh` from `PATH`, `ssh.exe` on Windows) |
+| `--ssh=<absolute path>` | the ssh client (default: `ssh` from `PATH`; on Windows `%SystemRoot%\System32\OpenSSH\ssh.exe`, else the first `ssh.exe` in an absolute `PATH` entry, never the current folder) |
 | `--no-open` | print the URL instead of opening the browser |
 | `--idle-minutes=<n>` | stop after n idle minutes (1–240, default 15) |
 
@@ -76,7 +76,12 @@ repository must not be able to repoint it. The file holds no secret.
 
 Every field has a closed grammar (no leading `-`, no spaces, no `..`); an
 unknown field is refused, not ignored. The UI refuses a targets file that is a
-symbolic link or writable by other users.
+symbolic link, writable by other users, or owned by another user (root
+included). It also refuses one in a directory, up to `/`, that another user
+owns or that others can write to without the sticky bit: whoever can replace
+the file chooses where your secrets go. A deploy, a `.env` write or a
+rollback carries the target your confirmation showed. If the file changed
+since then, nothing is sent, and the page shows the new values.
 
 ## What it does
 
@@ -85,8 +90,10 @@ lock, active and last run, a hold); **plan** (findings, what a run would do, the
 questions it would ask); the **`.env` form** (secrets in password fields, never
 stored, emptied after sending); **deploy** — detached by default, so a closed
 laptop lid does not stop it, or attended; the **live log**, which re-attaches
-after a dropped connection without a gap or a duplicate; **cancel** (a second
-cancel, separately confirmed, stops it at once); **rollback**, to the last
+after a dropped connection without a gap or a duplicate (even one cut
+mid-line); **cancel** (a second cancel, separately confirmed, stops it at
+once; the server decides which one it is, so a cancel already sent from a
+terminal counts); **rollback**, to the last
 healthy release or one picked from **history** (the last 10 releases); and
 "Write .env only" for a first setup.
 
@@ -107,6 +114,13 @@ every page your browser opens. So:
   token, held in that tab's `sessionStorage` and sent as `Authorization: Bearer`
   — not a cookie: cookies are not port-scoped and would reach your other local
   servers. A second claim is refused and printed in the terminal.
+- **The server proves itself.** The exchange also gives the page a key that
+  it never sends. After every load, and before any `.env` answer leaves the
+  page, the server must answer a fresh challenge with an HMAC under that key.
+  Once the UI has stopped, another program may take its port. It may have
+  seen the token, but it never has the key, so it gets no answer. When the
+  server is gone or fails the check, the page empties its forms, forgets the
+  session and says so.
 - **Every request checked:** exact `Host` (DNS rebinding), API calls `POST`
   only with `application/json`, an exact `Origin`, `Sec-Fetch-Site:
   same-origin` when sent, and the token in constant time; 1 MiB bodies; no
@@ -117,7 +131,10 @@ every page your browser opens. So:
   (a host you never verified is refused, whatever your config says),
   `ForwardAgent=no`, `ForwardX11=no`, `ClearAllForwardings=yes`,
   `PermitLocalCommand=no`, `-e none`, and `--` before the destination. The
-  remote command is built from validated pieces, each single-quoted.
+  remote command is built from validated pieces, each single-quoted. ssh (and
+  the browser opener) start in your home directory. On Windows they are always
+  absolute paths, because Windows looks a bare `ssh.exe` up in the current
+  folder first.
 - **Secrets travel once:** browser → loopback request body → `ssh` stdin.
   Never in argv, the environment, a file, a log, the URL or `sessionStorage`;
   the buffers the UI owns are zero-filled after the write. The deploy redacts
@@ -126,13 +143,19 @@ every page your browser opens. So:
   continuity, 1 MiB per line); text is rendered as text only and cleaned of
   escapes, control and bidi characters; a build that prints a fake event is a
   log line.
-- **Idle shutdown** after 15 minutes without a request (an open live log keeps
-  it alive). Quit from the page or `Ctrl-C`; detached runs go on on the server.
+- **Idle shutdown** after 15 minutes without a request (an open live log or a
+  command still running keeps it alive). Quit from the page or `Ctrl-C`;
+  detached runs go on on the server.
+- **Destructive confirmations** open with the focus on *Cancel* (or on the
+  typed name for a protected target), never on the destructive button.
 
 Limits: on a machine shared with other users, the launch code is visible in the
 browser opener's arguments for an instant — a claim by anyone else makes your
 tab fail loudly and the terminal say so (RFC 0009 Q1). JavaScript strings
-cannot be wiped from memory.
+cannot be wiped from memory. The server's proof is checked just before an
+answer is sent, not inside the same request. After a reload, the page you get
+is whatever answers on the port. When the terminal says the UI stopped, close
+the tab (RFC 0009 §15).
 
 ## Troubleshooting
 
