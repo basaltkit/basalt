@@ -34,27 +34,27 @@ const domainsOf = (tenant: Tenant | null): string[] =>
 
 describe('F-37 · canonicalDomain', () => {
   it('fills the domain the application would otherwise forget', async () => {
-    const { source, service } = tenancy((t) => `${t.id}.lexfirma.ao`)
+    const { source, service } = tenancy((t) => `${t.id}.myapp.example`)
     await service.create({ id: 'acme' } as Tenant)
 
-    expect(domainsOf(await source.find('acme'))).toEqual(['acme.lexfirma.ao'])
+    expect(domainsOf(await source.find('acme'))).toEqual(['acme.myapp.example'])
   })
 
   it('adds to the domains a tenant already declares, never replaces them', async () => {
     // The durable sources delete and reinsert the whole domain set on save, so
     // a canonical domain that replaced would erase the firm's own address the
     // first time anything called `create` again.
-    const { source, service } = tenancy((t) => `${t.id}.lexfirma.ao`)
+    const { source, service } = tenancy((t) => `${t.id}.myapp.example`)
     await service.create({ id: 'acme', domains: ['acme.example'] } as Tenant)
 
-    expect(domainsOf(await source.find('acme')).sort()).toEqual(['acme.example', 'acme.lexfirma.ao'])
+    expect(domainsOf(await source.find('acme')).sort()).toEqual(['acme.example', 'acme.myapp.example'])
   })
 
   it('does not duplicate a domain the tenant already had', async () => {
-    const { source, service } = tenancy((t) => `${t.id}.lexfirma.ao`)
-    await service.create({ id: 'acme', domains: ['acme.lexfirma.ao'] } as Tenant)
+    const { source, service } = tenancy((t) => `${t.id}.myapp.example`)
+    await service.create({ id: 'acme', domains: ['acme.myapp.example'] } as Tenant)
 
-    expect(domainsOf(await source.find('acme'))).toEqual(['acme.lexfirma.ao'])
+    expect(domainsOf(await source.find('acme'))).toEqual(['acme.myapp.example'])
   })
 
   it('lets the function decline for a particular tenant', async () => {
