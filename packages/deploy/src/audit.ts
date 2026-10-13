@@ -12,20 +12,21 @@ export interface Audit {
   actor: string
   /** The SSH client address, when the deploy runs over SSH. */
   client?: string
-  /** `ssh`, `ci`, `terminal` or `batch` (cron, a pipe). */
+  /** `ssh`, `ci`, `terminal`, `batch` (cron, a pipe) or `ui` (`--via=ui`: a program drove the CLI over SSH). */
   via: string
 }
 
 const ACTOR = /^[A-Za-z0-9._@+-]{1,64}$/
 
-export function auditOf(host: Host, declared?: string): Audit {
+/** `via` is self-declared, like `--actor`: it attributes, it does not authenticate (RFC 0008 §8.6). */
+export function auditOf(host: Host, declared?: string, declaredVia?: 'ui'): Audit {
   const named = declared ?? host.env['BASALT_DEPLOY_ACTOR']
   if (named !== undefined && !ACTOR.test(named)) throw new DeployError(`--actor "${named}": 1–64 of letters, digits and . _ @ + -`)
   const actor = named ?? host.env['USER'] ?? String(host.uid())
   // "client-ip client-port server-ip server-port": split, never a regex over the whole input.
   const ip = (host.env['SSH_CONNECTION'] ?? '').trim().split(/\s+/)[0] ?? ''
   const client = /^[0-9A-Fa-f:.]{2,45}$/.test(ip) ? ip : undefined
-  const via = client ? 'ssh' : host.env['CI'] ? 'ci' : host.interactive() ? 'terminal' : 'batch'
+  const via = declaredVia ?? (client ? 'ssh' : host.env['CI'] ? 'ci' : host.interactive() ? 'terminal' : 'batch')
   return { actor, ...(client ? { client } : {}), via }
 }
 
