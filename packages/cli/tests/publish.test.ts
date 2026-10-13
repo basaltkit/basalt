@@ -115,6 +115,15 @@ describe('publish dockerfile — secrets never enter the image (security)', () =
     }
   })
 
+  it('keeps the deploy state and its database dumps out of the image, and only those at the root', async () => {
+    const fs = memFs()
+    await runPublish(dockerfile, fs)
+    const ignore = fs.written['.dockerignore'] ?? ''
+    for (const path of ['.basalt/releases.json', 'backups/predeploy/20261011T120000-abcdef0.dump']) expect(dockerIgnores(ignore, path), path).toBe(true)
+    // An app's own module named "backups" is source, not a dump.
+    expect(dockerIgnores(ignore, 'src/modules/backups/index.ts')).toBe(false)
+  })
+
   it('never overwrites an existing .dockerignore without --force', async () => {
     const fs = memFs(['.dockerignore'])
     const result = await runPublish(dockerfile, fs)
