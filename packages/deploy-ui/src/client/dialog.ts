@@ -25,6 +25,7 @@ export function confirmDialog(options: ConfirmOptions, host: HTMLElement = docum
       resolve(answer)
     }
     const confirm = button(options.confirmLabel, () => finish(true), { class: options.danger ? 'danger' : 'primary' })
+    const dismiss = button('Cancel', () => finish(false))
     let typed: HTMLInputElement | undefined
     if (options.typeToConfirm !== undefined) {
       const expected = options.typeToConfirm
@@ -38,7 +39,7 @@ export function confirmDialog(options: ConfirmOptions, host: HTMLElement = docum
       el('h2', { id: 'confirm-title' }, options.title),
       ...options.lines.map((line) => el('p', {}, line)),
       typed ? el('div', { class: 'field' }, el('label', { for: 'confirm-name' }, `Type ${options.typeToConfirm} to confirm`), typed) : null,
-      el('div', { class: 'row' }, button('Cancel', () => finish(false)), confirm),
+      el('div', { class: 'row' }, dismiss, confirm),
     )
     dialog.addEventListener('cancel', (event) => { event.preventDefault(); finish(false) })
     dialog.addEventListener('keydown', (event) => { if (event.key === 'Escape') finish(false) })
@@ -50,6 +51,8 @@ export function confirmDialog(options: ConfirmOptions, host: HTMLElement = docum
         dialog.setAttribute('open', '')
       }
     } else dialog.setAttribute('open', '')
-    ;(typed ?? confirm).focus()
+    // A destructive action never starts with focus on its own button: one
+    // Enter too many (or a held key) must not confirm it.
+    ;(typed ?? (options.danger ? dismiss : confirm)).focus()
   })
 }

@@ -26,6 +26,9 @@ export class RunView {
   private readonly stateLine: HTMLElement
   private readonly steps: HTMLElement
   private readonly stepNodes = new Map<StepId, HTMLElement>()
+  private readonly stepTitles = new Map<StepId, string>()
+  /** The run's own `done` was seen (or attach said it had finished): nothing more will come. */
+  private runFinished = false
   private readonly findings: HTMLElement
   private readonly log: HTMLElement
   private readonly outcome: HTMLElement
@@ -128,6 +131,10 @@ export class RunView {
     }
     this.ended = true
     if (message.exitCode !== undefined) this.exitCode = message.exitCode
+    if (this.runId && message.exitCode !== undefined && !message.code) {
+      this.runFinished = true
+      if (message.reason) this.note(`(${clean(message.reason)})`)
+    }
     if (message.code) {
       this.failed = { code: message.code, ...(message.reason ? { reason: message.reason } : {}), ...(message.hint ? { hint: message.hint } : {}) }
     }
@@ -150,6 +157,7 @@ export class RunView {
       case 'step-start': {
         const node = el('li', {}, `▸ ${event.title} …`)
         this.stepNodes.set(event.id, node)
+        this.stepTitles.set(event.id, event.title)
         this.steps.append(node)
         this.setState(`Step: ${event.title}`)
         return
@@ -157,7 +165,8 @@ export class RunView {
       case 'step-end': {
         const node = this.stepNodes.get(event.id) ?? el('li')
         const mark = event.status === 'ok' ? '✓' : event.status === 'skipped' ? '–' : '✗'
-        const title = node.textContent?.replace(/^▸ /, '').replace(/ …$/, '') ?? event.id
+        // A step that started before the resume point has no node: its id names it.
+        const title = this.stepTitles.get(event.id) ?? event.id
         replace(node, el('span', { class: event.status === 'ok' ? 'status-ok' : event.status === 'skipped' ? 'muted' : 'status-err' }, `${mark} ${title}`), ` — ${event.status}, ${(event.durationMs / 1000).toFixed(1)} s`)
         if (!node.parentNode) this.steps.append(node)
         return
@@ -178,6 +187,7 @@ export class RunView {
         return
       case 'done':
         this.exitCode = event.exitCode
+        if (this.runId) this.runFinished = true
         return
       case 'event':
         // Only the server unwraps attach; a nested wrapper here is a log-worthy oddity.
@@ -231,8 +241,9 @@ export class RunView {
       buttons.push(button('Stop watching', () => this.stop()))
     }
     if (this.runId && !this.following) {
-      buttons.push(button('Re-attach', () => { void this.attach(this.lastSeq === undefined ? 0 : this.lastSeq + 1) }, { class: 'primary' }))
-      buttons.push(button('Show from the start', () => { this.app.watch(this.runId as string, `run ${this.runId}`, true) }))
+      // A finished run has nothing more to attach to: only a replay makes sense.
+      if (!this.runFinished) buttons.push(button('Re-attach', () => { void this.attach(this.lastSeq === undefined ? 0 : this.lastSeq + 1) }, { class: 'primary' }))
+      buttons.push(button('Show from the start', () => { this.app.watch(this.runId as string, `run ${this.runId}`, true) }, this.runFinished ? { class: 'primary' } : {}))
     }
     if (!this.following) buttons.push(button('Refresh status', () => { void this.app.refreshStatus().then(() => this.app.show('status')) }))
     replace(this.actions, ...buttons)

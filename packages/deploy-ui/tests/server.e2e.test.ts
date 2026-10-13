@@ -69,8 +69,19 @@ beforeAll(async () => {
       plan: { transcript: 'plan-questions' },
       run: { transcript: 'run-detach' },
       env: { transcript: 'env-answers' },
-      // The connection drops after 11 lines (the run's events 0…9); the second attach must resume at 10.
-      attach: [{ transcript: 'attach-from-0', cut: 11, expectFromSeq: 0 }, { transcript: 'attach-from-10', expectFromSeq: 10 }],
+      // The connection drops after 11 lines (the run's events 0…9) and in the middle of the 12th; the second attach must resume at 10.
+      // The third attaches past the run's done (a re-attach after it ended): attach prints hello and done only.
+      attach: [
+        { transcript: 'attach-from-0', cut: 11, partial: '{"v":1,"ts":"2026-10-11T12:0', stderr: 'Connection to staging.example.com closed by remote host.\n', exit: 255, expectFromSeq: 0 },
+        { transcript: 'attach-from-10', expectFromSeq: 10 },
+        {
+          lines: [
+            '{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":0,"type":"hello","tool":"@basaltkit/deploy","version":"0.0.0","protocol":1,"command":"attach","pid":4100,"host":"server-1"}',
+            '{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":1,"type":"done","exitCode":0}',
+          ],
+          expectFromSeq: 47,
+        },
+      ],
       cancel: [{ transcript: 'cancel-first' }, { transcript: 'cancel-second' }],
     },
     'prod.example.com': {
@@ -231,6 +242,14 @@ describe('the local server, end to end', () => {
       ['attach', '20261011T120000Z-aaaaaaaaaaa2', '--json=1', '--follow', '--from-seq=0'],
       ['attach', '20261011T120000Z-aaaaaaaaaaa2', '--json=1', '--follow', '--from-seq=10'],
     ])
+  })
+
+  it('re-attaching past the run\'s done ends at once with its exit code: one ssh call, no reconnect loop', async () => {
+    const before = (await ssh.calls()).length
+    const stream = messages(await api('attach', { target: 'staging', runId: '20261011T120000Z-aaaaaaaaaaa2', fromSeq: 47 }))
+    expect(stream.map((m) => (m.kind === 'state' ? m.state : m.kind))).toEqual(['connecting', 'hello', 'ended'])
+    expect(stream.at(-1)).toEqual({ kind: 'state', state: 'ended', exitCode: 0, reason: 'the run had already finished' })
+    expect((await ssh.calls()).length - before).toBe(1)
   })
 
   it('cancel needs a confirmation, and the second one its own', async () => {
