@@ -175,6 +175,8 @@ As the app user, in the checkout (`node node_modules/@basaltkit/deploy/dist/bin.
 | `rollback [--to=<sha>]` | the last healthy release. Code only — the database keeps its migrations. Holds the commit it left. |
 | `status` | the last releases (who, from where), the process, the deploy lock, a hold |
 | `install-plan [--out=<file>\|-]` | what `install` needs, as JSON (default `<state dir>/install-plan.json`, 0600), and the root command to run |
+| `attach <runId> --json [--from-seq=<n>] [--follow]` | the events of a run, from any point (machine mode, below) |
+| `cancel <runId>` | SIGTERM to a detached run; a second `cancel` stops it at once |
 
 As root, with a copy of the tool root owns (`cd / && sudo -H npx --yes --package=@basaltkit/deploy@<version> -- basalt-deploy <command>`):
 
@@ -185,10 +187,13 @@ As root, with a copy of the tool root owns (`cd / && sudo -H npx --yes --package
 
 Options: `--skip=fetch,backup,tls`, `--config=<file>`, `--overrides=<file>`,
 `--actor=<name>` (recorded with the release; default `$BASALT_DEPLOY_ACTOR`,
-else `$USER`), `run --unhold`, `--allow-root`, `--unsafe-tool`.
+else `$USER`), `run --unhold`, `--allow-root`, `--unsafe-tool`, and the
+machine-mode flags below (`--json`, `--answers=stdin`, `--answer-timeout`,
+`--detach`, `--via=ui`).
 
 Exit codes: `0` done · `1` failed or refused · `3` another deploy holds the
-lock · `130` stopped by a signal.
+lock · `130` stopped by a signal (a second signal ends the process at once:
+`130`/`129`/`143`).
 
 ### One deploy at a time
 
@@ -215,6 +220,100 @@ A rollback onto a commit that does not answer either exits 1 and records it as
 refuses a checkout with local edits and **holds** the commit it left: a
 scheduled `run` will not deploy that commit again until the branch moves on,
 or `run --unhold`.
+
+## Machine mode (`--json`)
+
+For a program that drives the deploy — the local UI of phase 2, a script —
+over the system `ssh`, as the app user, exactly as a person would type it.
+There is no daemon, no listener and no new credential: the program can do what
+the SSH account can, nothing more. Design and threat model:
+[RFC 0008](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0008-deploy-machine-protocol.md)
+(it builds on [RFC 0006](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0006-basalt-deploy.md)).
+
+`--json` (or `--json=1`; any other version is refused) works on `status`,
+`check`, `plan`, `run`, `env`, `rollback`, `install-plan`, `attach` and
+`cancel`. `init`, `install` and `bootstrap` refuse it. stdout then carries
+only NDJSON events, one per line:
+
+```json
+{"v":1,"ts":"2026-10-13T10:00:00.000Z","seq":0,"runId":"20261013T100000Z-5f2c9a1b3d4e","type":"hello","tool":"@basaltkit/deploy","version":"0.5.0","protocol":1,"command":"run","pid":4100,"host":"server-1"}
+{"v":1,"ts":"…","seq":1,"runId":"…","type":"step-start","id":"lock","title":"lock"}
+{"v":1,"ts":"…","seq":2,"runId":"…","type":"step-end","id":"lock","status":"ok","durationMs":3}
+{"v":1,"ts":"…","seq":9,"runId":"…","type":"log","stream":"child","level":"info","text":"Done in 4.1s","redacted":false,"step":"build","source":"pnpm"}
+{"v":1,"ts":"…","seq":40,"runId":"…","type":"result","command":"run","data":{"sha":"…","previous":"…","status":"ok","migrations":[],"url":"https://myapp.example.com"}}
+{"v":1,"ts":"…","seq":41,"runId":"…","type":"done","exitCode":0}
+```
+
+- Every stream starts with `hello` and ends with `done`; `seq` counts up by
+  one. A stream that ends without `done` ended abnormally (a second signal,
+  a kill) — never treat it as success.
+- `type` is one of `hello`, `step-start`, `step-end`, `log`, `finding`,
+  `prompt`, `result`, `error`, `done` (and `event`, from `attach`). `error`
+  carries a `code` (`locked`, `aborted`, `preflight`, `held`,
+  `release-failed`, `answer-missing`, …); the exit codes are the ones above.
+- What a build, a hook, a migration or `deploy.config.ts` prints is always
+  the `text` of a `log` event (`stream: "child"` or `"foreign"`), stripped of
+  terminal escapes and cut at 8 KiB — data, never interpreted.
+- **No event carries a secret.** Every string is redacted before it is
+  written: the values of generated, asked-secret and secret-named `.env` keys,
+  passwords inside URLs, the infra passwords, every secret answer — raw and
+  URL-encoded — become `[redacted:KEY]`. A value shorter than 6 characters
+  cannot be matched; a `secret-short` warning names its key.
+- Types and a validating parser for a program written in TypeScript:
+
+  ```ts
+  import { parseEvent, type DeployEvent } from '@basaltkit/deploy/protocol'
+
+  for (const line of output.split('\n').filter(Boolean)) {
+    const parsed = parseEvent(line)
+    if (!parsed.ok) throw new Error(`corrupt stream: ${parsed.error}`) // stop: never guess
+    if (parsed.known) handle(parsed.value) // a type this version does not know is skipped
+  }
+  ```
+
+  The subpath is pure (no CLI, no Node API at load).
+
+**Answers.** `run` and `env` ask the `env.ask` questions. `plan --json` lists
+them in its result (`questions`, never with a value; a secret never with a
+default). Send the answers on stdin with `--answers=stdin`, one line each:
+
+```sh
+printf '%s\n' '{"v":1,"type":"answer","id":"env.SMTP_URL","value":"smtps://user:pass@smtp.example.com:465"}' |
+  ssh -T deploy@192.0.2.10 -- 'cd /srv/myapp && node node_modules/@basaltkit/deploy/dist/bin.js run --json=1 --answers=stdin'
+```
+
+An unknown id, a duplicate, a malformed or oversized line fails the command
+before the lock is taken. A required question nobody answers fails
+(`answer-missing`); an unanswered optional secret is left out of the `.env`.
+With stdin kept open, a refused answer is asked again (`prompt` with
+`attempt: 2`); a prompt waits `--answer-timeout` seconds (default 600). The
+deploy's own environment still answers first. No child process ever reads
+stdin.
+
+**Detached runs.** `run --detach --json` (and `rollback --detach --json`)
+checks every answer first, starts the deploy in its own session — it survives
+the SSH connection — and returns `{runId, pid, log}` once that run holds the
+deploy lock:
+
+```sh
+node node_modules/@basaltkit/deploy/dist/bin.js run --json=1 --detach --answers=stdin --via=ui --actor=alice < answers.ndjson
+node node_modules/@basaltkit/deploy/dist/bin.js attach 20261013T100000Z-5f2c9a1b3d4e --json --follow --from-seq=0
+node node_modules/@basaltkit/deploy/dist/bin.js cancel 20261013T100000Z-5f2c9a1b3d4e --json
+```
+
+- Every JSON-mode `run`, `env` and `rollback` writes its events to
+  `<state dir>/runs/<runId>.ndjson` (0600, in a 0700 directory, created
+  exclusively, never through a link). `attach` replays one, wrapped as
+  `{"type":"event","event":{…}}`, from `--from-seq` (the inner `seq`), and
+  with `--follow` waits for its `done`; a run gone without one is
+  `run-vanished`. The newest 50 logs are kept, none older than 30 days; a log
+  stops taking output lines at 64 MiB.
+- `cancel` sends SIGTERM only to the process holding the lock for that run,
+  checked by its own command line (Linux). It stops at the next safe point,
+  as Ctrl-C does; a second `cancel` stops it at once and leaves a stale lock.
+- `status --json` reports the lock, the active run and the last run.
+- `--via=ui` records `via: "ui"` with the release; like `--actor`, it
+  attributes, it does not authenticate.
 
 ## Docker Compose apps
 
