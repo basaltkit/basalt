@@ -48,3 +48,12 @@ describe('server overrides', () => {
     expect(() => parseOverrides('{"__proto__": {"port": 1}}', 'x')).toThrow(/unknown keys __proto__/)
   })
 })
+
+describe('backup.dir', () => {
+  it('stays inside the checkout', () => {
+    expect(() => validateConfig(acmeConfig({ backup: { dir: 'backups/predeploy' } }))).not.toThrow()
+    for (const dir of ['/var/backups', '../outside', 'a/../../b', '']) {
+      expect(() => validateConfig(acmeConfig({ backup: { dir } })), dir).toThrow(/backup.dir .* must be a path inside the checkout/)
+    }
+  })
+})

@@ -38,7 +38,7 @@ describe('git credentials are checked before the deploy starts, never prompted f
     const host = gitHost(ok('x\trefs/heads/master'))
     await preflight(context(host, noApache()), { skip: ['tls'] })
     const probe = host.calls.find((c) => c.args[0] === 'ls-remote')
-    expect(probe?.args).toEqual(['ls-remote', '--exit-code', 'origin', 'refs/heads/master'])
+    expect(probe?.args).toEqual(['ls-remote', '--exit-code', '--', 'origin', 'refs/heads/master'])
     expect(probe?.options.env).toMatchObject({ GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' })
   })
 
@@ -134,7 +134,7 @@ describe('the install hint is a command root can run', () => {
     host.put('/etc/apache2/sites-available/acme.conf', renderVhost(ctx, 3000))
     host.files.set('/etc/apache2/sites-enabled/acme.conf', { kind: 'symlink', target: '../sites-available/acme.conf' })
     const fixes = (await apachePreflight(ctx, 3002)).map((f) => f.fix ?? '')
-    expect(INSTALL_COMMAND).toBe('sudo "$(command -v node)" node_modules/@basaltkit/deploy/dist/bin.js install --user="$USER"')
+    expect(INSTALL_COMMAND).toBe('node node_modules/@basaltkit/deploy/dist/bin.js install-plan')
     expect(fixes.every((f) => f.includes(INSTALL_COMMAND))).toBe(true)
     expect(fixes.join('\n')).not.toContain('pnpm exec')
   })

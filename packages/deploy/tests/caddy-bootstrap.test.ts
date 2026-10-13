@@ -65,6 +65,7 @@ describe('basalt-deploy bootstrap', () => {
   /** A fresh Ubuntu: nothing but apt, node 20, 4 GB of RAM, sshd. */
   function fresh(extra: { ufwActive?: boolean; listening?: string } = {}) {
     return new FakeHost()
+      .dir(DIR, 0o755, { uid: 0, gid: 0 }).dir(`${DIR}/.git`, 0o755, { uid: 0, gid: 0 })
       .put(`${DIR}/package.json`, JSON.stringify({ engines: { node: '>=22.5.0' }, packageManager: 'pnpm@12.3.4' }))
       .put(`${DIR}/pnpm-lock.yaml`, "lockfileVersion: '9.0'\npackageManagerDependencies:\n  pnpm:\n    specifier: 12.3.4\n")
       .put('/proc/meminfo', 'MemTotal:        4008172 kB\nSwapTotal:             0 kB\n')
@@ -78,7 +79,7 @@ describe('basalt-deploy bootstrap', () => {
       .on(({ command }) => (command === 'stat' ? ok('root\n') : undefined))
       .on(({ command, args }) => (command === 'id' ? ok(args[0] === '-u' ? '1000\n' : 'ubuntu adm\n') : undefined))
   }
-  const options = { user: 'ubuntu', proxy: 'caddy' as const, swapGb: 4, firewall: true, dryRun: true }
+  const options = { user: 'ubuntu', proxy: 'caddy' as const, dryRun: true }
 
   it('plans only what is missing, in order, and hands over to the user', async () => {
     const { actions, notes } = await planBootstrap(fresh(), DIR, options)
@@ -87,17 +88,35 @@ describe('basalt-deploy bootstrap', () => {
       'Docker + compose (download.docker.com)',
       'Node 24 (NodeSource; engines.node >=22.5.0)',
       'pnpm 12.3.4',
+      `${DIR} owned by ubuntu`,
+      'ubuntu in the docker group',
+      'as ubuntu: dependencies',
+      'as ubuntu: the .env (asks what it cannot generate)',
+      'as ubuntu: the install plan (data only)',
       'swap 4 GB (3.8 GB RAM, none yet)',
       'ufw on: SSH (22), 80, 443 only',
       'Caddy (cloudsmith)',
-      `${DIR} owned by ubuntu`,
-      'ubuntu in the docker group',
-      'as ubuntu: dependencies, then the .env (asks what it cannot generate)',
-      'install (root): state directory, the proxy site, env ownership',
+      'install (root, from the plan): state directory, the proxy site, env ownership',
     ])
     expect(notes[0]).toContain('that is root on this machine')
-    const handover = actions.at(-2)?.commands.map((c) => c.join(' '))
-    expect(handover?.[0]).toBe(`sudo -u ubuntu -H -- env -u NODE_ENV sh -c cd '${DIR}' && pnpm install --frozen-lockfile`)
+    // The user's steps: argv in the checkout — no shell, no quoting of the path.
+    const steps = actions.filter((a) => a.what.startsWith('as ubuntu'))
+    // Never on root's terminal (TIOCSTI): each in a session of its own.
+    expect(steps.map((a) => [a.cwd, a.commands.map((c) => c.join(' '))])).toEqual([
+      [DIR, ['setsid -w sudo -u ubuntu -H -- env -u NODE_ENV pnpm install --frozen-lockfile']],
+      [DIR, ['setsid -w sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js env']],
+      [DIR, ['setsid -w sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js install-plan --out=-']],
+    ])
+    expect(steps.some((a) => a.interactive)).toBe(false)
+    expect(actions.flatMap((a) => a.commands).some((c) => c[0] === 'sh' && c.join(' ').includes(DIR))).toBe(false)
+  })
+
+  it('at a terminal, env asks through a terminal of its own (script, run by root), never through root\'s', async () => {
+    const host = fresh()
+    host.tty = true
+    const env = (await planBootstrap(host, DIR, options)).actions.find((a) => a.what.startsWith('as ubuntu: the .env'))
+    expect(env?.interactive).toBe(true)
+    expect(env?.commands).toEqual([['script', '--quiet', '--return', '--command', 'sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js env', '/dev/null']])
   })
 
   it('ufw is never turned on over services it would cut off; when already on, rules are added', async () => {
@@ -115,6 +134,7 @@ describe('basalt-deploy bootstrap', () => {
     expect(host.transcript).toContain('+ npm install -g pnpm@12.3.4')
     await expect(bootstrap(fresh(), DIR, { ...options, dryRun: false })).rejects.toThrow(/run it with sudo/)
     await expect(bootstrap(fresh(), DIR, { ...options, user: 'root' })).rejects.toThrow(/never root/)
+    await expect(bootstrap(fresh(), DIR, { ...options, user: "x' ; touch /tmp/p ; '" })).rejects.toThrow(/not a login name/)
   })
 
   it('runs every command as planned and stops at the first that fails', async () => {
@@ -124,6 +144,49 @@ describe('basalt-deploy bootstrap', () => {
     host.on(() => ok())
     await expect(bootstrap(host, DIR, { ...options, dryRun: false })).rejects.toThrow(/Docker \+ compose .* failed \(exit 100\)/)
     expect(host.transcript).toContain('OK packages: git')
+  })
+
+  it('REGRESSION: never `chown -R` of / — --dir is a checkout, not the working directory', async () => {
+    // `cd / && sudo … bootstrap` without --dir used to chown -R the whole filesystem.
+    const host = fresh()
+    host.uid = () => 0
+    host.on(() => ok())
+    for (const dir of ['/', '/etc', '/home', '/srv', '/usr/local', '/var/lib/docker', '/etc/acme', '/srv/acme/../..', '/srv/acme/']) {
+      await expect(bootstrap(host, dir, { ...options, dryRun: false }), dir).rejects.toThrow(/^--dir: .* refused, nothing was done/)
+    }
+    expect(host.commands('chown')).toEqual([])
+    expect(host.calls.filter((c) => c.command !== 'id')).toEqual([])
+    // Not a checkout: no package.json, no .git, or reached through a link.
+    const bare = new FakeHost().dir('/srv/empty').on(({ command }) => (command === 'id' ? ok('1000') : undefined))
+    await expect(bootstrap(bare, '/srv/empty', options)).rejects.toThrow('--dir: /srv/empty has no package.json')
+    bare.put('/srv/empty/package.json', '{}')
+    await expect(bootstrap(bare, '/srv/empty', options)).rejects.toThrow('--dir: /srv/empty has no .git')
+    bare.files.set('/srv/link', { kind: 'symlink', target: '/srv/empty' })
+    await expect(bootstrap(bare, '/srv/link', options)).rejects.toThrow(/a symbolic link is refused/)
+  })
+
+  it('the chown -R of a checkout the user does not own needs a yes; a dry run only shows it', async () => {
+    const dry = fresh()
+    expect(await bootstrap(dry, DIR, options)).toBe(0)
+    expect(dry.transcript).toContain(`+ chown -R ubuntu: ${DIR}`)
+    expect(dry.prompts).toEqual([])
+    const host = fresh()
+    host.uid = () => 0
+    host.on(() => ok())
+    await expect(bootstrap(host, DIR, { ...options, dryRun: false })).rejects.toThrow(`${DIR} owned by ubuntu: not confirmed`)
+    expect(host.prompts).toContain(`${DIR} is root's: give it and everything in it to ubuntu (chown -R)?`)
+    expect(host.commands('chown')).toEqual([])
+  })
+
+  it('reads package.json and the lockfile as data, never through a link', async () => {
+    const host = fresh()
+    host.files.set(`${DIR}/package.json`, { kind: 'symlink', target: '/dev/zero' })
+    host.files.set(`${DIR}/pnpm-lock.yaml`, { kind: 'symlink', target: '/etc/shadow' })
+    await expect(bootstrap(host, DIR, options)).rejects.toThrow('has no package.json')
+    host.put(`${DIR}/package.json`, JSON.stringify({ packageManager: 'pnpm@12.3.4' }))
+    expect(await bootstrap(host, DIR, options)).toBe(0)
+    // The linked lockfile was not read: the version came from packageManager.
+    expect(host.transcript).toContain('+ npm install -g pnpm@12.3.4')
   })
 
   it('the SSH port comes from SSH_CONNECTION; a hostile value is ignored, in linear time', async () => {
@@ -138,7 +201,7 @@ describe('basalt-deploy bootstrap', () => {
   })
 
   it('outside apt it says so', async () => {
-    const host = new FakeHost().on(({ command }) => (command === 'sh' ? fail('', 1) : undefined)).on(({ command }) => (command === 'id' ? ok('1000') : undefined))
+    const host = new FakeHost().dir(DIR).dir(`${DIR}/.git`).put(`${DIR}/package.json`, '{}').on(({ command }) => (command === 'sh' ? fail('', 1) : undefined)).on(({ command }) => (command === 'id' ? ok('1000') : undefined))
     await expect(bootstrap(host, DIR, options)).rejects.toThrow(/Ubuntu or Debian only/)
   })
 })

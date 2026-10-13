@@ -239,8 +239,10 @@ verify: {
 
 ## 7. `basalt-deploy bootstrap`
 
-`sudo basalt-deploy bootstrap --user=<deploy user>`, once per server, on Ubuntu
-or Debian. Each piece is installed only when missing, and `--dry-run` shows the
+`cd / && sudo -H npx --yes --package=@basaltkit/deploy@<exact version> --
+basalt-deploy bootstrap --dir=<checkout> --user=<deploy user>`, once per
+server, on Ubuntu or Debian, with a copy of the tool root owns (RFC 0006 §14.1;
+`--dir` is required). Each piece is installed only when missing, and `--dry-run` shows the
 list:
 
 - the base packages, Docker with compose, and Node at `engines.node`;
@@ -374,6 +376,14 @@ the apps change their config once.
   when it loads, else from `--proxy`. It ends by running `pnpm install` and
   `env` as the user and `install` as root, so a new server is `git clone`,
   `bootstrap`, `run`.
+  **Changed in the phase 0 hardening (RFC 0006 §14):** loading the config as
+  root ran the app user's code as root. `bootstrap` no longer loads it: it
+  runs from a pinned copy root owns (`cd / && sudo -H npx --yes
+  --package=@basaltkit/deploy@<version> -- basalt-deploy bootstrap
+  --dir=<checkout>`), runs the user's steps as argv in the checkout (no
+  `sh -c`), gets the proxy and `bootstrap.*` settings from the user's
+  `install-plan` (data), so swap, ufw and Caddy come after the user's steps,
+  and runs `install` from that plan in-process.
 - **§8:** one on-demand TLS `ask` endpoint per server (Caddy's limit). On a
   server whose Caddyfile is not the stock one, `install` only adds the import
   line and says what to add to the global block.

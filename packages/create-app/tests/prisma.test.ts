@@ -208,6 +208,8 @@ describe('--prisma generates a PostgreSQL-backed app', () => {
   it('keeps the generated client out of git', async () => {
     const ignore = await read((await scaffold('ignored')).dir, '.gitignore')
     expect(ignore.split('\n')).toContain('generated/')
+    // @basaltkit/deploy's state and dumps, anchored at the root (a src/…/backups module is source).
+    expect(ignore.split('\n')).toEqual(expect.arrayContaining(['/.basalt/', '/backups/']))
   })
 })
 

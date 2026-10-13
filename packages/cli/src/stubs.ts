@@ -76,7 +76,10 @@ CMD ["node", "--enable-source-maps", "${PRODUCTION_ENTRY}"]
  * private keys and VCS metadata into an image layer. Every secret rule is
  * \`**\/\`-prefixed: .dockerignore patterns are anchored at the context root, so
  * a bare \`.env\` or \`*.pem\` would still let \`prisma/.env\` or
- * \`certs/server.key\` through. \`dist\` is rebuilt inside the image.
+ * \`certs/server.key\` through. \`.basalt\` and \`backups\` at the root (the
+ * deploy's state and database dumps — anchored, so an app's own \`backups\`
+ * module is still copied) never belong in an image. \`dist\` is rebuilt
+ * inside the image.
  */
 export const DOCKERIGNORE = `**/.env
 **/.env.*
@@ -91,6 +94,8 @@ export const DOCKERIGNORE = `**/.env
 **/*.p12
 **/*.pfx
 **/.DS_Store
+.basalt
+backups
 dist
 `
 

@@ -2,7 +2,8 @@ import type { DeployConfig } from '../src/config.js'
 import type { DeployContext } from '../src/context.js'
 import type { ExecOptions, ExecResult, Host, TlsCertificate } from '../src/host.js'
 
-type Node = { kind: 'file'; content: string; mode: number } | { kind: 'symlink'; target: string } | { kind: 'dir' }
+interface Owner { uid?: number; gid?: number }
+type Node = ({ kind: 'file'; content: string; mode: number } | { kind: 'symlink'; target: string } | { kind: 'dir'; mode?: number }) & Owner
 
 export interface Call {
   command: string
@@ -34,6 +35,13 @@ export class FakeHost implements Host {
   userId = 1000
   tty = false
   clock = new Date('2026-10-11T12:00:00Z').getTime()
+  /** The owner of files and directories that do not name one: the app user. */
+  defaultUid = 1000
+  processId = 4100
+  name = 'server-1'
+  /** Pids that run on this host; the deploy's own is always among them. */
+  alive = new Set<number>([4100])
+  signalListeners: Array<(signal: string) => void> = []
   private counter = 0
 
   out = {
@@ -69,8 +77,14 @@ export class FakeHost implements Host {
     return node?.kind === 'file' ? node.mode : undefined
   }
 
-  put(path: string, content: string, mode = 0o644): this {
-    this.files.set(path, { kind: 'file', content, mode })
+  put(path: string, content: string, mode = 0o644, owner: Owner = {}): this {
+    this.files.set(path, { kind: 'file', content, mode, ...owner })
+    return this
+  }
+
+  /** A directory with an owner and mode (for the checks that read them). */
+  dir(path: string, mode = 0o755, owner: Owner = {}): this {
+    this.files.set(path, { kind: 'dir', mode, ...owner })
     return this
   }
 
@@ -88,7 +102,7 @@ export class FakeHost implements Host {
   }
 
   async readFile(path: string) { return this.file(path) }
-  async writeFile(path: string, content: string, mode = 0o644) { this.put(path, content, mode) }
+  async writeFile(path: string, content: string, mode = 0o644) { this.put(path, content, mode, this.userId === 0 ? { uid: 0, gid: 0 } : {}) }
   async copyFile(from: string, to: string, mode?: number) {
     const content = this.file(from)
     if (content === undefined) throw new Error(`ENOENT ${from}`)
@@ -98,15 +112,59 @@ export class FakeHost implements Host {
   async stat(path: string) {
     const node = this.files.get(path)
     if (!node) return undefined
-    return { kind: node.kind, size: node.kind === 'file' ? node.content.length : 0 }
+    const mode = node.kind === 'file' ? node.mode : node.kind === 'dir' ? (node.mode ?? 0o755) : 0o777
+    return { kind: node.kind, size: node.kind === 'file' ? node.content.length : 0, mode, uid: node.uid ?? this.defaultUid, gid: node.gid ?? node.uid ?? this.defaultUid }
+  }
+  async realpath(path: string) {
+    let current = path
+    for (let hops = 0; hops < 40; hops++) {
+      const node = this.files.get(current)
+      if (!node) return undefined
+      if (node.kind !== 'symlink') return current
+      current = node.target.startsWith('/') ? node.target : `${current.slice(0, current.lastIndexOf('/'))}/${node.target}`
+    }
+    return undefined
+  }
+  async readPlainFile(path: string, maxBytes: number) {
+    const node = this.files.get(path)
+    if (!node) throw new Error(`ENOENT ${path}`)
+    if (node.kind === 'symlink') throw new Error(`${path} is a symbolic link — refused, never followed`)
+    if (node.kind !== 'file') throw new Error(`${path} is not a regular file`)
+    if (node.content.length > maxBytes) throw new Error(`${path} is larger than ${maxBytes} bytes`)
+    return node.content
+  }
+  owned: Array<{ path: string; uid: number; gid: number; mode: number }> = []
+  /** Paths with more than one hard link (only `secureOwner` looks). */
+  hardLinked = new Set<string>()
+  async secureOwner(path: string, owner: { uid: number; gid: number; mode: number; kind: 'file' | 'dir' }) {
+    const node = this.files.get(path)
+    if (!node) throw new Error(`ENOENT ${path}`)
+    if (node.kind === 'symlink') throw new Error(`${path} is a symbolic link — refused, never followed`)
+    if (node.kind !== owner.kind) throw new Error(`${path} is not a ${owner.kind === 'dir' ? 'directory' : 'regular file'}`)
+    if (this.hardLinked.has(path)) throw new Error(`${path} has 2 hard links`)
+    node.uid = owner.uid
+    node.gid = owner.gid
+    node.mode = owner.mode
+    this.owned.push({ path, uid: owner.uid, gid: owner.gid, mode: owner.mode })
+  }
+  async chmod(path: string, mode: number) {
+    const node = this.files.get(path)
+    if (!node) throw new Error(`ENOENT ${path}`)
+    if (node.kind !== 'symlink') node.mode = mode
   }
   async readlink(path: string) {
     const node = this.files.get(path)
     return node?.kind === 'symlink' ? node.target : undefined
   }
   async symlink(target: string, path: string) { this.files.set(path, { kind: 'symlink', target }) }
-  async mkdir(path: string) { if (!this.files.has(path)) this.files.set(path, { kind: 'dir' }) }
+  async mkdir(path: string, mode?: number) {
+    if (!this.files.has(path)) this.files.set(path, { kind: 'dir', ...(mode === undefined ? {} : { mode }), ...(this.userId === 0 ? { uid: 0, gid: 0 } : {}) })
+  }
   async remove(path: string) { this.files.delete(path) }
+  async removeFile(path: string) {
+    if (this.files.get(path)?.kind === 'dir') throw new Error(`EISDIR ${path}`)
+    this.files.delete(path)
+  }
   async list(dir: string) {
     const prefix = `${dir}/`
     // Like readdir: files and subdirectories (a directory exists when a file is under it).
@@ -131,6 +189,20 @@ export class FakeHost implements Host {
   }
   async httpGet(url: string, options: { host?: string } = {}) { return this.http(url, options.host) }
   uid() { return this.userId }
+  pid() { return this.processId }
+  hostname() { return this.name }
+  processAlive(pid: number) { return this.alive.has(pid) }
+  async createExclusive(path: string, content: string, mode: number) {
+    if (this.files.has(path)) return false
+    this.put(path, content, mode)
+    return true
+  }
+  onSignal(listener: (signal: string) => void) {
+    this.signalListeners.push(listener)
+    return () => { this.signalListeners = this.signalListeners.filter((l) => l !== listener) }
+  }
+  /** Delivers a signal as the terminal would (the first one reaches the listeners). */
+  signal(name = 'SIGINT') { for (const listener of [...this.signalListeners]) listener(name) }
   interactive() { return this.tty }
 }
 

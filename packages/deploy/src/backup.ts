@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { DeployError, type DeployContext } from './context.js'
+import { DeployError, type DeployContext, type Finding } from './context.js'
 import type { InfraPlan } from './infra.js'
 import { dumpContainer, dumpUrlKey } from './services.js'
 
@@ -14,10 +14,60 @@ import { dumpContainer, dumpUrlKey } from './services.js'
  * when there is one, travels in the environment (`docker exec -e PGPASSWORD`,
  * no value), never on a command line.
  */
+/**
+ * Where the dumps go: `<stateDir>/backups` (0700). Once `install` ran that is
+ * `/var/lib/basalt/<app>/backups`, outside the checkout — never in a
+ * `COPY . .` image, a commit or a served directory. Before, it is
+ * `<checkout>/.basalt/backups`, and {@link backupPlaceFindings} says when
+ * git or the Docker build context would take it. `backup.dir` (relative to
+ * the checkout) keeps the old place for those who chose it.
+ */
+export const backupDir = (ctx: DeployContext) => (ctx.config.backup?.dir ? join(ctx.dir, ctx.config.backup.dir) : join(ctx.stateDir, 'backups'))
+
+/** A .dockerignore line that keeps `top` (a top-level directory) out of the build context. */
+const ignoresTop = (dockerignore: string, top: string) => dockerignore.split('\n').map((l) => l.trim().replace(/\/+$/, '')).some((l) => [top, `/${top}`, `${top}/**`, `/${top}/**`, `**/${top}`].includes(l))
+
+/**
+ * Dumps of the whole database inside the checkout: said before the deploy
+ * writes one, when git does not ignore them or a Docker build would copy
+ * them into an image. And dumps left in the pre-0.6 place
+ * (`backups/predeploy`), which nothing prunes any more.
+ */
+export async function backupPlaceFindings(ctx: DeployContext): Promise<Finding[]> {
+  const { host } = ctx
+  const findings: Finding[] = []
+  const dir = backupDir(ctx)
+  const fix = `run install once (dumps then go to /var/lib/basalt/${ctx.config.app}/backups, outside the checkout)`
+  if (dir.startsWith(`${ctx.dir}/`)) {
+    const relative = dir.slice(ctx.dir.length + 1)
+    const top = relative.split('/')[0] as string
+    const ignored = await host.exec('git', ['check-ignore', '-q', '--no-index', '--', `${relative}/x.dump`], { cwd: ctx.dir })
+    if (ignored.code !== 0) {
+      findings.push({ id: 'dumps', level: 'warning', message: `database dumps go to ${dir}, inside the checkout, and git does not ignore them`, fix: `add /${top}/ to .gitignore, or ${fix}` })
+    }
+    const dockerBuild = ctx.config.runtime.kind === 'compose' || (await host.exists(join(ctx.dir, 'Dockerfile')))
+    const dockerignore = await host.readFile(join(ctx.dir, '.dockerignore'))
+    if (dockerBuild && !ignoresTop(dockerignore ?? '', top)) {
+      findings.push({ id: 'dumps', level: 'warning', message: `database dumps go to ${dir}, inside the Docker build context: a COPY . . puts them in the image`, fix: `add ${top} to .dockerignore, or ${fix}` })
+    }
+  }
+  if (!ctx.config.backup?.dir) {
+    const legacy = join(ctx.dir, 'backups', 'predeploy')
+    const left = (await host.list(legacy)).filter((name) => name.endsWith('.dump'))
+    if (left.length > 0) {
+      findings.push({ id: 'dumps', level: 'warning', message: `${left.length} dump(s) left in ${legacy} (the old place): new dumps go to ${dir}, and nothing prunes these`, fix: `move them next to the new ones (mv ${legacy}/*.dump ${dir}/) or delete them` })
+    }
+  }
+  return findings
+}
+
 export async function backupDatabase(ctx: DeployContext, values: Map<string, string>, infra: InfraPlan, sha: string): Promise<string> {
   const { host, config } = ctx
-  const dir = join(ctx.dir, config.backup?.dir ?? 'backups/predeploy')
+  const dir = backupDir(ctx)
   await host.mkdir(dir, 0o700)
+  // A directory made earlier with a looser mode: every dump is the whole database.
+  const made = await host.stat(dir)
+  if (made?.kind === 'dir' && made.uid === host.uid() && made.mode !== undefined && (made.mode & 0o077) !== 0) await host.chmod(dir, 0o700)
   const stamp = host.now().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '')
   const file = join(dir, `${stamp}-${sha.slice(0, 7)}.dump`)
 
