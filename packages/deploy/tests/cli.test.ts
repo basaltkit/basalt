@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { loadConfig, main } from '../src/cli.js'
+import { loadConfig, main, UI_HINT } from '../src/cli.js'
 import { detectPackageManager, resolveStateDir } from '../src/context.js'
 import { FakeHost, jlist, ok } from './fake-host.js'
 
@@ -32,6 +32,32 @@ describe('loadConfig', () => {
   it('says what is wrong with a file that is missing or exports nothing', async () => {
     await expect(loadConfig(dir, 'nope.mjs')).rejects.toThrow(/cannot load nope\.mjs/)
     await expect(loadConfig(dir, 'empty.mjs')).rejects.toThrow(/must export default defineDeploy/)
+  })
+})
+
+describe('ui (RFC 0009 §3.4)', () => {
+  it('only prints how to start the local UI, on stderr: no config, nothing spawned, exit 0; refused with --json', async () => {
+    const host = new FakeHost()
+    const errors = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const out = stdout()
+    try {
+      expect(await main(['ui', '--config=missing.mjs'], host, dir)).toBe(0)
+      expect(errors.mock.calls.map((c) => String(c[0])).join('')).toBe(UI_HINT)
+      expect(out).not.toHaveBeenCalled()
+    } finally {
+      errors.mockRestore()
+      out.mockRestore()
+    }
+    expect(host.calls).toEqual([])
+    expect(UI_HINT).toContain('npx @basaltkit/deploy-ui@<exact version>')
+    expect(UI_HINT).toMatch(/never on the server/)
+    expect(UI_HINT).toMatch(/not in the app's package\.json/)
+
+    const lines: string[] = []
+    const json = await main(['ui', '--json'], new FakeHost(), dir, { write: (t) => lines.push(t), stdin: async function* () {}, capture: () => () => undefined, stderr: () => undefined })
+    expect(json).toBe(1)
+    const events = lines.join('').split('\n').filter(Boolean).map((l) => JSON.parse(l) as { type: string; code?: string })
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'unsupported' })
   })
 })
 
