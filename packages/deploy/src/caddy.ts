@@ -28,7 +28,8 @@ export function renderSite(ctx: DeployContext, port: number): string {
   const tls = proxy.onDemandTls ? '\n\ttls {\n\t\ton_demand\n\t}\n' : ''
   return `# Written by basalt-deploy install for "${app}". Deploys compare this file with
 # what install would write and print the difference; they never rewrite it.
-# To change it: edit deploy.config.ts, then sudo basalt-deploy install.
+# To change it: edit deploy.config.ts, run ${INSTALL_COMMAND}
+# as the app user, then the root command it prints.
 
 ${hosts} {${tls}
 \tencode gzip

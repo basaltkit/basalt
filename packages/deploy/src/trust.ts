@@ -34,6 +34,36 @@ export const ASK_PATH = /^(\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/
 /** A Let's Encrypt certificate name (`/etc/letsencrypt/live/<name>/`). */
 export const CERT_NAME = /^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9-]+)*$/
 
+/**
+ * Characters a terminal acts on instead of showing (CR, ESC and the C1 CSI,
+ * line separators, bidirectional overrides): `install` shows raw Caddy
+ * `extra` before root writes it, and what is shown must be what is written.
+ */
+const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/
+
+/**
+ * Raw Caddy `extra`: no character that hides text on a terminal, and no
+ * `import` — a file the app user can change later would be configuration
+ * root loads without anyone seeing it again.
+ */
+export function caddyExtraProblem(extra: unknown): string | undefined {
+  if (typeof extra !== 'string' || extra.length > 16_384) return 'must be a string (at most 16 KiB)'
+  const hidden = HIDDEN.exec(extra)
+  if (hidden) return `holds a control or direction character (U+${(hidden[0].codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}) — tabs and newlines only`
+  if (/^\s*import(\s|$)/m.test(extra)) return 'may not `import` a file: root would load whatever that file says later, unseen'
+  return undefined
+}
+
+/**
+ * The managed vhost file name: the app's own (`<app>.conf`, `<app>-<x>.conf`),
+ * never one that sorts ahead of another site's or takes its name.
+ */
+export function vhostFileProblem(app: string, vhost: unknown): string | undefined {
+  if (typeof vhost !== 'string' || !/^[a-z0-9][a-z0-9.-]*\.conf$/.test(vhost)) return 'must be a plain *.conf file name'
+  if (vhost !== `${app}.conf` && !vhost.startsWith(`${app}-`) && !vhost.startsWith(`${app}.`)) return `must be ${app}.conf or start with "${app}-" — the app's own file`
+  return undefined
+}
+
 /** An absolute directory with no dot segments (`/etc/apache2`). */
 export function isConfigRoot(value: unknown): value is string {
   if (typeof value !== 'string' || !value.startsWith('/') || value.length > 200) return false

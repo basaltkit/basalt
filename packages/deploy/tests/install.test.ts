@@ -12,7 +12,7 @@ import { main, USAGE } from '../src/cli.js'
 import { caddy, compose, validateConfig } from '../src/config.js'
 import { INSTALL_COMMAND, RUN_COMMAND } from '../src/context.js'
 import { nodeHost, type Output } from '../src/host.js'
-import { buildInstallPlan, install, parseInstallPlan, PLAN_KIND, readInstallPlan, type InstallPlan } from '../src/install-plan.js'
+import { buildInstallPlan, install, parseInstallPlan, PLAN_KIND, readInstallPlan, servedNames, type InstallPlan } from '../src/install-plan.js'
 import { readReleases, recordRelease } from '../src/state.js'
 import { untrustedToolPaths } from '../src/trust.js'
 import { acmeConfig, context, DIR, FakeHost, ok } from './fake-host.js'
@@ -34,7 +34,7 @@ function rootServer(): FakeHost {
 
 const plan = (over: Partial<InstallPlan> = {}): InstallPlan => ({
   kind: PLAN_KIND, version: 1, app: 'acme', domain: 'acme.example.com', tenants: 'subdomain', dir: DIR, port: 3002,
-  proxy: { kind: 'apache', managed: true, vhost: 'acme.conf', webRoot: 'web/dist', apiPrefix: '/api' },
+  proxy: { kind: 'apache', managed: true, vhost: `${over.app ?? 'acme'}.conf`, webRoot: 'web/dist', apiPrefix: '/api' },
   envFiles: [], docker: false, tool: '0.5.0', ...over,
 })
 
@@ -232,7 +232,7 @@ describe('install (root\'s half)', () => {
     const caddyPlan = plan({ tenants: 'none', proxy: { kind: 'caddy', managed: true, webRoot: 'web/dist', apiPrefix: '/api', extra } })
     const refused = rootServer()
     await expect(install(refused, caddyPlan, 'ubuntu')).rejects.toThrow(/proxy.extra not confirmed/)
-    expect(refused.transcript).toContain('  + \treverse_proxy 127.0.0.1:9000')
+    expect(refused.transcript).toContain('  + →   reverse_proxy 127.0.0.1:9000')
     expect(refused.files.has('/etc/caddy/sites/acme.caddy')).toBe(false)
     const accepted = rootServer()
     accepted.confirmations.push(true)
@@ -241,6 +241,66 @@ describe('install (root\'s half)', () => {
 
     const elsewhere = rootServer().dir('/opt', 0o755, ROOT).dir('/opt/apache', 0o755, ROOT)
     await expect(install(elsewhere, plan({ proxy: { kind: 'apache', managed: true, vhost: 'acme.conf', webRoot: 'web/dist', apiPrefix: '/api', root: '/opt/apache' } }), 'ubuntu')).rejects.toThrow(/proxy root \/opt\/apache not confirmed/)
+  })
+
+  it('EXPLOIT: Caddy `extra` cannot hide text from the confirmation, nor import a file', () => {
+    const caddyPlan = (extra: string) => JSON.stringify(plan({ tenants: 'none', proxy: { kind: 'caddy', managed: true, webRoot: 'web/dist', apiPrefix: '/api', extra } }))
+    // The probe: a CR makes the terminal show only the comment; Caddy loads the directive.
+    for (const extra of ['\treverse_proxy 192.0.2.7:80 \r\t# health endpoint, harmless', 'x {\n\x1b[2K\x1b[1A}', 'a\u202eb', 'a\u009bb', 'a\u2028b']) {
+      expect(() => parseInstallPlan(caddyPlan(extra), 'p.json'), JSON.stringify(extra)).toThrow(/proxy\.extra holds a control or direction character/)
+      expect(() => validateConfig(acmeConfig({ tenants: 'none', proxy: caddy({ extra }) })), JSON.stringify(extra)).toThrow(/proxy\.extra holds a control/)
+    }
+    for (const extra of ['import /srv/acme/site.caddy', 'x.example.com {\n\timport /srv/acme/*.caddy\n}']) {
+      expect(() => parseInstallPlan(caddyPlan(extra), 'p.json'), extra).toThrow(/proxy\.extra may not `import`/)
+    }
+    expect(parseInstallPlan(caddyPlan('admin.acme.example.com {\n\treverse_proxy 127.0.0.1:9000 # importer\n}'), 'p.json').proxy).toMatchObject({ kind: 'caddy' })
+  })
+
+  it('EXPLOIT: a plan cannot take a co-hosted site\'s domain or sort its vhost ahead of it', async () => {
+    // The vhost is the app's own file name.
+    for (const vhost of ['000-aaa.conf', 'other.conf', 'acmex.conf']) {
+      expect(() => parseInstallPlan(JSON.stringify(plan({ proxy: { kind: 'apache', managed: true, vhost, webRoot: 'web', apiPrefix: '/api' } })), 'p.json'), vhost).toThrow(/proxy\.vhost must be acme\.conf or start with "acme-"/)
+      expect(() => validateConfig(acmeConfig({ proxy: { kind: 'apache', vhost, webRoot: 'web/dist', apiPrefix: '/api' } })), vhost).toThrow(/proxy\.vhost/)
+    }
+    expect(() => parseInstallPlan(JSON.stringify(plan({ proxy: { kind: 'apache', managed: true, vhost: 'acme-le-ssl.conf', webRoot: 'web', apiPrefix: '/api' } })), 'p.json')).not.toThrow()
+    // Another site already serves the domain, or a wildcard over it, or a name under ours.
+    const other = (text: string) => {
+      const host = rootServer()
+      host.put('/etc/apache2/sites-available/shop.conf', text, 0o644, ROOT)
+      return host
+    }
+    for (const [text, taken] of [
+      ['<VirtualHost *:443>\n  ServerName acme.example.com:443\n</VirtualHost>', 'acme.example.com'],
+      ['<VirtualHost *:443>\n  ServerName example.com\n  ServerAlias *.example.com\n</VirtualHost>', '*.example.com'],
+      ['<VirtualHost *:443>\n  ServerName shop.acme.example.com\n</VirtualHost>', 'shop.acme.example.com'],
+    ] as const) {
+      const host = other(text)
+      await expect(install(host, plan(), 'ubuntu'), text).rejects.toThrow(`refused: /etc/apache2/sites-available/shop.conf already serves ${taken}`)
+      expect(host.files.has('/etc/apache2/sites-available/acme.conf')).toBe(false)
+    }
+    // Unrelated sites, and our own file, are fine; the summary says what root is about to do.
+    const fine = other('<VirtualHost *:443>\n  ServerName shop.example.org\n</VirtualHost>')
+    fine.put('/etc/apache2/sites-available/acme.conf', 'ServerName acme.example.com\n', 0o644, ROOT)
+    fine.confirmations.push(true)
+    expect(await install(fine, plan(), 'ubuntu')).toBe(0)
+    expect(fine.transcript).toContain(`install for "acme" (plan by @basaltkit/deploy 0.5.0), for ubuntu, checkout ${DIR}:`)
+    expect(fine.transcript).toContain('Apache /etc/apache2/sites-available/acme.conf for acme.example.com, *.acme.example.com → 127.0.0.1:3002')
+    // Caddy: a site address of another app.
+    const caddyHost = rootServer().dir('/etc/caddy/sites', 0o755, ROOT).put('/etc/caddy/sites/shop.caddy', 'https://acme.example.com, www.example.org {\n\tfile_server\n}\n', 0o644, ROOT)
+    await expect(install(caddyHost, plan({ tenants: 'none', proxy: { kind: 'caddy', managed: true, webRoot: 'web', apiPrefix: '/api' } }), 'ubuntu')).rejects.toThrow('refused: /etc/caddy/sites/shop.caddy already serves acme.example.com')
+  })
+
+  it('servedNames reads Apache names and Caddy site addresses, not directives', () => {
+    expect(servedNames('<VirtualHost *:80>\n ServerName A.example.com\n ServerAlias b.example.com *.c.example.com\n</VirtualHost>', 'apache')).toEqual(['a.example.com', 'b.example.com', '*.c.example.com'])
+    expect(servedNames('{\n\temail x@example.com\n}\n(snip) {\n}\n:8080 {\n}\nx.example.com:443, *.y.example.com { # c\n\thandle {\n\t\tfile_server\n\t}\n}\n', 'caddy')).toEqual(['x.example.com', '*.y.example.com'])
+  })
+
+  it('the vhost follows no link the app user plants out of its own files, and reads no .htaccess', () => {
+    const vhost = renderVhost(context(new FakeHost()), 3002)
+    expect(vhost).toContain(`<Directory ${DIR}>\n    Options -Indexes -FollowSymLinks +SymLinksIfOwnerMatch\n    AllowOverride None\n  </Directory>`)
+    expect(vhost).toContain(`<Directory ${DIR}/web/dist>\n    Require all granted\n    Options -Indexes -FollowSymLinks +SymLinksIfOwnerMatch\n    AllowOverride None`)
+    expect(vhost).toContain('# To change it: edit deploy.config.ts, run node node_modules/@basaltkit/deploy/dist/bin.js install-plan')
+    expect(vhost).not.toContain('sudo basalt-deploy install')
   })
 
   it('renders only validated fields into the vhost', async () => {

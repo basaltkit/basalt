@@ -7,7 +7,8 @@ import { envValues } from './dotenv.js'
 import { envFile, envMirrors, readEnv } from './env-step.js'
 import type { Host } from './host.js'
 import { acquireLock } from './lock.js'
-import { API_PREFIX, ASK_PATH, assertRootOwnedDir, CERT_NAME, envLocationProblem, isConfigRoot, isWebRoot, USER_NAME } from './trust.js'
+import { covers } from './checks.js'
+import { API_PREFIX, ASK_PATH, assertRootOwnedDir, caddyExtraProblem, CERT_NAME, envLocationProblem, isConfigRoot, isWebRoot, USER_NAME, vhostFileProblem } from './trust.js'
 
 /**
  * `install` in two halves (RFC 0006 §11.4), so that root never runs code the
@@ -104,7 +105,6 @@ function planProxy(config: DeployConfig): PlanProxy {
 
 // ── validation: the same on both sides ─────────────────────────────────────
 
-const VHOST = /^[a-z0-9][a-z0-9.-]*\.conf$/
 const VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
 
 /** Parses and validates a plan; every problem is listed. The text is data, never evaluated. */
@@ -167,14 +167,16 @@ export function parseInstallPlan(text: string, source: string): InstallPlan {
     if (typeof proxy['apiPrefix'] !== 'string' || !API_PREFIX.test(proxy['apiPrefix'])) problems.push('proxy.apiPrefix must be a URL path such as /api')
     if (proxy['root'] !== undefined && !isConfigRoot(proxy['root'])) problems.push('proxy.root must be an absolute directory')
     if (kind === 'apache') {
-      if (typeof proxy['vhost'] !== 'string' || !VHOST.test(proxy['vhost'])) problems.push('proxy.vhost must be a plain *.conf file name')
+      const vhost = vhostFileProblem(app ?? '', proxy['vhost'])
+      if (vhost) problems.push(`proxy.vhost ${vhost}`)
       if (proxy['certName'] !== undefined && (typeof proxy['certName'] !== 'string' || !CERT_NAME.test(proxy['certName']))) problems.push('proxy.certName is not a certificate name')
     } else {
       const ask = proxy['onDemandTls']
       if (ask !== undefined && (typeof ask !== 'object' || ask === null || typeof (ask as { ask?: unknown }).ask !== 'string' || !ASK_PATH.test((ask as { ask: string }).ask) || Object.keys(ask).length !== 1)) {
         problems.push('proxy.onDemandTls must be { ask: "/path" }')
       }
-      if (proxy['extra'] !== undefined && (typeof proxy['extra'] !== 'string' || proxy['extra'].length > 16_384)) problems.push('proxy.extra must be a string (at most 16 KiB)')
+      const extra = proxy['extra'] === undefined ? undefined : caddyExtraProblem(proxy['extra'])
+      if (extra) problems.push(`proxy.extra ${extra}`)
     }
   } else problems.push('proxy.kind is apache, caddy or none')
 
@@ -270,13 +272,15 @@ export async function install(host: Host, plan: InstallPlan, user: string | unde
       host.out.ok(`${overrides} created (server-local overrides, no secrets)`)
     }
 
+    const ctx = contextOf(host, plan, stateDir)
+    summary(host, plan, user, stateDir, ctx)
     await envOwnership(host, plan, owner)
 
-    const ctx = contextOf(host, plan, stateDir)
     if (plan.proxy.kind === 'apache' && plan.proxy.managed) {
       const root = plan.proxy.root ?? '/etc/apache2'
       await confirmRoot(host, root, '/etc/apache2')
       for (const dir of [join(root, 'sites-available'), join(root, 'sites-enabled')]) await assertRootOwnedDir(host, dir, 'Apache')
+      await refuseTakenNames(host, plan, [join(root, 'sites-available'), join(root, 'sites-enabled')], vhostPaths(ctx).file, 'apache')
       host.out.step(`Apache vhost ${vhostPaths(ctx).file}`)
       await apacheInstall(ctx, plan.port, backups)
     }
@@ -284,6 +288,7 @@ export async function install(host: Host, plan: InstallPlan, user: string | unde
       const root = plan.proxy.root ?? '/etc/caddy'
       await confirmRoot(host, root, '/etc/caddy')
       await assertRootOwnedDir(host, root, 'Caddy')
+      await refuseTakenNames(host, plan, [caddyPaths(ctx).dir], `${plan.app}.caddy`, 'caddy', caddyPaths(ctx).main)
       if (plan.proxy.extra !== undefined) await confirmExtra(host, plan.proxy.extra, caddyPaths(ctx).site)
       host.out.step(`Caddy site ${caddyPaths(ctx).site}`)
       await host.mkdir(caddyPaths(ctx).dir, 0o755)
@@ -304,6 +309,57 @@ export async function install(host: Host, plan: InstallPlan, user: string | unde
   } finally {
     off()
     await release()
+  }
+}
+
+/** What root is about to do, from the plan — said before anything is written. */
+function summary(host: Host, plan: InstallPlan, user: string, stateDir: string, ctx: DeployContext): void {
+  const names = [plan.domain, ...(plan.tenants === 'subdomain' ? [`*.${plan.domain}`] : [])].join(', ')
+  const site = plan.proxy.kind === 'apache' && plan.proxy.managed
+    ? `Apache ${vhostPaths(ctx).available} for ${names} → 127.0.0.1:${plan.port}, ${join(plan.dir, plan.proxy.webRoot)} served, certificate ${plan.proxy.certName ?? plan.domain}`
+    : plan.proxy.kind === 'caddy' && plan.proxy.managed
+      ? `Caddy ${caddyPaths(ctx).site} for ${names} → 127.0.0.1:${plan.port}, ${join(plan.dir, plan.proxy.webRoot)} served`
+      : 'no proxy site'
+  host.out.info(`install for "${plan.app}" (plan by @basaltkit/deploy ${plan.tool}), for ${user}, checkout ${plan.dir}:`)
+  host.out.info(`  state ${stateDir} · ${site}${plan.envFiles.length ? ` · env ${plan.envFiles.join(', ')}` : ''}`)
+}
+
+/** The host names a proxy config file serves: Apache ServerName/ServerAlias, Caddy site addresses. */
+export function servedNames(text: string, kind: 'apache' | 'caddy'): string[] {
+  const clean = (name: string) => name.toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/:\d+$/, '').replace(/\.$/, '')
+  if (kind === 'apache') {
+    return [...text.matchAll(/^\s*Server(?:Name|Alias)\s+(.+)$/gim)].flatMap((m) => (m[1] ?? '').trim().split(/\s+/)).map(clean).filter(Boolean)
+  }
+  const names: string[] = []
+  let depth = 0
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/(^|\s)#.*$/, '').trim()
+    if (depth === 0 && line.endsWith('{') && line !== '{') {
+      for (const address of line.slice(0, -1).split(/[\s,]+/)) {
+        if (address && !address.startsWith('(') && !address.startsWith(':')) names.push(clean(address))
+      }
+    }
+    depth += (line.match(/{/g) ?? []).length - (line.match(/}/g) ?? []).length
+    if (depth < 0) depth = 0
+  }
+  return names.filter(Boolean)
+}
+
+const overlap = (a: string, b: string) => a === b || (a.startsWith('*.') && covers(a, b)) || (b.startsWith('*.') && covers(b, a))
+
+/**
+ * The plan's names are not another site's: a new file whose ServerName (or
+ * Caddy address) is a co-hosted app's domain — or a more specific name under
+ * its wildcard — would take that app's traffic and certificate.
+ */
+async function refuseTakenNames(host: Host, plan: InstallPlan, dirs: string[], own: string, kind: 'apache' | 'caddy', main?: string): Promise<void> {
+  const ours = [plan.domain, ...(plan.tenants === 'subdomain' ? [`*.${plan.domain}`] : [])]
+  const files = [...(main ? [main] : []), ...(await Promise.all(dirs.map(async (dir) => (await host.list(dir)).filter((name) => name !== own).map((name) => join(dir, name))))).flat()]
+  for (const file of files) {
+    const text = await host.readFile(file)
+    if (text === undefined) continue
+    const taken = servedNames(text, kind).filter((name) => ours.some((mine) => overlap(mine, name)))
+    if (taken.length > 0) throw new DeployError(`refused: ${file} already serves ${[...new Set(taken)].join(', ')} — "${plan.app}" may not take another site's names (${ours.join(', ')})`)
   }
 }
 
@@ -375,7 +431,8 @@ async function confirmRoot(host: Host, root: string, standard: string): Promise<
 
 /** Caddy `extra` is raw configuration root installs: shown in full, and written only after a "yes". */
 async function confirmExtra(host: Host, extra: string, site: string): Promise<void> {
-  host.out.info(`proxy.extra — raw Caddyfile appended to ${site}, as written by the app user:`)
-  for (const line of extra.trim().split('\n')) host.out.info(`  + ${line}`)
+  host.out.info(`proxy.extra — raw Caddyfile appended to ${site}, as written by the app user (tabs shown as →):`)
+  // parseInstallPlan refused every character a terminal would hide text with.
+  for (const line of extra.trim().split('\n')) host.out.info(`  + ${line.replace(/\t/g, '→   ')}`)
   if (!(await host.confirm('Install this raw configuration as root?'))) throw new DeployError('proxy.extra not confirmed — nothing written (a terminal must answer)')
 }
