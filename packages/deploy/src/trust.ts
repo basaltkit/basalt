@@ -40,6 +40,22 @@ export function isConfigRoot(value: unknown): value is string {
   return value.slice(1).split('/').every((segment) => SEGMENT.test(segment))
 }
 
+/**
+ * App names whose `/etc/<app>` is a system directory (or this tool's own
+ * `/etc/basalt`). `install` hands `/etc/<app>` to the app user when the env
+ * lives there: owning `/etc/systemd`, `/etc/ssh` or `/etc/apt` is root. The
+ * list is a first line; `install` also refuses a directory a Debian package
+ * ships, one another user owns, and asks before taking over one root made.
+ */
+export const RESERVED_APP_NAMES: ReadonlySet<string> = new Set([
+  'basalt', 'basaltkit', 'alternatives', 'apache2', 'apparmor', 'apt', 'bash-completion', 'bind', 'ca-certificates', 'caddy', 'cloud', 'containerd',
+  'cron', 'cryptsetup-initramfs', 'dbus-1', 'default', 'dhcp', 'docker', 'dpkg', 'fail2ban', 'fonts', 'gnupg', 'groff', 'grub', 'gss', 'init', 'initramfs-tools',
+  'iproute2', 'iptables', 'kernel', 'ldap', 'letsencrypt', 'libvirt', 'logcheck', 'logrotate', 'lvm', 'mysql', 'netplan', 'network', 'networkd-dispatcher', 'nftables', 'nginx',
+  'node', 'nodejs', 'npm', 'openvpn', 'opt', 'pam', 'php', 'pki', 'pm2', 'polkit-1', 'postfix', 'postgresql', 'postgresql-common', 'ppp', 'profile', 'python3', 'redis',
+  'resolvconf', 'rsyslog', 'security', 'selinux', 'skel', 'snap', 'ssh', 'ssl', 'sudo', 'sysctl', 'systemd', 'terminfo', 'tmpfiles', 'udev', 'ufw', 'update-motd',
+  'vim', 'wireguard', 'xdg',
+])
+
 /** An env file name in `/etc/<app>/`. */
 const ENV_NAME = /^[A-Za-z0-9_.][A-Za-z0-9._-]*$/
 
@@ -50,6 +66,7 @@ const ENV_NAME = /^[A-Za-z0-9_.][A-Za-z0-9._-]*$/
  */
 export function envLocationProblem(app: string, file: string): string | undefined {
   if (file.startsWith('/')) {
+    if (RESERVED_APP_NAMES.has(app)) return `"${file}": /etc/${app} is a system directory — keep the env inside the checkout, or name the app something else`
     const name = file.slice(`/etc/${app}/`.length)
     if (file.startsWith(`/etc/${app}/`) && ENV_NAME.test(name) && name !== '.' && name !== '..' && normalize(file) === file) return undefined
     return `"${file}" must be inside the checkout or directly in /etc/${app}/ (install gives it to the deploy user)`
