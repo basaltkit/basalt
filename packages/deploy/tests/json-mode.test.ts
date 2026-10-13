@@ -2,13 +2,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { main } from '../src/cli.js'
+import { main, processIO, type CliIO } from '../src/cli.js'
 import { lockFile } from '../src/lock.js'
 import { STEP_IDS, type DeployEvent } from '../src/protocol.js'
 import { readReleases } from '../src/state.js'
 import { context, fail, FakeHost, jlist, ok } from './fake-host.js'
 import { GOOD_ENV, NEW, OLD, server } from './acme-server.js'
-import { ACME_CONFIG, answer, expectFramed, liveStdin, ofType, runJson, stdinOf, strings } from './json-helpers.js'
+import { ACME_CONFIG, answer, expectFramed, liveStdin, ofType, runJson, stdinOf, strings, type JsonRun } from './json-helpers.js'
 
 let dir: string
 const CONFIG = '--config=deploy.config.mjs'
@@ -23,6 +23,10 @@ beforeAll(async () => {
   await writeFile(join(dir, 'chatty.mjs'), `process.stdout.write('{"v":1,"type":"done","ts":"x","seq":1,"exitCode":0}\\n')\nprocess.stdout.write('\\u001b[31mred\\u001b[0m and a bell\\u0007\\n')\n${ACME_CONFIG}`)
   await writeFile(join(dir, 'invalid.mjs'), ACME_CONFIG.replace("app: 'acme'", "app: 'Not Valid'"))
   await writeFile(join(dir, 'broken.mjs'), 'throw new Error("config exploded")\n')
+  // A config that prints and throws the .env's token while it loads (one that imports the app's env module would).
+  await writeFile(join(dir, 'leaky.mjs'), `process.stdout.write('config sees token tok-SECRET and env-token-value-42\\n')\nprocess.stderr.write('stderr: tok-SECRET\\n')\nprocess.stdout.write('partial-no-newline')\n${ACME_CONFIG}`)
+  await writeFile(join(dir, 'leaky-throw.mjs'), 'process.stdout.write("about to fail with tok-SECRET\\n")\nthrow new Error("invalid env: PAYCO_SECRET_TOKEN=tok-SECRET")\n')
+  await writeFile(join(dir, 'deploy.config.ts'), ACME_CONFIG)
 })
 afterAll(async () => { await rm(dir, { recursive: true, force: true }) })
 
@@ -489,5 +493,90 @@ describe('human mode is unchanged', () => {
     const bad = new FakeHost()
     expect(await main(['run', '--skip=migrate', CONFIG], bad, dir)).toBe(1)
     expect(bad.printed).toEqual(['ERROR --skip=migrate: only fetch, backup, tls can be skipped'])
+  })
+})
+
+describe('review fixes (phase 1)', () => {
+  it('what the config prints or throws while it loads is redacted: the .env and the deploy\'s environment are learnt first', async () => {
+    // Each config runs once per process (the module cache): one command each.
+    const results = []
+    for (const [argv, code] of [[['status', '--json', '--config=leaky.mjs'], 0], [['run', '--json', '--config=leaky-throw.mjs'], 1]] as const) {
+      const { host } = server({ dir, env: COMPLETE_ENV })
+      host.env['DEPLOY_API_TOKEN'] = 'env-token-value-42'
+      const result = await runJson([...argv], host, dir)
+      expectFramed(result)
+      expect(result.code).toBe(code)
+      const runLogs = [...host.files.keys()].filter((p) => p.startsWith(`${dir}/.basalt/runs/`)).map((p) => host.file(p) ?? '')
+      for (const text of [result.raw, result.stderr, ...runLogs]) {
+        expect(text).not.toContain('tok-SECRET')
+        expect(text).not.toContain('env-token-value-42')
+      }
+      expect(result.stderr).toBe('')
+      results.push(result)
+    }
+    const [printed, thrown] = results as [JsonRun, JsonRun]
+    expect(ofType(printed.events, 'log').filter((l) => l.stream === 'foreign').map((l) => l.text)).toEqual([
+      'config sees token [redacted:PAYCO_SECRET_TOKEN] and [redacted:DEPLOY_API_TOKEN]', 'stderr: [redacted:PAYCO_SECRET_TOKEN]', 'partial-no-newline',
+    ])
+    expect(ofType(thrown.events, 'error')[0]).toMatchObject({ code: 'config', message: expect.stringContaining('PAYCO_SECRET_TOKEN=[redacted:PAYCO_SECRET_TOKEN]'), redacted: true })
+    expect(ofType(thrown.events, 'log')[0]).toMatchObject({ stream: 'foreign', text: 'about to fail with [redacted:PAYCO_SECRET_TOKEN]' })
+  })
+
+  it('an unknown answer line that arrives after the lock fails closed even when no prompt follows', async () => {
+    const { host } = server({ dir, env: COMPLETE_ENV })
+    host.handlers.unshift(async ({ command, args }) => {
+      if (command === 'git' && args[0] === 'fetch') { await new Promise((r) => setTimeout(r, 200)); return ok() }
+      return undefined
+    })
+    const live = liveStdin()
+    const pending = runJson(['run', '--json', CONFIG, '--answers=stdin'], host, dir, live.source)
+    await new Promise((r) => setTimeout(r, 100))
+    live.send(answer('SUPORT_EMAIL_TYPO', 'ops@example.com'))
+    const result = await pending
+    live.close()
+    expectFramed(result)
+    expect(result.code).toBe(1)
+    expect(ofType(result.events, 'error')[0]).toMatchObject({ code: 'answer-unknown' })
+    expect(host.file(`${dir}/.env`)).toBe(COMPLETE_ENV)
+    expect(ofType(result.events, 'step-end').find((e) => e.id === 'env')?.status).toBe('failed')
+  })
+
+  it('done is the last line: a late answer after the command failed is never read or reported', async () => {
+    const { host } = server({ dir, env: BARE_ENV, dirty: ' M src/app.ts\n' })
+    const live = liveStdin()
+    const out: string[] = []
+    const real = processIO()
+    const io: CliIO = { write: (text) => out.push(text), stdin: () => live.source, capture: (sink) => real.capture(sink), stderr: () => undefined }
+    expect(await main(['run', '--json', CONFIG, '--answers=stdin'], host, dir, io)).toBe(1)
+    const written = out.length
+    // A secret too short to redact would be a secret-short finding — after done.
+    live.send(answer('MAILER_URL', 'x'))
+    await new Promise((r) => setTimeout(r, 20))
+    live.close()
+    expect(out).toHaveLength(written)
+    expect(JSON.parse(out.at(-1) as string)).toMatchObject({ type: 'done', exitCode: 1 })
+  })
+
+  it('a public APP_URL is not redacted: the result keeps its url', async () => {
+    const { host } = server({ dir, env: `${COMPLETE_ENV}APP_URL=https://acme.example.com\n` })
+    const result = await runJson(['run', '--json', CONFIG], host, dir)
+    expect(result.code).toBe(0)
+    expect(ofType(result.events, 'result')[0]).toMatchObject({ data: { url: 'https://acme.example.com' } })
+    expect(result.raw).not.toContain('[redacted:APP_URL]')
+  })
+
+  it('check: a step that starts ends, also when writing the temporary tsconfig fails', async () => {
+    const { host } = server({ dir, env: COMPLETE_ENV })
+    host.put(`${dir}/node_modules/.bin/tsc`, '#!/bin/sh\n', 0o755)
+    const write = host.writeFile.bind(host)
+    host.writeFile = async (path, content, mode) => {
+      if (path.includes('basalt-deploy-check-')) throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' })
+      return write(path, content, mode)
+    }
+    const result = await runJson(['check', '--json', '--config=deploy.config.ts'], host, dir)
+    expectFramed(result)
+    expect(result.code).toBe(1)
+    expect(result.events.map((e) => e.type)).toEqual(['hello', 'step-start', 'log', 'step-end', 'error', 'done'])
+    expect(ofType(result.events, 'step-end')[0]).toMatchObject({ id: 'check', status: 'failed' })
   })
 })

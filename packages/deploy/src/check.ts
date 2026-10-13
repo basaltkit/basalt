@@ -14,8 +14,13 @@ import type { CheckResult } from './protocol.js'
  */
 export async function check(host: Host, dir: string, file: string, config: DeployConfig): Promise<number> {
   const started = host.now().getTime()
-  const types = await checkTypes(host, dir, file, config)
-  host.out.stepEnd?.('check', types === 'failed' ? 'failed' : 'ok', host.now().getTime() - started)
+  let types: CheckResult['types'] | undefined
+  try {
+    types = await checkTypes(host, dir, file, config)
+  } finally {
+    // Every step that starts ends, also when checkTypes throws (a read-only checkout).
+    host.out.stepEnd?.('check', types === undefined || types === 'failed' ? 'failed' : 'ok', host.now().getTime() - started)
+  }
   host.out.result?.('check', { file, app: config.app, runtime: config.runtime.kind, ...(config.proxy ? { proxy: config.proxy.kind } : {}), types })
   return types === 'failed' ? 1 : 0
 }

@@ -182,7 +182,7 @@ export interface CliIO {
   /** stdout as it was before anything replaced `process.stdout.write`. */
   write(text: string): void
   stdin(): AsyncIterable<string | Uint8Array>
-  /** Turns writes to `process.stdout` into `sink` calls, until the returned function is called. */
+  /** Turns writes to `process.stdout` and `process.stderr` into `sink` calls, until the returned function is called. */
   capture(sink: (text: string) => void): () => void
   /** One plain line on stderr: the event writer itself failed. */
   stderr(text: string): void
@@ -192,8 +192,9 @@ export interface CliIO {
 const broken = new WeakSet<object>()
 const watched = new WeakSet<object>()
 
-export function processIO(stream: NodeJS.WritableStream = process.stdout, input: AsyncIterable<string | Uint8Array> = process.stdin): CliIO {
+export function processIO(stream: NodeJS.WritableStream = process.stdout, input: AsyncIterable<string | Uint8Array> = process.stdin, errors: NodeJS.WritableStream = process.stderr): CliIO {
   const original = stream.write.bind(stream) as (text: string) => boolean
+  const originalErrors = errors.write.bind(errors) as (text: string) => boolean
   if (!watched.has(stream)) {
     watched.add(stream)
     // The SSH client gone: never a crash mid-migration; the run log keeps every event.
@@ -211,16 +212,27 @@ export function processIO(stream: NodeJS.WritableStream = process.stdout, input:
     },
     stdin: () => input,
     capture(sink) {
-      const previous = stream.write
-      stream.write = ((chunk: string | Uint8Array, encoding?: unknown, callback?: unknown) => {
-        sink(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'))
-        const done = typeof encoding === 'function' ? encoding : callback
-        if (typeof done === 'function') queueMicrotask(() => (done as () => void)())
-        return true
-      }) as typeof stream.write
-      return () => { stream.write = previous }
+      // stderr too: a UI may show it, and the config's console.error is as foreign as its console.log.
+      const targets = stream === errors ? [stream] : [stream, errors]
+      const previous = targets.map((target) => target.write)
+      for (const target of targets) {
+        target.write = ((chunk: string | Uint8Array, encoding?: unknown, callback?: unknown) => {
+          sink(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'))
+          const done = typeof encoding === 'function' ? encoding : callback
+          if (typeof done === 'function') queueMicrotask(() => (done as () => void)())
+          return true
+        }) as typeof target.write
+      }
+      return () => { targets.forEach((target, i) => { target.write = previous[i] as typeof target.write }) }
     },
-    stderr: (text) => { process.stderr.write(text) },
+    // The stream as it was before capture: the writer's own failure is never a foreign event.
+    stderr: (text) => {
+      try {
+        originalErrors(text)
+      } catch {
+        // Nobody reads stderr any more: nothing else to tell.
+      }
+    },
   }
 }
 
@@ -242,7 +254,16 @@ interface Machine {
   /** A detached child (`--run-id` with the marker): its stdout is its run log. */
   child: boolean
   channel?: AnswerChannel
+  /**
+   * The redactor learns the config's `.env` files (the default `.env` while
+   * no config is known), then the config's held output goes out. Called once
+   * the config is loaded, and before any error is reported.
+   */
+  secretsKnown(config?: DeployConfig): Promise<void>
 }
+
+/** The largest `.env` the redactor reads before the config's own read (createContext). */
+const MAX_ENV_BYTES = 1024 * 1024
 
 /** `--json`: hello first, done last, nothing else on stdout. */
 async function machine(flags: Flags, base: Host, cwd: string, io: CliIO): Promise<number> {
@@ -265,12 +286,32 @@ async function machine(flags: Flags, base: Host, cwd: string, io: CliIO): Promis
   })
   const timeout = Number(flags.values.get('answer-timeout'))
   const json = jsonHost(base, writer, redactor, { answerTimeoutMs: (Number.isInteger(timeout) && timeout >= 1 && timeout <= 3600 ? timeout : ANSWER_TIMEOUT_SECONDS) * 1000 })
-  // deploy.config.ts runs in this process: what it prints is data, never an event.
-  const restore = io.capture(foreignSink(writer, () => json.output.current))
+  // The secrets the deploy was started with (a token in its environment), known before anything runs.
+  json.learn(Object.entries(base.env).filter((pair): pair is [string, string] => typeof pair[1] === 'string'))
+  // deploy.config.ts runs in this process: what it prints is data, never an event —
+  // and held until the redactor knows the .env it may print from.
+  const foreign = foreignSink(writer, () => json.output.current)
+  const restore = io.capture((text) => foreign.write(text))
+  const learnt = new Set<string>()
+  const state: Machine = {
+    json, writer, io, child,
+    async secretsKnown(config) {
+      for (const path of envFilesOf(config, cwd)) {
+        if (learnt.has(path)) continue
+        learnt.add(path)
+        const text = await readEnvForRedactor(base, path)
+        if (text !== undefined) json.learn(envValues(parseEnv(text)), config)
+      }
+      foreign.release()
+    },
+  }
   let code: number
   try {
-    code = await session(flags, json.host, cwd, writer, { json, writer, io, child })
+    code = await session(flags, json.host, cwd, writer, state)
   } finally {
+    foreign.end()
+    // No answer is read once the command is over: a late one never becomes an event after `done`.
+    state.channel?.finish()
     restore()
   }
   // attach ends with the run's own exit code; the run's error is in what it replayed.
@@ -278,6 +319,24 @@ async function machine(flags: Flags, base: Host, cwd: string, io: CliIO): Promis
   writer.emit({ type: 'done', exitCode: code })
   writer.close()
   return code
+}
+
+/** The `.env` files a config names (`.env` while none is known, or one that does not validate). */
+function envFilesOf(config: DeployConfig | undefined, cwd: string): string[] {
+  const env = (config as { env?: { file?: unknown; mirror?: unknown } } | undefined)?.env
+  const file = typeof env?.file === 'string' ? env.file : '.env'
+  const mirrors = Array.isArray(env?.mirror) ? env.mirror.filter((m): m is string => typeof m === 'string') : []
+  return [file, ...mirrors].map((f) => resolve(cwd, f))
+}
+
+/** A `.env` for the redactor only: through its links, a regular file, at most 1 MiB; never an error. */
+async function readEnvForRedactor(host: Host, path: string): Promise<string | undefined> {
+  try {
+    const real = await host.realpath(path)
+    return real === undefined ? undefined : await host.readPlainFile(real, MAX_ENV_BYTES)
+  } catch {
+    return undefined
+  }
 }
 
 /** A command that ended non-zero without throwing says why, with a code (the terminal already read it). */
@@ -343,6 +402,8 @@ function forwarded(flags: Flags): string[] {
 
 /** One command, as the terminal and the protocol both run it; `reporter` says how it ended. */
 async function session(flags: Flags, host: Host, cwd: string, reporter: Reporter, machine?: Machine): Promise<number> {
+  /** The config as far as it loaded: which `.env` the redactor reads before an error is reported. */
+  let loaded: DeployConfig | undefined
   try {
     checkFlags(flags, machine !== undefined, host.env)
     const skip: Skippable[] = []
@@ -390,12 +451,18 @@ async function session(flags: Flags, host: Host, cwd: string, reporter: Reporter
       return await check(host, cwd, file, created)
     }
     let config = await loadConfig(cwd, file)
+    loaded = config
     validateConfig(config)
+    await machine?.secretsKnown(config)
     if (flags.command === 'check') return await check(host, cwd, file, config)
     const overridesPath = flags.values.get('overrides') ?? `/etc/basalt/${config.app}.json`
     const overrides = await host.readFile(overridesPath)
     if (overrides !== undefined) config = validateConfig(applyOverrides(config, parseOverrides(overrides, overridesPath)))
-    if (machine) prepareMachine(machine, flags, config, cwd)
+    loaded = config
+    if (machine) {
+      await machine.secretsKnown(config)
+      prepareMachine(machine, flags, config, cwd)
+    }
     const ctx = await createContext(host, cwd, config)
     const via = flags.values.get('via') === 'ui' ? { via: 'ui' as const } : {}
     const actor = { ...(flags.values.has('actor') ? { actor: flags.values.get('actor') as string } : {}), allowRoot, ...via }
@@ -441,6 +508,8 @@ async function session(flags: Flags, host: Host, cwd: string, reporter: Reporter
         return 1
     }
   } catch (error) {
+    // A config that failed to load may quote a .env value in its error: the redactor reads the .env first.
+    await machine?.secretsKnown(loaded)
     return reportError(error, reporter, host.env['BASALT_DEBUG'] !== undefined && host.env['BASALT_DEBUG'] !== '')
   }
 }
@@ -473,6 +542,8 @@ async function protocolHooks(machine: Machine, ctx: DeployContext): Promise<Prot
       if (runId && ctx.host.readFileRange) await pruneRunLogs(ctx.host, ctx.stateDir, runId)
     },
     afterAnswers: () => {
+      // A bad line that arrived after the lock and found no prompt still fails, before the .env is written.
+      channel?.throwIfFatal()
       for (const key of channel?.finish() ?? []) ctx.host.out.warn(`the answer for ${key} was not needed (already in the .env, or given by the environment): dropped`)
     },
   }

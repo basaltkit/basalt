@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { AnswerChannel, askedQuestions } from '../src/answers.js'
 import { processIO } from '../src/cli.js'
 import { DeployError } from '../src/context.js'
-import { eventOutput, EventWriter, humanReporter, isSecretKey, LineSplitter, Redactor, sanitize, truncate, urlPasswords } from '../src/events.js'
+import { childSink, eventOutput, EventWriter, foreignSink, humanReporter, isSecretKey, isSecretValue, learnSecrets, LineSplitter, MAX_HELD_BYTES, Redactor, sanitize, truncate, urlPasswords } from '../src/events.js'
 import { jsonHost } from '../src/json-host.js'
 import * as protocol from '../src/protocol.js'
 import { parseAnswerLine, parseEvent, type DeployEvent, type EventBody } from '../src/protocol.js'
@@ -33,8 +33,9 @@ const BODIES: EventBody[] = [
 describe('the event schema (v1)', () => {
   it('every type round-trips through the writer and parseEvent', () => {
     const { w, lines } = writer({ runId: '20261011T120000Z-0123456789ab' })
-    for (const body of BODIES) w.emit(body)
+    for (const body of BODIES.slice(0, -1)) w.emit(body)
     w.emit({ type: 'event', event: JSON.parse(lines[0] as string) as DeployEvent })
+    w.emit(BODIES.at(-1) as EventBody)
     expect(lines).toHaveLength(BODIES.length + 1)
     lines.forEach((line, seq) => {
       const parsed = parseEvent(line)
@@ -126,14 +127,13 @@ describe('the writer', () => {
     const { w, lines } = writer({ onFailure: (m) => failures.push(m) })
     w.attachLog({ append: () => { throw new Error('ENOSPC') }, close: () => { throw new Error('gone') } })
     w.emit(BODIES[0] as EventBody)
-    w.emit(BODIES[8] as EventBody)
-    w.close()
-    expect(lines).toHaveLength(2)
     expect(failures).toEqual(['basalt-deploy: the run log could not be written: ENOSPC'])
     const cyclic: Record<string, unknown> = {}
     cyclic['self'] = cyclic
     w.emit({ type: 'result', command: 'status', data: cyclic } as unknown as EventBody)
     expect(failures[1]).toMatch(/an event could not be written/)
+    w.emit(BODIES[8] as EventBody)
+    w.close()
     expect(lines).toHaveLength(2)
   })
 
@@ -213,11 +213,18 @@ describe('text from outside', () => {
 
   it('splits on \\n, \\r\\n and a lone \\r, across chunks; bounds a line without an end', () => {
     const s = new LineSplitter(10)
-    expect(s.push('a\r')).toEqual([])
-    expect(s.push('\nb\rc')).toEqual(['a', 'b'])
-    expect(s.push('defghijklmnop')).toEqual(['cdefghijkl'])
-    expect(s.end()).toEqual(['mnop'])
+    const texts = (lines: Array<{ text: string; cut: boolean }>) => lines.map((l) => `${l.text}${l.cut ? '…' : ''}`)
+    expect(texts(s.push('a\r'))).toEqual([])
+    expect(texts(s.push('\nb\rc'))).toEqual(['a', 'b'])
+    // A line without an end is cut at the bound; the rest of it, up to its end, is dropped.
+    expect(texts(s.push('defghijklmnop'))).toEqual(['cdefghijkl…'])
+    expect(texts(s.push('qrs\r'))).toEqual([])
+    expect(texts(s.push('\nnext\nmore'))).toEqual(['next'])
+    expect(texts(s.end())).toEqual(['more'])
     expect(s.end()).toEqual([])
+    const dropped = new LineSplitter(4)
+    expect(texts(dropped.push('abcdefgh'))).toEqual(['abcd…'])
+    expect(dropped.end()).toEqual([])
   })
 
   it('the human renderer prints what the terminal always did, and nothing for the protocol-only events', () => {
@@ -325,5 +332,107 @@ describe('the JSON host', () => {
     expect(json.host.pid()).toBe(4100)
     expect(json.host.randomHex(2)).toBe('aaa1')
     expect(base.randomHex(2)).toBe('aaa2')
+  })
+
+})
+
+describe('review fixes: what goes out is redacted whole, sanitised everywhere, and ends at done', () => {
+  const SECRET = 'payco-live-token-ABCDEFGHIJKLMNOP'
+  const withSecret = () => {
+    const redactor = new Redactor()
+    redactor.add('PAYCO_SECRET_TOKEN', SECRET)
+    return writer({ redactor })
+  }
+  /** Every 6-character piece of the secret: none may appear anywhere. */
+  const pieces = (secret: string) => Array.from({ length: secret.length - 5 }, (_, i) => secret.slice(i, i + 6))
+
+  it('a secret across the 8 KiB cut is redacted before the line is cut — no prefix leaks', () => {
+    const { w, lines, events } = withSecret()
+    const sink = childSink(w, 'pnpm', 'build')
+    sink.push(`${'x'.repeat(8180)}${SECRET}\n`, 'stdout')
+    sink.end()
+    for (const piece of pieces(SECRET)) expect(lines.join('')).not.toContain(piece)
+    const log = events()[0] as Extract<DeployEvent, { type: 'log' }>
+    expect(log).toMatchObject({ truncated: true, redacted: true })
+    expect(Buffer.byteLength(log.text)).toBeLessThanOrEqual(8192)
+    // The cut never leaves half a marker either.
+    expect(log.text).toMatch(/x$|\[redacted:PAYCO_SECRET_TOKEN\]$/)
+  })
+
+  it('a secret across the 64 Ki bound of a line without an end: the rest of the line is dropped, never a second piece', () => {
+    const { w, lines, events } = withSecret()
+    const sink = childSink(w, 'pnpm', 'build')
+    sink.push(`${'x'.repeat(65526)}${SECRET}`, 'stdout')
+    sink.push('tail\nnext line\n', 'stdout')
+    sink.end()
+    for (const piece of pieces(SECRET)) expect(lines.join('')).not.toContain(piece)
+    expect(events().map((e) => e.type === 'log' && e.text.slice(0, 9))).toEqual(['xxxxxxxxx', 'next line'])
+  })
+
+  it('a cut line whose kept part ends inside a secret loses that tail, even when it is short', () => {
+    const { w, lines } = withSecret()
+    w.emit({ type: 'log', stream: 'child', level: 'info', text: `a line with some room ahead ${SECRET.slice(0, 20)}`, redacted: false, truncated: true })
+    expect(lines.join('')).not.toContain(SECRET.slice(0, 6))
+    // The longest secret is 33 characters: the last 32 go (at most that much of one can sit before a cut).
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ text: 'a line with some', truncated: true })
+  })
+
+  it('every string of every event is sanitised: an escape in a child\'s stderr quoted in an error or a finding never goes out', () => {
+    const { w, lines, events } = writer()
+    const hostile = 'remote: \u001b]8;;https://attacker.example.com\u0007click\u001b]8;;\u0007 \u001b[2J'
+    w.emit({ type: 'error', code: 'failed', message: `git fetch failed: ${hostile}\nsecond line`, hint: hostile, findings: [{ id: 'git', level: 'error', message: hostile, fix: hostile }] })
+    w.emit({ type: 'finding', id: 'git', level: 'error', message: `could not reach origin: ${hostile}` })
+    w.emit({ type: 'step-start', id: 'fetch', title: `fetch ${hostile}` })
+    expect(lines.join('')).not.toMatch(/\\u001b|\\u0007/)
+    expect(events()[0]).toMatchObject({ message: 'git fetch failed: remote: click \nsecond line', hint: 'remote: click ', findings: [{ message: 'remote: click ', fix: 'remote: click ' }] })
+    expect(events()[1]).toMatchObject({ message: 'could not reach origin: remote: click ' })
+    expect(events()[2]).toMatchObject({ title: 'fetch remote: click ' })
+  })
+
+  it('nothing is written after done', () => {
+    const { w, lines } = writer()
+    w.emit({ type: 'done', exitCode: 1 })
+    w.emit({ type: 'finding', id: 'secret-short', level: 'warning', message: 'late' })
+    w.emit({ type: 'log', stream: 'tool', level: 'info', text: 'late', redacted: false })
+    expect(lines).toHaveLength(1)
+    expect(w.nextSeq).toBe(1)
+  })
+
+  it('a bare origin in a *_URL key is the app\'s address, not a secret; any other URL value still is', () => {
+    const config = { env: { generate: { SIGNING_URL: { kind: 'secret', bytes: 32 } }, ask: { ASKED_URL: { secret: true } } } } as unknown as Parameters<typeof isSecretKey>[1]
+    expect(isSecretValue('APP_URL', 'https://acme.example.com', config)).toBe(false)
+    expect(isSecretValue('PUBLIC_URL', 'https://acme.example.com:8443/', config)).toBe(false)
+    expect(isSecretValue('WEBHOOK_URL', 'https://hooks.example.com/services/T0/B0/abcdef123456', config)).toBe(true)
+    expect(isSecretValue('CALLBACK_URL', 'https://acme.example.com/cb?sig=abcdef123456', config)).toBe(true)
+    expect(isSecretValue('SENTRY_DSN', 'https://key123456@o1.ingest.example.com/2', config)).toBe(true)
+    expect(isSecretValue('SECRET_URL', 'https://acme.example.com', config)).toBe(true)
+    expect(isSecretValue('SIGNING_URL', 'https://acme.example.com', config)).toBe(true)
+    expect(isSecretValue('ASKED_URL', 'https://acme.example.com', config)).toBe(true)
+    expect(isSecretValue('BASALT_PG_URL', 'https://acme.example.com', config)).toBe(true)
+    expect(isSecretValue('PORT', '3002', config)).toBe(false)
+    const r = new Redactor()
+    learnSecrets(r, [['APP_URL', 'https://acme.example.com'], ['DATABASE_URL', 'postgresql://app:db-pass-123@127.0.0.1/app']], config as never)
+    expect(r.apply('acme live at https://acme.example.com/api/health, db-pass-123').text).toBe('acme live at https://acme.example.com/api/health, [redacted:DATABASE_URL]')
+  })
+
+  it('the config\'s output is held until the secrets are known, bounded; a last line without a newline is not lost', () => {
+    const { w, events } = writer()
+    const sink = foreignSink(w, () => undefined)
+    sink.write('loading\n')
+    expect(events()).toEqual([])
+    sink.release()
+    expect(events().map((e) => e.type === 'log' && e.text)).toEqual(['loading'])
+    sink.write('partial-no-newline')
+    sink.end()
+    expect(events().map((e) => e.type === 'log' && e.text)).toEqual(['loading', 'partial-no-newline'])
+
+    const bounded = writer()
+    const big = foreignSink(bounded.w, () => undefined)
+    const line = `${'y'.repeat(1023)}\n`
+    for (let i = 0; i < MAX_HELD_BYTES / 1023 + 5; i++) big.write(line)
+    big.end()
+    const all = bounded.events()
+    expect(all.at(-1)).toMatchObject({ stream: 'tool', level: 'warn', text: expect.stringMatching(/^\d+ line\(s\) the config printed while it loaded were dropped/) })
+    expect(all.length).toBeLessThanOrEqual(MAX_HELD_BYTES / 1023 + 1)
   })
 })
