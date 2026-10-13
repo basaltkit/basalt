@@ -6,7 +6,7 @@
  * without running anything.
  */
 
-import { API_PREFIX, ASK_PATH, CERT_NAME, envLocationProblem, isConfigRoot, isWebRoot } from './trust.js'
+import { API_PREFIX, ASK_PATH, caddyExtraProblem, CERT_NAME, envLocationProblem, isConfigRoot, isWebRoot, vhostFileProblem } from './trust.js'
 
 /**
  * The app's environment, as `defineEnv` returns it: `defineDeploy<typeof env>`
@@ -699,7 +699,8 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   }
   if (config.migrate?.command && config.migrate.command.length === 0) problems.push('migrate.command must not be empty')
   const vhost = vhostName(config)
-  if (vhost !== undefined && !/^[a-z0-9.-]+\.conf$/.test(vhost)) problems.push(`proxy.vhost "${vhost}" must be a plain *.conf file name`)
+  const vhostProblem = vhost !== undefined && config.proxy?.kind === 'apache' && config.proxy.managed !== false ? vhostFileProblem(config.app, vhost) : undefined
+  if (vhostProblem) problems.push(`proxy.vhost "${vhost}" ${vhostProblem}`)
   const keys = [
     ...Object.keys(config.env.fixed ?? {}),
     ...Object.keys(config.env.generate ?? {}),
@@ -757,7 +758,8 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
     if (proxy.root !== undefined && !isConfigRoot(proxy.root)) problems.push(`proxy.root "${String(proxy.root)}" must be an absolute directory such as ${proxy.kind === 'apache' ? '/etc/apache2' : '/etc/caddy'}`)
     if (proxy.kind === 'apache' && proxy.certName !== undefined && !CERT_NAME.test(proxy.certName)) problems.push(`proxy.certName "${proxy.certName}" is not a certificate name`)
     if (proxy.kind === 'caddy' && proxy.onDemandTls && !ASK_PATH.test(proxy.onDemandTls.ask)) problems.push(`proxy.onDemandTls.ask "${proxy.onDemandTls.ask}" must be a URL path such as /tls/allowed`)
-    if (proxy.kind === 'caddy' && proxy.extra !== undefined && typeof proxy.extra !== 'string') problems.push('proxy.extra must be a string')
+    const extra = proxy.kind === 'caddy' && proxy.extra !== undefined ? caddyExtraProblem(proxy.extra) : undefined
+    if (extra) problems.push(`proxy.extra ${extra}`)
   }
   for (const file of [config.env.file ?? '.env', ...(config.env.mirror ?? [])]) {
     const problem = typeof file === 'string' ? envLocationProblem(config.app, file) : 'must be a string'

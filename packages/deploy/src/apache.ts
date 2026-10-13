@@ -32,7 +32,8 @@ export function renderVhost(ctx: DeployContext, port: number): string {
   const cert = `/etc/letsencrypt/live/${proxy.certName ?? domain}`
   return `# Written by basalt-deploy install for "${app}". Deploys compare this file with
 # what install would write and print the difference; they never rewrite it.
-# To change it: edit deploy.config.ts, then sudo basalt-deploy install.
+# To change it: edit deploy.config.ts, run ${INSTALL_COMMAND}
+# as the app user, then the root command it prints.
 
 <VirtualHost *:80>
   ServerName ${domain}
@@ -45,9 +46,17 @@ ${alias}  RewriteEngine On
   ServerName ${domain}
 ${alias}
   DocumentRoot ${webRoot}
+  # The checkout is the app user's: a link it plants is followed only to a
+  # file it owns too (never to /, nor to another site's files), and no
+  # .htaccess turns that back on.
+  <Directory ${ctx.dir}>
+    Options -Indexes -FollowSymLinks +SymLinksIfOwnerMatch
+    AllowOverride None
+  </Directory>
   <Directory ${webRoot}>
     Require all granted
-    Options -Indexes
+    Options -Indexes -FollowSymLinks +SymLinksIfOwnerMatch
+    AllowOverride None
     FallbackResource /index.html
   </Directory>
 
