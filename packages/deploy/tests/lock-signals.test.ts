@@ -171,6 +171,32 @@ describe('signals', () => {
     expect(host.signalListeners).toEqual([])
   })
 
+  it('a signal during a migration that succeeds does not put the old code back on the migrated schema', async () => {
+    const { host, head } = server({ migrations: ['20261011_add_col'] })
+    host.handlers.unshift(({ command, args }) => {
+      if (command === 'pnpm' && args.join(' ') === 'exec prisma migrate deploy' && !host.transcript.includes('SIGINT')) host.signal('SIGINT')
+      return undefined
+    })
+    const ctx = context(host, config())
+    expect(await run(ctx)).toBe(0)
+    expect(head()).toBe(NEW)
+    expect(host.transcript).toContain('SIGINT: run cannot stop safely at this point — it finishes, then exits')
+    expect((await readReleases(ctx)).map((r) => [r.sha, r.status, r.migrations])).toEqual([[NEW, 'ok', ['20261011_add_col']]])
+  })
+
+  it('a signal just before the migration still stops the deploy, the schema untouched', async () => {
+    const { host, head } = server({ migrations: ['20261011_add_col'] })
+    host.handlers.unshift(({ command }) => {
+      // The validate step, the last before backup and migrate.
+      if (command === process.execPath && !host.transcript.includes('SIGINT')) host.signal('SIGINT')
+      return undefined
+    })
+    const ctx = context(host, config())
+    await expect(run(ctx)).rejects.toThrow(DeployAbortedError)
+    expect(head()).toBe(OLD)
+    expect(host.commands('pnpm')).not.toContain('pnpm exec prisma migrate deploy')
+  })
+
   it('a child killed by the same SIGINT is reported as the signal, not as a build failure', async () => {
     const { host, head } = server({ buildFails: true })
     host.handlers.unshift(({ command, args }) => {

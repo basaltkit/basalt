@@ -1,6 +1,10 @@
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { isBranchName, validateConfig } from '../src/config.js'
-import { gitTarget, preflight } from '../src/pipeline.js'
+import { fetchArgs, gitTarget, preflight } from '../src/pipeline.js'
 import { acmeConfig, context, FakeHost, ok } from './fake-host.js'
 
 describe('branch and remote names (git option injection)', () => {
@@ -35,5 +39,40 @@ describe('branch and remote names (git option injection)', () => {
     expect(gitTarget(ctx)).toEqual({ remote: 'upstream', branch: 'release/1.2', head: 'refs/heads/release/1.2', tracking: 'refs/remotes/upstream/release/1.2' })
     await preflight(ctx).catch(() => undefined)
     expect(host.commands('git')).toContain('git ls-remote --exit-code -- upstream refs/heads/release/1.2')
+  })
+})
+
+describe('the fetch, on a real git', () => {
+  it('reaches a branch rewritten upstream after a rollback; the ff-only merge still guards the checkout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'basalt-deploy-fetch-'))
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+    try {
+      const remote = join(root, 'remote.git')
+      const work = join(root, 'work')
+      const server = join(root, 'server')
+      git(root, 'init', '--bare', '--quiet', remote)
+      git(root, 'clone', '--quiet', remote, work)
+      const commit = async (message: string) => { await writeFile(join(work, 'f'), message); git(work, 'add', 'f'); git(work, 'commit', '--quiet', '-m', message) }
+      await commit('OLD')
+      git(work, 'push', '--quiet', 'origin', 'HEAD:main')
+      git(root, 'clone', '--quiet', remote, server)
+      await commit('BAD')
+      git(work, 'push', '--quiet', 'origin', 'HEAD:main')
+      const target = { remote: 'origin', head: 'refs/heads/main', tracking: 'refs/remotes/origin/main' }
+      git(server, ...fetchArgs(target))
+      git(server, 'merge', '--ff-only', '--quiet', target.tracking)
+      // A rollback on the server; upstream drops BAD and commits the fix.
+      git(server, 'reset', '--hard', '--quiet', 'HEAD~1')
+      git(work, 'reset', '--hard', '--quiet', 'HEAD~1')
+      await commit('FIX')
+      git(work, 'push', '--quiet', '--force', 'origin', 'HEAD:main')
+      // The unforced refspec is refused (non-fast-forward) — what every run hit.
+      expect(spawnSync('git', ['fetch', '--quiet', '--', 'origin', `${target.head}:${target.tracking}`], { cwd: server }).status).not.toBe(0)
+      git(server, ...fetchArgs(target))
+      git(server, 'merge', '--ff-only', '--quiet', target.tracking)
+      expect(git(server, 'log', '-1', '--format=%s')).toBe('FIX')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
