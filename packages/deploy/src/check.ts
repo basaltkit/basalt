@@ -1,6 +1,7 @@
 import { isAbsolute, join, resolve } from 'node:path'
 import type { DeployConfig } from './config.js'
 import type { Host } from './host.js'
+import type { CheckResult } from './protocol.js'
 
 /**
  * `basalt-deploy check` — the config is valid and types against the app's own
@@ -12,17 +13,25 @@ import type { Host } from './host.js'
  * `src/` only still gets its deploy config checked.
  */
 export async function check(host: Host, dir: string, file: string, config: DeployConfig): Promise<number> {
-  host.out.step('check')
+  const started = host.now().getTime()
+  const types = await checkTypes(host, dir, file, config)
+  host.out.stepEnd?.('check', types === 'failed' ? 'failed' : 'ok', host.now().getTime() - started)
+  host.out.result?.('check', { file, app: config.app, runtime: config.runtime.kind, ...(config.proxy ? { proxy: config.proxy.kind } : {}), types })
+  return types === 'failed' ? 1 : 0
+}
+
+async function checkTypes(host: Host, dir: string, file: string, config: DeployConfig): Promise<CheckResult['types']> {
+  host.out.step('check', 'check')
   host.out.ok(`${file}: valid for ${config.app} (${config.runtime.kind}${config.proxy ? `, ${config.proxy.kind}` : ''})`)
   const path = isAbsolute(file) ? file : resolve(dir, file)
   if (!/\.[cm]?ts$/.test(path)) {
     host.out.info('not TypeScript: no types to check')
-    return 0
+    return 'not-typescript'
   }
   const tsc = join(dir, 'node_modules', '.bin', 'tsc')
   if (!(await host.stat(tsc))) {
     host.out.warn(`types not checked: no ${tsc} (add typescript to the app's devDependencies)`)
-    return 0
+    return 'no-tsc'
   }
   const base = join(dir, 'tsconfig.json')
   const project = {
@@ -44,11 +53,11 @@ export async function check(host: Host, dir: string, file: string, config: Deplo
     const result = await host.exec(tsc, ['-p', tsconfig, '--pretty', 'false'], { cwd: dir })
     if (result.code === 0) {
       host.out.ok(`${file}: types check`)
-      return 0
+      return 'ok'
     }
     const errors = `${result.stdout}${result.stderr}`.trim().split('\n').filter(Boolean)
     for (const line of errors) host.out.error(line.startsWith(dir) ? line.slice(dir.length + 1) : line)
-    return 1
+    return 'failed'
   } finally {
     await host.remove(tsconfig)
   }

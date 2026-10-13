@@ -1,6 +1,6 @@
 import type { DeployConfig } from '../src/config.js'
 import type { DeployContext } from '../src/context.js'
-import type { ExecOptions, ExecResult, Host, TlsCertificate } from '../src/host.js'
+import type { ExecOptions, ExecResult, FileRange, Host, LogHandle, TlsCertificate } from '../src/host.js'
 
 interface Owner { uid?: number; gid?: number }
 type Node = ({ kind: 'file'; content: string; mode: number } | { kind: 'symlink'; target: string } | { kind: 'dir'; mode?: number }) & Owner
@@ -95,6 +95,12 @@ export class FakeHost implements Host {
       const result = await handler(call)
       if (result) {
         if (options.stdoutFile) this.put(options.stdoutFile, result.stdout, 0o600)
+        // A streamed child's output reaches the sink (JSON mode), as a pipe would hand it over.
+        if (options.stream && options.onOutput) {
+          if (result.stdout) options.onOutput(result.stdout, 'stdout')
+          if (result.stderr) options.onOutput(result.stderr, 'stderr')
+          return { code: result.code, stdout: '', stderr: '' }
+        }
         return result
       }
     }
@@ -204,6 +210,36 @@ export class FakeHost implements Host {
   /** Delivers a signal as the terminal would (the first one reaches the listeners). */
   signal(name = 'SIGINT') { for (const listener of [...this.signalListeners]) listener(name) }
   interactive() { return this.tty }
+
+  // ── the machine protocol's optional members (RFC 0008) ──
+  async createLog(path: string, mode: number): Promise<LogHandle> {
+    if (this.files.has(path)) throw new Error(`EEXIST ${path}`)
+    if (!this.files.has(path.slice(0, path.lastIndexOf('/')))) throw new Error(`ENOENT ${path}`)
+    this.put(path, '', mode)
+    const node = this.files.get(path) as { kind: 'file'; content: string }
+    return { append: (text) => { node.content += text }, close: () => { this.closedLogs.push(path) } }
+  }
+  closedLogs: string[] = []
+  async readFileRange(path: string, offset: number, length: number): Promise<FileRange> {
+    const node = this.files.get(path)
+    if (!node) throw new Error(`ENOENT ${path}`)
+    if (node.kind === 'symlink') throw new Error(`${path} is a symbolic link — refused, never followed`)
+    if (node.kind !== 'file') throw new Error(`${path} is not a regular file`)
+    const bytes = Buffer.from(node.content, 'utf8')
+    return { data: bytes.subarray(offset, offset + length), size: bytes.length, uid: node.uid ?? this.defaultUid, mode: node.mode }
+  }
+  detached: Array<{ command: string; args: string[]; cwd: string; env: Record<string, string | undefined>; stdin: string; stdout: LogHandle }> = []
+  /** What a detached child does with its run log (write events), by default nothing. */
+  onDetached: (call: FakeHost['detached'][number]) => number | void = () => undefined
+  async spawnDetached(command: string, args: string[], options: { cwd: string; env: Record<string, string | undefined>; stdin: string; stdout: LogHandle }) {
+    const call = { command, args, ...options }
+    this.detached.push(call)
+    return { pid: this.onDetached(call) ?? 5100 }
+  }
+  killed: Array<{ pid: number; signal: string }> = []
+  kill(pid: number, signal: 'SIGTERM') { this.killed.push({ pid, signal }) }
+  cmdlines = new Map<number, string[]>()
+  async processCmdline(pid: number) { return this.cmdlines.get(pid) }
 }
 
 export const DIR = '/srv/acme'
@@ -235,8 +271,8 @@ export function acmeConfig(overrides: Partial<DeployConfig> = {}): DeployConfig 
   }
 }
 
-export function context(host: FakeHost, config: DeployConfig = acmeConfig()): DeployContext {
-  return { config, dir: DIR, host, pm: 'pnpm', envPath: `${DIR}/.env`, stateDir: `${DIR}/.basalt` }
+export function context(host: FakeHost, config: DeployConfig = acmeConfig(), dir = DIR): DeployContext {
+  return { config, dir, host, pm: 'pnpm', envPath: `${dir}/.env`, stateDir: `${dir}/.basalt` }
 }
 
 /** `ss -ltnpH` output for listeners `[port, pid?]`. */
