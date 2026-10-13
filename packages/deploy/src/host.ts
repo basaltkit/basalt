@@ -304,12 +304,11 @@ export function nodeHost(output: Output = consoleOutput()): Host {
       // The question and the echo go to stderr: anything a prompt writes to
       // stdout can end up inside a captured value (RFC 0006 §A, incident 5).
       const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: true })
-      if (secret) {
-        const writer = rl as unknown as { _writeToOutput: (s: string) => void }
-        let asked = false
-        writer._writeToOutput = (s: string) => {
-          if (!asked) { process.stderr.write(s); asked = true }
-        }
+      if (secret && !muteEcho(rl, (s) => process.stderr.write(s))) {
+        // Fail closed: never ask for a secret that would be echoed.
+        rl.close()
+        output.warn('this Node cannot hide what is typed: give the secret in the environment of the command instead')
+        return undefined
       }
       const answer = await new Promise<string>((resolve) => rl.question(`    ${question}: `, resolve))
       rl.close()
@@ -324,36 +323,7 @@ export function nodeHost(output: Output = consoleOutput()): Host {
       return /^y(es)?$/i.test(answer.trim())
     },
 
-    tlsCertificate(servername) {
-      return new Promise((resolve) => {
-        // The chain is verified as for any client: an untrusted or expired
-        // certificate fails the handshake and is reported by its code. Only
-        // the NAME check is ours — it records the certificate instead of
-        // refusing it, because which names it covers is what we report (C8).
-        // Nothing is sent over the connection either way.
-        let names: string[] = []
-        const socket = tls.connect({
-          host: servername, port: 443, servername, timeout: 10_000,
-          checkServerIdentity: (_host, cert) => {
-            names = (cert.subjectaltname ?? '')
-              .split(',')
-              .map((entry) => entry.trim())
-              .filter((entry) => entry.startsWith('DNS:'))
-              .map((entry) => entry.slice(4).toLowerCase())
-            return undefined
-          },
-        })
-        const finish = (value: TlsCertificate | { error: string }) => { socket.destroy(); resolve(value) }
-        socket.once('secureConnect', () => {
-          finish({ names, validTo: new Date(socket.getPeerCertificate().valid_to), trusted: true })
-        })
-        socket.once('timeout', () => finish({ error: 'timed out' }))
-        socket.once('error', (error: NodeJS.ErrnoException) => {
-          const code = error.code ?? ''
-          finish({ error: /CERT|SELF_SIGNED|UNABLE_TO|VERIFY/.test(code) ? `certificate not trusted by browsers (${code})` : error.message })
-        })
-      })
-    },
+    tlsCertificate: (servername) => probeTls(servername, { host: servername, port: 443 }),
 
     httpGet(url, options = {}) {
       return new Promise((resolve) => {
@@ -373,6 +343,54 @@ export function nodeHost(output: Output = consoleOutput()): Host {
       })
     },
   }
+}
+
+/**
+ * Readline echoes what is typed through its internal `_writeToOutput`; a
+ * secret answer replaces it so only the question is written. Returns false
+ * when that internal is gone (a Node that changed it): the caller must not
+ * ask then — fail closed, never echo a secret.
+ */
+export function muteEcho(rl: unknown, write: (text: string) => void): boolean {
+  const writer = rl as { _writeToOutput?: unknown }
+  if (typeof writer._writeToOutput !== 'function') return false
+  let asked = false
+  writer._writeToOutput = (text: string) => {
+    if (!asked) { write(text); asked = true }
+  }
+  return true
+}
+
+/**
+ * The certificate `host:port` presents for `servername`. The chain is
+ * verified as any client would (the system's roots), but an untrusted or
+ * expired one is REPORTED, with its names and expiry, instead of failing the
+ * handshake — what C8 says to the operator. Only network failures are
+ * errors. Nothing is sent over the connection.
+ */
+export function probeTls(servername: string, target: { host: string; port: number; timeoutMs?: number }): Promise<TlsCertificate | { error: string }> {
+  return new Promise((resolve) => {
+    const socket = tls.connect({
+      host: target.host, port: target.port, servername, timeout: target.timeoutMs ?? 10_000,
+      // Reported, not refused: `authorized` says whether the chain verifies.
+      rejectUnauthorized: false,
+      // The name check is ours (covers()): a name mismatch is not a trust error.
+      checkServerIdentity: () => undefined,
+    })
+    const finish = (value: TlsCertificate | { error: string }) => { socket.destroy(); resolve(value) }
+    socket.once('secureConnect', () => {
+      const cert = socket.getPeerCertificate()
+      const names = (cert.subjectaltname ?? '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.startsWith('DNS:'))
+        .map((entry) => entry.slice(4).toLowerCase())
+      const trustError = socket.authorized ? undefined : String(socket.authorizationError ?? 'unknown')
+      finish({ names, validTo: new Date(cert.valid_to), trusted: socket.authorized, ...(trustError ? { trustError } : {}) })
+    })
+    socket.once('timeout', () => finish({ error: 'timed out' }))
+    socket.once('error', (error: NodeJS.ErrnoException) => finish({ error: error.message }))
+  })
 }
 
 /** open(2) with O_NOFOLLOW: a symlink at `path` is an error that says so. */

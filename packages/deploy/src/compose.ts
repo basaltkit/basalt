@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import type { ComposeRuntime } from './config.js'
+import { ONCE_GLOB, type ComposeRuntime } from './config.js'
 import { DeployError, type DeployContext, type Finding } from './context.js'
 import { listeners } from './ports.js'
 
@@ -186,7 +186,10 @@ export async function runJobs(ctx: DeployContext, sha: string): Promise<string[]
   const lines: string[] = []
   for (const job of composeOf(ctx).jobs ?? []) {
     if (job.once) {
-      const seen = await ctx.host.exec('docker', composeArgs(ctx, 'run', '--rm', '--no-deps', '--entrypoint', 'sh', job.service, '-c', `ls ${job.once.exists}`), { cwd: ctx.dir, env: composeEnv(ctx, sha) })
+      // The glob is $1, never part of the script: the shell expands it as a
+      // path pattern, it can never run as a command.
+      if (!ONCE_GLOB.test(job.once.exists)) throw new DeployError(`job ${job.service}: once.exists "${job.once.exists}" is not an absolute path pattern`)
+      const seen = await ctx.host.exec('docker', composeArgs(ctx, 'run', '--rm', '--no-deps', '--entrypoint', 'sh', job.service, '-c', 'ls -d -- $1', 'sh', job.once.exists), { cwd: ctx.dir, env: composeEnv(ctx, sha) })
       if (seen.code === 0) { lines.push(`job ${job.service}: already done (${job.once.exists})`); continue }
     }
     ctx.host.out.info(`docker compose run --rm ${job.service}${job.command ? ` ${job.command.join(' ')}` : ''}`)
