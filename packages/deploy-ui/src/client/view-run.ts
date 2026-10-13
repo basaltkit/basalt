@@ -208,6 +208,8 @@ export class RunView {
   }
 
   private finish(): void {
+    // Status is refreshed once after any action (no polling loop).
+    void this.app.refreshStatus()
     if (this.failed && this.exitCode === undefined) {
       const reconnectable = this.runId !== undefined
       this.setState(`Stopped: ${clean(this.failed.reason ?? this.failed.code)}`)

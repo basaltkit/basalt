@@ -280,9 +280,11 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     let open = true
     // The page went away: an attended command stops (its ssh session ends), a follow stops watching.
     res.on('close', () => { if (open) controller.abort() })
+    // A write to a page that is gone is dropped, never a crash.
+    res.on('error', () => controller.abort())
     return {
       controller,
-      send: (message) => { if (open && !res.writableEnded) res.write(`${JSON.stringify(message)}\n`) },
+      send: (message) => { if (open && !res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(message)}\n`) },
       end: () => {
         if (!open) return
         open = false
