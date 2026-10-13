@@ -11,7 +11,7 @@ import { envValues } from './dotenv.js'
 import { applyInfra, describeInfra, dockerPostgres, maintainServices, planInfra, type InfraPlan } from './infra.js'
 import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, externalPostgres, grantTenantSchemas } from './services.js'
 import { pm2List, pm2Preflight, pm2Release, resolvePort } from './pm2.js'
-import { clearHold, lastGood, migrationNames, readHold, readReleases, recordRelease, writeHold, type Release } from './state.js'
+import { clearHold, deployedOver, lastGood, migrationNames, readHold, readReleases, recordRelease, writeHold, type Release } from './state.js'
 import { acquireLock, describeHolder, readLock } from './lock.js'
 import { auditOf } from './audit.js'
 
@@ -72,6 +72,14 @@ export function gitTarget(ctx: DeployContext): { remote: string; branch: string;
   if (!isBranchName(branch)) throw new DeployError(`branch "${branch}" is not a plain git branch name`)
   return { remote, branch, head: `refs/heads/${branch}`, tracking: `refs/remotes/${remote}/${branch}` }
 }
+
+/**
+ * The fetch: both refs in full, after `--`, and forced (`+`) — like the
+ * remote's default refspec. A branch rewritten upstream (the usual fix after
+ * a rollback) must still reach the tracking ref; the `merge --ff-only` that
+ * follows is what refuses history rewritten under the checkout.
+ */
+export const fetchArgs = (target: { remote: string; head: string; tracking: string }) => ['fetch', '--quiet', '--', target.remote, `+${target.head}:${target.tracking}`]
 
 async function step<T>(ctx: DeployContext, title: string, run: () => Promise<T>): Promise<T> {
   throwIfAborted(ctx)
@@ -495,7 +503,7 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
   const { host, config, pm } = ctx
   host.out.step('plan — nothing below has run')
   const lines = [
-    options.skip?.includes('fetch') ? 'fetch: skipped' : ((t) => `fetch: git fetch -- ${t.remote} ${t.head}:${t.tracking} && git merge --ff-only ${t.tracking}`)(gitTarget(ctx)),
+    options.skip?.includes('fetch') ? 'fetch: skipped' : ((t) => `fetch: git ${fetchArgs(t).filter((a) => a !== '--quiet').join(' ')} && git merge --ff-only ${t.tracking}`)(gitTarget(ctx)),
     ...describeEnv(env).map((l) => `env: ${l}`),
     ...describeInfra(infra).map((l) => `infra: ${l}`),
     ...describeServices(config).map((l) => `infra: ${l}`),
@@ -555,7 +563,7 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
   if (!skip.has('fetch')) {
     const target = gitTarget(ctx)
     await step(ctx, 'fetch', async () => {
-      await git(ctx, ['fetch', '--quiet', '--', target.remote, `${target.head}:${target.tracking}`], { noPrompt: !host.interactive() })
+      await git(ctx, fetchArgs(target), { noPrompt: !host.interactive() })
       await refuseHeld(ctx, await git(ctx, ['rev-parse', '--verify', '--end-of-options', `${target.tracking}^{commit}`]), options)
       await git(ctx, ['merge', '--ff-only', target.tracking])
     })
@@ -595,11 +603,14 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
       host.out.step('backup')
       host.out.info(`skipped: ${backup.why}`)
     }
+    // The last point where a signal stops the deploy. Once a migration has
+    // started, the old code may not run on the schema it leaves: the deploy
+    // finishes (release, health, rollback rules) instead of putting it back.
+    throwIfAborted(ctx)
+    if (ctx.abort) ctx.abort.deferred = true
     migrating = true
     await step(ctx, 'migrate', async () => { await migrate(ctx, values); await tenantGrants(ctx, infra, values); await settleLockfile(ctx, lockfileSaid) })
     migrating = false
-    // The last point where a signal stops the deploy: from the release on, it finishes.
-    throwIfAborted(ctx)
   } catch (error) {
     if (sha !== previous) await restoreCode(ctx, previous, values).catch((e: unknown) => host.out.error(`could not restore the code: ${(e as Error).message}`))
     record.note = (error as Error).message
@@ -616,7 +627,6 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
     if (signal && !(error instanceof DeployAbortedError)) throw new DeployAbortedError(signal, (error as Error).message)
     throw error
   }
-  if (ctx.abort) ctx.abort.deferred = true
 
   const destructive = applied.filter((name) => config.destructive?.includes(name))
   const recover = async (why: string): Promise<number> => {
@@ -728,7 +738,7 @@ async function rollbackLocked(ctx: DeployContext, to: string | undefined, option
   }
   // The last healthy release before this one; on the first recorded deploy,
   // the commit it was deployed over.
-  const target = wanted ?? lastGood(releases, current)?.sha ?? [...releases].reverse().find((r) => r.sha === current)?.previous
+  const target = wanted ?? lastGood(releases, current)?.sha ?? deployedOver(releases, current)
   if (!target || target === current) throw new DeployError('no earlier release to go back to; pass --to=<sha>')
   const document = await readEnv(ctx)
   const values = envValues(document)

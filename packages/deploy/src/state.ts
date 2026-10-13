@@ -77,6 +77,19 @@ export function lastGood(releases: Release[], except: string): Release | undefin
 }
 
 /**
+ * With no healthy release on record: the commit `current` was deployed over
+ * — from a release of `current` itself, never from a rollback's record (its
+ * `previous` is the commit rolled away from), and never a commit recorded
+ * unhealthy. `undefined` when there is none: the caller asks for `--to`.
+ */
+export function deployedOver(releases: Release[], current: string): string | undefined {
+  const own = [...releases].reverse().find((r) => r.sha === current && !UNHEALTHY.has(r.status))
+  const target = own?.previous
+  if (!target || releases.some((r) => r.sha === target && UNHEALTHY.has(r.status))) return undefined
+  return target
+}
+
+/**
  * Written by a manual rollback: the commit it left. A scheduled `run` would
  * otherwise fetch and redeploy it at once; it refuses that commit until the
  * branch moves on, or `--unhold`.

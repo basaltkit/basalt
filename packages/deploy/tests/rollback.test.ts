@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { rollback, run, status } from '../src/pipeline.js'
-import { lastGood, readHold, readReleases, type Release } from '../src/state.js'
+import { deployedOver, lastGood, readHold, readReleases, type Release } from '../src/state.js'
 import { acmeConfig, context, jlist, ok } from './fake-host.js'
 import { NEW, OLD, server } from './acme-server.js'
 
@@ -42,6 +42,26 @@ describe('rollback', () => {
     const ctx = context(host, config())
     expect(await run(ctx)).toBe(1)
     expect((await readReleases(ctx)).map((r) => [r.sha, r.status])).toEqual([[NEW, 'rolled-back'], [OLD, 'rollback-unhealthy']])
+  })
+
+  it('after an automatic rollback that did not answer, a bare rollback never goes back to the commit just rolled away from', async () => {
+    let healthy = (_sha: string) => false
+    const { host, head } = server({ healthyAt: (sha) => healthy(sha) })
+    const ctx = context(host, config())
+    expect(await run(ctx)).toBe(1)
+    expect(head()).toBe(OLD)
+    healthy = () => true
+    await expect(rollback(ctx)).rejects.toThrow('no earlier release to go back to; pass --to=<sha>')
+    expect(head()).toBe(OLD)
+    expect((await readReleases(ctx)).map((r) => [r.sha, r.status])).toEqual([[NEW, 'rolled-back'], [OLD, 'rollback-unhealthy']])
+  })
+
+  it('deployedOver: the commit a release of HEAD was deployed over, never a rollback record\'s, never an unhealthy one', () => {
+    const r = (sha: string, previous: string, status: Release['status']): Release => ({ ...rel(sha, status), previous })
+    expect(deployedOver([r('b', 'a', 'failed')], 'b')).toBe('a')
+    expect(deployedOver([r('b', 'a', 'rolled-back'), r('a', 'b', 'rollback-unhealthy')], 'a')).toBeUndefined()
+    expect(deployedOver([r('c', 'b', 'ok'), r('b', 'x', 'rolled-back')], 'c')).toBeUndefined()
+    expect(deployedOver([], 'a')).toBeUndefined()
   })
 
   it('refuses a checkout with local edits, before resetting anything', async () => {
