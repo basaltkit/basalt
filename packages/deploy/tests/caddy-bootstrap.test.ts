@@ -78,7 +78,7 @@ describe('basalt-deploy bootstrap', () => {
       .on(({ command }) => (command === 'stat' ? ok('root\n') : undefined))
       .on(({ command, args }) => (command === 'id' ? ok(args[0] === '-u' ? '1000\n' : 'ubuntu adm\n') : undefined))
   }
-  const options = { user: 'ubuntu', proxy: 'caddy' as const, swapGb: 4, firewall: true, dryRun: true }
+  const options = { user: 'ubuntu', proxy: 'caddy' as const, dryRun: true }
 
   it('plans only what is missing, in order, and hands over to the user', async () => {
     const { actions, notes } = await planBootstrap(fresh(), DIR, options)
@@ -87,17 +87,26 @@ describe('basalt-deploy bootstrap', () => {
       'Docker + compose (download.docker.com)',
       'Node 24 (NodeSource; engines.node >=22.5.0)',
       'pnpm 12.3.4',
+      `${DIR} owned by ubuntu`,
+      'ubuntu in the docker group',
+      'as ubuntu: dependencies',
+      'as ubuntu: the .env (asks what it cannot generate)',
+      'as ubuntu: the install plan (data only)',
       'swap 4 GB (3.8 GB RAM, none yet)',
       'ufw on: SSH (22), 80, 443 only',
       'Caddy (cloudsmith)',
-      `${DIR} owned by ubuntu`,
-      'ubuntu in the docker group',
-      'as ubuntu: dependencies, then the .env (asks what it cannot generate)',
-      'install (root): state directory, the proxy site, env ownership',
+      'install (root, from the plan): state directory, the proxy site, env ownership',
     ])
     expect(notes[0]).toContain('that is root on this machine')
-    const handover = actions.at(-2)?.commands.map((c) => c.join(' '))
-    expect(handover?.[0]).toBe(`sudo -u ubuntu -H -- env -u NODE_ENV sh -c cd '${DIR}' && pnpm install --frozen-lockfile`)
+    // The user's steps: argv in the checkout — no shell, no quoting of the path.
+    const steps = actions.filter((a) => a.what.startsWith('as ubuntu'))
+    expect(steps.map((a) => [a.cwd, a.commands.map((c) => c.join(' '))])).toEqual([
+      [DIR, ['sudo -u ubuntu -H -- env -u NODE_ENV pnpm install --frozen-lockfile']],
+      [DIR, ['sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js env']],
+      [DIR, ['sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js install-plan --out=-']],
+    ])
+    expect(steps[1]?.interactive).toBe(true)
+    expect(actions.flatMap((a) => a.commands).some((c) => c[0] === 'sh' && c.join(' ').includes(DIR))).toBe(false)
   })
 
   it('ufw is never turned on over services it would cut off; when already on, rules are added', async () => {
@@ -115,6 +124,7 @@ describe('basalt-deploy bootstrap', () => {
     expect(host.transcript).toContain('+ npm install -g pnpm@12.3.4')
     await expect(bootstrap(fresh(), DIR, { ...options, dryRun: false })).rejects.toThrow(/run it with sudo/)
     await expect(bootstrap(fresh(), DIR, { ...options, user: 'root' })).rejects.toThrow(/never root/)
+    await expect(bootstrap(fresh(), DIR, { ...options, user: "x' ; touch /tmp/p ; '" })).rejects.toThrow(/not a login name/)
   })
 
   it('runs every command as planned and stops at the first that fails', async () => {

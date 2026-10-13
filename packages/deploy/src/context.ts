@@ -53,12 +53,22 @@ const BIN = 'node_modules/@basaltkit/deploy/dist/bin.js'
 export const RUN_COMMAND = `node ${BIN} run`
 
 /**
- * How an administrator runs `install`. The node binary is resolved by the
- * operator's shell BEFORE sudo: with a per-user Node (nvm, fnm, volta) root
- * has no `node` on its PATH — `sudo node` failed with "command not found" on
- * the first server. Not `pnpm exec` either: root often has no pnpm.
+ * The first half of `install`, run by the app user: it writes the install
+ * plan (data only) and prints the root command for the second half, pinned
+ * to this exact version. Root never runs the checkout's node_modules nor
+ * loads deploy.config.ts (RFC 0006 §11.4).
  */
-export const INSTALL_COMMAND = `sudo "$(command -v node)" ${BIN} install --user="$USER"`
+export const INSTALL_COMMAND = `node ${BIN} install-plan`
+
+/**
+ * The second half, as root, with a copy of the tool root owns: npx from
+ * outside the checkout (inside it, npx would pick the checkout's own copy,
+ * which install refuses) and with root's HOME (`-H`), so the download lands
+ * in root's cache, not the user's.
+ */
+export function rootInstallCommand(version: string, plan: string, user: string): string {
+  return `cd / && sudo -H npx --yes --package=@basaltkit/deploy@${version} -- basalt-deploy install --plan=${plan} --user=${user}`
+}
 
 export const errors = (findings: Finding[]) => findings.filter((f) => f.level === 'error')
 

@@ -44,7 +44,7 @@ describe('main', () => {
       const host = new FakeHost()
       expect(await main(['deploy-everything', '--config=deploy.config.mjs'], host, dir)).toBe(1)
       expect(host.transcript).toContain('unknown command "deploy-everything"')
-      expect(String(write.mock.calls[0]?.[0])).toContain('basalt-deploy plan')
+      expect(String(write.mock.calls[0]?.[0])).toContain('plan               what a run would do')
     } finally {
       write.mockRestore()
     }
