@@ -32,8 +32,15 @@ const KEEP = 100
 
 export const releasesFile = (ctx: DeployContext) => join(ctx.stateDir, 'releases.json')
 
+/**
+ * The history, from `<stateDir>/releases.json` — or, the first time after
+ * `install` created `/var/lib/basalt/<app>`, from the checkout's
+ * `.basalt/releases.json` it was kept in before (moved by the next record,
+ * as the app user: root never copies a file the app user can point anywhere).
+ */
 export async function readReleases(ctx: DeployContext): Promise<Release[]> {
-  const text = await ctx.host.readFile(releasesFile(ctx))
+  const legacy = join(ctx.dir, '.basalt', 'releases.json')
+  const text = (await ctx.host.readFile(releasesFile(ctx))) ?? (releasesFile(ctx) === legacy ? undefined : await ctx.host.readFile(legacy))
   if (!text) return []
   try {
     const parsed = JSON.parse(text) as unknown

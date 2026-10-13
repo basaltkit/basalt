@@ -8,7 +8,7 @@ import { apachePreflight, proxiedPorts } from '../src/apache.js'
 import { composeBuild, composeEnv, composeHealthy, composePreflight, composeRelease, pruneImages } from '../src/compose.js'
 import { apache, compose, DeployConfigError, validateConfig, type DeployConfig } from '../src/config.js'
 import type { DeployContext } from '../src/context.js'
-import { install, plan, preflight, run } from '../src/pipeline.js'
+import { plan, preflight, run } from '../src/pipeline.js'
 import { readReleases } from '../src/state.js'
 import { FakeHost, fail, ok } from './fake-host.js'
 
@@ -273,29 +273,6 @@ describe('the env file outside the checkout', () => {
     host.put(WORKER_ENV, `${ENV}GLOBEX_EXTRA=1\n`, 0o600)
     const { findings } = await preflight(ctxOf(host), { skip: ['tls'] })
     expect(findings.find((f) => f.id === 'C10')?.message).toBe(`${WORKER_ENV} (env.mirror) differs from ${API_ENV}`)
-  })
-
-  it('install takes over the files and the app\'s own directory, never /etc, and leaves unmanaged Apache alone', async () => {
-    const { host } = server()
-    host.userId = 0
-    host.on(({ command }) => (['chown', 'chmod', 'id'].includes(command) ? ok('ubuntu') : undefined))
-    await install(ctxOf(host), 'ubuntu')
-    expect(host.commands('chown')).toEqual(expect.arrayContaining([
-      `chown ubuntu: ${API_ENV}`, `chown ubuntu: ${WORKER_ENV}`, 'chown ubuntu: /etc/globex',
-    ]))
-    expect(host.commands('chown')).not.toContain('chown ubuntu: /etc')
-    expect(host.commands('apachectl')).toEqual([])
-    expect(host.transcript).toContain('/etc/globex and its env files (api.env, worker.env) now owned by ubuntu')
-  })
-
-  it('a shared directory is not taken over; the operator is told', async () => {
-    const { host } = server()
-    host.userId = 0
-    host.put('/etc/shared.env', ENV, 0o600)
-    host.on(({ command }) => (['chown', 'chmod', 'id'].includes(command) ? ok() : undefined))
-    await install(ctxOf(host, globex({ env: { file: '/etc/shared.env' } })), 'ubuntu')
-    expect(host.commands('chown')).not.toContain('chown ubuntu: /etc')
-    expect(host.transcript).toContain("/etc is not globex's own directory")
   })
 })
 

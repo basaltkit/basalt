@@ -102,7 +102,7 @@ export class FakeHost implements Host {
   }
 
   async readFile(path: string) { return this.file(path) }
-  async writeFile(path: string, content: string, mode = 0o644) { this.put(path, content, mode) }
+  async writeFile(path: string, content: string, mode = 0o644) { this.put(path, content, mode, this.userId === 0 ? { uid: 0, gid: 0 } : {}) }
   async copyFile(from: string, to: string, mode?: number) {
     const content = this.file(from)
     if (content === undefined) throw new Error(`ENOENT ${from}`)
@@ -115,6 +115,38 @@ export class FakeHost implements Host {
     const mode = node.kind === 'file' ? node.mode : node.kind === 'dir' ? (node.mode ?? 0o755) : 0o777
     return { kind: node.kind, size: node.kind === 'file' ? node.content.length : 0, mode, uid: node.uid ?? this.defaultUid, gid: node.gid ?? node.uid ?? this.defaultUid }
   }
+  async realpath(path: string) {
+    let current = path
+    for (let hops = 0; hops < 40; hops++) {
+      const node = this.files.get(current)
+      if (!node) return undefined
+      if (node.kind !== 'symlink') return current
+      current = node.target.startsWith('/') ? node.target : `${current.slice(0, current.lastIndexOf('/'))}/${node.target}`
+    }
+    return undefined
+  }
+  async readPlainFile(path: string, maxBytes: number) {
+    const node = this.files.get(path)
+    if (!node) throw new Error(`ENOENT ${path}`)
+    if (node.kind === 'symlink') throw new Error(`${path} is a symbolic link — refused, never followed`)
+    if (node.kind !== 'file') throw new Error(`${path} is not a regular file`)
+    if (node.content.length > maxBytes) throw new Error(`${path} is larger than ${maxBytes} bytes`)
+    return node.content
+  }
+  owned: Array<{ path: string; uid: number; gid: number; mode: number }> = []
+  /** Paths with more than one hard link (only `secureOwner` looks). */
+  hardLinked = new Set<string>()
+  async secureOwner(path: string, owner: { uid: number; gid: number; mode: number; kind: 'file' | 'dir' }) {
+    const node = this.files.get(path)
+    if (!node) throw new Error(`ENOENT ${path}`)
+    if (node.kind === 'symlink') throw new Error(`${path} is a symbolic link — refused, never followed`)
+    if (node.kind !== owner.kind) throw new Error(`${path} is not a ${owner.kind === 'dir' ? 'directory' : 'regular file'}`)
+    if (this.hardLinked.has(path)) throw new Error(`${path} has 2 hard links`)
+    node.uid = owner.uid
+    node.gid = owner.gid
+    node.mode = owner.mode
+    this.owned.push({ path, uid: owner.uid, gid: owner.gid, mode: owner.mode })
+  }
   async chmod(path: string, mode: number) {
     const node = this.files.get(path)
     if (!node) throw new Error(`ENOENT ${path}`)
@@ -125,7 +157,9 @@ export class FakeHost implements Host {
     return node?.kind === 'symlink' ? node.target : undefined
   }
   async symlink(target: string, path: string) { this.files.set(path, { kind: 'symlink', target }) }
-  async mkdir(path: string) { if (!this.files.has(path)) this.files.set(path, { kind: 'dir' }) }
+  async mkdir(path: string, mode?: number) {
+    if (!this.files.has(path)) this.files.set(path, { kind: 'dir', ...(mode === undefined ? {} : { mode }), ...(this.userId === 0 ? { uid: 0, gid: 0 } : {}) })
+  }
   async remove(path: string) { this.files.delete(path) }
   async list(dir: string) {
     const prefix = `${dir}/`

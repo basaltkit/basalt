@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DeployError } from '../src/context.js'
-import { dockerInfra } from '../src/config.js'
-import { envCommand, install, plan, rollback, run, status } from '../src/pipeline.js'
+import { envCommand, plan, rollback, run, status } from '../src/pipeline.js'
 import { readReleases } from '../src/state.js'
 import { context, DIR, acmeConfig, fail, ok } from './fake-host.js'
 import { ENV, GOOD_ENV, NEW, OLD, server } from './acme-server.js'
@@ -156,55 +155,6 @@ describe('basalt-deploy env', () => {
   it('lists the answers it could not get without a terminal', async () => {
     const { host } = server({ env: '' })
     await expect(envCommand(context(host, config()))).rejects.toThrow(/no answer for PAYCO_SECRET_TOKEN/)
-  })
-})
-
-describe('basalt-deploy install', () => {
-  const installable = () => {
-    const { host } = server()
-    host.files.delete('/etc/apache2/sites-available/acme.conf')
-    host.files.delete('/etc/apache2/sites-enabled/acme.conf')
-    host.userId = 0
-    host
-      .on(({ command }) => (['chown', 'a2enmod', 'apachectl', 'systemctl'].includes(command) ? ok() : undefined))
-      .on(({ command }) => (command === 'id' ? ok('deployer docker sudo\n') : undefined))
-    return host
-  }
-
-  it('refuses without root, without a user, as root, and before the .env has a PORT', async () => {
-    const { host } = server()
-    await expect(install(context(host), 'deployer')).rejects.toThrow(/needs root/)
-    host.userId = 0
-    await expect(install(context(host), undefined)).rejects.toThrow(/--user/)
-    await expect(install(context(host), 'root')).rejects.toThrow(/never root/)
-    host.put(ENV, 'A=1\n')
-    await expect(install(context(host), 'deployer')).rejects.toThrow(/no PORT/)
-  })
-
-  it('creates the state directory for the app user, installs the vhost, and warns about the docker group', async () => {
-    const host = installable()
-    host.put(`${DIR}/.basalt/releases.json`, '[]\n')
-    const ctx = context(host, acmeConfig({ infra: dockerInfra('acme') }))
-    expect(await install(ctx, 'deployer')).toBe(0)
-    expect(host.commands('chown')).toEqual(['chown -R deployer: /var/lib/basalt/acme'])
-    expect(host.file('/var/lib/basalt/acme/releases.json')).toBe('[]\n')
-    expect(host.file('/etc/basalt/acme.json')).toBe('{}\n')
-    expect(await host.readlink('/etc/apache2/sites-enabled/acme.conf')).toBe('../sites-available/acme.conf')
-    expect(host.transcript).toMatch(/deployer is in the docker group: that is root/)
-    expect(host.commands('usermod')).toEqual([])
-  })
-
-  it('points at rootless Docker when the user is not in the docker group', async () => {
-    const host = installable()
-    host.handlers.unshift(({ command }) => (command === 'id' ? ok('deployer\n') : undefined))
-    expect(await install(context(host, acmeConfig({ infra: dockerInfra('acme') })), 'deployer')).toBe(0)
-    expect(host.transcript).toContain("rootless Docker")
-  })
-
-  it('reports a chown that fails', async () => {
-    const host = installable()
-    host.handlers.unshift(({ command }) => (command === 'chown' ? fail('invalid user') : undefined))
-    await expect(install(context(host), 'nobody-here')).rejects.toThrow(/chown nobody-here/)
   })
 })
 

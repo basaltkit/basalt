@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { constants, openSync, closeSync } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, readFile, readdir, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import https from 'node:https'
 import { hostname } from 'node:os'
@@ -25,6 +25,21 @@ export interface Host {
   /** lstat: a symlink is reported as one, never followed. */
   stat(path: string): Promise<FileStat | undefined>
   chmod(path: string, mode: number): Promise<void>
+  /** The path with every symlink resolved, or `undefined` when it does not exist. */
+  realpath(path: string): Promise<string | undefined>
+  /**
+   * Reads a regular file without following a symlink at `path` (O_NOFOLLOW),
+   * up to `maxBytes`. Throws for a link, a non-regular file or a larger one —
+   * how root reads a file the app user wrote.
+   */
+  readPlainFile(path: string, maxBytes: number): Promise<string>
+  /**
+   * Gives `path` to `uid:gid` with `mode`, through a descriptor opened with
+   * O_NOFOLLOW: a symlink planted at `path` is refused, never followed; a file
+   * with more than one hard link too. How root changes a file in a directory
+   * the app user can write.
+   */
+  secureOwner(path: string, owner: { uid: number; gid: number; mode: number; kind: 'file' | 'dir' }): Promise<void>
   readlink(path: string): Promise<string | undefined>
   symlink(target: string, path: string): Promise<void>
   mkdir(path: string, mode?: number): Promise<void>
@@ -86,6 +101,8 @@ export interface ExecOptions {
   stream?: boolean
   /** Written to the child's stdin, then closed — SQL that carries a password, never an argument. */
   stdin?: string
+  /** The child gets this terminal (stdin too): it may ask questions. Nothing is captured. */
+  interactive?: boolean
 }
 
 export interface ExecResult {
@@ -181,7 +198,7 @@ export function nodeHost(output: Output = consoleOutput()): Host {
         const child = spawn(command, args, {
           cwd: options.cwd,
           env,
-          stdio: options.stream ? ['ignore', 'inherit', 'inherit'] : [options.stdin === undefined ? 'ignore' : 'pipe', fd ?? 'pipe', 'pipe'],
+          stdio: options.interactive ? 'inherit' : options.stream ? ['ignore', 'inherit', 'inherit'] : [options.stdin === undefined ? 'ignore' : 'pipe', fd ?? 'pipe', 'pipe'],
         })
         if (options.stdin !== undefined) child.stdin?.end(options.stdin)
         child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
@@ -238,6 +255,38 @@ export function nodeHost(output: Output = consoleOutput()): Host {
     },
     symlink: (target, path) => symlink(target, path),
     chmod: (path, mode) => chmod(path, mode),
+    async realpath(path) {
+      try {
+        return await realpath(path)
+      } catch {
+        return undefined
+      }
+    },
+    async readPlainFile(path, maxBytes) {
+      const handle = await openNoFollow(path, constants.O_RDONLY | constants.O_NONBLOCK)
+      try {
+        const s = await handle.stat()
+        if (!s.isFile()) throw new Error(`${path} is not a regular file`)
+        if (s.size > maxBytes) throw new Error(`${path} is larger than ${maxBytes} bytes`)
+        return await handle.readFile('utf8')
+      } finally {
+        await handle.close()
+      }
+    },
+    async secureOwner(path, { uid, gid, mode, kind }) {
+      const handle = await openNoFollow(path, constants.O_RDONLY | constants.O_NONBLOCK | (kind === 'dir' ? constants.O_DIRECTORY : 0))
+      try {
+        const s = await handle.stat()
+        if (kind === 'file' && !s.isFile()) throw new Error(`${path} is not a regular file`)
+        if (kind === 'dir' && !s.isDirectory()) throw new Error(`${path} is not a directory`)
+        // A hard link to another file (a password file, say) would change that file too.
+        if (kind === 'file' && s.nlink !== 1) throw new Error(`${path} has ${s.nlink} hard links`)
+        await handle.chown(uid, gid)
+        await handle.chmod(mode)
+      } finally {
+        await handle.close()
+      }
+    },
     async mkdir(path, mode) {
       await mkdir(path, { recursive: true, ...(mode === undefined ? {} : { mode }) })
     },
@@ -323,6 +372,18 @@ export function nodeHost(output: Output = consoleOutput()): Host {
         request.end()
       })
     },
+  }
+}
+
+/** open(2) with O_NOFOLLOW: a symlink at `path` is an error that says so. */
+async function openNoFollow(path: string, flags: number) {
+  try {
+    return await open(path, flags | constants.O_NOFOLLOW)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ELOOP' || code === 'EMLINK') throw new Error(`${path} is a symbolic link — refused, never followed`)
+    if (code === 'ENOTDIR') throw new Error(`${path} is not a directory`)
+    throw error
   }
 }
 

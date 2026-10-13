@@ -1,11 +1,10 @@
-import { basename, dirname, join } from 'node:path'
-import { apacheInstall, apachePreflight, vhostPaths } from './apache.js'
-import { caddyInstall, caddyPaths, caddyPreflight } from './caddy.js'
+import { apachePreflight } from './apache.js'
+import { caddyPreflight } from './caddy.js'
 import { backupDatabase, backupDir, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, logFindings, pruneImages } from './compose.js'
 import { definedEntries, isBranchName, processName, REMOTE_NAME } from './config.js'
-import { DeployAbortedError, DeployError, errors, INSTALL_COMMAND, report, RUN_COMMAND, throwIfAborted, type AbortState, type DeployContext, type Finding } from './context.js'
+import { DeployAbortedError, DeployError, errors, report, RUN_COMMAND, throwIfAborted, type AbortState, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
 import { answerQuestions, describeEnv, envFile, envMirrors, envModeFindings, mirrorFindings, planEnv, readEnv, secureEnvModes, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
 import { envValues } from './dotenv.js'
@@ -777,96 +776,5 @@ export async function status(ctx: DeployContext): Promise<number> {
   }
   const process = (await pm2List(ctx))?.find((p) => p.name === processName(ctx.config))
   host.out.info(process ? `pm2 ${process.name}: ${process.status} (pid ${process.pid}, ${process.cwd})` : `pm2 ${processName(ctx.config)}: not running`)
-  return 0
-}
-
-/**
- * `sudo basalt-deploy install` — once per server, by an administrator (RFC
- * 0006 §11.4). Everything that needs root and nothing else: the vhost, the
- * state directory owned by the app user. The app user is never added to the
- * `docker` group (root-equivalent); with dedicated infra it needs rootless
- * Docker, and this says so.
- */
-/**
- * An env file outside the checkout (`/etc/<app>/api.env`) was root's while
- * deploys ran under sudo. Deploys run as the app user (§11.4, §13.5), so it
- * takes over the files — and their directory, where the atomic write and the
- * backups are created, but only a directory that is plainly the app's own
- * (its name contains the app's). Never /etc, never a shared directory.
- */
-async function envOwnership(ctx: DeployContext, user: string): Promise<void> {
-  const files = [envFile(ctx), ...envMirrors(ctx)].filter((f) => !f.startsWith(`${ctx.dir}/`))
-  if (files.length === 0) return
-  await step(ctx, 'env files outside the checkout', async () => {
-    const { host } = ctx
-    for (const file of files) {
-      if (!(await host.exists(file))) { host.out.warn(`${file} does not exist yet — the first deploy creates it`); continue }
-      const chown = await host.exec('chown', [`${user}:`, file])
-      if (chown.code !== 0) throw new DeployError(`chown ${user} ${file}: ${chown.stderr.trim()}`)
-      await host.exec('chmod', ['600', file])
-    }
-    for (const dir of [...new Set(files.map((f) => dirname(f)))]) {
-      if (basename(dir).includes(ctx.config.app) && dir !== '/' && dir !== '/etc') {
-        const chown = await host.exec('chown', [`${user}:`, dir])
-        if (chown.code !== 0) throw new DeployError(`chown ${user} ${dir}: ${chown.stderr.trim()}`)
-        await host.exec('chmod', ['700', dir])
-        host.out.ok(`${dir} and its env files (${files.filter((f) => dirname(f) === dir).map((f) => basename(f)).join(', ')}) now owned by ${user}, 0700/0600`)
-      } else {
-        host.out.warn(`${dir} is not ${ctx.config.app}'s own directory: the files are ${user}'s, but backups and atomic writes need ${user} to write in ${dir}`)
-      }
-    }
-  })
-}
-
-export async function install(ctx: DeployContext, user: string | undefined): Promise<number> {
-  const { host, config } = ctx
-  if (host.uid() !== 0) throw new DeployError(`install needs root: ${INSTALL_COMMAND}`)
-  if (!user || user === 'root') throw new DeployError('install needs the unprivileged user the deploys run as: --user=<name> (never root)')
-  const port = isCompose(ctx) ? composeOf(ctx).upstream.port : Number(envValues(await readEnv(ctx)).get('PORT'))
-  if (!Number.isInteger(port) || port <= 0) throw new DeployError(`no PORT in the .env yet: run \`${RUN_COMMAND.replace(/ run$/, ' env')}\` as the app user first`)
-
-  const stateDir = `/var/lib/basalt/${config.app}`
-  await step(ctx, `state directory ${stateDir}`, async () => {
-    await host.mkdir(stateDir, 0o700)
-    await host.mkdir(join(stateDir, 'install-backups'), 0o700)
-    const local = await host.readFile(join(ctx.dir, '.basalt', 'releases.json'))
-    const target = join(stateDir, 'releases.json')
-    let history = 'no release history yet'
-    if (await host.exists(target)) {
-      history = 'release history kept as it was'
-    } else if (local) {
-      await host.writeFile(target, local, 0o600)
-      const count = (() => { try { const v = JSON.parse(local) as unknown; return Array.isArray(v) ? v.length : 0 } catch { return 0 } })()
-      history = `${count} release(s) copied from ${join(ctx.dir, '.basalt', 'releases.json')}`
-    }
-    const chown = await host.exec('chown', ['-R', `${user}:`, stateDir])
-    if (chown.code !== 0) throw new DeployError(`chown ${user} ${stateDir}: ${chown.stderr.trim()}`)
-    host.out.ok(`${stateDir} (0700, owned by ${user}); ${history}`)
-    const overrides = `/etc/basalt/${config.app}.json`
-    if (!(await host.exists(overrides))) {
-      await host.mkdir('/etc/basalt', 0o755)
-      await host.writeFile(overrides, '{}\n', 0o644)
-      host.out.ok(`${overrides} created (server-local overrides, no secrets)`)
-    }
-  })
-
-  await envOwnership(ctx, user)
-
-  if (config.proxy?.kind === 'apache' && config.proxy.managed !== false) {
-    await step(ctx, `Apache vhost ${vhostPaths(ctx).file}`, () => apacheInstall(ctx, port, join(stateDir, 'install-backups')))
-  }
-  if (config.proxy?.kind === 'caddy' && config.proxy.managed !== false) {
-    await step(ctx, `Caddy site ${caddyPaths(ctx).site}`, () => caddyInstall(ctx, port, join(stateDir, 'install-backups')))
-  }
-
-  if (config.infra?.kind === 'docker') {
-    const groups = (await host.exec('id', ['-nG', user])).stdout.split(/\s+/)
-    if (groups.includes('docker')) {
-      host.out.warn(`${user} is in the docker group: that is root on this machine (a container can mount /). Plan the move to rootless Docker for ${user} (dockerd-rootless-setuptool.sh install); this command will not do it for a server with data in rootful volumes.`)
-    } else {
-      host.out.info(`dedicated infra runs under ${user}'s rootless Docker: dockerd-rootless-setuptool.sh install (as ${user}), then loginctl enable-linger ${user}`)
-    }
-  }
-  host.out.ok(`installed — from now on, as ${user} (not root), in ${ctx.dir}: ${RUN_COMMAND}`)
   return 0
 }

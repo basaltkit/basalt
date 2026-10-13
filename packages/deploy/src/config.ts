@@ -6,6 +6,8 @@
  * without running anything.
  */
 
+import { API_PREFIX, ASK_PATH, CERT_NAME, envLocationProblem, isConfigRoot, isWebRoot } from './trust.js'
+
 /**
  * The app's environment, as `defineEnv` returns it: `defineDeploy<typeof env>`
  * with `import type { env } from './src/env.js'` types every `.env` key the
@@ -638,7 +640,7 @@ export function isInsidePath(path: unknown): boolean {
   return path.replace(/\/$/, '').split('/').every((segment) => segment !== '' && segment !== '..')
 }
 
-const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
+export const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 
 export class DeployConfigError extends Error {
   constructor(readonly problems: string[]) {
@@ -740,6 +742,21 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   }
   if (config.backup?.container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(config.backup.container)) {
     problems.push(`backup.container "${config.backup.container}" is not a container name`)
+  }
+  // What install writes, as root, into Apache/Caddy configuration and hands to
+  // the app user: checked here and again by install on the plan (trust.ts).
+  if (config.proxy?.kind === 'apache' || config.proxy?.kind === 'caddy') {
+    const proxy = config.proxy
+    if (!isWebRoot(proxy.webRoot)) problems.push(`proxy.webRoot "${String(proxy.webRoot)}" must be a directory inside the checkout (relative; letters, digits, . _ -; no dot directories, not the checkout itself)`)
+    if (typeof proxy.apiPrefix !== 'string' || !API_PREFIX.test(proxy.apiPrefix)) problems.push(`proxy.apiPrefix "${String(proxy.apiPrefix)}" must be a URL path such as /api`)
+    if (proxy.root !== undefined && !isConfigRoot(proxy.root)) problems.push(`proxy.root "${String(proxy.root)}" must be an absolute directory such as ${proxy.kind === 'apache' ? '/etc/apache2' : '/etc/caddy'}`)
+    if (proxy.kind === 'apache' && proxy.certName !== undefined && !CERT_NAME.test(proxy.certName)) problems.push(`proxy.certName "${proxy.certName}" is not a certificate name`)
+    if (proxy.kind === 'caddy' && proxy.onDemandTls && !ASK_PATH.test(proxy.onDemandTls.ask)) problems.push(`proxy.onDemandTls.ask "${proxy.onDemandTls.ask}" must be a URL path such as /tls/allowed`)
+    if (proxy.kind === 'caddy' && proxy.extra !== undefined && typeof proxy.extra !== 'string') problems.push('proxy.extra must be a string')
+  }
+  for (const file of [config.env.file ?? '.env', ...(config.env.mirror ?? [])]) {
+    const problem = typeof file === 'string' ? envLocationProblem(config.app, file) : 'must be a string'
+    if (problem) problems.push(`env file ${problem}`)
   }
   if (config.proxy?.kind === 'caddy' && config.tenants === 'subdomain' && !config.proxy.onDemandTls) {
     problems.push(`tenants: 'subdomain' behind caddy() needs onDemandTls: { ask: '/…' } — a certificate per tenant host, issued only for hosts the app vouches for`)
