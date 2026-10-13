@@ -46,6 +46,15 @@ describe('install-plan (the app user\'s half)', () => {
     expect(JSON.parse(JSON.stringify(built))).toEqual(built)
   })
 
+  it('carries the caddy fields and the bootstrap settings, and nothing else', async () => {
+    const host = new FakeHost().put(`${DIR}/.env`, 'PORT=3002\n', 0o600)
+    const config = acmeConfig({ proxy: caddy({ onDemandTls: { ask: '/tls/allowed' }, extra: 'x.example.com {\n}', root: '/etc/caddy' }), bootstrap: { swapGb: 2, firewall: false } })
+    const built = await buildInstallPlan(context(host, config), '0.5.0')
+    expect(built.proxy).toEqual({ kind: 'caddy', managed: true, webRoot: 'web/dist', apiPrefix: '/api', onDemandTls: { ask: '/tls/allowed' }, extra: 'x.example.com {\n}', root: '/etc/caddy' })
+    expect(built.bootstrap).toEqual({ swapGb: 2, firewall: false })
+    expect((await buildInstallPlan(context(host, acmeConfig({ proxy: { kind: 'none' } })), '0.5.0')).proxy).toEqual({ kind: 'none' })
+  })
+
   it('needs a PORT first (pm2); a compose app takes the upstream port', async () => {
     await expect(buildInstallPlan(context(new FakeHost()), '0.5.0')).rejects.toThrow(`run \`${RUN_COMMAND.replace(/ run$/, ' env')}\` first`)
     const config = acmeConfig({ runtime: compose({ file: 'compose.yml', images: [{ tag: 'acme', dockerfile: 'Dockerfile', env: 'ACME_IMAGE' }], upstream: { service: 'api', port: 3005 } }) })
