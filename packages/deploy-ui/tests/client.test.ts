@@ -58,9 +58,20 @@ function shell(): void {
 }
 
 /** fetch as the browser would send it: our origin, relative URLs. */
-const browserFetch = (server: UiServer): Fetch => (input, init) => fetch(`http://127.0.0.1:${server.port}${input}`, {
-  ...init, headers: { ...(init.headers as Record<string, string>), Origin: `http://127.0.0.1:${server.port}`, 'Sec-Fetch-Site': 'same-origin' },
-})
+// Like a browser, retry once when a pooled keep-alive socket turns out to be
+// dead: Node's fetch can reuse a socket the stopped server has just destroyed
+// (seen on Linux CI), and a browser would transparently reconnect.
+const browserFetch = (server: UiServer): Fetch => async (input, init) => {
+  const send = (): Promise<Response> => fetch(`http://127.0.0.1:${server.port}${input}`, {
+    ...init, headers: { ...(init.headers as Record<string, string>), Origin: `http://127.0.0.1:${server.port}`, 'Sec-Fetch-Site': 'same-origin' },
+  })
+  try {
+    return await send()
+  } catch (error) {
+    if (init.signal?.aborted) throw error
+    return send()
+  }
+}
 
 beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'basalt-deploy-ui-client-'))
