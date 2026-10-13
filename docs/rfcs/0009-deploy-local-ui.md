@@ -1,6 +1,6 @@
 # RFC 0009 — `basalt-deploy` phase 2: a local UI over `ssh`
 
-- **Status:** Proposed
+- **Status:** Accepted — implemented in `packages/deploy-ui` (unreleased) and the `ui` hint in `@basaltkit/deploy`; where the code differs from this text, §15 says so
 - **Author:** Marcio Zebedeu
 - **Date:** 2026-10-13
 - **Affects:** new package `@basaltkit/deploy-ui` (operator's machine only); `@basaltkit/deploy` gains one hint command (`ui`, §3.4) and nothing else. No runtime package, no AI or MCP package, no app code.
@@ -770,3 +770,46 @@ Each lands with its tests, green on the gate, independently reviewable:
   `ControlMaster auto` in their own `~/.ssh/config` and the UI honours it; the
   UI does not enable it itself (a control socket is a local IPC endpoint, and
   Windows OpenSSH does not support it).
+
+## 15. As built
+
+Implemented in four increments as §12 planned. Where the code differs from
+the text above:
+
+1. **Server-side confirmation.** The page's dialogs are not the only gate: the
+   API itself refuses `run`, `rollback` and `env` without `confirm: true`
+   (428), a `protected` target without `confirmName` equal to its name, and a
+   second `cancel` of a run this UI already cancelled without `second: true`
+   (428 with `{second: true}`, which the page answers with the sterner
+   dialog). A buggy or scripted client cannot skip them. `env` needs a
+   confirmation too (it writes the server's `.env`).
+2. **Stream envelope.** Besides `event`, `diagnostic` and `state`, a stream
+   carries `{kind: 'hello', hello}` once (the target bar shows `hello.host`);
+   for `attach` the `event`s are the run's own, unwrapped by the server after
+   both sequences were checked.
+3. **Layout.** `commands.ts` is `remote.ts` (one invocation plus `follow`);
+   the views are flat files `src/client/view-*.ts`, because the static
+   allowlist is a flat `^[a-z0-9-]+\.js$`. The server reads `dist/client`
+   once at start.
+4. **Tests.** Client tests use plain jsdom without `@testing-library/dom` (one
+   devDependency fewer). The transcripts are recorded from the real
+   `@basaltkit/deploy` by `tests/transcripts.test.ts`, which drives the
+   deploy's own test helpers (`FakeHost`) and, without
+   `RECORD_TRANSCRIPTS=1`, fails when the committed transcripts drift from
+   what the code writes. Paths, `ts` and `hello.version` are normalised.
+   Narrow width is a CSS media query, not a class toggle.
+5. **What the page sends.** Empty optional answers are left out (the deploy
+   keeps its default or nothing); a `confirm` question is sent as `yes`/`no`.
+   The confirm dialog names the target, destination, host and app, and says
+   "this will migrate the database" when a plan line mentions a migration; it
+   does not show the branch head (no payload carries it).
+6. **Status refresh** happens once after a watched run ends, and on demand.
+7. **TypeScript.** The package's test `tsconfig.json` has `rootDir: ".."`
+   because the transcript recorder imports `../deploy`'s test helpers; the
+   build config is unchanged (`rootDir: src`, `src/client` excluded and
+   compiled by `tsconfig.client.json`).
+
+Open questions Q1–Q7 stay open; Q4 (a Windows job) in particular: the argv
+is the same on every platform and is snapshot-tested with `linux`, `darwin`
+and `win32`; the real `ssh.exe` quoting is not exercised in CI.
+

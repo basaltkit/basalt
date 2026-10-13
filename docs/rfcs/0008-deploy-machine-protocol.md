@@ -728,6 +728,10 @@ All on `FakeHost` unless noted; every existing test keeps passing.
 
 ## 14. What phase 2 (the local UI) consumes
 
+Designed in [RFC 0009](0009-deploy-local-ui.md) and built as
+`@basaltkit/deploy-ui`; it consumes exactly the list below (`check` is left out
+of its MVP, RFC 0009 Q5).
+
 - Transport: the system `ssh -T` (BatchMode, strict host keys), one process per
   command; no agent on the server.
 - Discovery: `status --json` (lock, active run, last run, hold, releases,
