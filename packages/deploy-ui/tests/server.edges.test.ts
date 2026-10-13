@@ -16,6 +16,7 @@ beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), 'basalt-deploy-ui-edges-'))
   ssh = await control({
     'slow.example.com': { status: { transcript: 'status-ok', pauseMs: 1500 }, env: { transcript: 'env-answers', pauseMs: 1500 }, plan: { transcript: 'plan-questions' } },
+    'cancelled.example.com': { cancel: { transcript: 'cancel-already' } },
     'hold.example.com': {
       status: { transcript: 'status-ok', pauseMs: 800 },
       attach: { lines: ['{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":0,"type":"hello","tool":"@basaltkit/deploy","version":"0.0.0","protocol":1,"command":"attach","pid":4100,"host":"server-1"}'], pauseMs: 20_000 },
@@ -102,6 +103,21 @@ describe('limits', () => {
         expect((await api('status', { target: 'fast' })).status).toBe(409)
         expect((await api('targets/save', { actor: 'x' })).status).toBe(409)
       }
+    } finally {
+      await server.close()
+    }
+  })
+})
+
+describe('cancel', () => {
+  it('a fresh UI never sends the immediate second signal for a run already cancelled elsewhere', async () => {
+    const { server, api } = await serverWith([{ name: 'prod', ssh: 'deploy@cancelled.example.com' }])
+    try {
+      const before = (await ssh.calls()).length
+      const res = await api('cancel', { target: 'prod', runId: '20261011T120000Z-0123456789ab', confirm: true })
+      expect(res.status).toBe(428)
+      expect(await res.json()).toMatchObject({ second: true })
+      expect((await ssh.calls()).slice(before).map((c) => c.words.at(-1))).toEqual(['--first-only'])
     } finally {
       await server.close()
     }

@@ -40,6 +40,7 @@ describe('the remote command', () => {
     expect(words(staging, { command: 'rollback', detach: true, to: 'abcdef1' })).toEqual(['cd', '/srv/myapp', '&&', 'exec', 'node', DEPLOY_BIN, 'rollback', '--json=1', '--detach', '--to=abcdef1', '--via=ui'])
     expect(words(staging, { command: 'attach', runId: RUN, follow: true, fromSeq: 42 })).toEqual(['cd', '/srv/myapp', '&&', 'exec', 'node', DEPLOY_BIN, 'attach', RUN, '--json=1', '--follow', '--from-seq=42'])
     expect(words(staging, { command: 'cancel', runId: RUN })).toEqual(['cd', '/srv/myapp', '&&', 'exec', 'node', DEPLOY_BIN, 'cancel', RUN, '--json=1'])
+    expect(words(staging, { command: 'cancel', runId: RUN, firstOnly: true })).toEqual(['cd', '/srv/myapp', '&&', 'exec', 'node', DEPLOY_BIN, 'cancel', RUN, '--json=1', '--first-only'])
     expect(words(staging, { command: 'env', answers: true })).toEqual(['cd', '/srv/myapp', '&&', 'exec', 'node', DEPLOY_BIN, 'env', '--json=1', '--answers=stdin', '--via=ui'])
     expect(remoteCommand(staging, { command: 'plan' })).not.toMatch(/npx|pnpm/)
   })
@@ -64,6 +65,7 @@ describe('the remote command', () => {
       [staging, { command: 'status', answers: true }],
       [staging, { command: 'env', detach: true }],
       [staging, { command: 'rollback', unhold: true }],
+      [staging, { command: 'status', firstOnly: true }],
       [staging, { command: 'attach', runId: RUN, fromSeq: -1 }],
       [staging, { command: 'run' }, 'alice smith'],
       [staging, { command: 'install' as RemoteSpec['command'] }],

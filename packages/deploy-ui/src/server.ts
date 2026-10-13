@@ -83,8 +83,6 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
   const osActor = options.osUser && ACTOR.test(options.osUser) ? options.osUser : undefined
   /** The questions of each target's last plan: answers to anything else are refused. */
   const questions = new Map<string, Set<string>>()
-  /** Runs this UI already sent a cancel to: the next one is the second signal. */
-  const cancelled = new Set<string>()
   const busy = new Set<string>()
   const controllers = new Set<AbortController>()
   let sshSessions = 0
@@ -459,12 +457,15 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         const { target: t, actor } = await target(body)
         const runId = runIdOf(body)
         if (body['confirm'] !== true) throw new HttpError(428, 'cancel needs a confirmation')
-        const key = `${t.name}/${runId}`
-        if (cancelled.has(key) && body['second'] !== true) {
-          throw new HttpError(428, 'this run was already cancelled once: a second cancel ends it at once, mid-step — confirm that explicitly', { second: true })
+        // First or second is the server's state (`<runId>.cancel`), not this
+        // process's: a cancel from a terminal or an earlier UI session counts.
+        // Without the explicit `second`, the server refuses rather than sending
+        // the immediate second signal.
+        const second = body['second'] === true
+        const reply = await collect(t, actor, { command: 'cancel', runId, ...(second ? {} : { firstOnly: true }) }, timeouts.cancel)
+        if (!second && reply.error?.code === 'already-cancelled') {
+          throw new HttpError(428, 'this run was already cancelled once (from a terminal, another session or this page): a second cancel ends it at once, mid-step — confirm that explicitly', { second: true })
         }
-        const reply = await collect(t, actor, { command: 'cancel', runId }, timeouts.cancel)
-        if (reply.ok) cancelled.add(key)
         return json(res, 200, reply)
       }
       case 'quit':
