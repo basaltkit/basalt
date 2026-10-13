@@ -17,7 +17,9 @@ each server over your own ssh (keys, agent, known_hosts), as the app user.
 Options:
   --targets=<file>      the targets file (default: $XDG_CONFIG_HOME/basalt/deploy-targets.json,
                         %APPDATA%\\basalt\\deploy-targets.json on Windows)
-  --ssh=<absolute path> the ssh client (default: ssh from PATH)
+  --ssh=<absolute path> the ssh client (default: ssh from PATH; on Windows
+                        %SystemRoot%\\System32\\OpenSSH\\ssh.exe, else the first ssh.exe
+                        in an absolute PATH entry — never the current folder)
   --no-open             print the URL instead of opening the browser
   --idle-minutes=<n>    stop after n idle minutes (1–${MAX_IDLE_MINUTES}, default 15)
   -h, --help
@@ -90,7 +92,7 @@ export function processDeps(): CliDeps {
     osUser,
     spawn: nodeSpawn as Spawn,
     print: (line) => { process.stderr.write(`${line}\n`) },
-    open: (url) => openBrowser(nodeSpawn as Spawn, process.platform, url),
+    open: (url) => openBrowser(nodeSpawn as Spawn, process.platform, url, homedir(), process.env),
     start: startUiServer,
     onSignal: (listener) => { for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(signal, listener) },
   }
@@ -114,7 +116,7 @@ export async function main(argv: readonly string[], deps: CliDeps = processDeps(
   const finished = new Promise<number>((resolve) => { finish = resolve })
   const server = await deps.start({
     targetsPath,
-    runner: { program: sshProgram(deps.platform, flags.ssh), prefix: [], spawn: deps.spawn, env: deps.env, ...deps.runner },
+    runner: { program: sshProgram(deps.platform, flags.ssh, deps.env), prefix: [], spawn: deps.spawn, env: deps.env, cwd: deps.home, ...deps.runner },
     ...(deps.osUser ? { osUser: deps.osUser } : {}),
     idleMinutes: flags.idleMinutes,
     ...(deps.clientDir === undefined ? {} : { clientDir: deps.clientDir }),

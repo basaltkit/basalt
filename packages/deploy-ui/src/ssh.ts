@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { win32 } from 'node:path'
 import { RUN_ID } from '@basaltkit/deploy/protocol'
 import { ACTOR, validConfig, validDir, validSsh, type Target } from './targets.js'
 
@@ -120,9 +122,32 @@ export function remoteCommand(target: Target, spec: RemoteSpec, actor?: string):
   return `cd ${shQuote(target.dir)} && exec ${shQuote(node)} ${shQuote(DEPLOY_BIN)} ${words.map(shQuote).join(' ')}`
 }
 
-/** The ssh client: `ssh` through PATH (`ssh.exe` on Windows), or `--ssh=<absolute path>`. */
-export function sshProgram(platform: NodeJS.Platform, explicit?: string): string {
-  return explicit ?? (platform === 'win32' ? 'ssh.exe' : 'ssh')
+/** `%SystemRoot%` when it is an absolute drive path, else `C:\Windows`. */
+export function windowsSystemRoot(env: NodeJS.ProcessEnv): string {
+  const root = env['SystemRoot'] ?? env['SYSTEMROOT']
+  return root && /^[A-Za-z]:[\\/]/.test(root) ? root : 'C:\\Windows'
+}
+
+/**
+ * The ssh client: `--ssh=<absolute path>`; else `ssh` through PATH on POSIX
+ * (execvp never looks in the working directory unless PATH says so). On
+ * Windows a bare name is looked up in the working directory BEFORE PATH, so
+ * a planted `ssh.exe` in the folder the operator started from would get the
+ * answers: there it is always an absolute path — the OpenSSH Client feature
+ * (`%SystemRoot%\System32\OpenSSH\ssh.exe`) or the first `ssh.exe` in an
+ * absolute PATH entry (never `.`, a relative or an empty one).
+ */
+export function sshProgram(platform: NodeJS.Platform, explicit?: string, env: NodeJS.ProcessEnv = {}, exists: (path: string) => boolean = existsSync): string {
+  if (explicit) return explicit
+  if (platform !== 'win32') return 'ssh'
+  const builtIn = win32.join(windowsSystemRoot(env), 'System32', 'OpenSSH', 'ssh.exe')
+  const path = env['Path'] ?? env['PATH'] ?? ''
+  const fromPath = path.split(';')
+    .map((entry) => entry.trim().replace(/^"(.*)"$/, '$1'))
+    .filter((entry) => /^[A-Za-z]:[\\/]/.test(entry))
+    .map((entry) => win32.join(entry, 'ssh.exe'))
+  // Not found anywhere: the built-in path, so the error is "no ssh client" and never a lookup in the working directory.
+  return [builtIn, ...fromPath].find((candidate) => exists(candidate)) ?? builtIn
 }
 
 /** The ssh argv, without the program. */

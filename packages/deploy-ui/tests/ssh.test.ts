@@ -14,6 +14,23 @@ describe('ssh argv', () => {
     expect({ program: sshProgram(platform, '/opt/ssh'), args: sshArgs(prod, remoteCommand(prod, { command: 'run', answers: true, detach: true, unhold: true }, 'alice')) }).toMatchSnapshot()
   })
 
+  it('Windows: always an absolute ssh.exe — the OpenSSH feature, else an absolute PATH entry; never ., a relative or an empty entry', () => {
+    const builtIn = 'C:\\Windows\\System32\\OpenSSH\\ssh.exe'
+    const none = () => false
+    expect(sshProgram('win32', undefined, {}, none)).toBe(builtIn)
+    expect(sshProgram('win32', undefined, { SystemRoot: 'D:\\WINNT' }, none)).toBe('D:\\WINNT\\System32\\OpenSSH\\ssh.exe')
+    const path = '.;;tools;"C:\\Program Files\\Git\\usr\\bin";\\\\share\\bin'
+    const only = (wanted: string) => (candidate: string) => candidate === wanted
+    expect(sshProgram('win32', undefined, { Path: path }, only('C:\\Program Files\\Git\\usr\\bin\\ssh.exe'))).toBe('C:\\Program Files\\Git\\usr\\bin\\ssh.exe')
+    expect(sshProgram('win32', undefined, { PATH: path }, only(builtIn))).toBe(builtIn)
+    // A planted ssh.exe in the working directory or a relative entry is never a candidate.
+    const asked: string[] = []
+    sshProgram('win32', undefined, { Path: path }, (candidate) => { asked.push(candidate); return false })
+    expect(asked).toEqual([builtIn, 'C:\\Program Files\\Git\\usr\\bin\\ssh.exe'])
+    expect(sshProgram('win32', 'C:\\tools\\ssh.exe', {}, none)).toBe('C:\\tools\\ssh.exe')
+    expect(sshProgram('linux', undefined, { PATH: '.' }, none)).toBe('ssh')
+  })
+
   it('never forwards, never prompts, never runs a local command, never reads another config or key', () => {
     const args = sshArgs(prod, 'x')
     for (const flag of ['-A', '-F', '-i', '-J', '-X', '-Y', '-L', '-R', '-D', '-W', '-N', '-t']) expect(args, flag).not.toContain(flag)

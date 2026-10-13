@@ -22,7 +22,10 @@ describe('the browser opener', () => {
     expect(openerCommand('darwin', url)).toEqual({ command: 'open', args: [url] })
     expect(openerCommand('linux', url)).toEqual({ command: 'xdg-open', args: [url] })
     expect(openerCommand('freebsd', url)).toEqual({ command: 'xdg-open', args: [url] })
-    expect(openerCommand('win32', url)).toEqual({ command: 'rundll32', args: ['url.dll,FileProtocolHandler', url] })
+    // Absolute on Windows: a bare name would be looked up in the working directory first.
+    expect(openerCommand('win32', url)).toEqual({ command: 'C:\\Windows\\System32\\rundll32.exe', args: ['url.dll,FileProtocolHandler', url] })
+    expect(openerCommand('win32', url, { SystemRoot: 'D:\\WINNT' }).command).toBe('D:\\WINNT\\System32\\rundll32.exe')
+    expect(openerCommand('win32', url, { SystemRoot: '.\\planted' }).command).toBe('C:\\Windows\\System32\\rundll32.exe')
   })
 
   it('reports whether it worked', async () => {
@@ -34,6 +37,10 @@ describe('the browser opener', () => {
       return child
     }
     expect(await openBrowser(fake(0), 'linux', 'u')).toBe(true)
+    let seen: { command: string; cwd: unknown } | undefined
+    const recording: Spawn = (command, args, options) => { seen = { command, cwd: options.cwd }; return fake(0)(command, args, options) }
+    expect(await openBrowser(recording, 'win32', 'u', 'C:\\Users\\alice', { SystemRoot: 'C:\\Windows' })).toBe(true)
+    expect(seen).toEqual({ command: 'C:\\Windows\\System32\\rundll32.exe', cwd: 'C:\\Users\\alice' })
     expect(await openBrowser(fake(3), 'linux', 'u')).toBe(false)
     expect(await openBrowser(fake('error'), 'darwin', 'u')).toBe(false)
     expect(await openBrowser(fake('throw'), 'win32', 'u')).toBe(false)
@@ -75,7 +82,8 @@ describe('main', () => {
     await new Promise((r) => setTimeout(r, 5))
     const o = run.options()
     expect(o.targetsPath).toBe('/home/alice/.cfg/basalt/deploy-targets.json')
-    expect(o.runner).toMatchObject({ program: 'ssh', prefix: [] })
+    // ssh starts in the operator's home, never in the folder the UI was started from.
+    expect(o.runner).toMatchObject({ program: 'ssh', prefix: [], cwd: '/home/alice' })
     expect(o.runner.env).toBe(run.d.env)
     expect(o.osUser).toBe('alice')
     expect(run.printed.join('\n')).toContain('listening on http://127.0.0.1:41234/')
@@ -100,7 +108,7 @@ describe('main', () => {
     const ended = main([], failed.d)
     await new Promise((r) => setTimeout(r, 5))
     expect(failed.printed.join('\n')).toContain('#launch=CODE')
-    expect(failed.options().runner.program).toBe('ssh.exe')
+    expect(failed.options().runner.program).toBe('C:\\Windows\\System32\\OpenSSH\\ssh.exe')
     failed.options().onStop?.('quit')
     expect(await ended).toBe(0)
   })
