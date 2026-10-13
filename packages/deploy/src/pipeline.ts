@@ -4,9 +4,9 @@ import { backupDatabase, backupDir, backupPlaceFindings, restoreCommand } from '
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, logFindings, pruneImages } from './compose.js'
 import { definedEntries, isBranchName, processName, REMOTE_NAME } from './config.js'
-import { DeployAbortedError, DeployError, errors, report, RUN_COMMAND, throwIfAborted, type AbortState, type DeployContext, type Finding } from './context.js'
+import { DeployAbortedError, DeployError, errors, report, throwIfAborted, type AbortState, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
-import { answerQuestions, describeEnv, envFile, envMirrors, envModeFindings, mirrorFindings, planEnv, readEnv, secureEnvModes, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
+import { answerQuestions, describeEnv, envFile, envModeFindings, mirrorFindings, planEnv, readEnv, secureEnvModes, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
 import { envValues } from './dotenv.js'
 import { applyInfra, describeInfra, dockerPostgres, maintainServices, planInfra, type InfraPlan } from './infra.js'
 import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, externalPostgres, grantTenantSchemas } from './services.js'
@@ -697,7 +697,6 @@ async function runLocked(ctx: DeployContext, options: RunOptions): Promise<numbe
     if (ctx.abort) ctx.abort.deferred = true
     migrating = true
     await step(ctx, 'migrate', async () => { await migrate(ctx, values); await tenantGrants(ctx, infra, values); await settleLockfile(ctx, lockfileSaid) })
-    migrating = false
   } catch (error) {
     if (sha !== previous) await restoreCode(ctx, previous, values).catch((e: unknown) => host.out.error(`could not restore the code: ${(e as Error).message}`))
     record.note = (error as Error).message
