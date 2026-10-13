@@ -1,0 +1,4 @@
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":0,"type":"hello","tool":"@basaltkit/deploy","version":"0.0.0","protocol":1,"command":"cancel","pid":4100,"host":"server-1"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":1,"type":"log","stream":"tool","level":"ok","text":"SIGTERM sent to run 20261011T120000Z-0123456789ab (pid 5100) — the second one: it stops at once, mid-step, and leaves a stale lock","redacted":false}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":2,"type":"result","command":"cancel","data":{"runId":"20261011T120000Z-0123456789ab","pid":5100,"signal":"SIGTERM","second":true}}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":3,"type":"done","exitCode":0}
