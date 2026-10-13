@@ -110,6 +110,17 @@ else listens; `--no-firewall`), Caddy when the proxy is `caddy()`, and runs
 running it again redoes nothing done. It warns when the lockfile records
 another `@basaltkit/deploy` version than the one running.
 
+`--dir` is required and is never taken from the working directory (root runs
+from `cd /`): it must be an absolute path with no link in it, holding
+`package.json` and `.git`, and not a system directory (`/`, `/etc`, `/home`,
+`/srv`, `/usr/…`, `/var/lib/…`). Giving the checkout to the user (`chown -R`)
+asks first. The user's steps never run on root's terminal: `pnpm install` and
+`install-plan` in a new session (`setsid -w`, no controlling terminal), `env`
+in a terminal of its own (`script`, which root runs). Without that, on sudo
+< 1.9.14 with a kernel < 6.2 (Debian 12, Ubuntu 22.04) a postinstall script
+could type into root's shell (TIOCSTI). A Ctrl-C stops bootstrap, not a step
+already running in its own session.
+
 By hand, the same thing:
 
 ```sh
@@ -169,7 +180,7 @@ As root, with a copy of the tool root owns (`cd / && sudo -H npx --yes --package
 
 | | |
 |---|---|
-| `bootstrap --user=<name> [--dir=<checkout>] [--dry-run]` | a fresh server, once (above) |
+| `bootstrap --user=<name> --dir=<checkout> [--dry-run]` | a fresh server, once (above); `--dir` is required |
 | `install --plan=<file> --user=<name>` | once per server: the state directory, the proxy site, the env files' owner |
 
 Options: `--skip=fetch,backup,tls`, `--config=<file>`, `--overrides=<file>`,
@@ -234,7 +245,14 @@ Mirrors are rewritten as exact copies; one that differs is a C10 error. Outside
 the checkout an env file lives directly in `/etc/<app>/` — nowhere else (never
 `/etc/environment`). `install` gives `/etc/<app>` (0700) and the files (0600)
 to the deploy user, through descriptors opened without following links: a
-symlink or a hard link planted there is refused.
+symlink or a hard link planted there is refused. The app name picks that
+directory, so `install` never takes one that is not the app's: names such as
+`systemd`, `ssh`, `apt`, `docker` or `basalt` cannot keep env files in `/etc`
+(keep the env in the checkout, or rename the app); a directory a Debian
+package ships, one with subdirectories, or one another account owns is
+refused; one root created by hand is shown and given only after a "yes". The
+state directory `/var/lib/basalt/<app>` is refused too when another account
+owns it.
 
 **Migrations by command**, with values that override the `.env` for them and for
 the pre-migration dump (a container name the host cannot resolve):
@@ -330,11 +348,14 @@ checks C2 and C1 on each vhost on every deploy and never writes them.
 - The dump before migrating — when something is migrated and there is a
   Postgres to dump (dedicated, or a `postgres://` URL in the `.env`);
   `backup.beforeMigrate` forces it either way. `plan` says why when it is skipped.
-  Dumps go to `<state dir>/backups` (0700; `/var/lib/basalt/<app>/backups`
-  once `install` ran) — outside the checkout, so never in an image, a commit or
-  a served directory. `backup.dir` (relative to the checkout) keeps the old
-  place; a new app's `.gitignore`/`.dockerignore` exclude `/backups` and
-  `/.basalt` anyway.
+  Dumps go to `<state dir>/backups` (0700). Once `install` ran that is
+  `/var/lib/basalt/<app>/backups`, outside the checkout — never in an image, a
+  commit or a served directory. Before, it is `<checkout>/.basalt/backups`: a
+  new app's `.gitignore`/`.dockerignore` exclude `/.basalt` and `/backups`, and
+  the preflight warns (`dumps`) when git does not ignore the directory or a
+  Docker build would copy it. `backup.dir` (relative to the checkout) keeps
+  the old place; dumps left in `backups/predeploy`, the old default, are
+  pointed out until they are moved or deleted.
   With external infra in a container, `backup: { container: 'myapp-postgres' }`
   runs `pg_dump` inside it (`docker exec`), as the user and database of the
   URL at `backup.urlKey` — the server's own pg_dump, none needed on the host.
@@ -392,8 +413,20 @@ environment to `~/.pm2/dump.pm2`).
   itself), the API prefix, the certificate name, the env files (only
   `/etc/<app>/`), the checkout (must be the user's own directory). It never
   loads `deploy.config.ts`, the checkout's `tsx` or `node_modules`, nor reads
-  the `.env`. Raw Caddy `extra` and a non-default proxy root are shown and need
-  a "yes" at the terminal.
+  the `.env`. Before writing it prints what it will do. Raw Caddy `extra` and a
+  non-default proxy root are shown and need a "yes" at the terminal; `extra`
+  may hold no control or direction character (what is shown is what is
+  written) and no `import`.
+- **A plan cannot take another site.** The managed vhost is `<app>.conf` (or
+  `<app>-….conf`), and `install` refuses a domain — or a name under its
+  wildcard, or a wildcard over it — that another Apache vhost or Caddy site
+  already serves.
+- **The served directory follows no planted link out of the user's files.**
+  The vhost sets `Options -FollowSymLinks +SymLinksIfOwnerMatch` and
+  `AllowOverride None` on the checkout and the web root. Caddy's
+  `file_server` has no such option: with `caddy()`, a link in the web root is
+  followed to anything the `caddy` user can read — keep secrets of other
+  sites out of its reach.
 - **Root writes only where no other user can plant a link**: directories
   only root can write (`/var/lib/basalt`, `/etc/basalt`, the Apache/Caddy
   roots), or files changed through an `O_NOFOLLOW` descriptor.
@@ -405,7 +438,9 @@ environment to `~/.pm2/dump.pm2`).
   (`cd /`: inside the checkout npx would pick its own copy; `-H`: root's npm
   cache, not the user's), or a root-owned global install (`sudo npm install -g
   @basaltkit/deploy@<version>`) with a root-owned Node (NodeSource's
-  `/usr/bin/node`).
+  `/usr/bin/node`). The check is a guardrail against a mistake, not a
+  boundary: it runs inside the copy being checked, so a copy the app user
+  changed can drop it. Running the pinned, root-owned copy is the control.
 - **The app user's commands refuse root** (`--allow-root` to insist): as root
   they would build and run the app's code, and `deploy.config.ts`, as root.
 - **The `docker` group is root on the machine** (a container can mount `/`).
