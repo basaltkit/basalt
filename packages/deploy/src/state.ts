@@ -9,8 +9,10 @@ export interface Release {
   user: string
   /**
    * `aborted`: a signal stopped it before the release (code put back).
+   * `rollback-unhealthy`: this commit was released by a rollback and did
+   * not answer either — never a rollback target again.
    */
-  status: 'ok' | 'rolled-back' | 'failed' | 'public-unreachable' | 'aborted'
+  status: 'ok' | 'rolled-back' | 'failed' | 'public-unreachable' | 'aborted' | 'rollback-unhealthy'
   /** Migration directories this release applied for the first time. */
   migrations: string[]
   backup?: string
@@ -38,9 +40,55 @@ export async function recordRelease(ctx: DeployContext, release: Release): Promi
   await ctx.host.writeFile(releasesFile(ctx), `${JSON.stringify(releases, null, 2)}\n`, 0o600)
 }
 
-/** The last release that ended healthy, other than `sha`. */
+/** Statuses that say the commit's code did not answer when released. */
+const UNHEALTHY: ReadonlySet<Release['status']> = new Set(['rolled-back', 'rollback-unhealthy'])
+
+/**
+ * The last release that ended healthy, other than `sha` — and not a commit
+ * that failed its health check AFTER that (a rollback onto it that did not
+ * answer, or a redeploy of it that was rolled back).
+ */
 export function lastGood(releases: Release[], except: string): Release | undefined {
-  return [...releases].reverse().find((r) => r.status === 'ok' && r.sha !== except)
+  const unhealthy = new Set<string>()
+  for (const release of [...releases].reverse()) {
+    if (UNHEALTHY.has(release.status)) { unhealthy.add(release.sha); continue }
+    if (release.status === 'ok' && release.sha !== except && !unhealthy.has(release.sha)) return release
+  }
+  return undefined
+}
+
+/**
+ * Written by a manual rollback: the commit it left. A scheduled `run` would
+ * otherwise fetch and redeploy it at once; it refuses that commit until the
+ * branch moves on, or `--unhold`.
+ */
+export interface Hold {
+  sha: string
+  at: string
+  actor: string
+  note: string
+}
+
+export const holdFile = (ctx: DeployContext) => join(ctx.stateDir, 'hold.json')
+
+export async function readHold(ctx: DeployContext): Promise<Hold | undefined> {
+  const text = await ctx.host.readFile(holdFile(ctx))
+  if (!text) return undefined
+  try {
+    const value = JSON.parse(text) as Partial<Hold>
+    return typeof value.sha === 'string' ? { sha: value.sha, at: String(value.at ?? ''), actor: String(value.actor ?? ''), note: String(value.note ?? '') } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export async function writeHold(ctx: DeployContext, hold: Hold): Promise<void> {
+  await ctx.host.mkdir(ctx.stateDir, 0o700)
+  await ctx.host.writeFile(holdFile(ctx), `${JSON.stringify(hold, null, 2)}\n`, 0o600)
+}
+
+export async function clearHold(ctx: DeployContext): Promise<void> {
+  if (await ctx.host.exists(holdFile(ctx))) await ctx.host.remove(holdFile(ctx))
 }
 
 /** Migration directory names among changed paths (`…/migrations/<name>/migration.sql`). */
