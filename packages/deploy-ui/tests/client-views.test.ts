@@ -177,7 +177,7 @@ describe('plan & deploy', () => {
     await confirmDialog('Deploy')
     await until(() => sent.some((s) => s.route === 'run'))
     const body = sent.find((s) => s.route === 'run')?.body
-    expect(body).toEqual({ target: 'staging', confirm: true, unhold: true, answers: [{ id: 'env.API_TOKEN', value: 'short' }, { id: 'env.REGION', value: 'eu' }, { id: 'env.METRICS', value: 'yes' }] })
+    expect(body).toEqual({ target: 'staging', confirm: true, confirmedTarget: targets.targets[0], unhold: true, answers: [{ id: 'env.API_TOKEN', value: 'short' }, { id: 'env.REGION', value: 'eu' }, { id: 'env.METRICS', value: 'yes' }] })
     for (const id of ['q-0', 'q-1', 'q-3']) expect((document.getElementById(id) as HTMLInputElement).value, id).toBe('')
     expect((document.getElementById('q-2') as HTMLInputElement).checked).toBe(false)
     await until(() => (document.getElementById('q-0-error')?.textContent ?? '') !== '')
@@ -195,6 +195,21 @@ describe('plan & deploy', () => {
     await confirmDialog('Deploy')
     await until(() => (document.getElementById('q-0-error')?.textContent ?? '') !== '')
     expect(has('The UI refused the request')).toBe(true)
+  })
+
+  it('the target changed in the file after the confirmation: refused, said so, and the page shows the file\'s values again', async () => {
+    routes['run'] = () => json({ error: 'staging changed in the targets file after you confirmed (deploy@staging.example.com · /srv/myapp → deploy@other.example.com · /srv/myapp): nothing was sent — check it and confirm again', changed: true }, 409)
+    await start()
+    click('Plan & deploy')
+    click('Run plan')
+    await until(() => document.getElementById('q-0') !== null)
+    ;(document.getElementById('q-0') as HTMLInputElement).value = 'tok'
+    routes['targets'] = () => json({ ...targets, targets: [{ ...targets.targets[0], ssh: 'deploy@other.example.com' }, targets.targets[1]] })
+    click('Deploy…')
+    await confirmDialog('Deploy')
+    await until(() => has('changed in the targets file after you confirmed'))
+    await until(() => document.getElementById('target-bar')?.textContent?.includes('deploy@other.example.com') === true, 'the bar with the new ssh')
+    expect(app.current?.ssh).toBe('deploy@other.example.com')
   })
 
   it('a required secret left empty: the browser does not submit', async () => {
@@ -342,7 +357,7 @@ describe('history, rollback, quit', () => {
     await until(() => document.querySelector('dialog')?.textContent?.includes('Back to aaaaaaaaaaaa.') === true)
     await confirmDialog('Roll back')
     await until(() => document.getElementById('run-title')?.textContent === `rollback ${RUN}`)
-    expect(sent.filter((s) => s.route === 'rollback').at(-1)?.body).toEqual({ target: 'staging', confirm: true, to: 'a'.repeat(40) })
+    expect(sent.filter((s) => s.route === 'rollback').at(-1)?.body).toEqual({ target: 'staging', confirm: true, confirmedTarget: targets.targets[0], to: 'a'.repeat(40) })
     await until(() => has('The stream ended.'))
     click('Refresh status')
     await until(() => has('Current release'))

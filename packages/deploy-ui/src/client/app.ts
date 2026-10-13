@@ -1,5 +1,5 @@
 import type { HelloEvent, PlanResult, StatusResult } from '@basaltkit/deploy/protocol'
-import type { Api } from './api.js'
+import { ApiError, type Api } from './api.js'
 import { confirmDialog } from './dialog.js'
 import { button, el, replace } from './dom.js'
 import type { CommandReply, TargetsReply, TargetView } from './messages.js'
@@ -59,6 +59,18 @@ export class App {
     this.targets = await this.api.post<TargetsReply>('targets')
     if (this.current && !this.targets.targets.some((t) => t.name === this.current?.name)) this.current = undefined
     if (this.current) this.current = this.targets.targets.find((t) => t.name === this.current?.name)
+  }
+
+  /** The server refused because the target changed after the confirmation: show the file's current values. */
+  async noticeChange(error: unknown): Promise<void> {
+    if (!(error instanceof ApiError) || error.body['changed'] !== true) return
+    try {
+      await this.loadTargets()
+    } catch {
+      return
+    }
+    this.renderNav()
+    this.renderBar()
   }
 
   select(name: string): void {

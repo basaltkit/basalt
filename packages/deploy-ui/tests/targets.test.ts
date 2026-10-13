@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -86,6 +86,53 @@ describe('the targets file', () => {
     const unknown = join(dir, 'unknown.json')
     await writeFile(unknown, JSON.stringify({ version: 1, targets: [{ ...base, proxyJump: 'bastion' }] }), { mode: 0o600 })
     await expect(readTargets(unknown)).rejects.toThrow(/proxyJump/)
-    expect(await readTargets(open, 'win32')).toMatchObject({ exists: true })
+    expect(await readTargets(open, { platform: 'win32' })).toMatchObject({ exists: true })
+  })
+
+  const me = typeof process.getuid === 'function' ? process.getuid() : -1
+
+  it.skipIf(process.platform === 'win32' || me === 0)('refuses a file another user owns, even 0644 (its owner can write it): /etc/hosts never reaches the JSON parser', async () => {
+    await expect(readTargets('/etc/hosts')).rejects.toThrow(/belongs to another user/)
+    // The same through an injected uid, since a test cannot chown.
+    const mine = join(dir, 'mine.json')
+    await writeFile(mine, JSON.stringify({ version: 1, targets: [base] }), { mode: 0o600 })
+    expect(await readTargets(mine)).toMatchObject({ exists: true })
+    await expect(readTargets(mine, { uid: me + 1 })).rejects.toThrow(new RegExp(`belongs to another user \\(uid ${me}, you are ${me + 1}\\)`))
+  })
+
+  it.skipIf(process.platform === 'win32' || me === 0)('refuses a file in a directory another user owns, or others can write without the sticky bit (read and write)', async () => {
+    const file = join(dir, 'dirs', 'deploy-targets.json')
+    await writeTargets(file, { version: 1, targets: [base] })
+    const real = await stat(join(dir, 'dirs'))
+    const statDir = (over: { uid?: number; mode?: number }) => async (path: string) => {
+      const info = await stat(path)
+      const self = path === join(dir, 'dirs')
+      return { uid: self && over.uid !== undefined ? over.uid : info.uid, mode: self && over.mode !== undefined ? over.mode : info.mode, isDirectory: () => info.isDirectory() }
+    }
+    await expect(readTargets(file, { statDir: statDir({ uid: me + 1 }) })).rejects.toThrow(/dirs belongs to another user/)
+    await expect(writeTargets(file, { version: 1, targets: [] }, { statDir: statDir({ uid: me + 1 }) })).rejects.toThrow(/belongs to another user/)
+    await expect(readTargets(file, { statDir: statDir({ mode: real.mode | 0o002 }) })).rejects.toThrow(/writable by other users .* not sticky/)
+    await expect(readTargets(file, { statDir: statDir({ mode: real.mode | 0o020 }) })).rejects.toThrow(/not sticky/)
+    // Root's, or sticky like /tmp: fine.
+    expect(await readTargets(file, { statDir: statDir({ uid: 0, mode: real.mode | 0o1777 }) })).toMatchObject({ exists: true })
+    // A real world-writable directory, not sticky: refused for real; sticky: accepted.
+    const open = join(dir, 'open-dir')
+    await mkdir(open)
+    await chmod(open, 0o777)
+    await expect(writeTargets(join(open, 't.json'), { version: 1, targets: [] })).rejects.toThrow(/not sticky/)
+    await chmod(open, 0o1777)
+    await writeTargets(join(open, 't.json'), { version: 1, targets: [] })
+    expect(await readTargets(join(open, 't.json'))).toMatchObject({ exists: true })
+    // Never written over a file another user owns.
+    // The directories that are ours, as if they were that other user's (they then pass); the file stays ours.
+    const ownedBy = (uid: number) => async (path: string) => {
+      const info = await stat(path)
+      return { uid: info.uid === me ? uid : info.uid, mode: info.mode, isDirectory: () => info.isDirectory() }
+    }
+    await expect(writeTargets(file, { version: 1, targets: [] }, { uid: me + 1, statDir: ownedBy(me + 1) })).rejects.toThrow(/belongs to another user .*not replaced/)
+    expect((await readTargets(file)).file.targets).toEqual([base])
+    // A directory that cannot be checked is refused too.
+    await expect(readTargets(file, { statDir: async () => { throw new Error('EACCES') } })).rejects.toThrow(/cannot check/)
+    await expect(readTargets(file, { statDir: async () => ({ uid: me, mode: 0o40700, isDirectory: () => false }) })).rejects.toThrow(/not a directory/)
   })
 })

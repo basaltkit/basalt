@@ -121,7 +121,7 @@ function deployForm(app: App, questions: PromptDescriptor[], blocking: boolean):
     if (!ok) return
     const answers = collectAnswers(fields)
     clearFields(fields)
-    const body: Record<string, unknown> = { target: t.name, confirm: true, answers, ...(t.protected ? { confirmName: t.name } : {}) }
+    const body: Record<string, unknown> = { target: t.name, confirm: true, confirmedTarget: t, answers, ...(t.protected ? { confirmName: t.name } : {}) }
     if (!deploy) {
       app.attended(`env on ${t.name}`, 'env', body)
       return
@@ -140,6 +140,7 @@ function deployForm(app: App, questions: PromptDescriptor[], blocking: boolean):
       const field = error instanceof ApiError && typeof error.body['field'] === 'string' ? error.body['field'] : undefined
       if (field) showFieldError(field, describe(error))
       replace(message, problem(undefined, error))
+      void app.noticeChange(error)
       return
     }
     const result = reply.result as DetachResult | undefined

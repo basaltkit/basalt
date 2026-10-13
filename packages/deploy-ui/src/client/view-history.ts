@@ -63,9 +63,10 @@ async function rollback(app: App, to: string, message: HTMLElement): Promise<voi
   replace(message, el('p', { class: 'muted' }, 'Starting the rollback…'))
   let reply: CommandReply
   try {
-    reply = await app.api.post<CommandReply>('rollback', { target: t.name, confirm: true, ...(t.protected ? { confirmName: t.name } : {}), ...(to ? { to } : {}) })
+    reply = await app.api.post<CommandReply>('rollback', { target: t.name, confirm: true, confirmedTarget: t, ...(t.protected ? { confirmName: t.name } : {}), ...(to ? { to } : {}) })
   } catch (error) {
     replace(message, problem(undefined, error))
+    void app.noticeChange(error)
     return
   }
   const result = reply.result as DetachResult | undefined

@@ -10,6 +10,8 @@ import { control, type Control } from './helpers.js'
 /** Limits, lifetime and the refusals the end-to-end file does not reach. */
 
 let home: string
+/** A target as the page shows it (serverWith adds the same dir). */
+const shown = (name: string, host: string) => ({ name, ssh: `deploy@${host}`, dir: '/srv/myapp' })
 let ssh: Control
 
 beforeAll(async () => {
@@ -57,13 +59,13 @@ describe('limits', () => {
       expect((await Promise.all(slow)).map((r) => r.status)).toEqual(Array(MAX_SSH_SESSIONS).fill(200))
 
       const leaving = new AbortController()
-      const first = await api('env', { target: 'slow', confirm: true, answers: [] }, leaving.signal)
+      const first = await api('env', { target: 'slow', confirmedTarget: shown('slow', 'slow.example.com'), confirm: true, answers: [] }, leaving.signal)
       expect(first.status).toBe(200)
-      expect((await api('env', { target: 'slow', confirm: true })).status).toBe(409)
+      expect((await api('env', { target: 'slow', confirmedTarget: shown('slow', 'slow.example.com'), confirm: true })).status).toBe(409)
       // The page goes away mid-stream: the attended ssh is stopped and the target is free again.
       leaving.abort()
       await new Promise((r) => setTimeout(r, 300))
-      const again = await api('env', { target: 'slow', confirm: true })
+      const again = await api('env', { target: 'slow', confirmedTarget: shown('slow', 'slow.example.com'), confirm: true })
       expect(again.status).toBe(200)
       const messages = (await again.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l) as StreamMessage)
       expect(messages.at(-1)).toEqual({ kind: 'state', state: 'ended', exitCode: 0 })
@@ -80,18 +82,18 @@ describe('limits', () => {
       expect((await api('attach', { target: 'fast', runId: '20261011T120000Z-0123456789ab', fromSeq: '3' })).status).toBe(400)
       expect((await api('plan', { target: 'fast' })).status).toBe(200)
       for (const answers of ['x', [{ id: 'PAYCO', value: 'x' }], [{ id: 'env.PAYCO_SECRET_TOKEN', value: 1 }], [null], Array(300).fill({ id: 'env.A', value: '' })]) {
-        expect((await api('run', { target: 'fast', confirm: true, answers })).status, JSON.stringify(answers).slice(0, 60)).toBe(400)
+        expect((await api('run', { target: 'fast', confirmedTarget: shown('fast', 'fast.example.com'), confirm: true, answers })).status, JSON.stringify(answers).slice(0, 60)).toBe(400)
       }
       expect((await api('targets/remove', { name: '../x' })).status).toBe(400)
       expect((await api('targets/save', { actor: 'bad actor' })).status).toBe(422)
       expect((await (await api('targets/save', { actor: '' })).json() as { actor?: string }).actor).toBeUndefined()
 
       // An attended run streams; ssh's stderr arrives as diagnostics.
-      const attended = await api('run', { target: 'fast', confirm: true, attended: true, answers: [] })
+      const attended = await api('run', { target: 'fast', confirmedTarget: shown('fast', 'fast.example.com'), confirm: true, attended: true, answers: [] })
       const messages = (await attended.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l) as StreamMessage)
       expect(messages).toContainEqual({ kind: 'diagnostic', text: 'a warning on stderr\n' })
       // A refused key on an attended stream ends it with the explanation.
-      const env = await api('env', { target: 'fast', confirm: true })
+      const env = await api('env', { target: 'fast', confirmedTarget: shown('fast', 'fast.example.com'), confirm: true })
       const ended = (await env.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l) as StreamMessage).at(-1)
       expect(ended).toMatchObject({ kind: 'state', state: 'ended', code: 'auth' })
 
