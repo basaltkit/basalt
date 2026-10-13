@@ -9,7 +9,7 @@ import { DeployAbortedError, DeployError, detectPackageManager, resolveStateDir,
 import { DeployLockedError } from './lock.js'
 import { envValues, parseEnv } from './dotenv.js'
 import { nodeHost, type Host } from './host.js'
-import { envCommand, install, plan, rollback, run, SKIPPABLE, status, type Skippable } from './pipeline.js'
+import { envCommand, install, plan, refuseRoot, rollback, run, SKIPPABLE, status, type Skippable } from './pipeline.js'
 
 export const USAGE = `basalt-deploy — deploy this Basalt app on this server (RFC 0006)
 
@@ -36,6 +36,7 @@ Exit codes: 0 done · 1 failed (or refused) · 3 another deploy holds the lock �
 Options:
   --config=<file>     default deploy.config.ts
   --overrides=<file>  server-local values, default /etc/basalt/<app>.json
+  --allow-root        run a command other than bootstrap/install as root (refused by default)
   --actor=<name>      who deploys, recorded with the release (default $BASALT_DEPLOY_ACTOR, else $USER)
   --skip=<steps>      ${SKIPPABLE.join(', ')} (comma-separated); --no-fetch = --skip=fetch
   -h, --help
@@ -138,6 +139,10 @@ export async function main(argv: string[], host: Host = nodeHost(), cwd: string 
         dryRun: flags.switches.has('dry-run'),
       })
     }
+    // Every command below loads deploy.config.ts — code the app user can
+    // change. As root that would be the app user's code running as root.
+    const allowRoot = flags.switches.has('allow-root')
+    if (flags.command !== 'install') refuseRoot(host, flags.command, allowRoot)
     if (flags.command === 'init') {
       const written = await init(host, cwd, flags.values, flags.switches)
       if (written !== 0) return written
@@ -151,11 +156,11 @@ export async function main(argv: string[], host: Host = nodeHost(), cwd: string 
     const overrides = await host.readFile(overridesPath)
     if (overrides !== undefined) config = validateConfig(applyOverrides(config, parseOverrides(overrides, overridesPath)))
     const ctx = await createContext(host, cwd, config)
-    const actor = flags.values.has('actor') ? { actor: flags.values.get('actor') as string } : {}
+    const actor = { ...(flags.values.has('actor') ? { actor: flags.values.get('actor') as string } : {}), allowRoot }
 
     switch (flags.command) {
       case 'plan': return await plan(ctx, { skip })
-      case 'run': return await run(ctx, { skip, unhold: flags.switches.has('unhold'), ...actor })
+      case 'run': return await run(ctx, { ...actor, skip, unhold: flags.switches.has('unhold') })
       case 'env': return await envCommand(ctx, actor)
       case 'rollback': return await rollback(ctx, flags.values.get('to'), actor)
       case 'status': return await status(ctx)

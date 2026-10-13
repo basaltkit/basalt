@@ -34,6 +34,18 @@ export interface RunOptions {
   actor?: string
   /** Deploy the commit a manual rollback left (the hold), deliberately. */
   unhold?: boolean
+  /**
+   * Run as root anyway. Refused by default: a deploy as root builds and runs
+   * the app's code (and deploy.config.ts) as root, and leaves root-owned files
+   * the app user can no longer replace.
+   */
+  allowRoot?: boolean
+}
+
+/** run, env and rollback are the app user's (RFC 0006 §11.4): never root unless asked. */
+export function refuseRoot(host: DeployContext['host'], command: string, allowRoot = false): void {
+  if (host.uid() !== 0 || allowRoot) return
+  throw new DeployError(`${command} runs as the app user, not root: it builds and runs the app's code. Run it as that user (sudo -u <user> -H …), or pass --allow-root if this server really has no other`)
 }
 
 /**
@@ -76,6 +88,7 @@ async function step<T>(ctx: DeployContext, title: string, run: () => Promise<T>)
  * is not finishes first. The lock is released in every case.
  */
 async function locked<T>(ctx: DeployContext, command: string, options: RunOptions, abortable: boolean, body: () => Promise<T>): Promise<T> {
+  refuseRoot(ctx.host, command, options.allowRoot)
   const audit = auditOf(ctx.host, options.actor)
   const release = await acquireLock(ctx.host, ctx.stateDir, command, audit.actor)
   ctx.audit = audit
