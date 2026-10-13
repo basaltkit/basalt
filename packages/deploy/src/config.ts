@@ -619,6 +619,8 @@ export function dockerInfra<E extends object = EnvShape>(app: string, options: N
 // ── validation and server-local overrides ──────────────────────────────────
 
 export const APP_NAME = /^[a-z][a-z0-9-]{1,30}$/
+/** `once.exists`: an absolute path with glob characters, nothing a shell would treat as syntax. */
+export const ONCE_GLOB = /^\/[A-Za-z0-9._/*?[\]-]+$/
 /** A git remote name: never an option (`-…`), never a URL or a path. */
 export const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
@@ -683,6 +685,9 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
     if (!Number.isInteger(rt.upstream.port) || rt.upstream.port < 1 || rt.upstream.port > 65535) problems.push('runtime.upstream.port must be a port number')
     if (!Number.isInteger(rt.keepImages) || rt.keepImages < 1) problems.push('runtime.keepImages must be a whole number ≥ 1')
     for (const key of Object.keys(rt.env)) if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) problems.push(`runtime.env key "${key}" is not a variable name`)
+    for (const job of rt.jobs ?? []) {
+      if (job.once && !ONCE_GLOB.test(job.once.exists)) problems.push(`runtime.jobs ${job.service}: once.exists "${job.once.exists}" must be an absolute path pattern (letters, digits, . _ / - and * ? [ ])`)
+    }
   }
   if (config.proxy?.kind === 'apache' && config.proxy.managed === false) {
     const vhosts = config.proxy.vhosts ?? []
