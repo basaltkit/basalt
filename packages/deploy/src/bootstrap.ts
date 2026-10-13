@@ -149,17 +149,34 @@ export async function planSystem(host: Host, dir: string, user: string): Promise
   return { actions, notes }
 }
 
-/** Phase 2 — as the user, in the checkout: argv only (no shell), the directory as the working directory. */
-export function userSteps(user: string, dir: string): Action[] {
+/**
+ * Phase 2 — as the user, in the checkout: argv only (no shell), the directory
+ * as the working directory — and never on root's terminal. Without
+ * `use_pty` (sudo < 1.9.14: Debian 12, Ubuntu 22.04) the user's command would
+ * share root's controlling terminal, and on a kernel that still allows
+ * TIOCSTI (< 6.2) a postinstall script could type a command into root's
+ * shell. So: the plain steps run in a new session (`setsid -w`: no
+ * controlling terminal, stdin closed); `env`, which may ask, gets a terminal
+ * of its own (`script`, run by root, relays the keys) — or, with no terminal
+ * to relay, runs like the others and fails closed on a missing answer.
+ *
+ * A Ctrl-C does not reach a step in its own session: bootstrap stops, the
+ * step finishes on its own.
+ */
+export function userSteps(user: string, dir: string, tty: boolean): Action[] {
   const asUser = (...command: string[]) => ['sudo', '-u', user, '-H', '--', ...command]
+  const env = tty
+    // `user` matched USER_NAME and BIN is fixed: nothing in this line needs quoting.
+    ? ['script', '--quiet', '--return', '--command', asUser('node', BIN, 'env').join(' '), '/dev/null']
+    : ['setsid', '-w', ...asUser('node', BIN, 'env')]
   return [
-    { what: `as ${user}: dependencies`, cwd: dir, commands: [asUser('env', '-u', 'NODE_ENV', 'pnpm', 'install', '--frozen-lockfile')] },
-    { what: `as ${user}: the .env (asks what it cannot generate)`, cwd: dir, interactive: true, commands: [asUser('node', BIN, 'env')] },
+    { what: `as ${user}: dependencies`, cwd: dir, commands: [['setsid', '-w', ...asUser('env', '-u', 'NODE_ENV', 'pnpm', 'install', '--frozen-lockfile')]] },
+    { what: `as ${user}: the .env (asks what it cannot generate)`, cwd: dir, ...(tty ? { interactive: true } : {}), commands: [env] },
   ]
 }
 
-/** The phase-2 command whose stdout is the install plan (JSON). */
-export const planCommand = (user: string) => ['sudo', '-u', user, '-H', '--', 'node', BIN, 'install-plan', '--out=-']
+/** The phase-2 command whose stdout is the install plan (JSON) — in its own session, like the other steps. */
+export const planCommand = (user: string) => ['setsid', '-w', 'sudo', '-u', user, '-H', '--', 'node', BIN, 'install-plan', '--out=-']
 
 /** Phase 3 — swap, ufw, Caddy, from the plan (or the flags). */
 export async function planServer(host: Host, options: { proxy: 'apache' | 'caddy' | 'none'; swapGb: number; firewall: boolean }): Promise<{ actions: Action[]; notes: string[] }> {
@@ -219,7 +236,7 @@ export async function planBootstrap(host: Host, dir: string, options: BootstrapO
   return {
     actions: [
       ...system.actions,
-      ...userSteps(user, dir),
+      ...userSteps(user, dir, host.interactive()),
       { what: `as ${user}: the install plan (data only)`, cwd: dir, commands: [planCommand(user)] },
       ...server.actions,
       { what: 'install (root, from the plan): state directory, the proxy site, env ownership', commands: [] },
@@ -266,11 +283,12 @@ export async function bootstrap(host: Host, dir: string, options: BootstrapOptio
   if (tool && locked && locked !== tool) host.out.warn(`this is @basaltkit/deploy ${tool}; the lockfile records ${locked} — run the version the app deploys with (npx --package=@basaltkit/deploy@${locked})`)
 
   const system = await planSystem(host, dir, user)
-  await runActions(host, [...system.actions, ...userSteps(user, dir)], options.dryRun)
+  const steps = userSteps(user, dir, host.interactive())
+  await runActions(host, [...system.actions, ...steps], options.dryRun)
 
   if (options.dryRun) {
     const { actions, notes } = await planBootstrap(host, dir, options)
-    await runActions(host, actions.slice(system.actions.length + userSteps(user, dir).length), true)
+    await runActions(host, actions.slice(system.actions.length + steps.length), true)
     host.out.info(`(phase 3 above assumes proxy ${options.proxy ?? 'none'}: a real run takes it from the install plan)`)
     for (const note of notes) host.out.warn(note)
     return 0

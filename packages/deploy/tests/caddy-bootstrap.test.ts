@@ -101,13 +101,22 @@ describe('basalt-deploy bootstrap', () => {
     expect(notes[0]).toContain('that is root on this machine')
     // The user's steps: argv in the checkout — no shell, no quoting of the path.
     const steps = actions.filter((a) => a.what.startsWith('as ubuntu'))
+    // Never on root's terminal (TIOCSTI): each in a session of its own.
     expect(steps.map((a) => [a.cwd, a.commands.map((c) => c.join(' '))])).toEqual([
-      [DIR, ['sudo -u ubuntu -H -- env -u NODE_ENV pnpm install --frozen-lockfile']],
-      [DIR, ['sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js env']],
-      [DIR, ['sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js install-plan --out=-']],
+      [DIR, ['setsid -w sudo -u ubuntu -H -- env -u NODE_ENV pnpm install --frozen-lockfile']],
+      [DIR, ['setsid -w sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js env']],
+      [DIR, ['setsid -w sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js install-plan --out=-']],
     ])
-    expect(steps[1]?.interactive).toBe(true)
+    expect(steps.some((a) => a.interactive)).toBe(false)
     expect(actions.flatMap((a) => a.commands).some((c) => c[0] === 'sh' && c.join(' ').includes(DIR))).toBe(false)
+  })
+
+  it('at a terminal, env asks through a terminal of its own (script, run by root), never through root\'s', async () => {
+    const host = fresh()
+    host.tty = true
+    const env = (await planBootstrap(host, DIR, options)).actions.find((a) => a.what.startsWith('as ubuntu: the .env'))
+    expect(env?.interactive).toBe(true)
+    expect(env?.commands).toEqual([['script', '--quiet', '--return', '--command', 'sudo -u ubuntu -H -- node node_modules/@basaltkit/deploy/dist/bin.js env', '/dev/null']])
   })
 
   it('ufw is never turned on over services it would cut off; when already on, rules are added', async () => {

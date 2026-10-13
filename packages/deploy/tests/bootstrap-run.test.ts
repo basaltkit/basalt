@@ -26,8 +26,8 @@ function server(planText: string) {
   host.put('/proc/meminfo', 'MemTotal:        2008172 kB\nSwapTotal:             0 kB\n')
   return host
     .on(({ command, args }) => (command === 'sh' && args[1]?.startsWith('command -v') ? (args[1].includes('apt-get') ? ok('/usr/bin/apt-get') : fail('', 1)) : undefined))
-    .on(({ command, args }) => (command === 'sudo' && args.includes('install-plan') ? ok(planText) : undefined))
-    .on(({ command }) => (['dpkg', 'docker', 'sudo', 'env', 'sh', 'systemctl', 'caddy'].includes(command) ? ok() : undefined))
+    .on(({ command, args }) => (command === 'setsid' && args.includes('install-plan') ? ok(planText) : undefined))
+    .on(({ command }) => (['dpkg', 'docker', 'setsid', 'script', 'env', 'sh', 'systemctl', 'caddy'].includes(command) ? ok() : undefined))
     .on(({ command }) => (command === 'node' ? ok('v24.1.0\n') : undefined))
     .on(({ command }) => (command === 'pnpm' ? ok('11.8.0\n') : undefined))
     .on(({ command }) => (command === 'stat' ? ok('ubuntu\n') : undefined))
@@ -40,19 +40,20 @@ describe('bootstrap, for real', () => {
   it('system, then the user\'s steps in the checkout, then the plan decides Caddy and swap, then install in-process', async () => {
     const host = server(JSON.stringify(plan()))
     expect(await bootstrap(host, DIR, options, '0.5.0')).toBe(0)
-    const sudo = host.calls.filter((c) => c.command === 'sudo')
-    expect(sudo.map((c) => [c.args.slice(4).join(' '), c.options.cwd])).toEqual([
+    const sudo = host.calls.filter((c) => c.command === 'setsid')
+    expect(sudo.map((c) => [c.args.slice(6).join(' '), c.options.cwd])).toEqual([
       ['env -u NODE_ENV pnpm install --frozen-lockfile', DIR],
       ['node node_modules/@basaltkit/deploy/dist/bin.js env', DIR],
       ['node node_modules/@basaltkit/deploy/dist/bin.js install-plan --out=-', DIR],
     ])
-    expect(sudo[1]?.options.interactive).toBe(true)
+    // No terminal to relay: nothing gets root's (stdin closed, no controlling terminal).
+    expect(sudo.every((c) => c.args[0] === '-w' && c.args[1] === 'sudo' && !c.options.interactive)).toBe(true)
     // Caddy comes from the plan, after it; swapGb: 0 in the plan means no swap.
     const caddyApt = host.calls.findIndex((c) => c.command === 'env' && c.args.includes('caddy'))
     expect(caddyApt).toBeGreaterThan(host.calls.indexOf(sudo[2]!))
     expect(host.calls.some((c) => c.command === 'fallocate')).toBe(false)
     // install ran in this process: no `node … install` as root, ever.
-    expect(host.calls.some((c) => c.args.includes('install') && c.args.some((a) => a.includes('bin.js')) && c.command !== 'sudo')).toBe(false)
+    expect(host.calls.some((c) => c.args.includes('install') && c.args.some((a) => a.includes('bin.js')) && c.command !== 'setsid')).toBe(false)
     expect(host.file('/etc/caddy/sites/acme.caddy')).toContain(`root * ${DIR}/web/dist`)
     expect(await host.stat('/var/lib/basalt/acme')).toMatchObject({ uid: 1000, mode: 0o700 })
     expect(host.transcript).toContain('this is @basaltkit/deploy 0.5.0; the lockfile records 0.4.9')
@@ -66,7 +67,7 @@ describe('bootstrap, for real', () => {
     const elsewhere = server(JSON.stringify(plan({ dir: '/srv/other' })))
     await expect(bootstrap(elsewhere, DIR, options)).rejects.toThrow('the install plan names /srv/other, not /srv/acme — refused')
     const failed = server('')
-    failed.handlers.unshift(({ command, args }) => (command === 'sudo' && args.includes('install-plan') ? fail('no PORT', 1) : undefined))
+    failed.handlers.unshift(({ command, args }) => (command === 'setsid' && args.includes('install-plan') ? fail('no PORT', 1) : undefined))
     await expect(bootstrap(failed, DIR, options)).rejects.toThrow(/install-plan as ubuntu failed \(exit 1\): no PORT/)
   })
 
@@ -109,6 +110,6 @@ describe('the CLI bootstrap never loads deploy.config.ts', () => {
     const host = server(JSON.stringify(plan()))
     expect(await main(['bootstrap', '--user=ubuntu'], host, dir)).toBe(1)
     expect(host.transcript).toContain('root would run files another user can change')
-    expect(host.calls.some((c) => c.command === 'sudo')).toBe(false)
+    expect(host.calls.some((c) => c.command === 'setsid' || c.command === 'sudo')).toBe(false)
   })
 })
