@@ -11,7 +11,7 @@ export const SCAFFOLD_VERSIONS: Readonly<Record<string, string>> = {
   '@basaltkit/cli': '^1.4.1',
   '@basaltkit/config': '^1.1.2',
   '@basaltkit/core': '^1.6.0',
-  '@basaltkit/deploy': '^0.2.1',
+  '@basaltkit/deploy': '^0.4.1',
   '@basaltkit/env': '^3.1.1',
   '@basaltkit/events': '^1.3.0',
   '@basaltkit/fastify': '^3.0.0',
@@ -28,5 +28,5 @@ export const SCAFFOLD_VERSIONS: Readonly<Record<string, string>> = {
   '@basaltkit/tenancy': '^4.0.0',
   '@basaltkit/tenancy-prisma': '^3.0.0',
   '@basaltkit/testing': '^3.0.0',
-  'create-basalt': '^1.13.0',
+  'create-basalt': '^1.14.0',
 }
