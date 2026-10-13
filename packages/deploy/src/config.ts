@@ -609,6 +609,21 @@ export function dockerInfra<E extends object = EnvShape>(app: string, options: N
 // ── validation and server-local overrides ──────────────────────────────────
 
 export const APP_NAME = /^[a-z][a-z0-9-]{1,30}$/
+/** A git remote name: never an option (`-…`), never a URL or a path. */
+export const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+
+/**
+ * `git check-ref-format --branch`, narrowed to the characters a branch name
+ * needs — and never a leading `-`, which git would read as an option
+ * (`--upload-pack=…` runs a command).
+ */
+export function isBranchName(name: unknown): boolean {
+  if (typeof name !== 'string' || name.length === 0 || name.length > 200) return false
+  if (!/^[A-Za-z0-9._/+-]+$/.test(name)) return false
+  if (/^[-/.]/.test(name) || /[/.]$/.test(name) || name.endsWith('.lock')) return false
+  return !/\.\.|\/\/|\/\.|\.lock\//.test(name)
+}
+
 const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 
 export class DeployConfigError extends Error {
@@ -630,6 +645,8 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   const problems: string[] = []
   if (!APP_NAME.test(config.app)) problems.push(`app "${config.app}" must match ${APP_NAME}`)
   if (!DOMAIN.test(config.domain)) problems.push(`domain "${config.domain}" is not a lowercase host name`)
+  if (config.branch !== undefined && !isBranchName(config.branch)) problems.push(`branch "${String(config.branch)}" is not a plain git branch name (no leading "-", no "..", letters, digits, . _ / + - only)`)
+  if (config.remote !== undefined && !REMOTE_NAME.test(config.remote)) problems.push(`remote "${String(config.remote)}" is not a git remote name (${REMOTE_NAME})`)
   // C4: the deploy only ever names what carries the app's label. `pm2 restart
   // all` once was one keystroke away from a production app that is not ours.
   if (config.runtime.kind === 'pm2') {

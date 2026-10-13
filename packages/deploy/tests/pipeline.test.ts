@@ -76,6 +76,9 @@ describe('basalt-deploy run', () => {
     const ctx = context(host, config())
     expect(await run(ctx)).toBe(0)
     expect(head()).toBe(NEW)
+    // Explicit refs after "--": the branch can never be read as a git option.
+    expect(host.commands('git')).toContain('git fetch --quiet -- origin refs/heads/master:refs/remotes/origin/master')
+    expect(host.commands('git')).toContain('git merge --ff-only refs/remotes/origin/master')
     expect(host.printed.filter((l) => l.startsWith('STEP')).map((l) => l.slice(5))).toEqual(
       ['preflight', 'fetch', 'env', 'infra', 'build', 'validate', 'backup', 'migrate', 'release', 'health', 'record'],
     )

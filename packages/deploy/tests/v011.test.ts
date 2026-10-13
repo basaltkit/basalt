@@ -38,7 +38,7 @@ describe('git credentials are checked before the deploy starts, never prompted f
     const host = gitHost(ok('x\trefs/heads/master'))
     await preflight(context(host, noApache()), { skip: ['tls'] })
     const probe = host.calls.find((c) => c.args[0] === 'ls-remote')
-    expect(probe?.args).toEqual(['ls-remote', '--exit-code', 'origin', 'refs/heads/master'])
+    expect(probe?.args).toEqual(['ls-remote', '--exit-code', '--', 'origin', 'refs/heads/master'])
     expect(probe?.options.env).toMatchObject({ GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' })
   })
 
