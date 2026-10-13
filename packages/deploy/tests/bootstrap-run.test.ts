@@ -20,7 +20,7 @@ function server(planText: string) {
   const host = new FakeHost()
   host.userId = 0
   for (const dir of ['/', '/etc', '/var', '/var/lib', '/srv', '/etc/caddy']) host.dir(dir, 0o755, ROOT)
-  host.dir(DIR, 0o755, { uid: 1000, gid: 1000 })
+  host.dir(DIR, 0o755, { uid: 1000, gid: 1000 }).dir(`${DIR}/.git`, 0o755, { uid: 1000, gid: 1000 })
   host.put(`${DIR}/package.json`, JSON.stringify({ engines: { node: '>=22.5.0' }, packageManager: 'pnpm@11.8.0' }))
   host.put(`${DIR}/pnpm-lock.yaml`, "lockfileVersion: '9.0'\npackages:\n\n  '@basaltkit/deploy@0.4.9':\n    resolution: {}\n")
   host.put('/proc/meminfo', 'MemTotal:        2008172 kB\nSwapTotal:             0 kB\n')
@@ -96,6 +96,12 @@ describe('the CLI bootstrap never loads deploy.config.ts', () => {
     expect(host.transcript).toContain('Caddy (cloudsmith)')
     expect(host.transcript).toContain('(phase 3 above assumes proxy caddy')
     expect(await main(['bootstrap', '--user=ubuntu', '--dry-run', '--proxy=nginx'], host, dir)).toBe(1)
+    // No --dir: refused, whatever the working directory (root runs from `cd /`).
+    const before = host.calls.length
+    expect(await main(['bootstrap', '--user=ubuntu', '--dry-run'], host, '/')).toBe(1)
+    expect(await main(['bootstrap', '--user=ubuntu', '--dry-run', '--dir=srv/acme'], host, '/')).toBe(1)
+    expect(host.transcript).toContain('bootstrap needs --dir=<checkout>, an absolute path')
+    expect(host.calls.slice(before)).toEqual([])
     expect(await main(['bootstrap', '--user=ubuntu', '--dry-run', '--swap-gb=x'], host, dir)).toBe(1)
   })
 

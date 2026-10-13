@@ -65,6 +65,7 @@ describe('basalt-deploy bootstrap', () => {
   /** A fresh Ubuntu: nothing but apt, node 20, 4 GB of RAM, sshd. */
   function fresh(extra: { ufwActive?: boolean; listening?: string } = {}) {
     return new FakeHost()
+      .dir(DIR, 0o755, { uid: 0, gid: 0 }).dir(`${DIR}/.git`, 0o755, { uid: 0, gid: 0 })
       .put(`${DIR}/package.json`, JSON.stringify({ engines: { node: '>=22.5.0' }, packageManager: 'pnpm@12.3.4' }))
       .put(`${DIR}/pnpm-lock.yaml`, "lockfileVersion: '9.0'\npackageManagerDependencies:\n  pnpm:\n    specifier: 12.3.4\n")
       .put('/proc/meminfo', 'MemTotal:        4008172 kB\nSwapTotal:             0 kB\n')
@@ -136,6 +137,49 @@ describe('basalt-deploy bootstrap', () => {
     expect(host.transcript).toContain('OK packages: git')
   })
 
+  it('REGRESSION: never `chown -R` of / — --dir is a checkout, not the working directory', async () => {
+    // `cd / && sudo … bootstrap` without --dir used to chown -R the whole filesystem.
+    const host = fresh()
+    host.uid = () => 0
+    host.on(() => ok())
+    for (const dir of ['/', '/etc', '/home', '/srv', '/usr/local', '/var/lib/docker', '/etc/acme', '/srv/acme/../..', '/srv/acme/']) {
+      await expect(bootstrap(host, dir, { ...options, dryRun: false }), dir).rejects.toThrow(/^--dir: .* refused, nothing was done/)
+    }
+    expect(host.commands('chown')).toEqual([])
+    expect(host.calls.filter((c) => c.command !== 'id')).toEqual([])
+    // Not a checkout: no package.json, no .git, or reached through a link.
+    const bare = new FakeHost().dir('/srv/empty').on(({ command }) => (command === 'id' ? ok('1000') : undefined))
+    await expect(bootstrap(bare, '/srv/empty', options)).rejects.toThrow('--dir: /srv/empty has no package.json')
+    bare.put('/srv/empty/package.json', '{}')
+    await expect(bootstrap(bare, '/srv/empty', options)).rejects.toThrow('--dir: /srv/empty has no .git')
+    bare.files.set('/srv/link', { kind: 'symlink', target: '/srv/empty' })
+    await expect(bootstrap(bare, '/srv/link', options)).rejects.toThrow(/a symbolic link is refused/)
+  })
+
+  it('the chown -R of a checkout the user does not own needs a yes; a dry run only shows it', async () => {
+    const dry = fresh()
+    expect(await bootstrap(dry, DIR, options)).toBe(0)
+    expect(dry.transcript).toContain(`+ chown -R ubuntu: ${DIR}`)
+    expect(dry.prompts).toEqual([])
+    const host = fresh()
+    host.uid = () => 0
+    host.on(() => ok())
+    await expect(bootstrap(host, DIR, { ...options, dryRun: false })).rejects.toThrow(`${DIR} owned by ubuntu: not confirmed`)
+    expect(host.prompts).toContain(`${DIR} is root's: give it and everything in it to ubuntu (chown -R)?`)
+    expect(host.commands('chown')).toEqual([])
+  })
+
+  it('reads package.json and the lockfile as data, never through a link', async () => {
+    const host = fresh()
+    host.files.set(`${DIR}/package.json`, { kind: 'symlink', target: '/dev/zero' })
+    host.files.set(`${DIR}/pnpm-lock.yaml`, { kind: 'symlink', target: '/etc/shadow' })
+    await expect(bootstrap(host, DIR, options)).rejects.toThrow('has no package.json')
+    host.put(`${DIR}/package.json`, JSON.stringify({ packageManager: 'pnpm@12.3.4' }))
+    expect(await bootstrap(host, DIR, options)).toBe(0)
+    // The linked lockfile was not read: the version came from packageManager.
+    expect(host.transcript).toContain('+ npm install -g pnpm@12.3.4')
+  })
+
   it('the SSH port comes from SSH_CONNECTION; a hostile value is ignored, in linear time', async () => {
     const host = fresh({ listening: 'LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n' })
     host.env = { SSH_CONNECTION: '10.0.0.5 51234 10.0.0.9 2222' }
@@ -148,7 +192,7 @@ describe('basalt-deploy bootstrap', () => {
   })
 
   it('outside apt it says so', async () => {
-    const host = new FakeHost().on(({ command }) => (command === 'sh' ? fail('', 1) : undefined)).on(({ command }) => (command === 'id' ? ok('1000') : undefined))
+    const host = new FakeHost().dir(DIR).dir(`${DIR}/.git`).put(`${DIR}/package.json`, '{}').on(({ command }) => (command === 'sh' ? fail('', 1) : undefined)).on(({ command }) => (command === 'id' ? ok('1000') : undefined))
     await expect(bootstrap(host, DIR, options)).rejects.toThrow(/Ubuntu or Debian only/)
   })
 })
