@@ -6,6 +6,8 @@
  * without running anything.
  */
 
+import { API_PREFIX, ASK_PATH, caddyExtraProblem, CERT_NAME, envLocationProblem, isConfigRoot, isWebRoot, vhostFileProblem } from './trust.js'
+
 /**
  * The app's environment, as `defineEnv` returns it: `defineDeploy<typeof env>`
  * with `import type { env } from './src/env.js'` types every `.env` key the
@@ -81,6 +83,12 @@ export interface DeployConfig<E extends object = EnvShape> {
   hooks?: HooksConfig
   /** Declarative checks after the health check; a failure is a failed release, rolled back (RFC 0007 §6). */
   verify?: VerifyConfig
+  /**
+   * Every release record already says who (`--actor` or `$USER`), from where
+   * (`$SSH_CONNECTION`) and how. `syslog: true` also sends one line per
+   * release to the system log (`logger -t basalt-deploy`).
+   */
+  audit?: { syslog?: boolean }
   /** What `basalt-deploy bootstrap` sets up on a fresh server (RFC 0007 §7). */
   bootstrap?: {
     /** Swap created when RAM is under 6 GB and there is none; 0 = never. @default 4 */
@@ -322,8 +330,10 @@ export interface BackupConfig<E extends object = EnvShape> {
    */
   keep?: number
   /**
-   * Relative to the app directory.
-   * @default 'backups/predeploy'
+   * Relative to the app directory. Unset, the dumps go to
+   * `<stateDir>/backups` (0700): `/var/lib/basalt/<app>/backups` once
+   * `install` ran — outside the checkout, so never in an image or a commit.
+   * @default '<stateDir>/backups'
    */
   dir?: string
   /**
@@ -609,7 +619,30 @@ export function dockerInfra<E extends object = EnvShape>(app: string, options: N
 // ── validation and server-local overrides ──────────────────────────────────
 
 export const APP_NAME = /^[a-z][a-z0-9-]{1,30}$/
-const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
+/** `once.exists`: an absolute path with glob characters, nothing a shell would treat as syntax. */
+export const ONCE_GLOB = /^\/[A-Za-z0-9._/*?[\]-]+$/
+/** A git remote name: never an option (`-…`), never a URL or a path. */
+export const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+
+/**
+ * `git check-ref-format --branch`, narrowed to the characters a branch name
+ * needs — and never a leading `-`, which git would read as an option
+ * (`--upload-pack=…` runs a command).
+ */
+export function isBranchName(name: unknown): boolean {
+  if (typeof name !== 'string' || name.length === 0 || name.length > 200) return false
+  if (!/^[A-Za-z0-9._/+-]+$/.test(name)) return false
+  if (/^[-/.]/.test(name) || /[/.]$/.test(name) || name.endsWith('.lock')) return false
+  return !/\.\.|\/\/|\/\.|\.lock\//.test(name)
+}
+
+/** A relative path that stays inside its base: no absolute path, no `..`, no empty segment. */
+export function isInsidePath(path: unknown): boolean {
+  if (typeof path !== 'string' || path === '' || path.startsWith('/') || path.includes('\0')) return false
+  return path.replace(/\/$/, '').split('/').every((segment) => segment !== '' && segment !== '..')
+}
+
+export const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 
 export class DeployConfigError extends Error {
   constructor(readonly problems: string[]) {
@@ -630,6 +663,8 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   const problems: string[] = []
   if (!APP_NAME.test(config.app)) problems.push(`app "${config.app}" must match ${APP_NAME}`)
   if (!DOMAIN.test(config.domain)) problems.push(`domain "${config.domain}" is not a lowercase host name`)
+  if (config.branch !== undefined && !isBranchName(config.branch)) problems.push(`branch "${String(config.branch)}" is not a plain git branch name (no leading "-", no "..", letters, digits, . _ / + - only)`)
+  if (config.remote !== undefined && !REMOTE_NAME.test(config.remote)) problems.push(`remote "${String(config.remote)}" is not a git remote name (${REMOTE_NAME})`)
   // C4: the deploy only ever names what carries the app's label. `pm2 restart
   // all` once was one keystroke away from a production app that is not ours.
   if (config.runtime.kind === 'pm2') {
@@ -650,6 +685,9 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
     if (!Number.isInteger(rt.upstream.port) || rt.upstream.port < 1 || rt.upstream.port > 65535) problems.push('runtime.upstream.port must be a port number')
     if (!Number.isInteger(rt.keepImages) || rt.keepImages < 1) problems.push('runtime.keepImages must be a whole number ≥ 1')
     for (const key of Object.keys(rt.env)) if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) problems.push(`runtime.env key "${key}" is not a variable name`)
+    for (const job of rt.jobs ?? []) {
+      if (job.once && !ONCE_GLOB.test(job.once.exists)) problems.push(`runtime.jobs ${job.service}: once.exists "${job.once.exists}" must be an absolute path pattern (letters, digits, . _ / - and * ? [ ])`)
+    }
   }
   if (config.proxy?.kind === 'apache' && config.proxy.managed === false) {
     const vhosts = config.proxy.vhosts ?? []
@@ -661,7 +699,8 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   }
   if (config.migrate?.command && config.migrate.command.length === 0) problems.push('migrate.command must not be empty')
   const vhost = vhostName(config)
-  if (vhost !== undefined && !/^[a-z0-9.-]+\.conf$/.test(vhost)) problems.push(`proxy.vhost "${vhost}" must be a plain *.conf file name`)
+  const vhostProblem = vhost !== undefined && config.proxy?.kind === 'apache' && config.proxy.managed !== false ? vhostFileProblem(config.app, vhost) : undefined
+  if (vhostProblem) problems.push(`proxy.vhost "${vhost}" ${vhostProblem}`)
   const keys = [
     ...Object.keys(config.env.fixed ?? {}),
     ...Object.keys(config.env.generate ?? {}),
@@ -704,8 +743,29 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   if (config.backup?.keep !== undefined && (!Number.isInteger(config.backup.keep) || config.backup.keep < 1)) {
     problems.push('backup.keep must be a whole number ≥ 1')
   }
+  if (config.backup?.dir !== undefined && !isInsidePath(config.backup.dir)) {
+    problems.push(`backup.dir "${config.backup.dir}" must be a path inside the checkout (relative, no "..")`)
+  }
   if (config.backup?.container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(config.backup.container)) {
     problems.push(`backup.container "${config.backup.container}" is not a container name`)
+  }
+  // What install writes, as root, into Apache/Caddy configuration and hands to
+  // the app user: checked here and again by install on the plan (trust.ts).
+  if (config.proxy?.kind === 'apache' || config.proxy?.kind === 'caddy') {
+    const proxy = config.proxy
+    // Unmanaged: root writes nothing from these two, so nothing to hold them to.
+    const managed = proxy.managed !== false
+    if (managed && !isWebRoot(proxy.webRoot)) problems.push(`proxy.webRoot "${String(proxy.webRoot)}" must be a directory inside the checkout (relative; letters, digits, . _ -; no dot directories, not the checkout itself)`)
+    if (managed && (typeof proxy.apiPrefix !== 'string' || !API_PREFIX.test(proxy.apiPrefix))) problems.push(`proxy.apiPrefix "${String(proxy.apiPrefix)}" must be a URL path such as /api`)
+    if (proxy.root !== undefined && !isConfigRoot(proxy.root)) problems.push(`proxy.root "${String(proxy.root)}" must be an absolute directory such as ${proxy.kind === 'apache' ? '/etc/apache2' : '/etc/caddy'}`)
+    if (proxy.kind === 'apache' && proxy.certName !== undefined && !CERT_NAME.test(proxy.certName)) problems.push(`proxy.certName "${proxy.certName}" is not a certificate name`)
+    if (proxy.kind === 'caddy' && proxy.onDemandTls && !ASK_PATH.test(proxy.onDemandTls.ask)) problems.push(`proxy.onDemandTls.ask "${proxy.onDemandTls.ask}" must be a URL path such as /tls/allowed`)
+    const extra = proxy.kind === 'caddy' && proxy.extra !== undefined ? caddyExtraProblem(proxy.extra) : undefined
+    if (extra) problems.push(`proxy.extra ${extra}`)
+  }
+  for (const file of [config.env.file ?? '.env', ...(config.env.mirror ?? [])]) {
+    const problem = typeof file === 'string' ? envLocationProblem(config.app, file) : 'must be a string'
+    if (problem) problems.push(`env file ${problem}`)
   }
   if (config.proxy?.kind === 'caddy' && config.tenants === 'subdomain' && !config.proxy.onDemandTls) {
     problems.push(`tenants: 'subdomain' behind caddy() needs onDemandTls: { ask: '/…' } — a certificate per tenant host, issued only for hosts the app vouches for`)

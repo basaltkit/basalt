@@ -1,50 +1,96 @@
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, normalize } from 'node:path'
 import { below, lockedPnpm, minimumVersion } from './checks.js'
 import { DeployError } from './context.js'
 import type { Host } from './host.js'
+import { install, parseInstallPlan } from './install-plan.js'
+import { USER_NAME } from './trust.js'
 
 /**
  * `basalt-deploy bootstrap` — a fresh Ubuntu/Debian server, once (RFC 0007 §7).
- * Root. Installs only what is missing, then hands over to the app user:
+ * Root, with a copy of this tool root owns (`sudo -H npx --yes
+ * --package=@basaltkit/deploy@<exact version> -- basalt-deploy bootstrap
+ * --dir=<checkout>`, run from outside the checkout): it never loads deploy.config.ts nor runs the
+ * checkout's node_modules — both are the app user's to change. Three phases:
  *
- *   base packages · Docker + compose · Node at engines.node · the pnpm the
- *   lockfile records · swap (< 6 GB RAM) · ufw (only when nothing but SSH
- *   listens) · Caddy (proxy: caddy) · the checkout and the docker group for
- *   the user · then, as the user, `pnpm install` and `env`, and as root,
- *   `install`.
+ *   1. the system: base packages · Docker + compose · Node at engines.node ·
+ *      the pnpm the lockfile records · the checkout and the docker group for
+ *      the user;
+ *   2. as the user, in the checkout: `pnpm install`, `env` (it may ask), then
+ *      `install-plan`, whose JSON comes back as data;
+ *   3. as root, from that plan: swap (< 6 GB RAM), ufw (only when nothing but
+ *      SSH listens), Caddy (proxy: caddy), then `install`.
  *
- * It needs no node_modules and no loaded config: it runs before either exists
- * (`sudo npx -y -p @basaltkit/deploy basalt-deploy bootstrap --user=<u>`), so it
- * reads package.json and takes the proxy and swap from flags.
- *
- * `--dry-run` prints every command and runs none.
+ * `--dry-run` prints every command and runs none (phase 3 then assumes
+ * `--proxy`, or none: the plan is not written in a dry run).
  */
 
 export interface BootstrapOptions {
   user: string | undefined
-  proxy: 'apache' | 'caddy' | 'none'
-  swapGb: number
-  firewall: boolean
+  /** Overrides the plan's proxy (and decides phase 3 of a dry run). */
+  proxy?: 'apache' | 'caddy' | 'none'
+  /** Overrides the plan's `bootstrap.swapGb` (default 4). */
+  swapGb?: number
+  /** Overrides the plan's `bootstrap.firewall` (default on). */
+  firewall?: boolean
   dryRun: boolean
 }
 
-interface Action {
+export interface Action {
   what: string
   commands: string[][]
+  /** Run in this directory (the checkout, for the user's steps); default outside it. */
+  cwd?: string
+  /** The command may ask at the terminal (`env`). */
+  interactive?: boolean
+  /** Asked at the terminal before a real run runs it; a "no" (or no terminal) stops bootstrap. */
+  confirm?: string
 }
 
 const APT = ['env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get']
 const OUTSIDE = { cwd: tmpdir() }
+const BIN = 'node_modules/@basaltkit/deploy/dist/bin.js'
 
-/** What a fresh server needs, given what is already there. Pure planning: it runs probes, never changes anything. */
-export async function planBootstrap(host: Host, dir: string, options: BootstrapOptions): Promise<{ actions: Action[]; notes: string[] }> {
+const sh = (script: string) => ['sh', '-c', script]
+/** Read as data, as root, from the app user's checkout: no link followed, a size cap (a FIFO or /dev/zero must not hang root). */
+const PACKAGE_JSON_BYTES = 1024 * 1024
+const LOCKFILE_BYTES = 32 * 1024 * 1024
+async function readCheckoutFile(host: Host, path: string, maxBytes: number): Promise<string | undefined> {
+  try {
+    return await host.readPlainFile(path, maxBytes)
+  } catch {
+    return undefined
+  }
+}
+
+/** Directories that are never a checkout: bootstrap would `chown -R` them to the app user. */
+const SYSTEM_DIRS = new Set(['/', '/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib32', '/lib64', '/media', '/mnt', '/opt', '/proc', '/root', '/run', '/sbin', '/snap', '/srv', '/sys', '/tmp', '/usr', '/usr/local', '/var', '/var/lib', '/var/www'])
+const SYSTEM_TREES = ['/bin/', '/boot/', '/dev/', '/etc/', '/lib/', '/lib32/', '/lib64/', '/proc/', '/root/', '/run/', '/sbin/', '/sys/', '/usr/', '/var/lib/']
+
+/**
+ * The checkout bootstrap works on — and may `chown -R` to the user — named
+ * with `--dir`, never taken from the working directory (root's commands run
+ * from `cd /`). It must be an app checkout: an absolute, normalized path with
+ * no link in it, not a system directory, holding package.json and .git.
+ */
+export async function checkoutProblem(host: Host, dir: string): Promise<string | undefined> {
+  if (!dir.startsWith('/') || normalize(dir) !== dir || (dir !== '/' && dir.endsWith('/')) || /[\0\n\r"'\\$`\s]/.test(dir)) return `${dir} must be an absolute, normalized path without quotes, spaces or shell characters`
+  if (SYSTEM_DIRS.has(dir) || SYSTEM_TREES.some((tree) => dir.startsWith(tree))) return `${dir} is a system directory, not an app checkout`
+  const stat = await host.stat(dir)
+  if (stat?.kind !== 'dir') return `${dir} is not a directory${stat?.kind === 'symlink' ? ' (a symbolic link is refused)' : ''}`
+  const real = await host.realpath(dir)
+  if (real !== dir) return `${dir} goes through a symbolic link (it is ${real ?? 'unreadable'}): name the real directory`
+  if ((await host.stat(join(dir, 'package.json')))?.kind !== 'file') return `${dir} has no package.json: not an app checkout`
+  if (!(await host.exists(join(dir, '.git')))) return `${dir} has no .git: not a git checkout`
+  return undefined
+}
+const has = async (host: Host, command: string) => (await host.exec('sh', ['-c', `command -v ${command}`], OUTSIDE)).code === 0
+
+/** Phase 1 — what the system lacks. Pure planning: probes only. */
+export async function planSystem(host: Host, dir: string, user: string): Promise<{ actions: Action[]; notes: string[] }> {
   const actions: Action[] = []
   const notes: string[] = []
-  const sh = (script: string) => ['sh', '-c', script]
-  const has = async (command: string) => (await host.exec('sh', ['-c', `command -v ${command}`], OUTSIDE)).code === 0
-
-  if (!(await has('apt-get'))) throw new DeployError('bootstrap installs with apt: Ubuntu or Debian only')
+  if (!(await has(host, 'apt-get'))) throw new DeployError('bootstrap installs with apt: Ubuntu or Debian only')
 
   const packages: string[] = []
   for (const name of ['ca-certificates', 'curl', 'git', 'openssl', 'gnupg']) {
@@ -66,8 +112,9 @@ export async function planBootstrap(host: Host, dir: string, options: BootstrapO
     })
   }
 
+  // package.json and the lockfile as data: versions matched by pattern, nothing evaluated.
   let pkg: { engines?: { node?: string }; packageManager?: string } = {}
-  try { pkg = JSON.parse((await host.readFile(join(dir, 'package.json'))) ?? '{}') as typeof pkg } catch { /* reported by run's C9 */ }
+  try { pkg = JSON.parse((await readCheckoutFile(host, join(dir, 'package.json'), PACKAGE_JSON_BYTES)) ?? '{}') as typeof pkg } catch { /* reported by run's C9 */ }
   const wanted = minimumVersion(pkg.engines?.node)
   const node = minimumVersion((await host.exec('node', ['--version'], OUTSIDE)).stdout)
   if (!node || (wanted && below(node, wanted))) {
@@ -78,12 +125,63 @@ export async function planBootstrap(host: Host, dir: string, options: BootstrapO
 
   if (pkg.packageManager?.startsWith('pnpm@')) {
     // The lockfile's own pnpm when it records one (C11), else packageManager's.
-    const lockfile = await host.readFile(join(dir, 'pnpm-lock.yaml'))
+    const lockfile = await readCheckoutFile(host, join(dir, 'pnpm-lock.yaml'), LOCKFILE_BYTES)
     const version = (lockfile && lockedPnpm(lockfile)) ?? pkg.packageManager.slice('pnpm@'.length).split('+')[0] as string
+    if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new DeployError(`the pnpm version the project records ("${version}") is not a version`)
     const current = (await host.exec('pnpm', ['--version'], OUTSIDE)).stdout.trim()
     if (current !== version) actions.push({ what: `pnpm ${version}${current ? ` (this server has ${current})` : ''}`, commands: [['npm', 'install', '-g', `pnpm@${version}`]] })
   }
 
+  const owner = (await host.exec('stat', ['-c', '%U', dir], OUTSIDE)).stdout.trim()
+  if (owner !== user) {
+    actions.push({
+      what: `${dir} owned by ${user}`,
+      commands: [['chown', '-R', `${user}:`, dir]],
+      confirm: `${dir} is ${owner || 'unknown'}'s: give it and everything in it to ${user} (chown -R)?`,
+    })
+  }
+  const groups = (await host.exec('id', ['-nG', user], OUTSIDE)).stdout.split(/\s+/)
+  if (!groups.includes('docker')) {
+    // §11.2: the docker group, said plainly — rootless Docker is its own phase.
+    actions.push({ what: `${user} in the docker group`, commands: [['usermod', '-aG', 'docker', user]] })
+    notes.push(`${user} is now in the docker group — that is root on this machine (a container can mount /). Rootless Docker is a later step; it moves every volume.`)
+  }
+  return { actions, notes }
+}
+
+/**
+ * Phase 2 — as the user, in the checkout: argv only (no shell), the directory
+ * as the working directory — and never on root's terminal. Without
+ * `use_pty` (sudo < 1.9.14: Debian 12, Ubuntu 22.04) the user's command would
+ * share root's controlling terminal, and on a kernel that still allows
+ * TIOCSTI (< 6.2) a postinstall script could type a command into root's
+ * shell. So: the plain steps run in a new session (`setsid -w`: no
+ * controlling terminal, stdin closed); `env`, which may ask, gets a terminal
+ * of its own (`script`, run by root, relays the keys) — or, with no terminal
+ * to relay, runs like the others and fails closed on a missing answer.
+ *
+ * A Ctrl-C does not reach a step in its own session: bootstrap stops, the
+ * step finishes on its own.
+ */
+export function userSteps(user: string, dir: string, tty: boolean): Action[] {
+  const asUser = (...command: string[]) => ['sudo', '-u', user, '-H', '--', ...command]
+  const env = tty
+    // `user` matched USER_NAME and BIN is fixed: nothing in this line needs quoting.
+    ? ['script', '--quiet', '--return', '--command', asUser('node', BIN, 'env').join(' '), '/dev/null']
+    : ['setsid', '-w', ...asUser('node', BIN, 'env')]
+  return [
+    { what: `as ${user}: dependencies`, cwd: dir, commands: [['setsid', '-w', ...asUser('env', '-u', 'NODE_ENV', 'pnpm', 'install', '--frozen-lockfile')]] },
+    { what: `as ${user}: the .env (asks what it cannot generate)`, cwd: dir, ...(tty ? { interactive: true } : {}), commands: [env] },
+  ]
+}
+
+/** The phase-2 command whose stdout is the install plan (JSON) — in its own session, like the other steps. */
+export const planCommand = (user: string) => ['setsid', '-w', 'sudo', '-u', user, '-H', '--', 'node', BIN, 'install-plan', '--out=-']
+
+/** Phase 3 — swap, ufw, Caddy, from the plan (or the flags). */
+export async function planServer(host: Host, options: { proxy: 'apache' | 'caddy' | 'none'; swapGb: number; firewall: boolean }): Promise<{ actions: Action[]; notes: string[] }> {
+  const actions: Action[] = []
+  const notes: string[] = []
   const meminfo = (await host.readFile('/proc/meminfo')) ?? ''
   const memGb = Number(/MemTotal:\s+(\d+)/.exec(meminfo)?.[1] ?? 0) / 1024 / 1024
   const swapKb = Number(/SwapTotal:\s+(\d+)/.exec(meminfo)?.[1] ?? 0)
@@ -94,7 +192,7 @@ export async function planBootstrap(host: Host, dir: string, options: BootstrapO
     })
   }
 
-  if (options.firewall && (await has('ufw'))) {
+  if (options.firewall && (await has(host, 'ufw'))) {
     // SSH_CONNECTION = "client-ip client-port server-ip server-port": split, not a regex over input.
     const sshPort = (host.env['SSH_CONNECTION'] ?? '').trim().split(/\s+/)[3]
     const ssh = sshPort && /^\d+$/.test(sshPort) ? sshPort : '22'
@@ -115,7 +213,7 @@ export async function planBootstrap(host: Host, dir: string, options: BootstrapO
     }
   }
 
-  if (options.proxy === 'caddy' && !(await has('caddy'))) {
+  if (options.proxy === 'caddy' && !(await has(host, 'caddy'))) {
     actions.push({
       what: 'Caddy (cloudsmith)',
       commands: [
@@ -127,48 +225,91 @@ export async function planBootstrap(host: Host, dir: string, options: BootstrapO
       ],
     })
   }
-
-  const user = options.user as string
-  const owner = (await host.exec('stat', ['-c', '%U', dir], OUTSIDE)).stdout.trim()
-  if (owner !== user) actions.push({ what: `${dir} owned by ${user}`, commands: [['chown', '-R', `${user}:`, dir]] })
-  const groups = (await host.exec('id', ['-nG', user], OUTSIDE)).stdout.split(/\s+/)
-  if (!groups.includes('docker')) {
-    // §11.2: the docker group, said plainly — rootless Docker is its own phase.
-    actions.push({ what: `${user} in the docker group`, commands: [['usermod', '-aG', 'docker', user]] })
-    notes.push(`${user} is now in the docker group — that is root on this machine (a container can mount /). Rootless Docker is a later step; it moves every volume.`)
-  }
-
-  // As the user, from the checkout: the project's own tools from here on.
-  const asUser = (...command: string[]) => ['sudo', '-u', user, '-H', '--', ...command]
-  actions.push({
-    what: `as ${user}: dependencies, then the .env (asks what it cannot generate)`,
-    commands: [
-      asUser('env', '-u', 'NODE_ENV', 'sh', '-c', `cd '${dir}' && pnpm install --frozen-lockfile`),
-      asUser('sh', '-c', `cd '${dir}' && node node_modules/@basaltkit/deploy/dist/bin.js env`),
-    ],
-  })
-  actions.push({ what: 'install (root): state directory, the proxy site, env ownership', commands: [['sh', '-c', `cd '${dir}' && node node_modules/@basaltkit/deploy/dist/bin.js install --user=${user}`]] })
   return { actions, notes }
 }
 
-export async function bootstrap(host: Host, dir: string, options: BootstrapOptions): Promise<number> {
-  if (!options.user || options.user === 'root') throw new DeployError('bootstrap needs the unprivileged user the deploys will run as: --user=<name> (never root)')
-  if (!options.dryRun && host.uid() !== 0) throw new DeployError('bootstrap installs packages: run it with sudo (or --dry-run to see what it would do)')
-  if ((await host.exec('id', ['-u', options.user], OUTSIDE)).code !== 0) throw new DeployError(`no user ${options.user} on this server: adduser ${options.user} first`)
+/** Every phase as a dry run shows it: phase 3 with the flags (the plan does not exist yet). */
+export async function planBootstrap(host: Host, dir: string, options: BootstrapOptions): Promise<{ actions: Action[]; notes: string[] }> {
+  const user = options.user as string
+  const system = await planSystem(host, dir, user)
+  const server = await planServer(host, { proxy: options.proxy ?? 'none', swapGb: options.swapGb ?? 4, firewall: options.firewall ?? true })
+  return {
+    actions: [
+      ...system.actions,
+      ...userSteps(user, dir, host.interactive()),
+      { what: `as ${user}: the install plan (data only)`, cwd: dir, commands: [planCommand(user)] },
+      ...server.actions,
+      { what: 'install (root, from the plan): state directory, the proxy site, env ownership', commands: [] },
+    ],
+    notes: [...system.notes, ...server.notes],
+  }
+}
 
-  host.out.step(`bootstrap${options.dryRun ? ' — dry run, nothing below runs' : ''}`)
-  const { actions, notes } = await planBootstrap(host, dir, options)
+/** The @basaltkit/deploy version the lockfile records — what root should be running. */
+export function lockedDeployVersion(lockfile: string): string | undefined {
+  return /['"]?@basaltkit\/deploy@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)['"]?:/.exec(lockfile)?.[1]
+}
+
+async function runActions(host: Host, actions: Action[], dryRun: boolean): Promise<void> {
   for (const action of actions) {
     host.out.info(action.what)
+    if (action.confirm && !dryRun && !(await host.confirm(action.confirm))) {
+      throw new DeployError(`${action.what}: not confirmed — nothing more was done (a terminal must answer; or make ${action.what.split(' ')[0]} the user's first)`)
+    }
     for (const command of action.commands) {
-      host.out.info(`  + ${command.join(' ')}`)
-      if (options.dryRun) continue
-      const result = await host.exec(command[0] as string, command.slice(1), { stream: true })
+      host.out.info(`  + ${command.join(' ')}${action.cwd ? `   (in ${action.cwd})` : ''}`)
+      if (dryRun) continue
+      const result = await host.exec(command[0] as string, command.slice(1), {
+        cwd: action.cwd ?? OUTSIDE.cwd,
+        ...(action.interactive ? { interactive: true } : { stream: true }),
+      })
       if (result.code !== 0) throw new DeployError(`${action.what}: \`${command.join(' ')}\` failed (exit ${result.code}) — re-run bootstrap after fixing it; what is done is not redone`)
     }
-    if (!options.dryRun) host.out.ok(action.what)
+    if (!dryRun && action.commands.length) host.out.ok(action.what)
   }
-  for (const note of notes) host.out.warn(note)
-  if (!options.dryRun) host.out.ok(`server ready — from now on, as ${options.user} in ${dir}: node node_modules/@basaltkit/deploy/dist/bin.js run`)
+}
+
+export async function bootstrap(host: Host, dir: string, options: BootstrapOptions, tool?: string): Promise<number> {
+  const user = options.user
+  if (!user || user === 'root') throw new DeployError('bootstrap needs the unprivileged user the deploys will run as: --user=<name> (never root)')
+  if (!USER_NAME.test(user)) throw new DeployError(`--user=${user} is not a login name`)
+  if (!options.dryRun && host.uid() !== 0) throw new DeployError('bootstrap installs packages: run it with sudo (or --dry-run to see what it would do)')
+  if ((await host.exec('id', ['-u', user], OUTSIDE)).code !== 0) throw new DeployError(`no user ${user} on this server: adduser ${user} first`)
+  const problem = await checkoutProblem(host, dir)
+  if (problem) throw new DeployError(`--dir: ${problem} — refused, nothing was done`)
+
+  host.out.step(`bootstrap${options.dryRun ? ' — dry run, nothing below runs' : ''}`)
+  const locked = lockedDeployVersion((await readCheckoutFile(host, join(dir, 'pnpm-lock.yaml'), LOCKFILE_BYTES)) ?? '')
+  if (tool && locked && locked !== tool) host.out.warn(`this is @basaltkit/deploy ${tool}; the lockfile records ${locked} — run the version the app deploys with (npx --package=@basaltkit/deploy@${locked})`)
+
+  const system = await planSystem(host, dir, user)
+  const steps = userSteps(user, dir, host.interactive())
+  await runActions(host, [...system.actions, ...steps], options.dryRun)
+
+  if (options.dryRun) {
+    const { actions, notes } = await planBootstrap(host, dir, options)
+    await runActions(host, actions.slice(system.actions.length + steps.length), true)
+    host.out.info(`(phase 3 above assumes proxy ${options.proxy ?? 'none'}: a real run takes it from the install plan)`)
+    for (const note of notes) host.out.warn(note)
+    return 0
+  }
+
+  // The plan comes back as data; root parses and validates it, never runs it.
+  const command = planCommand(user)
+  host.out.info(`as ${user}: the install plan\n      + ${command.join(' ')}`)
+  const written = await host.exec(command[0] as string, command.slice(1), { cwd: dir })
+  if (written.code !== 0) throw new DeployError(`install-plan as ${user} failed (exit ${written.code}): ${written.stderr.trim().split('\n').slice(-3).join(' ')}`)
+  const plan = parseInstallPlan(written.stdout, `the install plan from ${user}`)
+  if (plan.dir !== dir) throw new DeployError(`the install plan names ${plan.dir}, not ${dir} — refused`)
+
+  const server = await planServer(host, {
+    proxy: options.proxy ?? plan.proxy.kind,
+    swapGb: options.swapGb ?? plan.bootstrap?.swapGb ?? 4,
+    firewall: options.firewall ?? plan.bootstrap?.firewall ?? true,
+  })
+  await runActions(host, server.actions, false)
+  await install(host, plan, user)
+  for (const note of [...system.notes, ...server.notes]) host.out.warn(note)
+  host.out.ok(`server ready — from now on, as ${user} in ${dir}: node ${BIN} run`)
   return 0
 }

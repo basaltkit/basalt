@@ -40,7 +40,8 @@ export async function tlsFindings(ctx: DeployContext): Promise<Finding[]> {
         id: 'C8', level: 'warning', message: `the certificate served for ${label} covers only ${cert.names.join(', ') || '(no names)'}`,
         ...(name === config.domain ? {} : { fix: `issue a wildcard: certbot certonly --dns-cloudflare -d ${config.domain} -d '*.${config.domain}', and make *.${config.domain} DNS-only` }),
       })
-    } else if (!cert.trusted) {
+    }
+    if (!cert.trusted) {
       findings.push({ id: 'C8', level: 'warning', message: `the certificate served for ${label} is not trusted by browsers (${cert.trustError ?? 'unknown reason'}) — a Cloudflare Origin certificate behind a DNS-only record?` })
     }
     const days = Math.floor((cert.validTo.getTime() - host.now().getTime()) / 86_400_000)

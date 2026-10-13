@@ -1,18 +1,19 @@
-import { basename, dirname, join } from 'node:path'
-import { apacheInstall, apachePreflight, vhostPaths } from './apache.js'
-import { caddyInstall, caddyPaths, caddyPreflight } from './caddy.js'
-import { backupDatabase, restoreCommand } from './backup.js'
+import { apachePreflight } from './apache.js'
+import { caddyPreflight } from './caddy.js'
+import { backupDatabase, backupDir, backupPlaceFindings, restoreCommand } from './backup.js'
 import { lockfileFindings, tlsFindings, toolingFindings } from './checks.js'
 import { composeBuild, composeEnv, composeHealthy, composeOf, composePreflight, composeRelease, composeStatus, logFindings, pruneImages } from './compose.js'
-import { definedEntries, processName } from './config.js'
-import { DeployError, errors, INSTALL_COMMAND, report, RUN_COMMAND, type DeployContext, type Finding } from './context.js'
+import { definedEntries, isBranchName, processName, REMOTE_NAME } from './config.js'
+import { DeployAbortedError, DeployError, errors, report, throwIfAborted, type AbortState, type DeployContext, type Finding } from './context.js'
 import { checkSchema, coercionFindings, policyFindings } from './env-check.js'
-import { answerQuestions, describeEnv, envFile, envMirrors, mirrorFindings, planEnv, readEnv, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
+import { answerQuestions, describeEnv, envFile, envModeFindings, mirrorFindings, planEnv, readEnv, secureEnvModes, syntaxFindings, writeEnv, type EnvPlan } from './env-step.js'
 import { envValues } from './dotenv.js'
 import { applyInfra, describeInfra, dockerPostgres, maintainServices, planInfra, type InfraPlan } from './infra.js'
 import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, externalPostgres, grantTenantSchemas } from './services.js'
 import { pm2List, pm2Preflight, pm2Release, resolvePort } from './pm2.js'
-import { lastGood, migrationNames, readReleases, recordRelease, type Release } from './state.js'
+import { clearHold, deployedOver, lastGood, migrationNames, readHold, readReleases, recordRelease, writeHold, type Release } from './state.js'
+import { acquireLock, describeHolder, readLock } from './lock.js'
+import { auditOf } from './audit.js'
 
 /**
  * The pipeline (RFC 0006 §4): preflight → fetch → env → infra → build →
@@ -28,6 +29,22 @@ export const SKIPPABLE: readonly Skippable[] = ['fetch', 'backup', 'tls']
 
 export interface RunOptions {
   skip?: Skippable[]
+  /** Who runs it, for the lock and the release record. Default `$USER`. */
+  actor?: string
+  /** Deploy the commit a manual rollback left (the hold), deliberately. */
+  unhold?: boolean
+  /**
+   * Run as root anyway. Refused by default: a deploy as root builds and runs
+   * the app's code (and deploy.config.ts) as root, and leaves root-owned files
+   * the app user can no longer replace.
+   */
+  allowRoot?: boolean
+}
+
+/** run, env and rollback are the app user's (RFC 0006 §11.4): never root unless asked. */
+export function refuseRoot(host: DeployContext['host'], command: string, allowRoot = false): void {
+  if (host.uid() !== 0 || allowRoot) return
+  throw new DeployError(`${command} runs as the app user, not root: it builds and runs the app's code. Run it as that user (sudo -u <user> -H …), or pass --allow-root if this server really has no other`)
 }
 
 /**
@@ -42,9 +59,62 @@ async function git(ctx: DeployContext, args: string[], options: { noPrompt?: boo
   return result.stdout.trim()
 }
 
+/**
+ * The remote and branch a deploy fetches, checked again here (a config built
+ * in code may skip validateConfig): each reaches git as an argument, and a
+ * name starting with `-` would be an option (`--upload-pack=<cmd>`). The
+ * fetch names both refs in full, after `--`.
+ */
+export function gitTarget(ctx: DeployContext): { remote: string; branch: string; head: string; tracking: string } {
+  const remote = ctx.config.remote ?? 'origin'
+  const branch = ctx.config.branch ?? 'main'
+  if (!REMOTE_NAME.test(remote)) throw new DeployError(`remote "${remote}" is not a git remote name`)
+  if (!isBranchName(branch)) throw new DeployError(`branch "${branch}" is not a plain git branch name`)
+  return { remote, branch, head: `refs/heads/${branch}`, tracking: `refs/remotes/${remote}/${branch}` }
+}
+
+/**
+ * The fetch: both refs in full, after `--`, and forced (`+`) — like the
+ * remote's default refspec. A branch rewritten upstream (the usual fix after
+ * a rollback) must still reach the tracking ref; the `merge --ff-only` that
+ * follows is what refuses history rewritten under the checkout.
+ */
+export const fetchArgs = (target: { remote: string; head: string; tracking: string }) => ['fetch', '--quiet', '--', target.remote, `+${target.head}:${target.tracking}`]
+
 async function step<T>(ctx: DeployContext, title: string, run: () => Promise<T>): Promise<T> {
+  throwIfAborted(ctx)
   ctx.host.out.step(title)
   return run()
+}
+
+
+/**
+ * The deploy lock around a command that changes the server, and its signal
+ * handling: the first SIGINT/SIGTERM/SIGHUP stops an `abortable` command at
+ * the next step boundary (the command puts back what it changed); one that
+ * is not finishes first. The lock is released in every case.
+ */
+async function locked<T>(ctx: DeployContext, command: string, options: RunOptions, abortable: boolean, body: () => Promise<T>): Promise<T> {
+  refuseRoot(ctx.host, command, options.allowRoot)
+  const audit = auditOf(ctx.host, options.actor)
+  const release = await acquireLock(ctx.host, ctx.stateDir, command, audit.actor)
+  ctx.audit = audit
+  const abort: AbortState = { deferred: !abortable }
+  ctx.abort = abort
+  const off = ctx.host.onSignal((signal) => {
+    abort.signal = signal
+    ctx.host.out.warn(abort.deferred
+      ? `${signal}: ${command} cannot stop safely at this point — it finishes, then exits (a second ${signal} stops it at once)`
+      : `${signal}: stopping after this step; what the deploy changed is put back (a second ${signal} stops it at once)`)
+  })
+  try {
+    return await body()
+  } finally {
+    off()
+    delete ctx.abort
+    delete ctx.audit
+    await release()
+  }
 }
 
 // ── the runtime: PM2 on the host, or a compose project ────────────────────
@@ -103,6 +173,7 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
   const document = await readEnv(ctx)
   const values = envValues(document)
   findings.push(...syntaxFindings(document, ctx.config.env.file ?? '.env'))
+  findings.push(...await envModeFindings(ctx))
   const port = await resolvePort(ctx, values)
   findings.push(...await toolingFindings(ctx))
   findings.push(...await lockfileFindings(ctx))
@@ -119,11 +190,13 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
 /** The dump's container running — found now, not after the build, minutes later. */
 async function backupFindings(ctx: DeployContext, values: Map<string, string>, options: RunOptions): Promise<Finding[]> {
   const container = ctx.config.backup?.container
+  const runs = backupDecision(ctx.config, values, options.skip ?? []).run
+  const place = runs ? await backupPlaceFindings(ctx) : []
   // An external infra.postgres is checked with the rest of the infra.
-  if (!container || !backupDecision(ctx.config, values, options.skip ?? []).run) return []
+  if (!container || !runs) return place
   const running = await ctx.host.exec('docker', ['inspect', '--format', '{{.State.Running}}', container])
-  if (running.stdout.trim() === 'true') return []
-  return [{
+  if (running.stdout.trim() === 'true') return place
+  return [...place, {
     id: 'backup',
     level: 'error',
     message: running.code === 0 ? `backup.container ${container} is not running` : `backup.container ${container} does not exist (or docker is not available to this user)`,
@@ -134,6 +207,17 @@ async function backupFindings(ctx: DeployContext, values: Map<string, string>, o
 const LOCKFILES = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lock']
 
 async function gitFindings(ctx: DeployContext, options: RunOptions): Promise<Finding[]> {
+  const findings = await dirtyFindings(ctx)
+  if (findings.some((f) => f.message.endsWith('is not a git checkout'))) return findings
+  const branch = (await ctx.host.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
+  const wanted = ctx.config.branch ?? 'main'
+  if (branch !== wanted) findings.push({ id: 'git', level: 'error', message: `the checkout is on "${branch}", the deploy tracks "${wanted}"`, fix: `git checkout ${wanted}` })
+  if (!options.skip?.includes('fetch')) findings.push(...await remoteFindings(ctx))
+  return findings
+}
+
+/** Tracked files modified on the server: a deploy (or a rollback's reset) would discard them. */
+async function dirtyFindings(ctx: DeployContext): Promise<Finding[]> {
   const findings: Finding[] = []
   const dirty = await ctx.host.exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: ctx.dir })
   if (dirty.code !== 0) return [{ id: 'git', level: 'error', message: `${ctx.dir} is not a git checkout` }]
@@ -149,10 +233,6 @@ async function gitFindings(ctx: DeployContext, options: RunOptions): Promise<Fin
         : 'git stash (or commit them where they belong); a deploy builds what is committed',
     })
   }
-  const branch = (await ctx.host.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
-  const wanted = ctx.config.branch ?? 'main'
-  if (branch !== wanted) findings.push({ id: 'git', level: 'error', message: `the checkout is on "${branch}", the deploy tracks "${wanted}"`, fix: `git checkout ${wanted}` })
-  if (!options.skip?.includes('fetch')) findings.push(...await remoteFindings(ctx))
   return findings
 }
 
@@ -160,9 +240,8 @@ const CREDENTIALS = /terminal prompts disabled|could not read (Username|Password
 
 /** Can the fetch reach the branch without asking anyone for anything? */
 async function remoteFindings(ctx: DeployContext): Promise<Finding[]> {
-  const remote = ctx.config.remote ?? 'origin'
-  const branch = ctx.config.branch ?? 'main'
-  const probe = await ctx.host.exec('git', ['ls-remote', '--exit-code', remote, `refs/heads/${branch}`], { cwd: ctx.dir, env: NO_PROMPT })
+  const { remote, branch, head } = gitTarget(ctx)
+  const probe = await ctx.host.exec('git', ['ls-remote', '--exit-code', '--', remote, head], { cwd: ctx.dir, env: NO_PROMPT })
   if (probe.code === 0) return []
   if (probe.code === 2) return [{ id: 'git', level: 'error', message: `the branch "${branch}" does not exist on ${remote}` }]
   const reason = probe.stderr.trim().split('\n').find((l) => l.trim()) ?? `exit ${probe.code}`
@@ -386,6 +465,12 @@ function reportEnv(ctx: DeployContext, plan: EnvPlan): void {
   for (const line of lines) ctx.host.out.info(line)
 }
 
+/** Writes the `.env` and puts its mode (and its mirrors') back to 0600. */
+async function writeEnvSecure(ctx: DeployContext, plan: EnvPlan): Promise<void> {
+  await writeEnv(ctx, plan)
+  for (const file of await secureEnvModes(ctx)) ctx.host.out.ok(`${file} is 0600 again (other users could read it)`)
+}
+
 async function infraStep(ctx: DeployContext, infra: InfraPlan, values: Map<string, string>): Promise<void> {
   stopOnErrors(ctx, await applyInfra(ctx, infra), 'infra')
   const external = externalOf(ctx.config)
@@ -420,7 +505,7 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
   const { host, config, pm } = ctx
   host.out.step('plan — nothing below has run')
   const lines = [
-    options.skip?.includes('fetch') ? 'fetch: skipped' : `fetch: git fetch ${config.remote ?? 'origin'} ${config.branch ?? 'main'} && git merge --ff-only`,
+    options.skip?.includes('fetch') ? 'fetch: skipped' : ((t) => `fetch: git ${fetchArgs(t).filter((a) => a !== '--quiet').join(' ')} && git merge --ff-only ${t.tracking}`)(gitTarget(ctx)),
     ...describeEnv(env).map((l) => `env: ${l}`),
     ...describeInfra(infra).map((l) => `infra: ${l}`),
     ...describeServices(config).map((l) => `infra: ${l}`),
@@ -428,7 +513,7 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
     ...(config.hooks?.infra ?? []).map((h) => `infra hook: ${h.join(' ')}`),
     `validate: ${config.env.schema ?? '(no schema configured)'} against the new .env`,
     ((decision) => decision.run
-      ? `backup: pg_dump${dumpContainer(config) ? ` inside ${dumpContainer(config)}` : ''} → ${config.backup?.dir ?? 'backups/predeploy'} (keep ${config.backup?.keep ?? 10})`
+      ? `backup: pg_dump${dumpContainer(config) ? ` inside ${dumpContainer(config)}` : ''} → ${backupDir(ctx)} (keep ${config.backup?.keep ?? 10})`
       : `backup: skipped (${decision.why})`)(backupDecision(config, checked.values, options.skip ?? [])),
     `migrate: ${[config.migrate?.command?.join(' ') ?? '', migratesCentral(config) ? 'prisma migrate deploy' : '', config.migrate?.tenants ? 'tenant:migrate' : ''].filter(Boolean).join(' + ') || 'nothing configured'}`,
     ...(isCompose(ctx) && composeOf(ctx).attach ? [`attach: ${Object.entries(composeOf(ctx).attach ?? {}).map(([c, n]) => `${c} → ${n.join(', ')}`).join('; ')}`] : []),
@@ -444,16 +529,20 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
 }
 
 /** `basalt-deploy env` — the .env and the infra only (first setup, before `install`). */
-export async function envCommand(ctx: DeployContext): Promise<number> {
+export async function envCommand(ctx: DeployContext, options: RunOptions = {}): Promise<number> {
+  return locked(ctx, 'env', options, true, () => envLocked(ctx))
+}
+
+async function envLocked(ctx: DeployContext): Promise<number> {
   const document = await readEnv(ctx)
-  stopOnErrors(ctx, syntaxFindings(document, ctx.config.env.file ?? '.env'), '.env')
+  stopOnErrors(ctx, [...syntaxFindings(document, ctx.config.env.file ?? '.env'), ...await envModeFindings(ctx)], '.env')
   const port = await resolvePort(ctx, envValues(document))
   const { env, infra } = await step(ctx, 'env', () => prepareEnv(ctx, port))
   stopOnErrors(ctx, infra.findings, 'infra')
   const missing = await answerQuestions(ctx, env)
   if (missing.length > 0) throw new DeployError(`no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`)
   reportEnv(ctx, env)
-  await writeEnv(ctx, env)
+  await writeEnvSecure(ctx, env)
   await step(ctx, 'infra', () => infraStep(ctx, infra, env.values))
   await step(ctx, 'validate', () => validateStep(ctx, env.values))
   ctx.host.out.ok(isCompose(ctx) ? `${envFile(ctx)} ready` : `.env ready (PORT=${port})`)
@@ -461,6 +550,10 @@ export async function envCommand(ctx: DeployContext): Promise<number> {
 }
 
 export async function run(ctx: DeployContext, options: RunOptions = {}): Promise<number> {
+  return locked(ctx, 'run', options, true, () => runLocked(ctx, options))
+}
+
+async function runLocked(ctx: DeployContext, options: RunOptions): Promise<number> {
   const { host, config } = ctx
   const skip = new Set(options.skip ?? [])
 
@@ -470,10 +563,14 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
 
   const previous = await git(ctx, ['rev-parse', 'HEAD'])
   if (!skip.has('fetch')) {
+    const target = gitTarget(ctx)
     await step(ctx, 'fetch', async () => {
-      await git(ctx, ['fetch', '--quiet', config.remote ?? 'origin', config.branch ?? 'main'], { noPrompt: !host.interactive() })
-      await git(ctx, ['merge', '--ff-only', `${config.remote ?? 'origin'}/${config.branch ?? 'main'}`])
+      await git(ctx, fetchArgs(target), { noPrompt: !host.interactive() })
+      await refuseHeld(ctx, await git(ctx, ['rev-parse', '--verify', '--end-of-options', `${target.tracking}^{commit}`]), options)
+      await git(ctx, ['merge', '--ff-only', target.tracking])
     })
+  } else {
+    await refuseHeld(ctx, previous, options)
   }
   const sha = await git(ctx, ['rev-parse', 'HEAD'])
   host.out.info(sha === previous ? `already at ${sha.slice(0, 7)}` : `${previous.slice(0, 7)} → ${sha.slice(0, 7)}`)
@@ -484,6 +581,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
   const lockfileSaid = { warned: false }
   let values = checked.values
   let infra: InfraPlan = { services: [], env: [], findings: [], secrets: {} }
+  let migrating = false
   try {
     // Again on the code the fetch brought: preflight saw the commit before it.
     if (sha !== previous) stopOnErrors(ctx, await lockfileFindings(ctx), `the incoming commit ${sha.slice(0, 7)}`)
@@ -493,7 +591,7 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
     const missing = await answerQuestions(ctx, prepared.env)
     if (missing.length > 0) throw new DeployError(`no answer for ${missing.join(', ')} (no terminal to ask): set them in the environment of this command`)
     reportEnv(ctx, prepared.env)
-    await writeEnv(ctx, prepared.env)
+    await writeEnvSecure(ctx, prepared.env)
     values = prepared.env.values
 
     await step(ctx, 'infra', async () => { await infraStep(ctx, infra, values); await runHooks(ctx, 'infra', values, sha) })
@@ -507,11 +605,27 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
       host.out.step('backup')
       host.out.info(`skipped: ${backup.why}`)
     }
+    // The last point where a signal stops the deploy. Once a migration has
+    // started, the old code may not run on the schema it leaves: the deploy
+    // finishes (release, health, rollback rules) instead of putting it back.
+    throwIfAborted(ctx)
+    if (ctx.abort) ctx.abort.deferred = true
+    migrating = true
     await step(ctx, 'migrate', async () => { await migrate(ctx, values); await tenantGrants(ctx, infra, values); await settleLockfile(ctx, lockfileSaid) })
   } catch (error) {
     if (sha !== previous) await restoreCode(ctx, previous, values).catch((e: unknown) => host.out.error(`could not restore the code: ${(e as Error).message}`))
     record.note = (error as Error).message
+    const signal = ctx.abort?.signal
+    if (migrating) {
+      // The code is back; the database may not be — a migration does not undo itself.
+      record.status = 'failed-migration'
+      host.out.error(`the migration failed: the database may be part-way migrated, and the code is back on ${previous.slice(0, 7)}`)
+      if (record.backup) host.out.info(`to put the database back as it was before this deploy: ${restoreCommand(ctx, infra, record.backup, values)}`)
+      else host.out.warn('no dump was taken before this migration (backup skipped): restore from your own backups if needed')
+    } else if (signal) record.status = 'aborted'
     await recordRelease(ctx, record).catch(() => undefined)
+    // A terminal's SIGINT reaches the child too: its failure is the signal's.
+    if (signal && !(error instanceof DeployAbortedError)) throw new DeployAbortedError(signal, (error as Error).message)
     throw error
   }
 
@@ -525,10 +639,14 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
       await recordRelease(ctx, record)
       return 1
     }
-    await rollbackTo(ctx, previous, values, port)
+    const back = await rollbackTo(ctx, previous, values, port)
     record.status = 'rolled-back'
     record.note = why
     await recordRelease(ctx, record)
+    if (!back.ok) {
+      // The previous commit does not answer either: never a rollback target again.
+      await recordRelease(ctx, { ...record, sha: previous, previous: sha, at: host.now().toISOString(), status: 'rollback-unhealthy', migrations: [], note: back.why })
+    }
     return 1
   }
 
@@ -556,6 +674,8 @@ export async function run(ctx: DeployContext, options: RunOptions = {}): Promise
   }
 
   record.status = publicProblem ? 'public-unreachable' : 'ok'
+  // A healthy release on purpose: whatever a rollback held is behind us.
+  await clearHold(ctx)
   // `pnpm run start`, launched by PM2 in the checkout, may rewrite it too.
   await settleLockfile(ctx, lockfileSaid)
   await step(ctx, 'record', () => recordRelease(ctx, record))
@@ -577,7 +697,18 @@ async function retainImages(ctx: DeployContext): Promise<void> {
   if (removed.length > 0) ctx.host.out.info(`removed ${removed.length} image(s) of releases older than the last ${keep}: ${removed.join(', ')}`)
 }
 
-async function rollbackTo(ctx: DeployContext, sha: string, values: Map<string, string>, port: number): Promise<void> {
+/** `run` will not redeploy the commit a manual rollback left, unless asked to (`--unhold`). */
+async function refuseHeld(ctx: DeployContext, incoming: string, options: RunOptions): Promise<void> {
+  const hold = await readHold(ctx)
+  if (!hold || hold.sha !== incoming) return
+  if (options.unhold) {
+    ctx.host.out.warn(`deploying ${incoming.slice(0, 7)} although a rollback held it (--unhold)`)
+    return
+  }
+  throw new DeployError(`${incoming.slice(0, 7)} is held: ${hold.note} by ${hold.actor || 'someone'} at ${hold.at} — nothing was changed. Push a fix (the hold ends when the branch moves on), or deploy it anyway with --unhold`)
+}
+
+async function rollbackTo(ctx: DeployContext, sha: string, values: Map<string, string>, port: number): Promise<{ ok: true } | { ok: false; why: string }> {
   // Compose: the images of `sha` exist (kept by retention), so the rebuild
   // inside restoreCode skips them — a rollback is not a new build.
   await restoreCode(ctx, sha, values)
@@ -586,15 +717,29 @@ async function rollbackTo(ctx: DeployContext, sha: string, values: Map<string, s
   const health = await healthCheck(ctx, port, sha)
   if (health.ok) ctx.host.out.ok(`back on ${sha.slice(0, 7)}`)
   else ctx.host.out.error(`${sha.slice(0, 7)} does not answer either (${health.why}) — ${logsHint(ctx)}`)
+  return health
 }
 
 /** `basalt-deploy rollback [--to=<sha>]` — code only; the database stays as it is. */
-export async function rollback(ctx: DeployContext, to?: string): Promise<number> {
+export async function rollback(ctx: DeployContext, to?: string, options: RunOptions = {}): Promise<number> {
+  return locked(ctx, 'rollback', options, false, () => rollbackLocked(ctx, to, options))
+}
+
+async function rollbackLocked(ctx: DeployContext, to: string | undefined, options: RunOptions): Promise<number> {
+  // The reset below would discard edits on the server, as a deploy would.
+  stopOnErrors(ctx, await dirtyFindings(ctx), 'rollback')
   const current = await git(ctx, ['rev-parse', 'HEAD'])
   const releases = await readReleases(ctx)
+  let wanted: string | undefined
+  if (to !== undefined) {
+    if (!/^[0-9a-f]{7,40}$/.test(to)) throw new DeployError(`--to=${to}: a commit sha (7 to 40 hex digits)`)
+    const resolved = await ctx.host.exec('git', ['rev-parse', '--verify', '--quiet', '--end-of-options', `${to}^{commit}`], { cwd: ctx.dir })
+    if (resolved.code !== 0) throw new DeployError(`--to=${to} is not a commit in this checkout`)
+    wanted = resolved.stdout.trim()
+  }
   // The last healthy release before this one; on the first recorded deploy,
   // the commit it was deployed over.
-  const target = to ?? lastGood(releases, current)?.sha ?? [...releases].reverse().find((r) => r.sha === current)?.previous
+  const target = wanted ?? lastGood(releases, current)?.sha ?? deployedOver(releases, current)
   if (!target || target === current) throw new DeployError('no earlier release to go back to; pass --to=<sha>')
   const document = await readEnv(ctx)
   const values = envValues(document)
@@ -605,8 +750,21 @@ export async function rollback(ctx: DeployContext, to?: string): Promise<number>
     const destructive = since.filter((name) => ctx.config.destructive?.includes(name))
     if (destructive.length > 0) throw new DeployError(`refused: ${destructive.join(', ')} marked destructive — ${target.slice(0, 7)} cannot run on this schema`)
   }
-  await rollbackTo(ctx, target, values, port)
-  await recordRelease(ctx, { sha: target, previous: current, at: ctx.host.now().toISOString(), user: ctx.host.env['USER'] ?? '', status: 'ok', migrations: [], note: `manual rollback from ${current.slice(0, 7)}` })
+  const back = await rollbackTo(ctx, target, values, port)
+  const at = ctx.host.now().toISOString()
+  const note = `manual rollback from ${current.slice(0, 7)}`
+  await recordRelease(ctx, {
+    sha: target, previous: current, at, user: ctx.host.env['USER'] ?? '', migrations: [],
+    status: back.ok ? 'ok' : 'rollback-unhealthy',
+    note: back.ok ? note : `${note}; ${target.slice(0, 7)} does not answer either: ${back.why}`,
+  })
+  // Whatever the outcome, the commit rolled away from is not redeployed by the next scheduled run.
+  await writeHold(ctx, { sha: current, at, actor: ctx.audit?.actor ?? '', note: `rolled back to ${target.slice(0, 7)}` })
+  ctx.host.out.info(`${current.slice(0, 7)} is held: \`run\` will not deploy it again until the branch moves on (or --unhold)`)
+  if (!back.ok) {
+    ctx.host.out.error(`the rollback did not bring a healthy release: ${target.slice(0, 7)} is recorded as rollback-unhealthy — try another with --to=<sha>`)
+    return 1
+  }
   return 0
 }
 
@@ -614,7 +772,14 @@ export async function status(ctx: DeployContext): Promise<number> {
   const { host } = ctx
   const releases = (await readReleases(ctx)).slice(-10).reverse()
   host.out.step(`${ctx.config.app} — last ${releases.length} release(s)`)
-  for (const r of releases) host.out.info(`${r.at}  ${r.sha.slice(0, 7)}  ${r.status.padEnd(18)} ${r.user}${r.migrations.length ? `  +${r.migrations.length} migration(s)` : ''}${r.note ? `  — ${r.note}` : ''}`)
+  const lock = await readLock(host, ctx.stateDir)
+  if (!lock) host.out.info('no deploy running')
+  else if (lock.corrupt) host.out.warn(`${lock.path} is not a deploy lock (empty or unreadable): deploys are refused until it is removed`)
+  else if (lock.stale) host.out.warn(`stale lock: ${describeHolder(lock.holder!)} — that process is gone; the next deploy takes it over`)
+  else host.out.info(`deploy running: ${describeHolder(lock.holder!)}`)
+  const hold = await readHold(ctx)
+  if (hold) host.out.warn(`held: ${hold.sha.slice(0, 7)} (${hold.note}, by ${hold.actor || 'someone'} at ${hold.at}) — run will not deploy it again; --unhold to override`)
+  for (const r of releases) host.out.info(`${r.at}  ${r.sha.slice(0, 7)}  ${r.status.padEnd(18)} ${r.actor && r.actor !== r.user ? `${r.actor} (${r.user})` : r.user}${r.client ? ` from ${r.client}` : ''}${r.migrations.length ? `  +${r.migrations.length} migration(s)` : ''}${r.note ? `  — ${r.note}` : ''}`)
   if (isCompose(ctx)) {
     const head = (await ctx.host.exec('git', ['rev-parse', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
     for (const line of await composeStatus(ctx, head)) host.out.info(line)
@@ -622,96 +787,5 @@ export async function status(ctx: DeployContext): Promise<number> {
   }
   const process = (await pm2List(ctx))?.find((p) => p.name === processName(ctx.config))
   host.out.info(process ? `pm2 ${process.name}: ${process.status} (pid ${process.pid}, ${process.cwd})` : `pm2 ${processName(ctx.config)}: not running`)
-  return 0
-}
-
-/**
- * `sudo basalt-deploy install` — once per server, by an administrator (RFC
- * 0006 §11.4). Everything that needs root and nothing else: the vhost, the
- * state directory owned by the app user. The app user is never added to the
- * `docker` group (root-equivalent); with dedicated infra it needs rootless
- * Docker, and this says so.
- */
-/**
- * An env file outside the checkout (`/etc/<app>/api.env`) was root's while
- * deploys ran under sudo. Deploys run as the app user (§11.4, §13.5), so it
- * takes over the files — and their directory, where the atomic write and the
- * backups are created, but only a directory that is plainly the app's own
- * (its name contains the app's). Never /etc, never a shared directory.
- */
-async function envOwnership(ctx: DeployContext, user: string): Promise<void> {
-  const files = [envFile(ctx), ...envMirrors(ctx)].filter((f) => !f.startsWith(`${ctx.dir}/`))
-  if (files.length === 0) return
-  await step(ctx, 'env files outside the checkout', async () => {
-    const { host } = ctx
-    for (const file of files) {
-      if (!(await host.exists(file))) { host.out.warn(`${file} does not exist yet — the first deploy creates it`); continue }
-      const chown = await host.exec('chown', [`${user}:`, file])
-      if (chown.code !== 0) throw new DeployError(`chown ${user} ${file}: ${chown.stderr.trim()}`)
-      await host.exec('chmod', ['600', file])
-    }
-    for (const dir of [...new Set(files.map((f) => dirname(f)))]) {
-      if (basename(dir).includes(ctx.config.app) && dir !== '/' && dir !== '/etc') {
-        const chown = await host.exec('chown', [`${user}:`, dir])
-        if (chown.code !== 0) throw new DeployError(`chown ${user} ${dir}: ${chown.stderr.trim()}`)
-        await host.exec('chmod', ['700', dir])
-        host.out.ok(`${dir} and its env files (${files.filter((f) => dirname(f) === dir).map((f) => basename(f)).join(', ')}) now owned by ${user}, 0700/0600`)
-      } else {
-        host.out.warn(`${dir} is not ${ctx.config.app}'s own directory: the files are ${user}'s, but backups and atomic writes need ${user} to write in ${dir}`)
-      }
-    }
-  })
-}
-
-export async function install(ctx: DeployContext, user: string | undefined): Promise<number> {
-  const { host, config } = ctx
-  if (host.uid() !== 0) throw new DeployError(`install needs root: ${INSTALL_COMMAND}`)
-  if (!user || user === 'root') throw new DeployError('install needs the unprivileged user the deploys run as: --user=<name> (never root)')
-  const port = isCompose(ctx) ? composeOf(ctx).upstream.port : Number(envValues(await readEnv(ctx)).get('PORT'))
-  if (!Number.isInteger(port) || port <= 0) throw new DeployError(`no PORT in the .env yet: run \`${RUN_COMMAND.replace(/ run$/, ' env')}\` as the app user first`)
-
-  const stateDir = `/var/lib/basalt/${config.app}`
-  await step(ctx, `state directory ${stateDir}`, async () => {
-    await host.mkdir(stateDir, 0o700)
-    await host.mkdir(join(stateDir, 'install-backups'), 0o700)
-    const local = await host.readFile(join(ctx.dir, '.basalt', 'releases.json'))
-    const target = join(stateDir, 'releases.json')
-    let history = 'no release history yet'
-    if (await host.exists(target)) {
-      history = 'release history kept as it was'
-    } else if (local) {
-      await host.writeFile(target, local, 0o600)
-      const count = (() => { try { const v = JSON.parse(local) as unknown; return Array.isArray(v) ? v.length : 0 } catch { return 0 } })()
-      history = `${count} release(s) copied from ${join(ctx.dir, '.basalt', 'releases.json')}`
-    }
-    const chown = await host.exec('chown', ['-R', `${user}:`, stateDir])
-    if (chown.code !== 0) throw new DeployError(`chown ${user} ${stateDir}: ${chown.stderr.trim()}`)
-    host.out.ok(`${stateDir} (0700, owned by ${user}); ${history}`)
-    const overrides = `/etc/basalt/${config.app}.json`
-    if (!(await host.exists(overrides))) {
-      await host.mkdir('/etc/basalt', 0o755)
-      await host.writeFile(overrides, '{}\n', 0o644)
-      host.out.ok(`${overrides} created (server-local overrides, no secrets)`)
-    }
-  })
-
-  await envOwnership(ctx, user)
-
-  if (config.proxy?.kind === 'apache' && config.proxy.managed !== false) {
-    await step(ctx, `Apache vhost ${vhostPaths(ctx).file}`, () => apacheInstall(ctx, port, join(stateDir, 'install-backups')))
-  }
-  if (config.proxy?.kind === 'caddy' && config.proxy.managed !== false) {
-    await step(ctx, `Caddy site ${caddyPaths(ctx).site}`, () => caddyInstall(ctx, port, join(stateDir, 'install-backups')))
-  }
-
-  if (config.infra?.kind === 'docker') {
-    const groups = (await host.exec('id', ['-nG', user])).stdout.split(/\s+/)
-    if (groups.includes('docker')) {
-      host.out.warn(`${user} is in the docker group: that is root on this machine (a container can mount /). Plan the move to rootless Docker for ${user} (dockerd-rootless-setuptool.sh install); this command will not do it for a server with data in rootful volumes.`)
-    } else {
-      host.out.info(`dedicated infra runs under ${user}'s rootless Docker: dockerd-rootless-setuptool.sh install (as ${user}), then loginctl enable-linger ${user}`)
-    }
-  }
-  host.out.ok(`installed — from now on, as ${user} (not root), in ${ctx.dir}: ${RUN_COMMAND}`)
   return 0
 }

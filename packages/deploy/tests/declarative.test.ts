@@ -205,6 +205,8 @@ describe('a Globex deploy with no scripts', () => {
     expect(world.rules).toEqual(['local/globex-quarantine'])
     expect(world.host.transcript).toContain('globex-quarantine (1-day expiry)')
     expect(world.host.transcript).toContain('job freshclam: already done')
+    // The glob is the shell's $1, never part of its script.
+    expect(dockerArgs(world.host).find((a) => a.includes('--entrypoint'))).toMatch(/--entrypoint sh freshclam -c ls -d -- \$1 sh \/var\/lib\/clamav\/main\.c\?d$/)
     expect(dockerArgs(world.host).some((a) => a.startsWith('network connect'))).toBe(false)
     expect(dockerArgs(world.host).some((a) => a.includes('--no-start'))).toBe(false)
   })

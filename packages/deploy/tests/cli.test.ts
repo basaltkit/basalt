@@ -44,7 +44,7 @@ describe('main', () => {
       const host = new FakeHost()
       expect(await main(['deploy-everything', '--config=deploy.config.mjs'], host, dir)).toBe(1)
       expect(host.transcript).toContain('unknown command "deploy-everything"')
-      expect(String(write.mock.calls[0]?.[0])).toContain('basalt-deploy plan')
+      expect(String(write.mock.calls[0]?.[0])).toContain('plan               what a run would do')
     } finally {
       write.mockRestore()
     }
@@ -75,7 +75,7 @@ describe('main', () => {
   })
 
   it('turns a DeployError into exit 1 and an unexpected error into a one-line report', async () => {
-    const refused = new FakeHost().on(({ command }) => (command === 'git' ? ok(`${'c'.repeat(40)}\n`) : undefined))
+    const refused = new FakeHost().on(({ command, args }) => (command === 'git' ? ok(args[0] === 'status' ? '' : `${'c'.repeat(40)}\n`) : undefined))
     expect(await main(['rollback', '--config=deploy.config.mjs'], refused, dir)).toBe(1)
     expect(refused.transcript).toContain('no earlier release to go back to')
 
