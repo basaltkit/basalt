@@ -23,6 +23,8 @@ export interface JsonSession {
   output: EventOutput
   /** The config is known: its `.env` files and which keys are secrets. */
   watchEnv(config: DeployConfig, dir: string): void
+  /** Learns the secrets among key/value pairs (`config` says which keys it declares secret); warns once for each one too short. */
+  learn(pairs: Iterable<[string, string]>, config?: DeployConfig): void
   /** Learns a secret answer (called by the answer channel the moment it parses one). */
   secret(key: string, value: string): void
   /** Where the `.env` answers come from (`--answers=stdin`), once the config says what it asks. */
@@ -108,6 +110,7 @@ export function jsonHost(base: Host, writer: EventWriter, redactor: Redactor, op
     host,
     output,
     useAnswers(next) { channel = next },
+    learn(pairs, given) { warnShort(learnSecrets(redactor, pairs, given ?? config)) },
     watchEnv(next, dir) {
       config = next
       envFiles.add(resolve(dir, next.env.file ?? '.env'))

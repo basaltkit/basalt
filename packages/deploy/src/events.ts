@@ -85,44 +85,61 @@ export function sanitize(text: string, keepNewlines = false): string {
 
 export const MAX_LINE_BYTES = 8 * 1024
 
-/** At most {@link MAX_LINE_BYTES} of UTF-8, never half a character. */
+/** At most {@link MAX_LINE_BYTES} of UTF-8, never half a character, never half a `[redacted:KEY]` marker. */
 export function truncate(text: string, max = MAX_LINE_BYTES): { text: string; truncated: boolean } {
   const bytes = Buffer.from(text, 'utf8')
   if (bytes.length <= max) return { text, truncated: false }
-  return { text: bytes.subarray(0, max).toString('utf8').replace(/�+$/, ''), truncated: true }
+  const cut = bytes.subarray(0, max).toString('utf8').replace(/\uFFFD+$/, '')
+  return { text: cut.replace(/\[(?:r(?:e(?:d(?:a(?:c(?:t(?:e(?:d(?::[A-Za-z0-9_]*)?)?)?)?)?)?)?)?)?$/, ''), truncated: true }
+}
+
+/** One line of a stream; `cut` when it had no end within the bound and the rest of it was dropped. */
+export interface SplitLine {
+  text: string
+  cut: boolean
 }
 
 /**
  * Splits a stream of text into lines: `\n`, `\r\n`, and a lone `\r` (a
  * progress bar redrawing its line). A line longer than `maxPending` without
- * an end is cut there, so memory stays bounded.
+ * an end is cut there and the rest of it, up to its end, is dropped: memory
+ * stays bounded, and a secret the cut splits never goes out as a second
+ * piece that no longer matches it (the writer drops the first piece's tail).
  */
 export class LineSplitter {
   private pending = ''
+  /** Inside a line already cut: everything up to its end is dropped. */
+  private skipping = false
   constructor(private readonly maxPending = 64 * 1024) {}
 
-  push(text: string): string[] {
+  push(text: string): SplitLine[] {
     this.pending += text
-    const lines: string[] = []
+    const lines: SplitLine[] = []
     for (;;) {
       const match = /\r\n|\n|\r/.exec(this.pending)
       if (!match) break
       // A '\r' at the very end may be the first half of '\r\n'.
       if (match[0] === '\r' && match.index === this.pending.length - 1) break
-      lines.push(this.pending.slice(0, match.index))
+      if (!this.skipping) lines.push({ text: this.pending.slice(0, match.index), cut: false })
+      this.skipping = false
       this.pending = this.pending.slice(match.index + match[0].length)
     }
-    while (this.pending.length > this.maxPending) {
-      lines.push(this.pending.slice(0, this.maxPending))
-      this.pending = this.pending.slice(this.maxPending)
+    if (this.skipping) {
+      // Keep a lone '\r' at the end: it may begin the '\r\n' that ends the dropped line.
+      this.pending = this.pending.endsWith('\r') ? '\r' : ''
+    } else if (this.pending.length > this.maxPending) {
+      lines.push({ text: this.pending.slice(0, this.maxPending), cut: true })
+      this.pending = ''
+      this.skipping = true
     }
     return lines
   }
 
-  end(): string[] {
-    const rest = this.pending.replace(/\r$/, '')
+  end(): SplitLine[] {
+    const rest = this.skipping ? '' : this.pending.replace(/\r$/, '')
     this.pending = ''
-    return rest ? [rest] : []
+    this.skipping = false
+    return rest ? [{ text: rest, cut: false }] : []
   }
 }
 
@@ -163,6 +180,13 @@ export class Redactor {
     return this.needles.size
   }
 
+  /** The length of the longest needle: a cut can split at most `longest - 1` characters of one. */
+  get longest(): number {
+    let longest = 0
+    for (const needle of this.needles.keys()) longest = Math.max(longest, needle.length)
+    return longest
+  }
+
   apply(text: string): { text: string; hit: boolean } {
     if (this.needles.size === 0 || text.length < MIN_REDACTED_LENGTH) return { text, hit: false }
     this.sorted ??= [...this.needles].sort((a, b) => b[0].length - a[0].length)
@@ -182,10 +206,32 @@ const INFRA_SECRETS = /^BASALT_(PG|REDIS|MINIO)_/
 /** Whether the value of `key` is a secret for this config: generated, asked as a secret, or named like one. */
 export function isSecretKey(key: string, config?: DeployConfig): boolean {
   if (SENSITIVE.test(key) || INFRA_SECRETS.test(key)) return true
+  return declaredSecret(key, config)
+}
+
+function declaredSecret(key: string, config: DeployConfig | undefined): boolean {
   if (!config) return false
   if (config.env.generate && key in config.env.generate) return true
   const question = config.env.ask?.[key as keyof typeof config.env.ask] as { secret?: boolean } | undefined
   return question?.secret === true
+}
+
+const URL_NAMED = /_URL$|_DSN$/
+/** `scheme://host[:port][/]` — no user, password, path, query or fragment: nothing in it can be a secret. */
+const BARE_ORIGIN = /^[a-z][a-z0-9+.-]*:\/\/[^/?#@\s]+\/?$/i
+
+/**
+ * Whether the whole value of `key` is learnt as a secret. A key that is a
+ * secret only by its `_URL`/`_DSN` suffix and holds a bare origin
+ * (`APP_URL=https://app.example.com`) is not: that is the app's public
+ * address, and redacting it would hide the result's `url` and every health
+ * line. A URL with a path, a query or a user is learnt whole (a webhook URL's
+ * path is its secret); a URL's password is always learnt on its own.
+ */
+export function isSecretValue(key: string, value: string, config?: DeployConfig): boolean {
+  if (!isSecretKey(key, config)) return false
+  if (!URL_NAMED.test(key) || !BARE_ORIGIN.test(value)) return true
+  return SENSITIVE.test(key.replace(URL_NAMED, '')) || INFRA_SECRETS.test(key) || declaredSecret(key, config)
 }
 
 /** The password inside a `scheme://user:password@…` value, as written and decoded. */
@@ -210,7 +256,7 @@ export function learnSecrets(redactor: Redactor, pairs: Iterable<[string, string
   const short: string[] = []
   const note = (key: string, value: string) => { if (redactor.add(key, value) === 'short') short.push(key) }
   for (const [key, value] of pairs) {
-    if (isSecretKey(key, config)) note(key, value)
+    if (isSecretValue(key, value, config)) note(key, value)
     for (const password of urlPasswords(value)) note(key, password)
   }
   return short
@@ -242,9 +288,12 @@ export interface WriterOptions {
 
 /**
  * The one place events are serialised: it assigns `seq` and `ts`, redacts
- * every string field BEFORE `JSON.stringify` (a secret with `"` or `\` would
- * be escaped in the JSON and missed afterwards), then writes the line to
- * stdout and to the run log.
+ * and sanitises every string field BEFORE `JSON.stringify` (a secret with `"`
+ * or `\` would be escaped in the JSON and missed afterwards; a child's stderr
+ * quoted in an error message carries no terminal escape), cuts a `log` line
+ * only once it is redacted (a secret across the cut would match neither
+ * half), then writes the line to stdout and to the run log. Nothing is
+ * written after `done`.
  */
 export class EventWriter implements Reporter {
   private seq = 0
@@ -272,13 +321,25 @@ export class EventWriter implements Reporter {
   }
 
   private write(body: EventBody, notice: boolean): void {
+    // `done` is the last line: a late answer (a finding) or a stray write after it is dropped.
+    if (this.last.done) return
     let line: string
     let event: DeployEvent
     const capApplies = Boolean(this.log || this.backlog || this.options.stdoutIsRunLog)
     try {
-      const { value, hit } = redactDeep(body, this.options.redactor)
+      const { redactor } = this.options
+      // A line cut by the splitter: its tail may hold the first half of a secret whose rest was dropped.
+      const source = body.type === 'log' && body.truncated ? { ...body, text: body.text.slice(0, Math.max(0, body.text.length - Math.max(0, redactor.longest - 1))) } : body
+      const { value, hit } = redactDeep(source, redactor)
       const redacted = value as Record<string, unknown>
-      if (redacted['type'] === 'log') redacted['redacted'] = hit || redacted['redacted'] === true
+      if (redacted['type'] === 'log') {
+        redacted['redacted'] = hit || redacted['redacted'] === true
+        const cut = truncate(redacted['text'] as string)
+        if (cut.truncated) {
+          redacted['text'] = cut.text
+          redacted['truncated'] = true
+        }
+      }
       event = {
         v: 1,
         ts: this.options.now().toISOString(),
@@ -345,10 +406,11 @@ export class EventWriter implements Reporter {
   }
 }
 
+/** Every string redacted, and stripped of escapes and control characters (newlines and tabs kept). */
 function redactDeep(value: unknown, redactor: Redactor): { value: unknown; hit: boolean } {
   if (typeof value === 'string') {
     const { text, hit } = redactor.apply(value)
-    return { value: text, hit }
+    return { value: sanitize(text, true), hit }
   }
   if (Array.isArray(value)) {
     let hit = false
@@ -373,14 +435,50 @@ function redactDeep(value: unknown, redactor: Redactor): { value: unknown; hit: 
 }
 
 /**
- * Text written to the deploy's stdout by code that is not this tool's — the
- * config's `console.log` — as `log{stream:'foreign'}` events (RFC 0008 §5.4):
- * split, sanitised, cut, never interpreted.
+ * Text written to the deploy's stdout or stderr by code that is not this
+ * tool's — the config's `console.log` — as `log{stream:'foreign'}` events
+ * (RFC 0008 §5.4): split, sanitised, redacted and cut by the writer, never
+ * interpreted.
+ *
+ * Until `release()`, the lines are held (at most {@link MAX_HELD_BYTES}):
+ * the config prints while it loads, before the redactor has read the `.env`
+ * that holds the secrets it might print.
  */
-export function foreignSink(reporter: Reporter, step: () => StepId | undefined): (text: string) => void {
+export interface ForeignSink {
+  write(text: string): void
+  /** The secrets are known: what was held is emitted, and every line from now on. */
+  release(): void
+  /** The text after the last newline, then {@link release}. */
+  end(): void
+}
+
+export const MAX_HELD_BYTES = 1024 * 1024
+
+export function foreignSink(reporter: Reporter, step: () => StepId | undefined): ForeignSink {
   const lines = new LineSplitter()
-  return (text) => {
-    for (const line of lines.push(text)) emitLine(reporter, 'foreign', 'warn', line, step())
+  let held: Array<{ line: SplitLine; step: StepId | undefined }> | undefined = []
+  let heldBytes = 0
+  let dropped = 0
+  const take = (line: SplitLine) => {
+    if (!held) { emitLine(reporter, 'foreign', 'warn', line, step()); return }
+    heldBytes += line.text.length
+    if (heldBytes > MAX_HELD_BYTES) { dropped++; return }
+    held.push({ line, step: step() })
+  }
+  const release = () => {
+    if (!held) return
+    const lines = held
+    held = undefined
+    for (const { line, step: at } of lines) emitLine(reporter, 'foreign', 'warn', line, at)
+    if (dropped > 0) reporter.emit({ type: 'log', stream: 'tool', level: 'warn', text: `${dropped} line(s) the config printed while it loaded were dropped (more than ${MAX_HELD_BYTES / 1024} KiB)`, redacted: false })
+  }
+  return {
+    write(text) { for (const line of lines.push(text)) take(line) },
+    release,
+    end() {
+      for (const line of lines.end()) take(line)
+      release()
+    },
   }
 }
 
@@ -400,14 +498,14 @@ export function childSink(reporter: Reporter, source: string, step: StepId | und
   }
 }
 
-function emitLine(reporter: Reporter, stream: 'child' | 'foreign', level: LogLevel, raw: string, step: StepId | undefined, source?: string): void {
-  const clean = sanitize(raw)
-  if (clean.trim() === '') return
-  const { text, truncated } = truncate(clean)
+/** One line from outside, sanitised; the writer redacts it, then cuts it at {@link MAX_LINE_BYTES}. */
+function emitLine(reporter: Reporter, stream: 'child' | 'foreign', level: LogLevel, line: SplitLine, step: StepId | undefined, source?: string): void {
+  const text = sanitize(line.text)
+  if (text.trim() === '') return
   reporter.emit({
     type: 'log', stream, level, text, redacted: false,
     ...(step ? { step } : {}),
     ...(source ? { source } : {}),
-    ...(truncated ? { truncated: true as const } : {}),
+    ...(line.cut ? { truncated: true as const } : {}),
   })
 }
