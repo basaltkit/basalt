@@ -49,7 +49,7 @@ describe('reading --json output', () => {
     expect(flood.reader.hello).toBeUndefined()
   })
 
-  it('after hello: a malformed line, a gap, a repeat, a line after done, an oversized line, a cut line — corrupt, never skipped', () => {
+  it('after hello: a malformed line, a gap, a repeat, a line after done, an oversized line — corrupt, never skipped', () => {
     const cases: Array<[string[], RegExp]> = [
       [[hello, 'not json'], /corrupt at line 2: not JSON/],
       [[hello, log(2, 'gap')], /seq 2, expected 1/],
@@ -64,11 +64,18 @@ describe('reading --json output', () => {
     }
     expect(read([`${hello}\n${'x'.repeat(MAX_LINE_BYTES + 1)}\n`]).reader.failure?.message).toMatch(/longer than/)
     expect(read([`${hello}\n`, Buffer.alloc(MAX_LINE_BYTES + 1, 0x78)]).reader.failure?.message).toMatch(/longer than/)
-    expect(read([`${hello}\n${log(1, 'cut')}`]).reader.failure?.message).toMatch(/mid-line/)
+    // A partial tail after done is still output after done.
+    expect(read([`${hello}\n${done(1)}\n{"v":1`]).reader.failure).toMatchObject({ kind: 'corrupt', message: expect.stringMatching(/after done/) })
     // The reader stops at the first failure.
     const stopped = new ProtocolReader()
     stopped.push(Buffer.from(`${hello}\nbad\n`))
     expect(stopped.push(Buffer.from(`${done(1)}\n`))).toBe(false)
+  })
+
+  it('a stream cut mid-line before done is truncated (a dropped connection), not corrupt; the complete lines stand', () => {
+    const { reader, events } = read([`${hello}\n${log(1, 'whole')}\n{"v":1,"ts":"2026-10-11T12:0`])
+    expect(reader.failure).toEqual({ kind: 'truncated', message: 'the output was cut mid-line at line 3' })
+    expect(events.map((e) => e.type)).toEqual(['hello', 'log'])
   })
 
   it('a hello of another protocol is a version mismatch, not foreign text', () => {

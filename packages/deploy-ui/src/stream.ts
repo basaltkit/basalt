@@ -23,6 +23,8 @@ export function sanitizeText(text: string): string {
 export type StreamFailure =
   | { kind: 'corrupt'; message: string }
   | { kind: 'protocol-version'; message: string }
+  /** The output stopped mid-line before `done`: a cut connection, not a lying server (a retry may help). */
+  | { kind: 'truncated'; message: string }
 
 export interface ReaderOptions {
   /** `attach`: the outer stream wraps the run's events; both sequences are checked. */
@@ -83,13 +85,19 @@ export class ProtocolReader {
     return true
   }
 
-  /** The end of stdout: a partial last line is foreign before `hello` and corrupt after it. */
+  /**
+   * The end of stdout: a partial last line is foreign before `hello`, corrupt
+   * after `done` (nothing may follow it), and otherwise a cut stream — a TCP
+   * or SSH drop can end the output at any byte, and an attach resumes from
+   * the last complete run event.
+   */
   end(): void {
     if (this.failure || this.pending.length === 0) return
     const rest = this.pending.toString('utf8')
     this.pending = Buffer.alloc(0)
     if (!this.hello) this.foreign(rest)
-    else this.fail({ kind: 'corrupt', message: `the output ends mid-line at line ${this.lineNo + 1}` })
+    else if (this.done) this.fail({ kind: 'corrupt', message: `output after done at line ${this.lineNo + 1}` })
+    else this.fail({ kind: 'truncated', message: `the output was cut mid-line at line ${this.lineNo + 1}` })
   }
 
   private fail(failure: StreamFailure): false {
