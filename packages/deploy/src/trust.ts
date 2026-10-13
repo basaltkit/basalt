@@ -21,8 +21,10 @@ const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/
 
 /** Directory served by the proxy, relative to the checkout: inside it, never the checkout itself, never a dot directory. */
 export function isWebRoot(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 200) return false
-  return value.replace(/\/$/, '').split('/').every((segment) => SEGMENT.test(segment))
+  if (typeof value !== 'string' || value.length > 200) return false
+  // `./web/dist` is `web/dist`; `.` and `./` stay refused (the checkout itself).
+  const relative = value.replace(/^(\.\/)+/, '').replace(/\/$/, '')
+  return relative.length > 0 && relative.split('/').every((segment) => SEGMENT.test(segment))
 }
 
 /** `/api`, `/api/v1/`: URL path segments, no dot segments, nothing a config file would parse. */
