@@ -32,7 +32,7 @@ As the app user, in the checkout (node node_modules/@basaltkit/deploy/dist/bin.j
 
 As root, with a copy of the tool root owns — never the checkout's node_modules:
   cd / && sudo -H npx --yes --package=@basaltkit/deploy@<exact version> -- basalt-deploy <command>
-  bootstrap --user=<name> [--dir=<checkout>] [--dry-run] [--proxy=…] [--swap-gb=<n>] [--no-firewall]
+  bootstrap --user=<name> --dir=<checkout> [--dry-run] [--proxy=…] [--swap-gb=<n>] [--no-firewall]
                      a fresh Ubuntu/Debian server, once: Docker, Node, pnpm; as the user
                      pnpm install, env, install-plan; then swap, ufw, Caddy and install
   install --plan=<file> --user=<name>
@@ -182,8 +182,10 @@ export async function main(argv: string[], host: Host = nodeHost(), cwd: string 
       if (proxy !== undefined && proxy !== 'apache' && proxy !== 'caddy' && proxy !== 'none') throw new DeployError('--proxy is apache, caddy or none')
       const swap = flags.values.get('swap-gb')
       if (swap !== undefined && !/^\d{1,2}$/.test(swap)) throw new DeployError('--swap-gb takes a whole number of GB')
+      // Never the working directory: root's commands run from `cd /`, and bootstrap may chown -R it.
       const dirFlag = flags.values.get('dir')
-      return await bootstrap(host, dirFlag ? resolve(cwd, dirFlag) : cwd, {
+      if (!dirFlag || !isAbsolute(dirFlag)) throw new DeployError('bootstrap needs --dir=<checkout>, an absolute path (the app user\'s clone of the app) — it is never taken from the working directory')
+      return await bootstrap(host, dirFlag, {
         user: flags.values.get('user') ?? host.env['SUDO_USER'],
         ...(proxy ? { proxy } : {}),
         ...(swap === undefined ? {} : { swapGb: Number(swap) }),
