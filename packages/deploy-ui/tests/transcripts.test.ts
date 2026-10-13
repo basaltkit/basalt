@@ -66,6 +66,8 @@ const state = () => `${dir}/.basalt`
 /** A detached child on the same fake server, in-process (as @basaltkit/deploy's own runs tests do). */
 function detachInProcess(parent: FakeHost): { done: () => Promise<number> } {
   let child: Promise<number> | undefined
+  // The run id is stamped from the clock, which the previous detach's polls moved by a timing-dependent amount.
+  parent.clock = new Date(TS).getTime()
   parent.sleep = async (ms) => { parent.clock += ms; await new Promise((r) => setTimeout(r, 1)) }
   parent.onDetached = (call) => {
     const host = new FakeHost()
