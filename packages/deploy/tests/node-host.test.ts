@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { DeployContext } from '../src/context.js'
 import { checkSchema } from '../src/env-check.js'
-import { nodeHost, type Output } from '../src/host.js'
+import { nodeHost, withOwnNode, type Output } from '../src/host.js'
 import { acmeConfig } from './fake-host.js'
 
 const quiet: Output = { step() {}, info() {}, ok() {}, warn() {}, error() {} }
@@ -14,6 +14,28 @@ afterAll(async () => { await rm(dir, { recursive: true, force: true }) })
 
 const ctxFor = (schema: string): DeployContext => ({
   config: acmeConfig({ env: { schema } }), dir, host: nodeHost(quiet), pm: 'pnpm', envPath: join(dir, '.env'), stateDir: join(dir, '.basalt'),
+})
+
+describe('withOwnNode', () => {
+  it('puts the running node\'s directory first, once (nvm puts it on PATH only in an interactive shell)', () => {
+    const nvm = '/home/deployer/.nvm/versions/node/v24.0.0/bin/node'
+    expect(withOwnNode('/usr/local/bin:/usr/bin:/bin', nvm)).toBe('/home/deployer/.nvm/versions/node/v24.0.0/bin:/usr/local/bin:/usr/bin:/bin')
+    expect(withOwnNode('/usr/bin:/home/deployer/.nvm/versions/node/v24.0.0/bin:/bin', nvm)).toBe('/home/deployer/.nvm/versions/node/v24.0.0/bin:/usr/bin:/bin')
+    expect(withOwnNode(undefined, '/usr/bin/node')).toBe('/usr/bin')
+    expect(withOwnNode('::/usr/bin:', '/usr/bin/node')).toBe('/usr/bin')
+  })
+
+  it('children of the real host find what sits next to the running node, even with a PATH that lacks it', async () => {
+    const saved = process.env['PATH']
+    process.env['PATH'] = '/nonexistent'
+    try {
+      const result = await nodeHost(quiet).exec('node', ['-e', 'process.stdout.write(process.execPath)'], { cwd: dir })
+      expect(result.code).toBe(0)
+      expect(result.stdout).toBe(process.execPath)
+    } finally {
+      process.env['PATH'] = saved
+    }
+  })
 })
 
 describe('the real host', () => {

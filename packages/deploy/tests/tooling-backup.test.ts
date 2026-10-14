@@ -102,7 +102,18 @@ describe('where the dumps go, before install', () => {
     const host = ignoredBy(0).put(`${DIR}/backups/predeploy/20261001-abc.dump`, 'x').put(`${DIR}/backups/predeploy/notes.txt`, 'x')
     const ctx = { ...context(host), stateDir: '/var/lib/basalt/acme' }
     expect((await backupPlaceFindings(ctx)).map((f) => f.message)).toEqual([`1 dump(s) left in ${DIR}/backups/predeploy (the old place): new dumps go to /var/lib/basalt/acme/backups, and nothing prunes these`])
+    expect((await backupPlaceFindings(ctx))[0]?.fix).toBe(`move them next to the new ones (install -d -m 700 /var/lib/basalt/acme/backups && mv ${DIR}/backups/predeploy/*.dump /var/lib/basalt/acme/backups/) or delete them`)
     expect(await backupPlaceFindings({ ...ctx, config: acmeConfig({ backup: { dir: 'backups/predeploy' } }) })).toEqual([])
+  })
+
+  it('says when /var/lib/basalt is there but this app\'s state is not reachable (the deploy falls back to the checkout)', async () => {
+    const fallback = context(ignoredBy(0).dir('/var/lib/basalt', 0o700))
+    const findings = (await backupPlaceFindings(fallback)).filter((f) => f.id === 'state-dir')
+    expect(findings.map((f) => f.message)).toEqual([`/var/lib/basalt/acme is missing or not reachable by this user: the deploy's state (release history, lock, dumps) stays in ${DIR}/.basalt, inside the checkout`])
+    expect(findings[0]?.fix).toMatch(/install-plan/)
+    // No /var/lib/basalt at all (never installed), or the state is there: quiet.
+    expect((await backupPlaceFindings(context(ignoredBy(0)))).filter((f) => f.id === 'state-dir')).toEqual([])
+    expect((await backupPlaceFindings({ ...context(ignoredBy(0).dir('/var/lib/basalt', 0o755)), stateDir: '/var/lib/basalt/acme' })).filter((f) => f.id === 'state-dir')).toEqual([])
   })
 
   it('a hold written before install is still read, and cleared, from the checkout', async () => {

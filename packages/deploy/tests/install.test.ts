@@ -225,6 +225,13 @@ describe('install (root\'s half)', () => {
     expect(again.prompts).toEqual([])
   })
 
+  it('makes an existing /var/lib/basalt that only root can enter (0700) enterable, so the app user reaches its state', async () => {
+    const host = rootServer().dir('/var/lib/basalt', 0o700, ROOT)
+    expect(await install(host, plan(), 'ubuntu')).toBe(0)
+    expect(await host.stat('/var/lib/basalt')).toMatchObject({ uid: 0, mode: 0o755 })
+    expect(await host.stat('/var/lib/basalt/acme')).toMatchObject({ uid: USER.uid, mode: 0o700 })
+  })
+
   it('serves the app user\'s own checkout only', async () => {
     const other = rootServer().dir(DIR, 0o755, ROOT)
     await expect(install(other, plan(), 'ubuntu')).rejects.toThrow(`${DIR} is not ubuntu's (uid 0)`)

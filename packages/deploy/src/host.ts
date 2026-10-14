@@ -5,7 +5,7 @@ import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, readlink, realp
 import http from 'node:http'
 import https from 'node:https'
 import { hostname } from 'node:os'
-import { dirname } from 'node:path'
+import { delimiter, dirname } from 'node:path'
 import { createInterface } from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import tls from 'node:tls'
@@ -254,6 +254,19 @@ export function stopOwnGroup(pid = process.pid, kill: (pid: number, signal: Node
   }
 }
 
+/**
+ * `PATH` with the directory of the node running the deploy first. A version
+ * manager (nvm, fnm, volta) puts node and its pnpm/corepack shims on `PATH`
+ * only in an interactive shell, so over `ssh host cmd`, in cron or under the
+ * local UI the children (`pnpm`, `node`) would not be found, or would be
+ * another node than the one the deploy runs on.
+ */
+export function withOwnNode(path: string | undefined, execPath: string): string {
+  const own = dirname(execPath)
+  const entries = (path ?? '').split(delimiter).filter((entry) => entry !== '' && entry !== own)
+  return [own, ...entries].join(delimiter)
+}
+
 export function nodeHost(output: Output = consoleOutput()): Host {
   return {
     out: output,
@@ -306,6 +319,7 @@ export function nodeHost(output: Output = consoleOutput()): Host {
         : { ...process.env }
       for (const key of options.unset ?? []) delete base[key]
       const env = { ...base, ...options.env }
+      if (options.env?.['PATH'] === undefined) env['PATH'] = withOwnNode(env['PATH'], process.execPath)
       let fd: number | undefined
       if (options.stdoutFile) {
         fd = openSync(options.stdoutFile, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC, 0o600)
