@@ -177,7 +177,7 @@ none for `status`).
 | `failed` | any other `DeployError` | 1 |
 | `answer-missing`, `answer-invalid`, `answer-unknown`, `answer-timeout` | §7 | 1 |
 | `protocol`, `protocol-version`, `usage`, `unsupported` | §3, §7.3, §9 | 1 |
-| `not-found`, `detach-unconfirmed`, `run-vanished` | §8 | 1 |
+| `not-found`, `detach-unconfirmed`, `run-vanished`, `already-cancelled` | §8 | 1 |
 | `unexpected` | anything else (the stack only with `BASALT_DEBUG`, as a `log` line, redacted) | 1 |
 
 `DeployError` gains an optional `code` (a non-breaking addition); `cli.ts`
@@ -553,7 +553,7 @@ parent killed after step 7 changes nothing.
   killer). Attach's exit code: the run's `exitCode` when `done` was seen, else 1.
 - Attach takes no lock and changes nothing.
 
-### 8.5 `cancel <runId> [--json]`
+### 8.5 `cancel <runId> [--first-only] [--json]`
 
 Reads the lock. It sends `SIGTERM` to `holder.pid` only when: the holder's
 `runId` is this one, its `host` is this host, the pid is alive, and (Linux)
@@ -572,6 +572,15 @@ child that ignores `SIGTERM` can outlive it: the lock of a detached run whose
 process is gone is therefore not stale while any process of its group is
 alive — the next deploy is refused (`locked`, naming `kill -TERM -<pid>`) and
 takes the lock over once the group is empty.
+
+`--first-only` (added with RFC 0009's review) makes the choice the server's:
+whether a cancel is the first or the second is decided by `<runId>.cancel`,
+the marker the first one creates atomically, and no client can know it
+beforehand. A run already cancelled once, from a terminal or from another UI
+session, makes a `--first-only` cancel fail with `already-cancelled` (exit 1,
+a hint naming the plain `cancel`) and sends no signal. The local UI sends its
+first cancel with it, and the plain `cancel` only after its own second
+confirmation.
 
 ### 8.6 Audit
 
@@ -727,6 +736,10 @@ All on `FakeHost` unless noted; every existing test keeps passing.
     finishing the run log.
 
 ## 14. What phase 2 (the local UI) consumes
+
+Designed in [RFC 0009](0009-deploy-local-ui.md) and built as
+`@basaltkit/deploy-ui`; it consumes exactly the list below (`check` is left out
+of its MVP, RFC 0009 Q5).
 
 - Transport: the system `ssh -T` (BatchMode, strict host keys), one process per
   command; no agent on the server.

@@ -37,7 +37,10 @@ As the app user, in the checkout (node node_modules/@basaltkit/deploy/dist/bin.j
                      prints the root command for install
   attach <runId> --json [--from-seq=<n>] [--follow]
                      the events of a run (run/env/rollback --json), from any seq
-  cancel <runId>     SIGTERM to a detached run (a second cancel stops it at once)
+  cancel <runId> [--first-only]
+                     SIGTERM to a detached run (a second cancel stops it at once;
+                     --first-only refuses when the run was already cancelled)
+  ui                 how to start the local UI — on YOUR machine, never on the server
 
 As root, with a copy of the tool root owns — never the checkout's node_modules:
   cd / && sudo -H npx --yes --package=@basaltkit/deploy@<exact version> -- basalt-deploy <command>
@@ -68,6 +71,24 @@ Options:
   --actor=<name>      who deploys, recorded with the release (default $BASALT_DEPLOY_ACTOR, else $USER)
   --skip=<steps>      ${SKIPPABLE.join(', ')} (comma-separated); --no-fetch = --skip=fetch
   -h, --help
+`
+
+/**
+ * `basalt-deploy ui` (RFC 0009 §3.4): a hint, nothing else. The UI is a
+ * separate package that runs on the operator's machine and drives this CLI
+ * over ssh; this package gains no listener and no dependency for it.
+ */
+export const UI_HINT = `The deploy UI runs on YOUR machine, never on the server: it listens on
+127.0.0.1 only and drives this server over your own ssh, as the app user.
+
+On your machine (not here, and not in the app's package.json — the deploy
+installs devDependencies on the server):
+
+  npx @basaltkit/deploy-ui@<exact version>
+
+It opens your browser. Add a target (ssh destination and this checkout's
+directory), check the connection, plan, deploy. See the @basaltkit/deploy-ui
+README for its security model.
 `
 
 /** Another deploy holds the lock: nothing was done. */
@@ -102,7 +123,7 @@ function parse(argv: string[]): Flags {
   return { command, args, values, switches }
 }
 
-const COMMANDS = ['init', 'check', 'plan', 'run', 'env', 'rollback', 'status', 'install-plan', 'install', 'bootstrap', 'attach', 'cancel']
+const COMMANDS = ['init', 'check', 'plan', 'run', 'env', 'rollback', 'status', 'install-plan', 'install', 'bootstrap', 'attach', 'cancel', 'ui']
 /** The commands that take the deploy lock, and so write a run log under --json. */
 const LOCKED = new Set(['run', 'env', 'rollback'])
 
@@ -357,6 +378,7 @@ function outcomeError(command: string, writer: EventWriter): EventBody {
 function checkFlags(flags: Flags, json: boolean, env: Host['env']): void {
   const via = flags.values.get('via')
   if (via !== undefined && via !== 'ui') throw usage('--via takes only ui')
+  if ((flags.switches.has('first-only') || flags.values.has('first-only')) && (flags.command !== 'cancel' || flags.values.has('first-only'))) throw usage('--first-only is a switch of cancel')
   const protocolOnly = ['answers', 'answer-timeout', 'detach', 'from-seq', 'follow', 'run-id']
   if (!json) {
     for (const name of protocolOnly) if (flags.values.has(name) || flags.switches.has(name)) throw usage(`--${name} needs --json`)
@@ -367,8 +389,9 @@ function checkFlags(flags: Flags, json: boolean, env: Host['env']): void {
   const version = flags.values.get('json')
   if (version !== undefined && version !== '1') throw new DeployError(`--json=${version}: this basalt-deploy ${VERSION} speaks protocol 1`, [], 'protocol-version')
   const { command } = flags
-  if (command === 'init' || command === 'install' || command === 'bootstrap') {
-    throw new DeployError(`${command} does not speak --json: ${command === 'init' ? 'it writes code into the checkout' : 'root\'s confirmations are the control, never a pipe'}`, [], 'unsupported')
+  if (command === 'init' || command === 'install' || command === 'bootstrap' || command === 'ui') {
+    const why = command === 'init' ? 'it writes code into the checkout' : command === 'ui' ? 'it only prints how to start the local UI, which runs on the operator\'s machine' : 'root\'s confirmations are the control, never a pipe'
+    throw new DeployError(`${command} does not speak --json: ${why}`, [], 'unsupported')
   }
   if (flags.switches.has('help') || !command || !COMMANDS.includes(command)) throw usage(command && !flags.switches.has('help') ? `unknown command "${command}"` : 'a command is needed', 'basalt-deploy --help lists them')
   if (flags.switches.has('answers') || (flags.values.has('answers') && flags.values.get('answers') !== 'stdin')) throw usage('--answers takes only stdin')
@@ -412,6 +435,11 @@ async function session(flags: Flags, host: Host, cwd: string, reporter: Reporter
       skip.push(name as Skippable)
     }
     if (flags.switches.has('no-fetch')) skip.push('fetch')
+    // A hint: no config, no server state, nothing spawned.
+    if (flags.command === 'ui') {
+      process.stderr.write(UI_HINT)
+      return 0
+    }
 
     const file = flags.values.get('config') ?? 'deploy.config.ts'
     // Root's commands: never deploy.config.ts, never the checkout's code.
@@ -497,7 +525,7 @@ async function session(flags: Flags, host: Host, cwd: string, reporter: Reporter
       }
       case 'cancel': {
         const runId = flags.args[0] as string
-        const sent = await cancel(host, ctx.stateDir, runId)
+        const sent = await cancel(host, ctx.stateDir, runId, { firstOnly: flags.switches.has('first-only') })
         host.out.ok(`SIGTERM sent to run ${runId} (pid ${sent.pid})${sent.second ? ' — the second one: it stops at once, mid-step, and leaves a stale lock' : ' — it stops at the next safe point'}`)
         host.out.result?.('cancel', { runId, pid: sent.pid, signal: 'SIGTERM', second: sent.second })
         return 0
