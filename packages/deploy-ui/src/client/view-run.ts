@@ -2,7 +2,9 @@ import type { CancelResult, DeployEvent, StepId } from '@basaltkit/deploy/protoc
 import type { App } from './app.js'
 import { ApiError } from './api.js'
 import { confirmDialog } from './dialog.js'
-import { append, button, el, replace } from './dom.js'
+import { append, button, el, quiet, replace } from './dom.js'
+import { icon } from './icons.js'
+import { findingItem } from './view-plan.js'
 import type { CommandReply, StreamMessage, TargetView } from './messages.js'
 import { banner, describe, errorBanner, problem } from './reply.js'
 import { clean } from './sanitize.js'
@@ -30,6 +32,7 @@ export class RunView {
   /** The run's own `done` was seen (or attach said it had finished): nothing more will come. */
   private runFinished = false
   private readonly findings: HTMLElement
+  private readonly findingsCard: HTMLElement
   private readonly log: HTMLElement
   private readonly outcome: HTMLElement
   private readonly actions: HTMLElement
@@ -41,21 +44,28 @@ export class RunView {
   private lastError: DeployEvent | undefined
 
   constructor(private readonly app: App, private readonly target: TargetView, title: string, readonly runId: string | undefined) {
-    this.stateLine = el('p', { class: 'muted', role: 'status', aria: { live: 'polite' } })
+    this.stateLine = el('p', { class: 'run-state', role: 'status', aria: { live: 'polite' } })
     this.steps = el('ol', { class: 'steps', aria: { label: 'Steps' } })
-    this.findings = el('ul', { aria: { label: 'Findings' } })
+    this.findings = el('ul', { class: 'findings', aria: { label: 'Findings' } })
     this.log = el('ol', { class: 'log', aria: { label: 'Log' } })
-    this.outcome = el('div')
-    this.actions = el('div', { class: 'row' })
+    this.outcome = el('div', { class: 'run-outcome' })
+    this.actions = el('div', { class: 'page-actions' })
     this.diagnostics = el('pre', { class: 'diagnostics', hidden: true })
+    this.findingsCard = el('div', { class: 'card', hidden: true },
+      el('div', { class: 'card-head' }, el('h3', {}, 'Findings')), el('div', { class: 'card-body flush' }, this.findings))
     this.element = el('section', { aria: { labelledby: 'run-title' } },
-      el('h2', { id: 'run-title' }, title),
-      el('p', { class: 'muted' }, `${target.name} · ${target.ssh} · ${target.dir}`),
-      this.stateLine, this.actions,
-      el('h3', {}, 'Steps'), this.steps,
-      this.findings,
-      el('h3', {}, 'Log'), this.log,
+      el('header', { class: 'page-head' },
+        el('div', { class: 'page-title' }, el('h2', { id: 'run-title', class: 'mono-title' }, title),
+          el('p', { class: 'page-sub' }, `${target.name} · ${target.ssh} · ${target.dir}`)),
+        this.actions),
+      this.stateLine,
       this.outcome,
+      el('div', { class: 'run-grid' },
+        el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h3', {}, 'Steps')), el('div', { class: 'card-body' }, this.steps)),
+        el('div', { class: 'console' },
+          el('div', { class: 'console-head' }, el('h3', {}, icon('terminal'), 'Log'), el('span', { class: 'console-meta' }, target.name)),
+          this.log)),
+      this.findingsCard,
       this.diagnostics)
     this.renderActions()
   }
@@ -103,7 +113,10 @@ export class RunView {
       }
     } finally {
       this.following = false
-      if (!this.ended) this.setState(this.controller.signal.aborted ? 'Stopped watching (the run goes on on the server).' : 'The stream ended.')
+      if (!this.ended) {
+        this.settleSteps()
+        this.setState(this.controller.signal.aborted ? 'Stopped watching (the run goes on on the server).' : 'The stream ended.')
+      }
       this.renderActions()
     }
   }
@@ -126,9 +139,9 @@ export class RunView {
   }
 
   private state(message: Extract<StreamMessage, { kind: 'state' }>): void {
-    if (message.state === 'connecting') return this.setState(`Connecting to ${this.target.ssh}…`)
+    if (message.state === 'connecting') return this.setState(`Connecting to ${this.target.ssh}…`, 'live')
     if (message.state === 'reconnecting') {
-      return this.setState(`Connection lost (${clean(message.reason)}); reconnecting in ${Math.round((message.retryInMs ?? 0) / 1000)} s from event ${this.lastSeq === undefined ? 0 : this.lastSeq + 1}…`)
+      return this.setState(`Connection lost (${clean(message.reason)}); reconnecting in ${Math.round((message.retryInMs ?? 0) / 1000)} s from event ${this.lastSeq === undefined ? 0 : this.lastSeq + 1}…`, 'live')
     }
     this.ended = true
     if (message.exitCode !== undefined) this.exitCode = message.exitCode
@@ -156,11 +169,12 @@ export class RunView {
       case 'hello':
         return
       case 'step-start': {
-        const node = el('li', {}, `▸ ${event.title} …`)
+        const node = el('li', { class: 'step is-running' }, el('span', { class: 'step-icon', aria: { hidden: 'true' } }, '▸'), ' ', el('span', { class: 'step-title' }, event.title),
+          el('span', { class: 'step-meta' }, quiet(' '), quiet('…'), el('span', { class: 'step-status', aria: { hidden: 'true' } }, 'running')))
         this.stepNodes.set(event.id, node)
         this.stepTitles.set(event.id, event.title)
         this.steps.append(node)
-        this.setState(`Step: ${event.title}`)
+        this.setState(`Step: ${event.title}`, 'live')
         return
       }
       case 'step-end': {
@@ -168,14 +182,18 @@ export class RunView {
         const mark = event.status === 'ok' ? '✓' : event.status === 'skipped' ? '–' : '✗'
         // A step that started before the resume point has no node: its id names it.
         const title = this.stepTitles.get(event.id) ?? event.id
-        replace(node, el('span', { class: event.status === 'ok' ? 'status-ok' : event.status === 'skipped' ? 'muted' : 'status-err' }, `${mark} ${title}`), ` — ${event.status}, ${(event.durationMs / 1000).toFixed(1)} s`)
+        node.className = `step is-${event.status === 'ok' ? 'ok' : event.status === 'skipped' ? 'skipped' : 'failed'}`
+        // The text reads "✓ build — ok, 1.5 s"; the layout draws the mark as an icon and the duration in a column.
+        replace(node, el('span', { class: 'step-icon', aria: { hidden: 'true' } }, mark), quiet(' '), el('span', { class: 'step-title' }, title),
+          el('span', { class: 'step-meta' }, quiet(' — '), el('span', { class: 'step-status' }, event.status), quiet(', '), el('span', { class: 'step-dur' }, `${(event.durationMs / 1000).toFixed(1)} s`)))
         if (!node.parentNode) this.steps.append(node)
         return
       }
       case 'log':
-        return this.line(event.level, event.text, event.source)
+        return this.line(event.level, event.text, event.source, event.ts)
       case 'finding':
-        this.findings.append(el('li', {}, el('strong', { class: event.level === 'error' ? 'status-err' : 'status-warn' }, event.level === 'error' ? 'Error ' : 'Warning '), event.message, event.fix ? el('div', {}, 'Fix: ', el('code', {}, event.fix)) : null))
+        this.findingsCard.hidden = false
+        this.findings.append(findingItem(event))
         return
       case 'prompt':
         return this.line('warn', `the deploy asks: ${event.message} (answer it in the form and run again)`)
@@ -196,40 +214,56 @@ export class RunView {
     }
   }
 
-  private line(level: string, textValue: string, source?: string): void {
+  private line(level: string, textValue: string, source?: string, ts?: string): void {
     if (this.log.childElementCount >= MAX_LOG_LINES) {
       this.log.firstElementChild?.remove()
       this.dropped++
       this.setDropped()
     }
     const mark = level === 'error' ? '✗ ' : level === 'warn' ? '! ' : ''
-    this.log.append(el('li', { class: level === 'error' || level === 'warn' ? level : '' }, mark, source ? el('span', { class: 'src' }, `[${source}] `) : null, textValue))
+    const node = el('li', { class: level === 'error' || level === 'warn' || level === 'ok' ? level : '' }, mark, source ? el('span', { class: 'src' }, `[${source}] `) : null, textValue)
+    // The time column is drawn from an attribute: the line's text stays exactly what the deploy printed.
+    const time = /T(\d\d:\d\d:\d\d)/.exec(clean(ts))?.[1]
+    if (time) node.dataset['ts'] = time
+    this.log.append(node)
   }
 
   private note(textValue: string): void {
     this.log.append(el('li', { class: 'src' }, textValue))
   }
 
+  /** A step still running when this view stopped following: its end is not known here (it is not drawn as running). */
+  private settleSteps(): void {
+    for (const node of this.stepNodes.values()) {
+      if (!node.classList.contains('is-running')) continue
+      node.classList.replace('is-running', 'is-aborted')
+      const status = node.querySelector('.step-status')
+      if (status) replace(status, 'no end seen')
+    }
+  }
+
   private setDropped(): void {
     this.stateLine.dataset['dropped'] = String(this.dropped)
   }
 
-  private setState(textValue: string): void {
+  private setState(textValue: string, tone?: 'live' | 'ok' | 'err'): void {
+    this.stateLine.className = `run-state${tone ? ` is-${tone}` : ''}`
     replace(this.stateLine, textValue, this.dropped > 0 ? ` (${this.dropped} older log lines dropped from the page)` : '')
   }
 
   private finish(): void {
     // Status is refreshed once after any action (no polling loop).
     void this.app.refreshStatus()
+    this.settleSteps()
     if (this.failed && this.exitCode === undefined) {
       const reconnectable = this.runId !== undefined
-      this.setState(`Stopped: ${clean(this.failed.reason ?? this.failed.code)}`)
+      this.setState(`Stopped: ${clean(this.failed.reason ?? this.failed.code)}`, 'err')
       this.outcome.append(banner('err', this.failed.reason ?? 'the stream ended', [this.failed.hint ?? '', reconnectable ? 'The run may still be going on the server: re-attach to see.' : ''], [], this.failed.code))
     } else if (this.exitCode === 0) {
-      this.setState('Done.')
+      this.setState('Done.', 'ok')
       this.outcome.append(banner('ok', 'Finished: exit 0'))
     } else {
-      this.setState(`Finished with exit ${this.exitCode ?? 'unknown'}`)
+      this.setState(`Finished with exit ${this.exitCode ?? 'unknown'}`, 'err')
       if (!this.lastError) this.outcome.append(banner('err', `Finished with exit ${this.exitCode ?? 'unknown'}`))
     }
     this.renderActions()

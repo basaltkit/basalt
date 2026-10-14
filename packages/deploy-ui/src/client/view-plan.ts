@@ -1,7 +1,8 @@
 import type { DetachResult, Finding, PromptDescriptor } from '@basaltkit/deploy/protocol'
 import type { App } from './app.js'
 import { confirmDialog } from './dialog.js'
-import { append, button, el, replace, type Child } from './dom.js'
+import { append, button, card, el, emptyState, pageHead, replace, type Child } from './dom.js'
+import { icon } from './icons.js'
 import type { CommandReply } from './messages.js'
 import { banner, describe, diagnosticsBlock, problem } from './reply.js'
 import { ApiError } from './api.js'
@@ -11,18 +12,23 @@ export function renderPlan(app: App): HTMLElement {
   const reply = app.planReply
   const plan = app.plan
   const root = el('section', { aria: { labelledby: 'plan-title' } },
-    el('div', { class: 'row' }, el('h2', { id: 'plan-title' }, 'Plan & deploy'),
-      button(app.planBusy ? 'Planning…' : plan ? 'Plan again' : 'Run plan', () => { void app.runPlan() }, { disabled: app.planBusy, class: plan ? '' : 'primary' })),
-    el('p', { class: 'muted' }, 'plan changes nothing on the server. Its preflight may reach the git remote, so it can take a while.'))
-  if (!reply) return root
+    pageHead('plan-title', 'Plan & deploy', 'plan changes nothing on the server. Its preflight may reach the git remote, so it can take a while.',
+      button(app.planBusy ? 'Planning…' : plan ? 'Plan again' : 'Run plan', () => { void app.runPlan() }, { disabled: app.planBusy, class: plan ? '' : 'primary' })))
+  if (!reply) {
+    append(root, app.planBusy
+      ? emptyState('refresh', 'Planning…', 'Preflight checks and the plan run on the server; nothing changes there.')
+      : emptyState('plan', 'No plan yet', 'Run a plan to see what a deploy would do, the questions it would ask, and anything that would stop it.'))
+    return root
+  }
   if (!plan) {
     append(root, problem(reply) ?? el('p', {}, 'No plan came back.'))
     return root
   }
   append(root, ...findings(plan.findings))
   if (plan.lines.length > 0) {
-    append(root, el('h3', {}, 'What a run would do'), el('div', { class: 'table-wrap' }, el('table', {},
-      el('tbody', {}, ...plan.lines.map((line) => el('tr', {}, el('th', { class: 'mono' }, line.step), el('td', {}, line.text)))))))
+    append(root, card('What a run would do', [el('div', { class: 'table-wrap' }, el('table', { class: 'plan-lines' },
+      el('tbody', {}, ...plan.lines.map((line) => el('tr', {}, el('th', { scope: 'row' }, el('span', { class: 'step-chip' }, line.step)), el('td', {}, line.text))))))],
+    { bodyClass: 'flush' }))
   }
   if (reply.diagnostics.length > 0) append(root, diagnosticsBlock(reply.diagnostics))
   append(root, deployForm(app, plan.questions, plan.blocking))
@@ -32,10 +38,23 @@ export function renderPlan(app: App): HTMLElement {
 function findings(list: Finding[]): Child[] {
   if (list.length === 0) return [banner('ok', 'No problem found.')]
   const sorted = [...list].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1))
-  return [el('h3', {}, 'Findings'), el('ul', {}, ...sorted.map((f) => el('li', {},
-    el('strong', { class: f.level === 'error' ? 'status-err' : 'status-warn' }, f.level === 'error' ? 'Error ' : 'Warning '),
-    el('span', { class: 'muted' }, `[${f.id}] `), f.message,
-    f.fix ? el('div', {}, 'Fix: ', el('code', {}, f.fix)) : null)))]
+  const errors = list.filter((f) => f.level === 'error').length
+  return [card('Findings', [findingList(sorted)], {
+    bodyClass: 'flush',
+    actions: [el('span', { class: 'muted' }, `${errors} error${errors === 1 ? '' : 's'}, ${list.length - errors} warning${list.length - errors === 1 ? '' : 's'}`)],
+  })]
+}
+
+/** Findings with a severity badge; the fix is copyable text, never run by the page. */
+export function findingList(list: Array<Pick<Finding, 'level' | 'message' | 'fix'> & { id?: string }>, label?: string): HTMLElement {
+  return el('ul', { class: 'findings', ...(label ? { aria: { label } } : {}) }, ...list.map((f) => findingItem(f)))
+}
+
+export function findingItem(f: Pick<Finding, 'level' | 'message' | 'fix'> & { id?: string }): HTMLElement {
+  return el('li', { class: 'finding' },
+    el('span', { class: `sev sev-${f.level === 'error' ? 'error' : 'warning'}` }, f.level === 'error' ? 'Error ' : 'Warning '),
+    el('span', { class: 'finding-msg' }, f.id ? el('span', { class: 'finding-id' }, `[${f.id}] `) : null, f.message),
+    f.fix ? el('div', { class: 'fix' }, el('span', { class: 'fix-label' }, 'Fix: '), el('code', {}, f.fix)) : null)
 }
 
 interface Field {
@@ -45,7 +64,7 @@ interface Field {
 
 function questionField(question: PromptDescriptor, index: number): { node: HTMLElement; field: Field } {
   const id = `q-${index}`
-  const label = el('label', { for: id }, question.message, question.key ? el('span', { class: 'muted' }, ` (${question.key})`) : null, question.optional ? '' : el('span', { class: 'required' }, ' *'))
+  const label = el('label', { for: id }, question.message, question.optional ? '' : el('span', { class: 'required', title: 'required' }, ' *'), question.key ? el('span', { class: 'field-key' }, ` (${question.key})`) : null)
   let input: HTMLInputElement | HTMLSelectElement
   if (question.kind === 'secret') {
     // No default, no autocomplete, no spellcheck: a secret is typed, sent once, and the field is emptied.
@@ -55,6 +74,7 @@ function questionField(question: PromptDescriptor, index: number): { node: HTMLE
     if (question.default !== undefined) input.value = question.default
   } else if (question.kind === 'confirm') {
     input = el('input', { type: 'checkbox', id, checked: question.default === 'yes' || question.default === 'true', aria: { describedby: `${id}-error` } })
+    return { node: el('div', { class: 'field check' }, el('label', { for: id }, input, el('span', {}, question.message, question.optional ? '' : el('span', { class: 'required', title: 'required' }, ' *'), question.key ? el('span', { class: 'field-key' }, ` (${question.key})`) : null)), el('span', { id: `${id}-error`, class: 'field-error' })), field: { question, input } }
   } else {
     input = el('input', { type: 'text', id, value: question.default ?? '', autocomplete: 'off', spellcheck: false, required: !question.optional, aria: { describedby: `${id}-error` } })
   }
@@ -109,8 +129,8 @@ function deployForm(app: App, questions: PromptDescriptor[], blocking: boolean):
     const deploy = route === 'run'
     const ok = await confirmDialog({
       title: deploy ? `Deploy to ${t.name}?` : `Write the .env on ${t.name}?`,
+      context: `${t.ssh} · ${t.dir}${app.hello ? ` · host ${app.hello.host}` : ''}${app.status ? ` · app ${app.status.app}` : ''}`,
       lines: [
-        `${t.ssh} · ${t.dir}${app.hello ? ` · host ${app.hello.host}` : ''}${app.status ? ` · app ${app.status.app}` : ''}`,
         deploy ? 'Fetch, .env, build, migrate, restart, health check — the run goes on on the server if this page closes (unless attended).' : 'The .env and the dedicated infra only; nothing is built or restarted.',
         deploy && app.plan?.lines.some((l) => /migrat/i.test(l.step) || /migrat/i.test(l.text)) ? el('strong', {}, 'This will migrate the database.') : null,
       ],
@@ -156,16 +176,19 @@ function deployForm(app: App, questions: PromptDescriptor[], blocking: boolean):
     replace(message, problem(reply))
   }
 
-  return el('form', { class: 'panel', aria: { label: 'Deploy' }, on: { submit: (event) => { event.preventDefault(); void send('run') } } },
-    el('h3', {}, questions.length > 0 ? 'What the run will ask' : 'Deploy'),
-    questions.length > 0 ? el('p', { class: 'muted' }, 'Secrets are sent once, over your ssh, to the deploy on the server; they are never stored here and the fields are emptied after sending.') : el('p', { class: 'muted' }, 'Nothing to answer: the .env is complete.'),
-    ...nodes,
-    hold ? el('div', { class: 'field' }, el('label', { for: 'unhold' }, unhold, ' Deploy anyway: the held commit ', el('code', {}, hold.sha.slice(0, 12)), ' may be deployed (--unhold)')) : null,
-    el('details', {}, el('summary', {}, 'Advanced'),
-      el('div', { class: 'field' }, el('label', { for: 'attended' }, attended, ' Attended: the run stops at its next step if this page closes or the UI quits'))),
-    blocking ? banner('err', 'The plan found problems that stop a run: fix them first.') : null,
-    el('div', { class: 'row' },
-      el('button', { type: 'submit', class: 'primary', disabled: blocking }, 'Deploy…'),
-      button('Write .env only…', () => { void send('env') })),
-    message)
+  return el('form', { class: 'card', aria: { label: 'Deploy' }, on: { submit: (event) => { event.preventDefault(); void send('run') } } },
+    el('div', { class: 'card-head' }, el('h3', {}, questions.length > 0 ? 'What the run will ask' : 'Deploy'),
+      t?.protected ? el('span', { class: 'badge badge-protected' }, icon('shield'), 'PROTECTED') : null),
+    el('div', { class: 'card-body' },
+      el('p', { class: 'form-note' }, icon(questions.length > 0 ? 'lock' : 'ok'), questions.length > 0 ? 'Secrets are sent once, over your ssh, to the deploy on the server; they are never stored here and the fields are emptied after sending.' : 'Nothing to answer: the .env is complete.'),
+      nodes.length > 0 ? el('div', { class: 'form-section' }, ...nodes) : null,
+      el('div', { class: 'form-section' },
+        hold ? el('div', { class: 'field check' }, el('label', { for: 'unhold' }, unhold, el('span', {}, ' Deploy anyway: the held commit ', el('code', {}, hold.sha.slice(0, 12)), ' may be deployed (--unhold)'))) : null,
+        el('details', { class: 'advanced' }, el('summary', {}, 'Advanced'),
+          el('div', { class: 'field check' }, el('label', { for: 'attended' }, attended, el('span', {}, ' Attended: the run stops at its next step if this page closes or the UI quits'))))),
+      blocking ? banner('err', 'The plan found problems that stop a run: fix them first.') : null,
+      message),
+    el('div', { class: 'card-foot' },
+      button('Write .env only…', () => { void send('env') }),
+      el('button', { type: 'submit', class: 'primary', disabled: blocking }, 'Deploy…')))
 }

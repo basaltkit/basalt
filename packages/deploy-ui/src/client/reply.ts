@@ -1,5 +1,6 @@
 import type { ErrorEvent } from '@basaltkit/deploy/protocol'
-import { el, type Child } from './dom.js'
+import { el, quiet, type Child } from './dom.js'
+import { icon } from './icons.js'
 import type { CommandReply, Failure } from './messages.js'
 import { ApiError } from './api.js'
 
@@ -32,13 +33,15 @@ export function errorBanner(error: ErrorEvent, diagnostics: string[] = []): HTML
 
 export function banner(level: 'ok' | 'warn' | 'err', title: string, lines: Child[] = [], diagnostics: string[] = [], code?: string): HTMLElement {
   return el('div', { class: `banner ${level}`, role: level === 'err' ? 'alert' : 'status' },
-    el('strong', {}, level === 'ok' ? 'OK: ' : level === 'warn' ? 'Warning: ' : 'Error: ', title),
-    code ? el('span', { class: 'muted' }, ` [${code}]`) : null,
-    ...lines.map((line) => el('p', {}, line)),
-    diagnostics.length > 0 ? diagnosticsBlock(diagnostics) : null,
+    icon(level === 'ok' ? 'ok' : level === 'warn' ? 'alert' : 'error', 'icon banner-icon'),
+    el('div', { class: 'banner-body' },
+      el('strong', { class: 'banner-title' }, quiet(level === 'ok' ? 'OK: ' : level === 'warn' ? 'Warning: ' : 'Error: '), title),
+      code ? el('span', { class: 'banner-code' }, ` [${code}]`) : null,
+      ...lines.filter((line) => line !== '' && line !== null && line !== undefined && line !== false).map((line) => el('p', {}, line)),
+      diagnostics.length > 0 ? diagnosticsBlock(diagnostics) : null),
   )
 }
 
 export function diagnosticsBlock(lines: string[]): HTMLElement {
-  return el('details', {}, el('summary', {}, `Diagnostics (${lines.length})`), el('pre', { class: 'diagnostics' }, lines.join('\n')))
+  return el('details', { class: 'disclosure' }, el('summary', {}, `Diagnostics (${lines.length})`), el('pre', { class: 'diagnostics' }, lines.join('\n')))
 }
