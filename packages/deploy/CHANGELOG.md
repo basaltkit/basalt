@@ -1,5 +1,62 @@
 # @basaltkit/deploy
 
+## 0.5.0
+
+### Minor Changes
+
+- 9cd8edb: `cancel <runId> --first-only` (RFC 0008 §8.5): sends only a first signal. When the run was already cancelled once, from any client (the `<runId>.cancel` marker on the server says so), it is refused with the new protocol error code `already-cancelled` (exit 1) and nothing is signalled. A client that asked for the mild cancel, which stops at a step boundary, therefore never sends the immediate one by surprise. Additive: a plain `cancel` behaves as before.
+- d9bea2b: Machine mode (RFC 0008): a program can drive the deploy over the system `ssh`, as the app user, with no daemon and no listener.
+  
+  - **`--json`** on `status`, `check`, `plan`, `run`, `env`, `rollback`, `install-plan`, `attach` and `cancel`: stdout carries only NDJSON events in a versioned envelope (`{v:1, type, ts, seq, runId?}`) — `hello`, `step-start`/`step-end`, `log`, `finding`, `prompt`, `result` (a typed payload per command), `error` (with a `code`), `done`. Children's and `deploy.config.ts`'s output is always the text of a `log` event, sanitised, never interpreted. Every string of every event is redacted (generated, asked-secret and secret-named `.env` values, URL passwords, infra passwords, secret answers; raw and URL-encoded) before it is serialised. `init`, `install` and `bootstrap` refuse `--json`.
+  - **`--answers=stdin`** for `run` and `env`: answer lines `{"v":1,"type":"answer","id":"env.KEY","value":"…"}`, checked strictly; an unknown id, a duplicate or a malformed line fails before the lock; an unanswered secret never takes a default; `--answer-timeout` (default 600 s). `plan --json` lists the questions.
+  - **`run --detach` / `rollback --detach`**: the run starts in its own session and owns the deploy lock (`LockHolder.runId`); `attach <runId> [--from-seq] [--follow]` replays its run log (`<stateDir>/runs/<runId>.ndjson`, 0600, kept 50 / 30 days, 64 MiB cap); `cancel <runId>` sends SIGTERM only to the matching lock holder. `status --json` reports the active and last run. `--via=ui` is recorded as the release's `via`.
+  - New subpath **`@basaltkit/deploy/protocol`**: the event and payload types, `parseEvent` and `parseAnswerLine`, with no CLI and no Node API at load.
+  - API (additive): `Output` gains `step(title, id?)` and the optional `stepEnd`, `finding`, `result`; `Host` gains the optional `createLog`, `readFileRange`, `spawnDetached`, `kill`, `processCmdline`, and `prompt` an optional third argument; `ExecOptions.onOutput`; `DeployError` gains `code` and `hint`; `RunOptions` gains `via` and `protocol`; `main` takes an optional `CliIO`.
+  
+  Hardened after review: the config's output is held until its `.env` is learnt (and its load errors reported after), stderr writes are events too, lines are redacted before they are cut (a line past 64 Ki keeps only its first piece), every string of every event is sanitised, nothing follows `done`, a late bad answer line still fails closed, a bare-origin `*_URL` is not redacted, `check` always ends its step, a piped child that leaves a background process no longer holds the deploy, a second signal stops the run's process group and a detached run's lock is not stale while that group lives, and `attach` gives a finished run a moment to write `done`. `@basaltkit/deploy/protocol`'s declarations no longer need Node types; `Host.onSignal` takes an optional `second`, and `Host` gains the optional `processGroupAlive`.
+  
+  Without `--json` every command prints exactly what it printed before (a snapshot recorded on the previous code guards it). Behaviour changes in human mode: `--via` accepts only `ui`; a second signal also sends SIGTERM to the deploy's process group when it leads one (the step's child no longer outlives it); `cancel` is a new command; `--answers`/`--detach`/`attach` without `--json` are refused.
+- 5ef14ee: Phase 0 hardening (RFC 0006 §14). **Breaking (0.x minor):**
+  
+  - **`install` no longer runs the app user's code as root.** It is now two halves: as the app user, `node node_modules/@basaltkit/deploy/dist/bin.js install-plan` writes a data-only plan and prints the root command; as root, `cd / && sudo -H npx --yes --package=@basaltkit/deploy@<exact version> -- basalt-deploy install --plan=<file> --user=<name>` validates the plan and never loads `deploy.config.ts`, `tsx`, `node_modules` or the `.env`. The old `sudo node node_modules/…/bin.js install --user=<u>` is refused with these instructions. Env files are handed over through `O_NOFOLLOW` descriptors (a planted symlink or hard link is refused), root writes only under root-only directories, and as root `install`/`bootstrap` refuse to run from files another user can change (`--unsafe-tool` to override). The exported `install(ctx, user)` becomes `install(host, plan, user)`; `buildInstallPlan`, `parseInstallPlan` and `readInstallPlan` are new.
+  - **`bootstrap` never loads the config**: it runs the user's steps as argv in the checkout (`--dir=<checkout>`), takes the proxy and `bootstrap.*` from the user's install plan (swap, ufw and Caddy now come after `pnpm install`/`env`), runs `install` in-process, and lets `env` ask at the terminal.
+  - **Config validation** now refuses: a `branch`/`remote` git could read as an option; `webRoot` outside the checkout, a dot directory or the checkout itself; an `apiPrefix`, `certName`, `proxy.root` or `onDemandTls.ask` that is not a plain path/name; env files outside the checkout other than directly in `/etc/<app>/`; a `backup.dir` that leaves the checkout; a compose job `once.exists` that is not an absolute path pattern.
+  - **Root is refused** for `run`, `env`, `rollback` and every command that loads `deploy.config.ts`, unless `--allow-root` (`allowRoot`).
+  - **Pre-migration dumps** default to `<stateDir>/backups` (0700) instead of `<checkout>/backups/predeploy`; `backup.dir` keeps the old place.
+  - `Host` gains `pid`, `hostname`, `processAlive`, `createExclusive`, `onSignal`, `chmod`, `realpath`, `readPlainFile` and `secureOwner`; `stat` also returns `mode`, `uid` and `gid`.
+  
+  Also:
+  
+  - A deploy lock (`<stateDir>/deploy.lock`) for `run`/`env`/`rollback`/`install`: a concurrent deploy exits with code **3**; a stale lock (dead pid, same host) is taken over; `status` shows it.
+  - SIGINT/SIGTERM/SIGHUP stop `run`/`env` at the next step boundary (code put back, release recorded `aborted`, exit 130); the release, `rollback` and `install` finish first.
+  - `rollback` onto a commit that does not answer exits 1 and records `rollback-unhealthy` (never a rollback target again); it refuses a dirty tree, verifies `--to`, and **holds** the commit it left (`run --unhold` to deploy it anyway).
+  - A failed migration is recorded `failed-migration` and prints the `pg_restore` of the pre-deploy dump.
+  - The fetch names `refs/heads/<b>:refs/remotes/<r>/<b>` after `--`.
+  - The `.env`'s mode/owner are checked, and the mode fixed to 0600 by `env`/`run`.
+  - Releases record `actor` (`--actor`, `$BASALT_DEPLOY_ACTOR`, `$USER`), `client` (SSH) and `via`; `audit: { syslog: true }` logs each release with `logger`.
+  - C8 now reports an untrusted certificate with its names (the real host never did); the secret prompt refuses to ask rather than echo on a Node without the readline internal it relies on; a compose job's `once.exists` reaches the shell as `$1`, never as script.
+- 3ebf5be: Phase 0 review fixes (RFC 0006 §14). **Breaking (0.x minor):**
+  
+  - **`bootstrap` requires `--dir=<checkout>`** (absolute). It is never taken from the working directory: run as documented from `cd /`, it planned `chown -R <user>: /`. The directory must be a link-free path holding `package.json` and `.git`, not a system directory; the `chown -R` of a checkout the user does not own asks first.
+  - **`install` never hands over a directory that is not the app's.** Reserved app names (`systemd`, `ssh`, `apt`, `docker`, `basalt`, …) cannot keep env files in `/etc/<app>/`; an `/etc/<app>` a Debian package ships, one with subdirectories, or any directory or env file another account owns is refused; one root created by hand needs a "yes". `/var/lib/basalt/<app>` owned by another account is refused.
+  - **The managed Apache vhost must be `<app>.conf` or `<app>-*.conf`**, and `install` refuses a domain another vhost or Caddy site already serves (or a name under its wildcard).
+  - **Caddy `extra`** may not hold control or direction characters, nor `import`.
+  - **The rendered vhost changes** (a one-time drift warning on existing installs): `Options -Indexes -FollowSymLinks +SymLinksIfOwnerMatch` and `AllowOverride None` on the checkout and the web root; the vhost and Caddy site headers name the `install-plan` flow.
+  - `Host` gains `removeFile` (unlink, never recursive).
+  
+  Also:
+  
+  - `bootstrap` runs the app user's steps off root's terminal (`setsid -w`; `env` in its own pty via `script`): no TIOCSTI on sudo < 1.9.14 / kernel < 6.2.
+  - The deploy lock is read without following a link and removed with `unlink` only; a stale lock is taken over by one process (an `O_EXCL` takeover file).
+  - The fetch refspec is forced again (`+refs/heads/<b>:…`): a branch rewritten upstream after a rollback deploys; `merge --ff-only` still guards the checkout.
+  - A bare `rollback` never picks the commit an automatic rollback just left; a signal no longer aborts a deploy once its migration started.
+  - The preflight warns (`dumps`) when dumps would go inside the checkout unignored by git or into a Docker build context, and about dumps left in `backups/predeploy`; a hold written before `install` is still read.
+  - `install` prints what it is about to do; the printed root command shell-quotes the plan path; `webRoot: './web/dist'` is accepted again; `managed: false` proxies are not held to root's `webRoot`/`apiPrefix` rules.
+
+### Patch Changes
+
+- 7490752: `basalt-deploy ui` prints how to start the local UI (`@basaltkit/deploy-ui`, RFC 0009) on the operator's machine, and exits 0; with `--json` it is refused (`unsupported`). It loads no config and spawns nothing: the package gains no listener and no dependency.
+
 ## 0.4.1
 
 ### Patch Changes
