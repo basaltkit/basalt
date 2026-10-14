@@ -235,9 +235,12 @@ async function runAlive(host: Host, stateDir: string, runId: string): Promise<bo
  * when its runId, host, a live pid and its own argv (`--run-id=<id>`, from
  * /proc) all say it is that run: a recycled pid is never signalled. Where the
  * argv cannot be read (not Linux), refused. A second cancel is the second
- * signal: the run stops at once.
+ * signal: the run stops at once. With `firstOnly`, a run already cancelled
+ * once (from anywhere: the marker is on the server) is refused
+ * (`already-cancelled`) and not signalled — a client that asked only for the
+ * mild first cancel never sends the immediate second one by surprise.
  */
-export async function cancel(host: Host, stateDir: string, runId: string): Promise<{ pid: number; second: boolean }> {
+export async function cancel(host: Host, stateDir: string, runId: string, options: { firstOnly?: boolean } = {}): Promise<{ pid: number; second: boolean }> {
   if (!RUN_ID.test(runId)) throw new DeployError(`"${runId}" is not a run id`, [], 'usage')
   if (!host.kill || !host.processCmdline) throw new DeployError('cancel needs a host that can signal a process and read its argv', [], 'unsupported')
   const holder = (await readLock(host, stateDir))?.holder
@@ -252,6 +255,13 @@ export async function cancel(host: Host, stateDir: string, runId: string): Promi
   }
   await ensureRunsDir(host, stateDir)
   const first = await host.createExclusive(cancelMarker(stateDir, runId), `${host.now().toISOString()}\n`, 0o600)
+  if (!first && options.firstOnly) {
+    throw new DeployError(
+      `run ${runId} was already cancelled once: another cancel is the second signal, which stops it at once, mid-step — not sent (--first-only)`,
+      [], 'already-cancelled',
+      `cancel ${runId} again without --first-only to stop it at once (a migration may be left half-applied)`,
+    )
+  }
   host.kill(holder.pid, 'SIGTERM')
   return { pid: holder.pid, second: !first }
 }

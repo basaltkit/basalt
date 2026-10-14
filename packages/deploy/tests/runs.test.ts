@@ -290,6 +290,24 @@ describe('cancel', () => {
     expect(human.printed).toEqual([`OK SIGTERM sent to run ${RUN} (pid 5100) — it stops at the next safe point`])
   })
 
+  it('--first-only: the first cancel as usual; once the run was cancelled (from anywhere), refused and not signalled', async () => {
+    const host = running()
+    const first = await runJson(['cancel', RUN, '--json', '--first-only', CONFIG], host, dir)
+    expect(ofType(first.events, 'result')[0]?.data).toMatchObject({ second: false })
+    const refused = await runJson(['cancel', RUN, '--json', '--first-only', CONFIG], host, dir)
+    expectFramed(refused)
+    expect(refused.code).toBe(1)
+    expect(ofType(refused.events, 'error')[0]).toMatchObject({ code: 'already-cancelled', hint: expect.stringMatching(/without --first-only/) })
+    expect(host.killed).toEqual([{ pid: 5100, signal: 'SIGTERM' }])
+    // Without it, the second signal is sent, as before.
+    expect(ofType((await runJson(['cancel', RUN, '--json', CONFIG], host, dir)).events, 'result')[0]?.data).toMatchObject({ second: true })
+    expect(host.killed).toHaveLength(2)
+    // A switch of cancel only.
+    for (const argv of [['status', '--json', '--first-only'], ['cancel', RUN, '--json', '--first-only=1']]) {
+      expect(ofType((await runJson([...argv, CONFIG], running(), dir)).events, 'error')[0], argv.join(' ')).toMatchObject({ code: 'usage' })
+    }
+  })
+
   it('never signals a recycled pid, another run, a dead holder, or what it cannot identify', async () => {
     const recycled = running()
     recycled.cmdlines.set(5100, ['/usr/sbin/nginx', '-g', 'daemon off;'])

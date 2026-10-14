@@ -699,4 +699,5 @@ Specified and implemented in [RFC 0008](0008-deploy-machine-protocol.md):
 `run`/`rollback --detach` with `attach` and `cancel`, and run logs under
 `<stateDir>/runs`. Without `--json` every command prints what it printed
 after phase 0, byte for byte. The local UI that drives it over the system
-`ssh` is phase 2.
+`ssh` is phase 2: [RFC 0009](0009-deploy-local-ui.md), built as
+`@basaltkit/deploy-ui` (operator's machine only).

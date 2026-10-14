@@ -1,0 +1,20 @@
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":0,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"hello","tool":"@basaltkit/deploy","version":"0.0.0","protocol":1,"command":"env","pid":4100,"host":"server-1"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":1,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"step-start","id":"lock","title":"lock"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":2,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"step-end","id":"lock","status":"ok","durationMs":0}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":3,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"step-start","id":"env","title":"env"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":4,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"prompt","id":"env.PAYCO_SECRET_TOKEN","kind":"secret","message":"PayCo token [PAYCO_SECRET_TOKEN]","key":"PAYCO_SECRET_TOKEN","optional":false,"attempt":1}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":5,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"prompt","id":"env.SUPPORT_EMAIL","kind":"text","message":"Support address [SUPPORT_EMAIL] (empty to skip)","key":"SUPPORT_EMAIL","optional":true,"attempt":1,"default":"help@example.com"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":6,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"log","stream":"tool","level":"info","text":"add APP_SECRET (generated)","redacted":false,"step":"env"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":7,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"log","stream":"tool","level":"info","text":"add PAYCO_CALLBACK_URL (derived from the domain/port)","redacted":false,"step":"env"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":8,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"log","stream":"tool","level":"info","text":"add PAYCO_SECRET_TOKEN (answered)","redacted":false,"step":"env"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":9,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"log","stream":"tool","level":"info","text":"add SUPPORT_EMAIL (answered)","redacted":false,"step":"env"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":10,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"step-end","id":"env","status":"ok","durationMs":0}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":11,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"step-start","id":"infra","title":"infra"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":12,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"log","stream":"tool","level":"ok","text":"nothing to start (external infra)","redacted":false,"step":"infra"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":13,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"step-end","id":"infra","status":"ok","durationMs":0}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":14,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"step-start","id":"validate","title":"validate"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":15,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"log","stream":"tool","level":"ok","text":".env is valid for src/env.ts","redacted":false,"step":"validate"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":16,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"step-end","id":"validate","status":"ok","durationMs":0}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":17,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"log","stream":"tool","level":"ok","text":".env ready (PORT=3002)","redacted":false}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":18,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"result","command":"env","data":{"file":"/srv/myapp/.env","changes":[{"kind":"set","key":"APP_SECRET","reason":"generated"},{"kind":"set","key":"PAYCO_CALLBACK_URL","reason":"derived from the domain/port"},{"kind":"set","key":"PAYCO_SECRET_TOKEN","reason":"answered"},{"kind":"set","key":"SUPPORT_EMAIL","reason":"answered"}],"port":3002}}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":19,"runId":"20261011T120000Z-aaaaaaaaaaa1","type":"done","exitCode":0}

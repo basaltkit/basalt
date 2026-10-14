@@ -1,0 +1,3 @@
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":0,"type":"hello","tool":"@basaltkit/deploy","version":"0.0.0","protocol":1,"command":"run","pid":4100,"host":"server-1","detached":true}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":1,"type":"error","code":"answer-missing","message":"a detached run cannot ask: no answer for PAYCO_SECRET_TOKEN — nothing was started","hint":"send them with --answers=stdin (plan --json lists them), or in the environment of the command"}
+{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":2,"type":"done","exitCode":1}
