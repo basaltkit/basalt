@@ -1,7 +1,8 @@
 import type { DetachResult, Release } from '@basaltkit/deploy/protocol'
 import type { App } from './app.js'
 import { confirmDialog } from './dialog.js'
-import { button, el, replace, when } from './dom.js'
+import { button, card, el, emptyState, pageHead, pill, replace, when } from './dom.js'
+import { icon } from './icons.js'
 import type { CommandReply } from './messages.js'
 import { problem } from './reply.js'
 import { short } from './sanitize.js'
@@ -17,31 +18,31 @@ export function renderHistory(app: App): HTMLElement {
     el('option', { value: '' }, 'the last healthy release (the deploy decides)'),
     ...choices.map((r) => el('option', { value: r.sha }, `${short(r.sha)} — ${when(r.at)}`)))
   return el('section', { aria: { labelledby: 'history-title' } },
-    el('div', { class: 'row' }, el('h2', { id: 'history-title' }, 'History'), button('Refresh', () => { void app.refreshStatus() })),
-    !status ? el('p', { class: 'muted' }, 'Load the status first.') : null,
-    releases.length > 0 ? table(releases) : status ? el('p', { class: 'muted' }, 'No release recorded yet.') : null,
-    status ? el('div', { class: 'panel' },
-      el('h3', {}, 'Roll back'),
+    pageHead('history-title', 'History', 'The last 10 releases the server recorded, newest first.',
+      el('button', { type: 'button', on: { click: () => { void app.refreshStatus() } } }, icon('refresh'), 'Refresh')),
+    !status ? emptyState('history', 'Load the status first.', 'The releases come with the status of the target.') : null,
+    releases.length > 0 ? card('Releases', [table(releases)], { bodyClass: 'flush', actions: [el('span', { class: 'muted num' }, `${releases.length} recorded`)] }) : status ? emptyState('inbox', 'No release recorded yet.', 'The first deploy of this target will show here.') : null,
+    status ? card('Roll back', [
       el('div', { class: 'field' }, el('label', { for: 'rollback-to' }, 'Back to'), select),
-      el('p', { class: 'muted' }, 'Code only: the database is not rolled back. The commit it leaves is held: a scheduled run will not redeploy it until the branch moves on.'),
-      button('Roll back…', () => { void rollback(app, select.value, message) }, { class: 'danger' }),
-      message) : null,
+      el('p', { class: 'form-note' }, icon('alert'), 'Code only: the database is not rolled back. The commit it leaves is held: a scheduled run will not redeploy it until the branch moves on.'),
+      message,
+    ], { foot: [button('Roll back…', () => { void rollback(app, select.value, message) }, { class: 'danger' })] }) : null,
   )
 }
 
 function table(releases: Release[]): HTMLElement {
   return el('div', { class: 'table-wrap' }, el('table', {},
-    el('thead', {}, el('tr', {}, ...['Commit', 'When', 'Status', 'Actor', 'Via', 'Client', 'Migrations', 'Backup', 'Note'].map((h) => el('th', {}, h)))),
+    el('thead', {}, el('tr', {}, ...['Commit', 'When', 'Status', 'Actor', 'Via', 'Client', 'Migrations', 'Backup', 'Note'].map((h) => el('th', { scope: 'col' }, h)))),
     el('tbody', {}, ...releases.map((r) => el('tr', {},
-      el('td', {}, el('code', {}, short(r.sha))),
-      el('td', {}, when(r.at)),
-      el('td', {}, el('span', { class: r.status === 'ok' ? 'status-ok' : 'status-err' }, r.status)),
+      el('td', { class: 'nowrap' }, el('code', {}, short(r.sha))),
+      el('td', { class: 'nowrap num' }, when(r.at)),
+      el('td', {}, pill(r.status === 'ok' ? 'ok' : 'err', r.status)),
       el('td', {}, r.actor ?? r.user),
-      el('td', {}, r.via ?? ''),
-      el('td', {}, r.client ?? ''),
-      el('td', {}, r.migrations.join(', ')),
-      el('td', {}, r.backup ?? ''),
-      el('td', {}, r.note ?? ''),
+      el('td', { class: 'muted' }, r.via ?? ''),
+      el('td', { class: 'mono' }, r.client ?? ''),
+      el('td', { class: 'mono wrap' }, r.migrations.join(', ')),
+      el('td', { class: 'mono wrap' }, r.backup ?? ''),
+      el('td', { class: 'wrap' }, r.note ?? ''),
     )))))
 }
 
@@ -50,8 +51,8 @@ async function rollback(app: App, to: string, message: HTMLElement): Promise<voi
   if (!t) return
   const ok = await confirmDialog({
     title: `Roll back ${t.name}?`,
+    context: `${t.ssh} · ${t.dir}${app.hello ? ` · host ${app.hello.host}` : ''}`,
     lines: [
-      `${t.ssh} · ${t.dir}${app.hello ? ` · host ${app.hello.host}` : ''}`,
       to ? `Back to ${short(to)}.` : 'Back to the last healthy release.',
       'The commit it leaves is held until the branch moves on.',
     ],
