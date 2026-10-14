@@ -117,4 +117,11 @@ describe('ssh failures, explained', () => {
   it('is silent when nothing matches', () => {
     expect(classifySshFailure(1, 'warning: something', d)).toBeUndefined()
   })
+
+  it('stays linear on hostile stderr (no polynomial backtracking)', () => {
+    const hostile = 'Cannot find module'.repeat(50_000) + '\n' + ' cd'.repeat(50_000) + '\n' + 'exec: node'.repeat(50_000)
+    const started = performance.now()
+    expect(classifySshFailure(1, hostile, d)).toBeUndefined()
+    expect(performance.now() - started).toBeLessThan(500)
+  })
 })
