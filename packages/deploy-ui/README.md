@@ -10,6 +10,13 @@ Design and threat model: [RFC 0009](https://github.com/basaltkit/basalt/blob/mai
 (it builds on the machine protocol of [RFC 0008](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0008-deploy-machine-protocol.md)
 and the pipeline of [RFC 0006](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0006-basalt-deploy.md)).
 
+![The Plan & deploy page: a C8 certificate warning with its fix, the list of what a run would do, and the form for the .env questions](https://basaltkit-docs.pages.dev/guide/deploy/ui-plan.png)
+
+**Illustrated guide:** [Deploying from the local UI](https://basaltkit-docs.pages.dev/guide/deploy#ui)
+covers adding a target, SSH keys and `known_hosts`, `node` under nvm, plan and
+deploy, the live run, cancel, rollback and protected targets, with a
+troubleshooting table ([Português](https://basaltkit-docs.pages.dev/pt/guide/deploy#ui)).
+
 ## Start it
 
 ```sh
@@ -158,6 +165,9 @@ is whatever answers on the port. When the terminal says the UI stopped, close
 the tab (RFC 0009 §15).
 
 ## Troubleshooting
+
+Every message, with its fix, is in the guide's
+[troubleshooting section](https://basaltkit-docs.pages.dev/guide/deploy#troubleshooting).
 
 | The UI says | Do |
 |---|---|
