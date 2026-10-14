@@ -155,6 +155,9 @@ export async function writeEnv(ctx: DeployContext, plan: EnvPlan): Promise<void>
   await writeMirrors(ctx, text)
   plan.document = parseEnv(text)
   plan.values = envValues(plan.document)
+  // compose's passEnv reads ctx.values: it must see what was just written,
+  // not the .env before it (a recreated Redis left the worker on the old URL).
+  ctx.values = plan.values
   plan.changes = []
 }
 
