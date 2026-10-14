@@ -51,11 +51,18 @@ export async function backupPlaceFindings(ctx: DeployContext): Promise<Finding[]
       findings.push({ id: 'dumps', level: 'warning', message: `database dumps go to ${dir}, inside the Docker build context: a COPY . . puts them in the image`, fix: `add ${top} to .dockerignore, or ${fix}` })
     }
   }
+  // /var/lib/basalt is there (another app's install, or this one's with a
+  // parent the app user cannot enter) but this app's state is not: the deploy
+  // falls back to the checkout, which is easy to miss.
+  const system = `/var/lib/basalt/${ctx.config.app}`
+  if (ctx.stateDir !== system && (await host.stat('/var/lib/basalt'))?.kind === 'dir') {
+    findings.push({ id: 'state-dir', level: 'warning', message: `${system} is missing or not reachable by this user: the deploy's state (release history, lock, dumps) stays in ${ctx.stateDir}, inside the checkout`, fix: 'run install-plan, then the root command it prints: install makes it yours (0700) and its parent enterable' })
+  }
   if (!ctx.config.backup?.dir) {
     const legacy = join(ctx.dir, 'backups', 'predeploy')
     const left = (await host.list(legacy)).filter((name) => name.endsWith('.dump'))
     if (left.length > 0) {
-      findings.push({ id: 'dumps', level: 'warning', message: `${left.length} dump(s) left in ${legacy} (the old place): new dumps go to ${dir}, and nothing prunes these`, fix: `move them next to the new ones (mv ${legacy}/*.dump ${dir}/) or delete them` })
+      findings.push({ id: 'dumps', level: 'warning', message: `${left.length} dump(s) left in ${legacy} (the old place): new dumps go to ${dir}, and nothing prunes these`, fix: `move them next to the new ones (install -d -m 700 ${dir} && mv ${legacy}/*.dump ${dir}/) or delete them` })
     }
   }
   return findings

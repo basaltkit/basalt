@@ -69,7 +69,7 @@ repository must not be able to repoint it. The file holds no secret.
 | `ssh` | `[user@]host` or a `Host` alias of your `~/.ssh/config` — jump hosts, identity files and proxies go there |
 | `port` | optional, 1–65535 |
 | `dir` | the checkout on the server, absolute |
-| `node` | optional absolute path, when a non-interactive shell has no `node` on `PATH` (nvm) |
+| `node` | optional absolute path, when a non-interactive shell has no `node` on `PATH` (nvm); from `@basaltkit/deploy` 0.5.1 the deploy puts its directory on `PATH` for `pnpm` and the app's scripts too |
 | `config` | optional `--config` path, relative to the checkout |
 | `protected` | deploy and rollback need the target's name typed |
 | `actor` | recorded with each release (`--actor`); default: your OS user name |

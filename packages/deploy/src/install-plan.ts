@@ -228,6 +228,10 @@ export async function install(host: Host, plan: InstallPlan, user: string | unde
   const stateRoot = options.stateRoot ?? '/var/lib/basalt'
   await host.mkdir(stateRoot, 0o755)
   await assertRootOwnedDir(host, stateRoot, 'state directory')
+  // Enterable by every app user (each app's own directory below is 0700): one
+  // created 0700 by hand or an older install hides the app's state, and the
+  // deploy then keeps it in the checkout.
+  await secure(host, stateRoot, { uid: 0, gid: 0, mode: 0o755, kind: 'dir' })
   const stateDir = join(stateRoot, plan.app)
   const backups = join(stateRoot, `${plan.app}.install-backups`)
   host.out.step(`state directory ${stateDir}`)

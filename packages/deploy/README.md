@@ -480,7 +480,15 @@ checks C2 and C1 on each vhost on every deploy and never writes them.
   the preflight warns (`dumps`) when git does not ignore the directory or a
   Docker build would copy it. `backup.dir` (relative to the checkout) keeps
   the old place; dumps left in `backups/predeploy`, the old default, are
-  pointed out until they are moved or deleted.
+  pointed out until they are moved or deleted. When `/var/lib/basalt` exists
+  but `/var/lib/basalt/<app>` is missing or not reachable by the app user (a
+  parent only root can enter), the preflight says so (`state-dir`) instead of
+  falling back to the checkout in silence; `install` makes `/var/lib/basalt`
+  0755 (each app's own directory below stays 0700).
+- The node it runs on, first on `PATH` for everything it starts (`pnpm`,
+  `node`, the app's scripts). With nvm, fnm or volta, a non-interactive shell
+  (`ssh host cmd`, cron, the local UI) does not have them on `PATH`; starting
+  the deploy with that node's absolute path is enough.
   With external infra in a container, `backup: { container: 'myapp-postgres' }`
   runs `pg_dump` inside it (`docker exec`), as the user and database of the
   URL at `backup.urlKey` — the server's own pg_dump, none needed on the host.
