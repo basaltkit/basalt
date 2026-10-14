@@ -223,6 +223,16 @@ describe('a Globex deploy with no scripts', () => {
     expect(world.host.file(API_ENV)).toMatch(/^GLOBEX_DATABASE_URL=postgresql:\/\/globex_app:[0-9a-f]{48}@globex-postgres:5432\/globex$/m)
   })
 
+  it('passEnv hands compose the value this deploy just wrote, not the one before it', async () => {
+    const world = server({ env: `NODE_ENV=production\nGLOBEX_OWNER_DATABASE_URL=${OWNER}\n`, seeded: true })
+    const config = globex({ runtime: compose({ ...(globex().runtime as ReturnType<typeof compose>), passEnv: ['GLOBEX_DATABASE_URL'] }) })
+    expect(await run(ctxOf(world.host, config), { skip: ['tls'] })).toBe(0)
+    const written = /^GLOBEX_DATABASE_URL=(.+)$/m.exec(world.host.file(API_ENV) ?? '')?.[1]
+    const up = world.host.calls.find((c) => c.command === 'docker' && c.args.includes('compose') && c.args.includes('up'))
+    expect(written).toBeDefined()
+    expect(up?.options.env?.['GLOBEX_DATABASE_URL']).toBe(written)
+  })
+
   it('a worker that logs EAI_AGAIN is a failed release, rolled back', async () => {
     const world = server({ seeded: true, logs: 'ingest-worker | getaddrinfo EAI_AGAIN globex-redis\n' })
     const ctx = ctxOf(world.host)
