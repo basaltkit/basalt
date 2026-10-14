@@ -1,7 +1,8 @@
 import type { HelloEvent, PlanResult, StatusResult } from '@basaltkit/deploy/protocol'
 import { ApiError, type Api, type ServerGone } from './api.js'
 import { confirmDialog } from './dialog.js'
-import { button, el, replace } from './dom.js'
+import { button, el, emptyState, quiet, replace, type Child } from './dom.js'
+import { icon, type IconName } from './icons.js'
 import type { CommandReply, TargetsReply, TargetView } from './messages.js'
 import { describe } from './reply.js'
 import { renderHistory } from './view-history.js'
@@ -33,7 +34,7 @@ export interface Shell {
   session: HTMLElement
 }
 
-const SCREENS: Array<[Screen, string]> = [['status', 'Status'], ['plan', 'Plan & deploy'], ['history', 'History'], ['run', 'Run'], ['targets', 'Targets']]
+const SCREENS: Array<[Screen, string, IconName]> = [['status', 'Status', 'status'], ['plan', 'Plan & deploy', 'plan'], ['history', 'History', 'history'], ['run', 'Run', 'run'], ['targets', 'Targets', 'targets']]
 
 /** Per-target state the screens render; every server string in it is shown as text only. */
 export class App {
@@ -62,12 +63,16 @@ export class App {
     this.stopped = true
     this.run?.stop()
     forgetSession(this.storage)
-    replace(this.shell.main, el('div', { class: 'banner err', role: 'alert' },
-      el('strong', {}, error.why === 'unverified' ? 'This page no longer talks to your deploy UI.' : 'The deploy UI has stopped.'),
-      el('p', {}, error.message),
-      el('p', {}, 'Nothing was sent. Detached runs go on on the server. Start basalt-deploy-ui again and open the URL it prints.')))
+    replace(this.shell.main, el('div', { class: 'stopped' },
+      emptyState('power', 'Disconnected', 'This page sends nothing from here on.'),
+      el('div', { class: 'banner err', role: 'alert' },
+        icon('error', 'icon banner-icon'),
+        el('div', { class: 'banner-body' },
+          el('strong', { class: 'banner-title' }, error.why === 'unverified' ? 'This page no longer talks to your deploy UI.' : 'The deploy UI has stopped.'),
+          el('p', {}, error.message),
+          el('p', {}, 'Nothing was sent. Detached runs go on on the server. Start basalt-deploy-ui again and open the URL it prints.')))))
     replace(this.shell.nav)
-    replace(this.shell.bar)
+    this.clearBar()
     replace(this.shell.session)
   }
 
@@ -80,7 +85,7 @@ export class App {
   }
 
   async start(): Promise<void> {
-    replace(this.shell.session, button('Quit', () => { void this.quit() }, { class: 'danger' }))
+    replace(this.shell.session, el('button', { type: 'button', class: 'ghost danger', on: { click: () => { void this.quit() } } }, icon('power'), 'Quit'))
     await this.loadTargets()
     const first = this.targets.targets[0]
     if (first) {
@@ -123,11 +128,12 @@ export class App {
     this.renderBar()
     const main = this.shell.main
     if (screen === 'targets') return replace(main, renderTargets(this))
-    if (!this.current) return replace(main, el('p', {}, 'Add a target first.'), button('Targets', () => this.show('targets')))
+    if (!this.current) return replace(main, emptyState('targets', 'No target selected', 'Add a target first.', el('span', { class: 'row' }, button('Targets', () => this.show('targets'), { class: 'primary' }))))
     if (screen === 'status') return replace(main, renderStatus(this))
     if (screen === 'plan') return replace(main, renderPlan(this))
     if (screen === 'history') return replace(main, renderHistory(this))
-    replace(main, this.run ? this.run.element : el('p', { class: 'muted' }, 'No run in this tab yet: start one from Plan & deploy, or attach from Status.'))
+    replace(main, this.run ? this.run.element : el('section', { aria: { label: 'Run' } },
+      emptyState('run', 'Nothing running here', 'No run in this tab yet: start one from Plan & deploy, or attach from Status.')))
   }
 
   /** Re-renders the current screen (after a state change). */
@@ -136,27 +142,45 @@ export class App {
   }
 
   renderNav(): void {
-    const select = el('select', { aria: { label: 'Target' }, on: { change: (event) => { this.select((event.target as HTMLSelectElement).value); this.refresh(); if (this.current) void this.refreshStatus() } } },
+    const select = el('select', { id: 'target-select', aria: { label: 'Target' }, on: { change: (event) => { this.select((event.target as HTMLSelectElement).value); this.refresh(); if (this.current) void this.refreshStatus() } } },
       ...this.targets.targets.map((t) => {
         const option = el('option', { value: t.name }, t.name)
         option.selected = t.name === this.current?.name
         return option
       }))
     replace(this.shell.nav,
-      this.targets.targets.length > 0 ? select : null,
-      ...SCREENS.map(([screen, label]) => button(label, () => this.show(screen), screen === this.screen ? { aria: { current: 'page' } } : {})))
+      this.targets.targets.length > 0 ? el('div', { class: 'nav-target' }, el('label', { class: 'section-label', for: 'target-select' }, 'Target'), select) : null,
+      el('div', { class: 'nav-list' }, ...SCREENS.map(([screen, label, name]) => el('button', {
+        type: 'button', class: 'nav-item', ...(screen === this.screen ? { aria: { current: 'page' } } : {}),
+        on: { click: () => this.show(screen) },
+      }, icon(name), label))))
   }
 
-  /** "Am I about to deploy production?": name, destination, the server's host name and the app — on every screen. */
+  /**
+   * "Am I about to deploy production?": name, destination, the server's host
+   * name and the app — on every screen. The dividers are text (" · ") for
+   * screen readers and copy, drawn as rules.
+   */
   renderBar(): void {
     const t = this.current
-    if (!t) return replace(this.shell.bar)
+    if (!t) return this.clearBar()
     const status = this.status
+    const sep = () => el('span', { class: 'ctx-sep', aria: { hidden: 'true' } }, ' · ')
+    const item = (name: IconName, value: string, label?: string): Child[] => [sep(),
+      el('span', { class: 'ctx-item' }, icon(name), label ? el('span', { class: 'ctx-label' }, label) : null, label ? ' ' : null, el('span', { class: 'ctx-val' }, value))]
+    this.shell.bar.classList.toggle('is-protected', t.protected === true)
     replace(this.shell.bar,
-      el('strong', {}, t.name), ` · ${t.ssh}${t.port ? `:${t.port}` : ''} · ${t.dir}`,
-      this.hello ? ` · host ${this.hello.host} · deploy ${this.hello.version}` : '',
-      status ? ` · app ${status.app}` : '',
-      t.protected ? el('strong', { class: 'status-err' }, ' · PROTECTED') : '')
+      el('span', { class: 'ctx-target' }, el('strong', { class: 'ctx-name' }, t.name),
+        t.protected ? el('span', { class: 'badge badge-protected', title: 'Deploy and rollback ask for the name to be typed' }, icon('shield'), quiet(' '), 'PROTECTED') : null),
+      ...item('terminal', `${t.ssh}${t.port ? `:${t.port}` : ''}`),
+      ...item('folder', t.dir),
+      ...(this.hello ? [...item('server', this.hello.host, 'host'), ...item('tag', this.hello.version, 'deploy')] : []),
+      ...(status ? item('app', status.app, 'app') : []))
+  }
+
+  private clearBar(): void {
+    this.shell.bar.classList.remove('is-protected')
+    replace(this.shell.bar)
   }
 
   async refreshStatus(): Promise<void> {
@@ -235,8 +259,9 @@ export class App {
     }
     this.stopped = true
     forgetSession(this.storage)
-    replace(this.shell.main, el('p', {}, 'The deploy UI has stopped. You can close this tab.'))
+    replace(this.shell.main, el('div', { class: 'stopped' }, emptyState('power', 'Stopped', 'The deploy UI has stopped. You can close this tab.', 'Detached runs go on on the server; start basalt-deploy-ui again to re-attach.')))
     replace(this.shell.nav)
+    this.clearBar()
     replace(this.shell.session)
   }
 }
