@@ -177,6 +177,10 @@ export interface SshFailure {
  */
 export function classifySshFailure(exitCode: number | null, stderr: string, destination: string): SshFailure | undefined {
   const has = (pattern: RegExp) => pattern.test(stderr)
+  // Line by line with plain substring tests: stderr is the server's text, and
+  // wildcard-heavy patterns over it backtrack polynomially (CodeQL js/polynomial-redos).
+  const lines = stderr.split('\n')
+  const line = (test: (text: string) => boolean) => lines.some(test)
   if (has(/passphrase/i)) return { code: 'passphrase', message: 'your SSH key needs its passphrase, and ssh runs here in batch mode', hint: 'add the key to your agent first: ssh-add' }
   if (has(/Permission denied \(publickey/)) return { code: 'auth', message: 'the server refused your SSH key', hint: 'is the key loaded in your agent (ssh-add -l)? Can you `ssh ' + destination + '` from a terminal?' }
   if (has(/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|No \S+ host key is known/)) {
@@ -186,9 +190,9 @@ export function classifySshFailure(exitCode: number | null, stderr: string, dest
   if (has(/timed out|Connection timed out|Operation timed out/i)) return { code: 'timeout', message: 'the connection timed out', hint: 'is the server up, and port 22 (or the target\'s port) reachable from here?' }
   if (has(/Connection refused/i)) return { code: 'refused', message: 'the connection was refused', hint: 'is sshd listening on that port?' }
   if (has(/No route to host|Network is unreachable/i)) return { code: 'network', message: 'the network cannot reach the host' }
-  if (has(/Cannot find module[^\n]*@basaltkit[/\\]deploy/)) return { code: 'no-deploy', message: 'the checkout has no installed @basaltkit/deploy', hint: 'install the app\'s dependencies on the server (pnpm install) once from a terminal' }
-  if (has(/^.*\bcd\b.*(No such file or directory|can't cd)/m)) return { code: 'no-dir', message: 'the target\'s dir does not exist on the server', hint: 'check the target\'s dir (the app\'s checkout)' }
-  if (exitCode === 127 || has(/node: (command )?not found|exec: .*node.*not found/)) {
+  if (line((l) => l.includes('Cannot find module') && (l.includes('@basaltkit/deploy') || l.includes('@basaltkit\\deploy')))) return { code: 'no-deploy', message: 'the checkout has no installed @basaltkit/deploy', hint: 'install the app\'s dependencies on the server (pnpm install) once from a terminal' }
+  if (line((l) => /\bcd\b/.test(l) && (l.includes('No such file or directory') || l.includes("can't cd")))) return { code: 'no-dir', message: 'the target\'s dir does not exist on the server', hint: 'check the target\'s dir (the app\'s checkout)' }
+  if (exitCode === 127 || line((l) => /node: (command )?not found/.test(l) || (l.includes('exec:') && l.includes('node') && l.includes('not found')))) {
     return { code: 'no-node', message: 'node was not found on the server for a non-interactive shell', hint: 'set the target\'s node to an absolute path (for example the output of `command -v node` in a login shell)' }
   }
   if (exitCode === 255) return { code: 'ssh', message: 'ssh failed (exit 255)' }
