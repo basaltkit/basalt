@@ -40,6 +40,9 @@ that carries the full option table; nothing here restates one.
 - [ ] **Built, not transpiled at runtime** — `pnpm build` + `node dist/src/server.js`
       (or the scaffold's `Dockerfile`); no tsx in production. See [Build & ship](#build-ship).
 - [ ] **CI green** — build, typecheck, coverage gate, `pnpm audit`, CodeQL.
+- [ ] **One deploy path** — on a single Linux server, `@basaltkit/deploy` runs
+      the `.env`, infra, build, a pre-migration dump, the migration, the restart,
+      a health check and a rollback. See [Deploying to a server](/guide/deploy).
 
 ## A production-shaped `buildApp`
 
@@ -258,6 +261,13 @@ An app scaffolded before this existed: `pnpm basalt update` offers
 `start` change instead of making it; `pnpm basalt doctor` reports what is
 missing. The create-basalt suite builds fresh scaffolds and boots
 `node dist/src/server.js` until `/health` answers.
+
+::: tip Deploying to your own server
+For a single Linux server (PM2 or Docker Compose behind Apache or Caddy),
+`@basaltkit/deploy` runs the whole release, migrations included, and
+`@basaltkit/deploy-ui` drives it from your machine. See
+[Deploying to a server](/guide/deploy).
+:::
 
 ## Graceful shutdown
 

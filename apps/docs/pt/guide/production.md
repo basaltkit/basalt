@@ -41,6 +41,10 @@ linha liga ao guia que traz a tabela de opções completa; nada aqui repete uma.
 - [ ] **Compilada, não transpilada em runtime** — `pnpm build` + `node dist/src/server.js`
       (ou o `Dockerfile` do scaffold); nada de tsx em produção. Ver [Build e envio](#build-e-envio).
 - [ ] **CI verde** — build, typecheck, gate de cobertura, `pnpm audit`, CodeQL.
+- [ ] **Um único caminho de deploy** — num único servidor Linux, o `@basaltkit/deploy`
+      trata do `.env`, da infraestrutura, do build, de um dump antes da migração,
+      da migração, do reinício, de um health check e do rollback. Vê
+      [Deploy para um servidor](/pt/guide/deploy).
 
 ## Um `buildApp` com forma de produção
 
@@ -261,6 +265,13 @@ Uma app gerada antes disto existir: o `pnpm basalt update` oferece o
 `start` em vez de a fazer; o `pnpm basalt doctor` diz o que falta. A suite do
 create-basalt faz o build de scaffolds novos e arranca o
 `node dist/src/server.js` até o `/health` responder.
+
+::: tip Deploy para o teu próprio servidor
+Num único servidor Linux (PM2 ou Docker Compose atrás de Apache ou Caddy), o
+`@basaltkit/deploy` trata da release inteira, migrações incluídas, e o
+`@basaltkit/deploy-ui` controla-o a partir da tua máquina. Vê
+[Deploy para um servidor](/pt/guide/deploy).
+:::
 
 ## Encerramento gracioso
 
