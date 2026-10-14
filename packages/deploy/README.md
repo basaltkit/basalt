@@ -10,6 +10,11 @@ and [RFC 0007](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0007-depl
 pnpm add -D @basaltkit/deploy
 ```
 
+**Illustrated guide:** [Deploying to a server](https://basaltkit-docs.pages.dev/guide/deploy)
+walks through a first server, everyday deploys from the terminal and the local
+UI, with screenshots and a troubleshooting table
+([Português](https://basaltkit-docs.pages.dev/pt/guide/deploy)).
+
 ## The config
 
 `deploy.config.ts` at the app root, committed. It holds **no secrets**.
