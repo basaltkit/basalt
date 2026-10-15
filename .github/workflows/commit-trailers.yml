@@ -1,0 +1,32 @@
+name: commit trailers
+
+# Commits carry their human author only: no AI co-author trailer
+# ("Co-Authored-By: Claude …", "…@anthropic.com"), which would list a tool as a
+# contributor of the repository.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  no-ai-coauthor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: refuse AI co-author trailers
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then range="$HEAD"; else range="$BASE..$HEAD"; fi
+          bad=$(git log --format='%H%x09%s%x09%(trailers:key=Co-Authored-By,valueonly,separator=%x2C)' "$range" | awk -F'\t' 'tolower($3) ~ /claude|anthropic/')
+          if [ -n "$bad" ]; then
+            echo "::error::These commits name an AI as co-author; drop the Co-Authored-By trailer (git commit --amend / rebase):"
+            echo "$bad"
+            exit 1
+          fi
