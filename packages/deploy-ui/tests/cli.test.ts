@@ -8,7 +8,8 @@ import type { UiServer, UiServerOptions } from '../src/server.js'
 
 describe('flags', () => {
   it('targets, ssh, no-open, idle minutes; never a host or a port', () => {
-    expect(parseFlags(['--targets=t.json', '--ssh=/usr/bin/ssh', '--no-open', '--idle-minutes=30'], '/home/alice')).toEqual({ targets: '/home/alice/t.json', ssh: '/usr/bin/ssh', open: false, idleMinutes: 30, help: false })
+    expect(parseFlags(['--targets=t.json', '--ssh=/usr/bin/ssh', '--no-open', '--idle-minutes=30'], '/home/alice')).toEqual({ targets: '/home/alice/t.json', ssh: '/usr/bin/ssh', open: false, pair: false, idleMinutes: 30, help: false })
+    expect(parseFlags(['--pair'], '/')).toMatchObject({ pair: true, open: true })
     expect(parseFlags(['-h'], '/')).toMatchObject({ help: true })
     for (const bad of ['--host=0.0.0.0', '--port=8080', '--ssh=ssh', '--idle-minutes=0', '--idle-minutes=241', '--idle-minutes=x', 'serve', '--targets']) {
       expect(() => parseFlags([bad], '/'), bad).toThrow()
@@ -111,6 +112,19 @@ describe('main', () => {
     expect(failed.options().runner.program).toBe('C:\\Windows\\System32\\OpenSSH\\ssh.exe')
     failed.options().onStop?.('quit')
     expect(await ended).toBe(0)
+  })
+
+  it('--pair: the browser gets the bare URL, the terminal the code — nothing secret in the opener\'s argv', async () => {
+    const opened: string[] = []
+    const paired = deps({ open: async (url) => { opened.push(url); return true }, start: async (o) => { paired.options = () => o; return { port: 41234, url: 'http://127.0.0.1:41234/', launchUrl: 'http://127.0.0.1:41234/', pairCode: 'ABCD-EFGH', close: async () => undefined } } }) as ReturnType<typeof deps> & { options: () => UiServerOptions }
+    const done = main(['--pair'], paired.d)
+    await new Promise((r) => setTimeout(r, 5))
+    expect(paired.options()).toMatchObject({ pair: true })
+    expect(opened).toEqual(['http://127.0.0.1:41234/'])
+    expect(paired.printed.join('\n')).toContain('pairing code ABCD-EFGH — type it in the page within 2 minutes (5 tries)')
+    paired.options().onStop?.('quit')
+    expect(await done).toBe(0)
+    expect(USAGE).toContain('--pair')
   })
 
   it('the process dependencies are the real ones', () => {

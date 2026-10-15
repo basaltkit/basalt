@@ -38,6 +38,7 @@ secrets.
 | `--targets=<file>` | the targets file (default below) |
 | `--ssh=<absolute path>` | the ssh client (default: `ssh` from `PATH`; on Windows `%SystemRoot%\System32\OpenSSH\ssh.exe`, else the first `ssh.exe` in an absolute `PATH` entry, never the current folder) |
 | `--no-open` | print the URL instead of opening the browser |
+| `--pair` | open the bare URL and type a short code the terminal shows (shared machines) |
 | `--idle-minutes=<n>` | stop after n idle minutes (1–240, default 15) |
 
 There is no `--host` and no `--port`: see the security model.
@@ -158,7 +159,10 @@ every page your browser opens. So:
 
 Limits: on a machine shared with other users, the launch code is visible in the
 browser opener's arguments for an instant — a claim by anyone else makes your
-tab fail loudly and the terminal say so (RFC 0009 Q1). JavaScript strings
+tab fail loudly and the terminal say so. There, start it with `--pair`: the
+browser opens the bare URL and you type an 8-character code the terminal
+shows (no look-alike letters, 2 minutes, 5 tries, then the UI must restart),
+so nothing secret passes through another process's arguments (RFC 0009 Q1). JavaScript strings
 cannot be wiped from memory. The server's proof is checked just before an
 answer is sent, not inside the same request. After a reload, the page you get
 is whatever answers on the port. When the terminal says the UI stopped, close

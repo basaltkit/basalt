@@ -273,7 +273,9 @@ basalt-deploy-ui: targets in ~/.config/basalt/deploy-targets.json
 ```
 
 It opens your browser with a one-time code in the URL, valid for 120 seconds.
-With `--no-open`, it prints the URL instead. Pin an exact version, because this
+With `--no-open`, it prints the URL instead. On a machine shared with other
+users, use `--pair`: the browser opens without the code, and you type the short
+pairing code the terminal shows. Pin an exact version, because this
 tool handles your deploy secrets. Other options: `--targets=<file>`,
 `--ssh=<absolute path>`, `--idle-minutes=<n>` (default 15). There is no
 `--host` and no `--port` option: the UI always listens on `127.0.0.1`, on a port
@@ -541,7 +543,8 @@ Status page.
 
 Its limits: on a machine shared with other users, the launch code is visible
 in the browser opener's arguments for an instant. A claim by anyone else makes
-your tab fail loudly, and the terminal says so. When the terminal says the UI
+your tab fail loudly, and the terminal says so; `--pair` removes that window.
+When the terminal says the UI
 stopped, close the tab. The full threat model is in
 [RFC 0009](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0009-deploy-local-ui.md).
 

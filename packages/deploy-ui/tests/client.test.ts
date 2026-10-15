@@ -227,15 +227,17 @@ describe('the page on its own', () => {
     expect(document.querySelector('[role="alert"]')?.textContent).toMatch(/already has its browser session.*stop basalt-deploy-ui/s)
     shell()
     expect(await boot(env('#launch=abc', async () => new Response('wrong launch code', { status: 401 })))).toBeUndefined()
-    expect(document.body.textContent).toMatch(/launch code was refused/)
+    expect(document.body.textContent).toMatch(/code was refused/)
     shell()
-    expect(await boot(env('', async () => json(200, {})))).toBeUndefined()
-    expect(document.body.textContent).toMatch(/No session/)
+    // No code and no token: the page asks for the pairing code.
+    void boot(env('', async () => json(200, {})))
+    expect(document.getElementById('pair-code')).not.toBeNull()
+    expect(document.body.textContent).toMatch(/Pair this page.*pairing code basalt-deploy-ui shows in your terminal/s)
     shell()
     // A token without its server key (or the reverse) is no session: both are forgotten.
     sessionStorage.setItem(TOKEN_KEY, 'tok')
-    expect(await boot(env('', async () => json(200, {})))).toBeUndefined()
-    expect(document.body.textContent).toMatch(/No session/)
+    void boot(env('', async () => json(200, {})))
+    expect(document.getElementById('pair-code')).not.toBeNull()
     expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull()
     shell()
     const key = Buffer.alloc(32, 9).toString('base64url')
@@ -255,6 +257,44 @@ describe('the page on its own', () => {
     expect(await boot(env('', async () => json(200, { proof: 'A'.repeat(43) })))).toBeUndefined()
     expect(document.body.textContent).toMatch(/no longer talks to your deploy UI/)
     expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull()
+  })
+
+  it('--pair: a wrong code says how many tries are left; the right one, typed loosely, opens the session; running out ends it', async () => {
+    const paired = await startUiServer({ targetsPath: join(home, 'pair-targets.json'), runner: ssh.runner, osUser: 'alice', clientDir: null, log: () => undefined, pair: true })
+    try {
+      expect(paired.launchUrl).toBe(paired.url)
+      expect(paired.pairCode).toMatch(/^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$/)
+      const env: Env = { location: { hash: '', pathname: '/' }, history: { replaceState: () => undefined }, storage: sessionStorage, fetch: browserFetch(paired), document, crypto: CRYPTO }
+      const booted = boot(env)
+      const submit = () => (document.querySelector('form.pair') as HTMLFormElement).requestSubmit()
+      type('pair-code', '2222-2222')
+      submit()
+      await until(() => /4 tries left/.test(document.body.textContent ?? ''), 'the tries left')
+      type('pair-code', ` ${(paired.pairCode as string).toLowerCase().replace('-', ' ')} `)
+      submit()
+      const app = await booted as App
+      expect(app).toBeDefined()
+      expect(sessionStorage.getItem(TOKEN_KEY)).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    } finally {
+      await paired.close()
+    }
+
+    const locked = await startUiServer({ targetsPath: join(home, 'pair-targets.json'), runner: ssh.runner, osUser: 'alice', clientDir: null, log: () => undefined, pair: true })
+    try {
+      shell()
+      sessionStorage.clear()
+      const booted = boot({ location: { hash: '', pathname: '/' }, history: { replaceState: () => undefined }, storage: sessionStorage, fetch: browserFetch(locked), document, crypto: CRYPTO })
+      for (let i = 0; i < 5; i++) {
+        await until(() => document.getElementById('pair-code') !== null && !(document.querySelector('form.pair button') as HTMLButtonElement).disabled, 'the form')
+        type('pair-code', '2222-2222')
+        ;(document.querySelector('form.pair') as HTMLFormElement).requestSubmit()
+        await until(() => i === 4 || new RegExp(`${4 - i} tr`).test(document.body.textContent ?? ''), 'a refusal')
+      }
+      expect(await booted).toBeUndefined()
+      expect(document.querySelector('[role="alert"]')?.textContent).toMatch(/5 wrong pairing codes: restart/)
+    } finally {
+      await locked.close()
+    }
   })
 
   it('after the UI stops, a listener that takes its port gets no answer: the page asks for the proof first, then stops and forgets', async () => {
