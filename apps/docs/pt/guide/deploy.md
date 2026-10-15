@@ -281,7 +281,9 @@ basalt-deploy-ui: targets in ~/.config/basalt/deploy-targets.json
 ```
 
 Abre o browser com um código de uso único no URL, válido durante 120 segundos.
-Com `--no-open`, mostra o URL em vez de abrir o browser. Fixa uma versão exata,
+Com `--no-open`, mostra o URL em vez de abrir o browser. Numa máquina
+partilhada com outros utilizadores, usa `--pair`: o browser abre sem o código,
+e escreves o código curto de emparelhamento que o terminal mostra. Fixa uma versão exata,
 porque esta ferramenta lida com os teus segredos de deploy. Outras opções:
 `--targets=<file>`, `--ssh=<absolute path>`, `--idle-minutes=<n>` (por omissão
 15). Não há opção `--host` nem `--port`: a interface escuta sempre em
@@ -561,7 +563,7 @@ da própria aplicação, fixado pelo lockfile.
 Os seus limites: numa máquina partilhada com outros utilizadores, o código de
 arranque fica visível nos argumentos do programa que abre o browser durante um
 instante. Se outra pessoa o reclamar, o teu separador falha de forma visível e
-o terminal avisa. Quando o terminal disser que a interface parou, fecha o
+o terminal avisa; o `--pair` elimina esse intervalo. Quando o terminal disser que a interface parou, fecha o
 separador. O modelo de ameaças completo está no
 [RFC 0009](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0009-deploy-local-ui.md).
 
