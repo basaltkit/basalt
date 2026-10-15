@@ -2,7 +2,7 @@ import { createHmac, randomBytes as nodeRandomBytes, timingSafeEqual } from 'nod
 
 /**
  * The one browser session of a UI process (RFC 0009 §4.2): a one-time launch
- * code (in the URL fragment, valid 120 s) exchanged once for a session token
+ * code (in the URL fragment, or typed with `--pair`; valid 120 s) exchanged once for a session token
  * sent as `Authorization: Bearer`. The first exchange wins; any later one —
  * right code or not — is refused, and the terminal says so.
  *
@@ -19,6 +19,30 @@ export const NONCE = /^[A-Za-z0-9_-]{22,128}$/
 export const LAUNCH_TTL_MS = 120_000
 const SECRET_BYTES = 32
 
+/**
+ * `--pair` (RFC 0009 Q1): the browser opens the bare URL and the person types
+ * a short code the terminal shows. Nothing secret passes through the opener's
+ * or the browser's argv, which another local user can read. Eight characters
+ * of an alphabet with no look-alikes (~40 bits), five tries, two minutes.
+ */
+export const PAIR_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'
+export const PAIR_LENGTH = 8
+export const PAIR_TRIES = 5
+
+/** What a person types, as the code is compared: upper case, without the separator or spaces. */
+export const normalizePairCode = (code: string) => code.toUpperCase().replace(/[\s-]/g, '')
+
+function pairCode(random: (size: number) => Buffer): string {
+  let code = ''
+  // Rejection sampling: 248 = 8 × 31, so every letter is equally likely.
+  while (code.length < PAIR_LENGTH) {
+    for (const byte of random(16)) {
+      if (byte < 248 && code.length < PAIR_LENGTH) code += PAIR_ALPHABET[byte % PAIR_ALPHABET.length]
+    }
+  }
+  return `${code.slice(0, 4)}-${code.slice(4)}`
+}
+
 /** Constant time for equal lengths; a length mismatch is a plain refusal (the lengths are public). */
 export function safeEqual(given: string, expected: string): boolean {
   const a = Buffer.from(given, 'utf8')
@@ -33,7 +57,7 @@ export function safeEqual(given: string, expected: string): boolean {
 
 export type Exchange =
   | { ok: true; token: string; serverKey: string }
-  | { ok: false; status: 401 | 409; reason: string }
+  | { ok: false; status: 401 | 409 | 410 | 429; reason: string }
 
 export class Session {
   readonly launchCode: string
@@ -41,12 +65,14 @@ export class Session {
   private readonly serverKey: string
   private readonly createdAt: number
   private claimed = false
+  private triesLeft = PAIR_TRIES
 
   constructor(
     private readonly now: () => number = Date.now,
     random: (size: number) => Buffer = nodeRandomBytes,
+    readonly pair = false,
   ) {
-    this.launchCode = random(SECRET_BYTES).toString('base64url')
+    this.launchCode = pair ? pairCode(random) : random(SECRET_BYTES).toString('base64url')
     this.token = random(SECRET_BYTES).toString('base64url')
     this.serverKey = random(SECRET_BYTES).toString('base64url')
     this.createdAt = now()
@@ -58,8 +84,15 @@ export class Session {
 
   exchange(code: unknown): Exchange {
     if (this.claimed) return { ok: false, status: 409, reason: 'this UI already has its browser session; restart basalt-deploy-ui for a new one' }
-    if (typeof code !== 'string' || !safeEqual(code, this.launchCode)) return { ok: false, status: 401, reason: 'wrong launch code' }
-    if (this.now() - this.createdAt > LAUNCH_TTL_MS) return { ok: false, status: 401, reason: 'the launch code expired (120 s); restart basalt-deploy-ui' }
+    if (this.pair && this.triesLeft <= 0) return { ok: false, status: 429, reason: `${PAIR_TRIES} wrong pairing codes: restart basalt-deploy-ui for a new one` }
+    const given = typeof code === 'string' && this.pair ? normalizePairCode(code) : code
+    const expected = this.pair ? normalizePairCode(this.launchCode) : this.launchCode
+    if (typeof given !== 'string' || !safeEqual(given, expected)) {
+      if (!this.pair) return { ok: false, status: 401, reason: 'wrong launch code' }
+      this.triesLeft--
+      return { ok: false, status: this.triesLeft > 0 ? 401 : 429, reason: this.triesLeft > 0 ? `wrong pairing code (${this.triesLeft} ${this.triesLeft === 1 ? 'try' : 'tries'} left)` : `${PAIR_TRIES} wrong pairing codes: restart basalt-deploy-ui for a new one` }
+    }
+    if (this.now() - this.createdAt > LAUNCH_TTL_MS) return { ok: false, status: 410, reason: 'the launch code expired (120 s); restart basalt-deploy-ui' }
     this.claimed = true
     return { ok: true, token: this.token, serverKey: this.serverKey }
   }

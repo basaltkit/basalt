@@ -141,7 +141,7 @@ Package layout (sizing, not a contract):
 ```
 packages/deploy-ui/
   src/
-    bin.ts        flags (--targets, --ssh, --no-open, --idle-minutes), start, open the browser
+    bin.ts        flags (--targets, --ssh, --no-open, --pair, --idle-minutes), start, open the browser
     server.ts     node:http, the route table, body limits, streaming responses
     security.ts   Host/Origin/Sec-Fetch-Site/Content-Type checks, response headers (pure)
     session.ts    launch code, session token, constant-time compare, idle timer
@@ -805,6 +805,11 @@ Each lands with its tests, green on the gate, independently reviewable:
   instant. A pairing code shown in the terminal and typed into the page would
   remove that window at the cost of one step on every launch. Proposed: a
   `--pair` flag now, the default only if operators use shared hosts.
+  **Shipped (0.2.0):** `--pair` opens the bare URL and prints an 8-character
+  code (alphabet without look-alikes, ~40 bits, normalized for case, spaces
+  and the dash); 5 wrong codes lock the session (429), an expired one is 410.
+  The page asks for the code whenever it has no session; a launch code pasted
+  there works too. Still opt-in.
 - **Q2. A repo-local targets file.** Teams may want to share target names and
   directories (not hosts' credentials). Possible later: read a repo file only
   for `dir`/`config`/`protected` and never for `ssh`, or require a one-time

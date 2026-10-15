@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { checkRequest, CLIENT_FILE, type RequestFacts } from '../src/security.js'
-import { IdleTimer, LAUNCH_TTL_MS, PROOF_CONTEXT, safeEqual, Session } from '../src/session.js'
+import { IdleTimer, LAUNCH_TTL_MS, normalizePairCode, PAIR_ALPHABET, PAIR_TRIES, PROOF_CONTEXT, safeEqual, Session } from '../src/session.js'
 
 const PORT = 45123
 const api = (headers: Record<string, string | undefined> = {}, method = 'POST', url = '/api/status'): RequestFacts => ({
@@ -78,11 +78,28 @@ describe('the session', () => {
     for (const header of [undefined, '', token, `Bearer  ${token}`, `Bearer ${token} `, `bearer ${token}`, `Bearer ${token.slice(0, -1)}`, `Bearer ${token}=`]) expect(session.authorizes(header), String(header)).toBe(false)
   })
 
+  it('--pair: eight characters with no look-alikes, typed in any case, with or without the dash; five tries, then nothing', () => {
+    const session = new Session(() => 0, undefined, true)
+    expect(session.launchCode).toMatch(new RegExp(`^[${PAIR_ALPHABET}]{4}-[${PAIR_ALPHABET}]{4}$`))
+    expect(session.launchCode).not.toMatch(/[01ILO]/)
+    const typed = normalizePairCode(session.launchCode).toLowerCase()
+    expect(session.exchange(`  ${typed.slice(0, 4)} ${typed.slice(4)} `)).toMatchObject({ ok: true })
+
+    const guessed = new Session(() => 0, undefined, true)
+    for (let left = PAIR_TRIES - 1; left > 0; left--) {
+      expect(guessed.exchange('2222-2222')).toMatchObject({ ok: false, status: 401, reason: expect.stringContaining(`${left} ${left === 1 ? 'try' : 'tries'} left`) })
+    }
+    expect(guessed.exchange('2222-2222')).toMatchObject({ ok: false, status: 429 })
+    // Locked: the right code no longer opens it.
+    expect(guessed.exchange(guessed.launchCode)).toMatchObject({ ok: false, status: 429, reason: expect.stringMatching(/restart/) })
+    expect(guessed.isClaimed).toBe(false)
+  })
+
   it('the launch code expires after 120 s', () => {
     let now = 1000
     const session = new Session(() => now, fixed(7))
     now += LAUNCH_TTL_MS + 1
-    expect(session.exchange(session.launchCode)).toMatchObject({ ok: false, status: 401, reason: expect.stringMatching(/expired/) })
+    expect(session.exchange(session.launchCode)).toMatchObject({ ok: false, status: 410, reason: expect.stringMatching(/expired/) })
   })
 
   it('compares in constant time, lengths included', () => {
