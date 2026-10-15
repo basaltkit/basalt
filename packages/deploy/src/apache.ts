@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { vhostName, type ApacheProxy } from './config.js'
 import { DeployError, INSTALL_COMMAND, type DeployContext, type Finding } from './context.js'
 import { lineDiff } from './diff.js'
@@ -30,6 +30,17 @@ export function renderVhost(ctx: DeployContext, port: number): string {
   const webRoot = join(ctx.dir, proxy.webRoot)
   const prefix = proxy.apiPrefix.replace(/\/$/, '')
   const cert = `/etc/letsencrypt/live/${proxy.certName ?? domain}`
+  // Apache checks a link against the options of the directory that holds it:
+  // a parent the app user can write (/home/<user>) could hold a link swapped
+  // in for the checkout itself, judged by the server's <Directory /> (which
+  // follows links), not by the blocks below. Every directory above the
+  // checkout gets the same rule.
+  const above: string[] = []
+  for (let parent = dirname(ctx.dir); parent !== '/' && parent !== '.'; parent = dirname(parent)) above.unshift(parent)
+  const parents = above.map((parent) => `  <Directory ${parent}>
+    Options -FollowSymLinks +SymLinksIfOwnerMatch
+  </Directory>
+`).join('')
   return `# Written by basalt-deploy install for "${app}". Deploys compare this file with
 # what install would write and print the difference; they never rewrite it.
 # To change it: edit deploy.config.ts, run ${INSTALL_COMMAND}
@@ -49,7 +60,7 @@ ${alias}
   # The checkout is the app user's: a link it plants is followed only to a
   # file it owns too (never to /, nor to another site's files), and no
   # .htaccess turns that back on.
-  <Directory ${ctx.dir}>
+${parents}  <Directory ${ctx.dir}>
     Options -Indexes -FollowSymLinks +SymLinksIfOwnerMatch
     AllowOverride None
   </Directory>

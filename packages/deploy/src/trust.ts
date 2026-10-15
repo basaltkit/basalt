@@ -16,6 +16,13 @@ import type { Host } from './host.js'
 /** A login name: what `useradd` accepts, never an option or a path. */
 export const USER_NAME = /^[a-z_][a-z0-9_-]{0,31}$/
 
+/**
+ * A checkout path: a closed set of characters. It is written into the Apache
+ * vhost and the Caddy site, where `{ }` are placeholders, `* ? [ ]`
+ * wildcards and `#` a comment.
+ */
+export const CHECKOUT_PATH = /^\/[A-Za-z0-9._@+/-]*$/
+
 /** A path segment with no leading dot: never `.`, `..`, `.git`, `.env`, `.basalt`. */
 const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/
 
@@ -38,10 +45,11 @@ export const CERT_NAME = /^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9-]+)*$/
 
 /**
  * Characters a terminal acts on instead of showing (CR, ESC and the C1 CSI,
- * line separators, bidirectional overrides): `install` shows raw Caddy
+ * line separators, bidirectional overrides), or shows as nothing (zero-width
+ * spaces and joiners, soft hyphen, BOM): `install` shows raw Caddy
  * `extra` before root writes it, and what is shown must be what is written.
  */
-const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/
+const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/
 
 /**
  * Raw Caddy `extra`: no character that hides text on a terminal, and no

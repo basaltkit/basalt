@@ -71,6 +71,25 @@ describe('bootstrap, for real', () => {
     await expect(bootstrap(failed, DIR, options)).rejects.toThrow(/install-plan as ubuntu failed \(exit 1\): no PORT/)
   })
 
+  it('EXPLOIT: a user step never gets root\'s terminal — its output comes through a pipe, sanitized', async () => {
+    const host = server(JSON.stringify(plan()))
+    // A postinstall that retitles root's terminal, clears a line and rings: none of it may reach the terminal.
+    host.handlers.unshift(({ command, args }) => (command === 'setsid' && args.includes('pnpm') ? ok('\u001b]0;owned\u0007added 3 packages\n\u001b[2K\u009b1Adone') : undefined))
+    expect(await bootstrap(host, DIR, options, '0.5.0')).toBe(0)
+    const steps = host.calls.filter((c) => c.command === 'setsid' && !c.args.includes('install-plan'))
+    expect(steps.length).toBe(2)
+    for (const step of steps) expect(step.options).toMatchObject({ stream: true, onOutput: expect.any(Function) })
+    expect(host.printed).toContain('INFO     added 3 packages')
+    expect(host.printed).toContain('INFO     done')
+    expect(host.transcript).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/)
+    // Root's own steps, and its probes, never run in a world-writable directory.
+    expect(host.calls.filter((c) => c.options.cwd !== DIR).every((c) => c.options.cwd === undefined || c.options.cwd === '/')).toBe(true)
+
+    const failed = server('')
+    failed.handlers.unshift(({ command, args }) => (command === 'setsid' && args.includes('install-plan') ? fail('\u001b[2Kno \u0007PORT', 1) : undefined))
+    await expect(bootstrap(failed, DIR, options)).rejects.toThrow(/install-plan as ubuntu failed \(exit 1\): no PORT$/)
+  })
+
   it('reads the deploy version the lockfile records', () => {
     expect(lockedDeployVersion("  '@basaltkit/deploy@0.5.0':\n")).toBe('0.5.0')
     expect(lockedDeployVersion('  /@basaltkit/deploy@1.2.3-rc.1:\n')).toBe('1.2.3-rc.1')

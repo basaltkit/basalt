@@ -196,6 +196,27 @@ describe('the redactor', () => {
   })
 })
 
+describe('the redactor, after the review', () => {
+  it('knows more secret names — and still not the working directory, nor a public key id\'s neighbours', () => {
+    for (const key of ['PRIVATE_KEY_PEM', 'ENC_KEY_V2', 'KEY', 'SMTP_PASSWD', 'DB_PWD', 'APIKEY', 'STRIPE_APIKEY', 'HASH_SALT', 'SALT', 'JWT_PRIVATE']) expect(isSecretKey(key), key).toBe(true)
+    for (const key of ['PWD', 'KEYCLOAK_REALM', 'MONKEY', 'BASALT', 'SALTY_NAME', 'PORT']) expect(isSecretKey(key), key).toBe(false)
+  })
+
+  it('a multi-line value is caught whole, with its newlines escaped, and line by line', () => {
+    const r = new Redactor()
+    const pem = '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nBKcwggSjAgEAAoIBAQDZ\n-----END PRIVATE KEY-----'
+    r.add('PRIVATE_KEY_PEM', pem)
+    expect(r.apply(`k=${pem}`).text).toBe('k=[redacted:PRIVATE_KEY_PEM]')
+    expect(r.apply(`k=${pem.replace(/\n/g, '\\n')}`).text).toBe('k=[redacted:PRIVATE_KEY_PEM]')
+    expect(r.apply('  MIIEvQIBADANBgkqhkiG9w0BAQEFAASC').text).toBe('  [redacted:PRIVATE_KEY_PEM]')
+    expect(r.apply('BKcwggSjAgEAAoIBAQDZ').text).toBe('[redacted:PRIVATE_KEY_PEM]')
+    // A line too short to be anything but common text is not learnt on its own.
+    const s = new Redactor()
+    s.add('X', 'abcdefgh-long-enough\nshort\n')
+    expect(s.apply('short').text).toBe('short')
+  })
+})
+
 describe('the JSON host and signals', () => {
   it('the second signal\'s line is an event, never text on stderr', () => {
     const base = new FakeHost()

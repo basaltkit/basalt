@@ -350,7 +350,7 @@ every string field of every event. Each occurrence becomes `[redacted:KEY]`
 1. the `.env` as read by `createContext` and after every `prepareEnv`/`writeEnv`:
    the value of every key that is declared `env.generate`, declared
    `ask.secret`, or whose name matches the `SENSITIVE` pattern `init.ts`
-   already uses (`SECRET|TOKEN|PASSWORD|PASS\b|_KEY\b|^KEY_|CREDENTIAL|_URL$|_DSN$`)
+   already uses (`SECRET|TOKEN|PASSW|PASS\b|_PWD(?:_|$)|(?:^|_)KEY(?:_|$)|APIKEY|PRIVATE|(?:^|_)SALT(?:_|$)|CREDENTIAL|_URL$|_DSN$`; widened in 0.5.3)
    — except a key that matches only by its `_URL`/`_DSN` suffix and holds a
    bare origin (`APP_URL=https://app.example.com`: no user, path, query or
    fragment), which is the app's public address, not a secret. A URL with a
