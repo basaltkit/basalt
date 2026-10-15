@@ -90,6 +90,13 @@ describe('bootstrap, for real', () => {
     await expect(bootstrap(failed, DIR, options)).rejects.toThrow(/install-plan as ubuntu failed \(exit 1\): no PORT$/)
   })
 
+  it('EXPLOIT: the app user cannot make root install an old pnpm globally', async () => {
+    const host = server(JSON.stringify(plan()))
+    host.put(`${DIR}/package.json`, JSON.stringify({ engines: { node: '>=22.5.0' }, packageManager: 'pnpm@8.15.9' }))
+    await expect(bootstrap(host, DIR, options, '0.5.0')).rejects.toThrow('the project records pnpm 8.15.9; bootstrap installs pnpm 9.0.0 or newer globally, as root')
+    expect(host.calls.some((c) => c.command === 'npm')).toBe(false)
+  })
+
   it('reads the deploy version the lockfile records', () => {
     expect(lockedDeployVersion("  '@basaltkit/deploy@0.5.0':\n")).toBe('0.5.0')
     expect(lockedDeployVersion('  /@basaltkit/deploy@1.2.3-rc.1:\n')).toBe('1.2.3-rc.1')

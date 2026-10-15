@@ -586,7 +586,9 @@ environment to `~/.pm2/dump.pm2`).
 - **The tool root runs is checked.** As root, `install` and `bootstrap` refuse
   to run from files another user can change — `sudo node
   node_modules/@basaltkit/deploy/dist/bin.js` from the checkout, a user's npm
-  cache, a per-user Node (nvm) — unless `--unsafe-tool`. Run the pinned copy:
+  cache, a per-user Node (nvm) — unless `--unsafe-tool`. The check catches
+  that mistake; it cannot stop a copy someone already tampered with (its code
+  has run by then), so the defence is the copy itself. Run the pinned copy:
   `cd / && sudo -H npx --yes --package=@basaltkit/deploy@<version> -- basalt-deploy …`
   (`cd /`: inside the checkout npx would pick its own copy; `-H`: root's npm
   cache, not the user's), or a root-owned global install (`sudo npm install -g
