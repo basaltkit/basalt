@@ -311,6 +311,57 @@ describe('install (root\'s half)', () => {
     await expect(install(caddyHost, plan({ tenants: 'none', proxy: { kind: 'caddy', managed: true, webRoot: 'web', apiPrefix: '/api' } }), 'ubuntu')).rejects.toThrow('refused: /etc/caddy/sites/shop.caddy already serves acme.example.com')
   })
 
+  it('EXPLOIT: a vhost name that is another app\'s file is never overwritten, even with a yes', async () => {
+    // "acme" may name acme-shop.conf (its own prefix) — but not when acme-shop already lives there.
+    const ours = plan({ proxy: { kind: 'apache', managed: true, vhost: 'acme-shop.conf', webRoot: 'web/dist', apiPrefix: '/api' } })
+    for (const [text, why] of [
+      ['# Written by basalt-deploy install for "acme-shop". Deploys compare\n<VirtualHost *:443>\n  ServerName acme.example.com\n</VirtualHost>\n', '"acme-shop"\'s'],
+      ['<VirtualHost *:443>\n  ServerName shop.example.org\n</VirtualHost>\n', 'a site for shop.example.org'],
+    ] as const) {
+      const host = rootServer().put('/etc/apache2/sites-available/acme-shop.conf', text, 0o644, ROOT)
+      host.confirmations.push(true)
+      await expect(install(host, ours, 'ubuntu'), why).rejects.toThrow(`refused: /etc/apache2/sites-available/acme-shop.conf is ${why}, not "acme"'s`)
+      expect(host.file('/etc/apache2/sites-available/acme-shop.conf')).toBe(text)
+    }
+    // Its own file — written by install for it, or hand-written for its names — is replaced after the diff.
+    const own = rootServer().put('/etc/apache2/sites-available/acme.conf', '<VirtualHost *:443>\n  ServerName acme.example.com\n</VirtualHost>\n', 0o644, ROOT)
+    own.confirmations.push(true)
+    expect(await install(own, plan(), 'ubuntu')).toBe(0)
+  })
+
+  it('EXPLOIT: Caddy `extra` cannot open a site block for another app\'s name, nor hide zero-width text', async () => {
+    const extra = 'shop.example.org {\n\treverse_proxy 127.0.0.1:9000\n}'
+    const host = rootServer().dir('/etc/caddy/sites', 0o755, ROOT).put('/etc/caddy/sites/shop.caddy', 'shop.example.org {\n\tfile_server\n}\n', 0o644, ROOT)
+    host.confirmations.push(true)
+    await expect(install(host, plan({ tenants: 'none', proxy: { kind: 'caddy', managed: true, webRoot: 'web', apiPrefix: '/api', extra } }), 'ubuntu')).rejects.toThrow('refused: /etc/caddy/sites/shop.caddy already serves shop.example.org')
+    for (const hidden of ['\u200b', '\u200e', '\ufeff', '\u00ad', '\u061c', '\u2060']) {
+      const text = JSON.stringify(plan({ tenants: 'none', proxy: { kind: 'caddy', managed: true, webRoot: 'web', apiPrefix: '/api', extra: `a${hidden}b` } }))
+      expect(() => parseInstallPlan(text, 'p.json'), JSON.stringify(hidden)).toThrow(/proxy\.extra holds a control or direction character/)
+    }
+  })
+
+  it('EXPLOIT: the checkout path is a closed set of characters — nothing a Caddyfile or <Directory> reads as syntax', () => {
+    for (const dir of ['/srv/{header.X}', '/srv/a*', '/srv/a?', '/srv/[ab]', '/srv/a>b', '/srv/a#b', '/srv/a;b', '/srv/a b', '/srv/a"b']) {
+      expect(() => parseInstallPlan(JSON.stringify(plan({ dir })), 'p.json'), dir).toThrow(/dir must be an absolute, normalized path of letters, digits/)
+    }
+    expect(parseInstallPlan(JSON.stringify(plan({ dir: '/home/deploy/acme-app_2@v1+x' })), 'p.json').dir).toBe('/home/deploy/acme-app_2@v1+x')
+  })
+
+  it('EXPLOIT: a checkout reached through a link is refused; under Caddy, a parent the user can write is said', async () => {
+    const linked = rootServer().dir('/data', 0o755, ROOT).dir('/data/acme', 0o755, USER)
+    linked.files.set(DIR, { kind: 'dir', mode: 0o755, uid: 1000, gid: 1000 })
+    linked.realpath = async () => '/data/acme'
+    await expect(install(linked, plan(), 'ubuntu')).rejects.toThrow(`${DIR} goes through a symbolic link (it is /data/acme)`)
+
+    const home = rootServer().dir('/home', 0o755, ROOT).dir('/home/deploy', 0o750, USER).dir('/home/deploy/acme', 0o755, USER)
+    const caddyPlan = plan({ dir: '/home/deploy/acme', tenants: 'none', proxy: { kind: 'caddy', managed: true, webRoot: 'web', apiPrefix: '/api' } })
+    expect(await install(home, caddyPlan, 'ubuntu')).toBe(0)
+    expect(home.transcript).toContain('/home/deploy is writable by a user other than root: ubuntu could swap /home/deploy/acme for a link')
+    const srv = rootServer()
+    expect(await install(srv, plan({ tenants: 'none', proxy: { kind: 'caddy', managed: true, webRoot: 'web', apiPrefix: '/api' } }), 'ubuntu')).toBe(0)
+    expect(srv.transcript).not.toContain('could swap')
+  })
+
   it('servedNames reads Apache names and Caddy site addresses, not directives', () => {
     expect(servedNames('<VirtualHost *:80>\n ServerName A.example.com\n ServerAlias b.example.com *.c.example.com\n</VirtualHost>', 'apache')).toEqual(['a.example.com', 'b.example.com', '*.c.example.com'])
     expect(servedNames('{\n\temail x@example.com\n}\n(snip) {\n}\n:8080 {\n}\nx.example.com:443, *.y.example.com { # c\n\thandle {\n\t\tfile_server\n\t}\n}\n', 'caddy')).toEqual(['x.example.com', '*.y.example.com'])
@@ -320,6 +371,9 @@ describe('install (root\'s half)', () => {
     const vhost = renderVhost(context(new FakeHost()), 3002)
     expect(vhost).toContain(`<Directory ${DIR}>\n    Options -Indexes -FollowSymLinks +SymLinksIfOwnerMatch\n    AllowOverride None\n  </Directory>`)
     expect(vhost).toContain(`<Directory ${DIR}/web/dist>\n    Require all granted\n    Options -Indexes -FollowSymLinks +SymLinksIfOwnerMatch\n    AllowOverride None`)
+    // A parent the app user can write could hold a link swapped in for the checkout: every directory above gets the rule.
+    expect(vhost).toContain('  <Directory /srv>\n    Options -FollowSymLinks +SymLinksIfOwnerMatch\n  </Directory>\n')
+    expect(renderVhost(context(new FakeHost(), acmeConfig(), '/home/deploy/acme'), 3002)).toContain('  <Directory /home>\n    Options -FollowSymLinks +SymLinksIfOwnerMatch\n  </Directory>\n  <Directory /home/deploy>\n    Options -FollowSymLinks +SymLinksIfOwnerMatch\n  </Directory>\n  <Directory /home/deploy/acme>')
     expect(vhost).toContain('# To change it: edit deploy.config.ts, run node node_modules/@basaltkit/deploy/dist/bin.js install-plan')
     expect(vhost).not.toContain('sudo basalt-deploy install')
   })

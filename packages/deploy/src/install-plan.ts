@@ -9,7 +9,7 @@ import type { Host } from './host.js'
 import type { InstallPlan, PlanProxy } from './protocol.js'
 import { acquireLock } from './lock.js'
 import { covers } from './checks.js'
-import { API_PREFIX, ASK_PATH, assertRootOwnedDir, caddyExtraProblem, CERT_NAME, envLocationProblem, isConfigRoot, isWebRoot, USER_NAME, vhostFileProblem } from './trust.js'
+import { API_PREFIX, ASK_PATH, assertRootOwnedDir, caddyExtraProblem, CERT_NAME, CHECKOUT_PATH, envLocationProblem, isConfigRoot, isWebRoot, untrustedAncestor, USER_NAME, vhostFileProblem } from './trust.js'
 
 /**
  * `install` in two halves (RFC 0006 §11.4), so that root never runs code the
@@ -103,8 +103,8 @@ export function parseInstallPlan(text: string, source: string): InstallPlan {
   if (typeof plan['domain'] !== 'string' || !DOMAIN.test(plan['domain'])) problems.push('domain is not a lowercase host name')
   if (plan['tenants'] !== 'subdomain' && plan['tenants'] !== 'none') problems.push('tenants is subdomain or none')
   const dir = plan['dir']
-  if (typeof dir !== 'string' || !dir.startsWith('/') || dir === '/' || normalize(dir) !== dir || dir.endsWith('/') || /[\0\n\r"'\\$`\s]/.test(dir)) {
-    problems.push('dir must be an absolute, normalized path without quotes, spaces or shell characters (not /)')
+  if (typeof dir !== 'string' || !CHECKOUT_PATH.test(dir) || dir === '/' || normalize(dir) !== dir || dir.endsWith('/')) {
+    problems.push('dir must be an absolute, normalized path of letters, digits and . _ @ + - only (not /)')
   }
   const port = plan['port']
   if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) problems.push('port must be a port number')
@@ -224,6 +224,8 @@ export async function install(host: Host, plan: InstallPlan, user: string | unde
   const checkout = await host.stat(plan.dir)
   if (checkout?.kind !== 'dir') throw new DeployError(`${plan.dir} is not a directory (a symbolic link is refused)`)
   if (checkout.uid !== owner.uid) throw new DeployError(`${plan.dir} is not ${user}'s (uid ${checkout.uid}): install serves ${user}'s checkout only`)
+  const real = await host.realpath(plan.dir)
+  if (real !== plan.dir) throw new DeployError(`${plan.dir} goes through a symbolic link (it is ${real ?? 'unreadable'}): the plan must name the real directory`)
 
   const stateRoot = options.stateRoot ?? '/var/lib/basalt'
   await host.mkdir(stateRoot, 0o755)
@@ -276,6 +278,9 @@ export async function install(host: Host, plan: InstallPlan, user: string | unde
       await host.mkdir(caddyPaths(ctx).dir, 0o755)
       await assertRootOwnedDir(host, caddyPaths(ctx).dir, 'Caddy')
       await caddyInstall(ctx, plan.port, backups)
+      // Caddy follows links wherever they go (RFC 0006 §14.1): said, not hidden.
+      const open = await untrustedAncestor(host, dirname(plan.dir))
+      if (open) host.out.warn(`${open} is writable by a user other than root: ${user} could swap ${plan.dir} for a link, and Caddy would serve wherever it points — keep checkouts under a root-owned directory (/srv/<app>)`)
     }
 
     if (plan.docker) {
@@ -335,7 +340,21 @@ const overlap = (a: string, b: string) => a === b || (a.startsWith('*.') && cove
  * its wildcard — would take that app's traffic and certificate.
  */
 async function refuseTakenNames(host: Host, plan: InstallPlan, dirs: string[], own: string, kind: 'apache' | 'caddy', main?: string): Promise<void> {
-  const ours = [plan.domain, ...(plan.tenants === 'subdomain' ? [`*.${plan.domain}`] : [])]
+  // Caddy `extra` can open site blocks of its own: their addresses are names this site takes too.
+  const extra = plan.proxy.kind === 'caddy' && plan.proxy.managed && plan.proxy.extra !== undefined ? servedNames(plan.proxy.extra, 'caddy') : []
+  const ours = [plan.domain, ...(plan.tenants === 'subdomain' ? [`*.${plan.domain}`] : []), ...extra]
+  // The file about to be replaced is this app's: written by install for it, or (hand-written,
+  // being adopted) serving nothing but its names — never another app's that `vhost` happens to name.
+  for (const dir of dirs) {
+    const file = join(dir, own)
+    const text = await host.readFile(file)
+    if (text === undefined) continue
+    const writer = /^# Written by basalt-deploy install for "([^"]*)"/m.exec(text)?.[1]
+    const foreign = servedNames(text, kind).filter((name) => !ours.some((mine) => overlap(mine, name)))
+    if ((writer !== undefined && writer !== plan.app) || (writer === undefined && foreign.length > 0)) {
+      throw new DeployError(`refused: ${file} is ${writer !== undefined ? `"${writer}"'s` : `a site for ${[...new Set(foreign)].join(', ')}`}, not "${plan.app}"'s — name another file (proxy.vhost)`)
+    }
+  }
   const files = [...(main ? [main] : []), ...(await Promise.all(dirs.map(async (dir) => (await host.list(dir)).filter((name) => name !== own).map((name) => join(dir, name))))).flat()]
   for (const file of files) {
     const text = await host.readFile(file)

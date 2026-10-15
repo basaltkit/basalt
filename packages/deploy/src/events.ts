@@ -167,7 +167,11 @@ export class Redactor {
       return 'short'
     }
     let added = false
-    for (const form of new Set([value, encodeURIComponent(value)])) {
+    // A multi-line value (a PEM key) reaches the log line by line, or with its
+    // newlines escaped: each form, and each line long enough not to be common text.
+    const lines = value.includes('\n') ? value.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length >= 16) : []
+    const escaped = lines.length ? [value.replace(/\r?\n/g, '\\n')] : []
+    for (const form of new Set([value, encodeURIComponent(value), ...escaped, ...lines])) {
       if (form.length < MIN_REDACTED_LENGTH || this.needles.has(form)) continue
       this.needles.set(form, key)
       added = true

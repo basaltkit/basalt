@@ -269,8 +269,12 @@ only NDJSON events, one per line:
 - **No event carries a secret.** Every string is redacted before it is
   written: the values of generated, asked-secret and secret-named `.env` keys,
   passwords inside URLs, the infra passwords, secret-named variables of the
-  deploy's own environment, every secret answer — raw and URL-encoded —
-  become `[redacted:KEY]`. What the config prints while it loads waits until
+  deploy's own environment, every secret answer — raw and URL-encoded, and a
+  multi-line value (a PEM key) also with its newlines escaped and line by
+  line — become `[redacted:KEY]`. A name is secret when it holds `SECRET`,
+  `TOKEN`, `PASSW`, `PRIVATE`, `APIKEY`, `CREDENTIAL`, a `KEY`, `SALT` or
+  `PWD` word, or ends in `_URL`/`_DSN`; declare any other with `generate` or
+  `ask.secret`. What the config prints while it loads waits until
   its `.env` has been read. A bare origin in a `*_URL` key
   (`APP_URL=https://app.example.com`) is the app's address and is not
   redacted. A value shorter than 6 characters cannot be matched; a
@@ -553,18 +557,29 @@ environment to `~/.pm2/dump.pm2`).
   loads `deploy.config.ts`, the checkout's `tsx` or `node_modules`, nor reads
   the `.env`. Before writing it prints what it will do. Raw Caddy `extra` and a
   non-default proxy root are shown and need a "yes" at the terminal; `extra`
-  may hold no control or direction character (what is shown is what is
-  written) and no `import`.
+  may hold no control, direction or zero-width character (what is shown is
+  what is written) and no `import`.
 - **A plan cannot take another site.** The managed vhost is `<app>.conf` (or
   `<app>-….conf`), and `install` refuses a domain — or a name under its
   wildcard, or a wildcard over it — that another Apache vhost or Caddy site
-  already serves.
+  already serves (Caddy `extra` site blocks included). The file it replaces
+  must be the app's own: written by `install` for it, or serving only its
+  names.
 - **The served directory follows no planted link out of the user's files.**
   The vhost sets `Options -FollowSymLinks +SymLinksIfOwnerMatch` and
-  `AllowOverride None` on the checkout and the web root. Caddy's
-  `file_server` has no such option: with `caddy()`, a link in the web root is
-  followed to anything the `caddy` user can read — keep secrets of other
-  sites out of its reach.
+  `AllowOverride None` on the checkout and the web root, and the link rule on
+  every directory above the checkout too — a parent the user can write
+  (`/home/<user>`) could otherwise hold a link swapped in for the checkout
+  itself. `install` refuses a checkout reached through a link, and the plan's
+  `dir` is letters, digits and `. _ @ + -` only. Caddy's `file_server` has no
+  such option: with `caddy()`, a link in the web root is followed to anything
+  the `caddy` user can read — keep secrets of other sites out of its reach,
+  and the checkout under a root-owned directory (`/srv/<app>`; `install` warns
+  otherwise).
+- **A user step never gets root's terminal.** In `bootstrap`, the app user's
+  `pnpm install` (and `env` without a terminal) writes to a pipe, not to
+  root's terminal: a process a postinstall leaves behind cannot read root's
+  keystrokes. Its output is shown line by line, without escape sequences.
 - **Root writes only where no other user can plant a link**: directories
   only root can write (`/var/lib/basalt`, `/etc/basalt`, the Apache/Caddy
   roots), or files changed through an `O_NOFOLLOW` descriptor.
