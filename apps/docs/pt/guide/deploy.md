@@ -70,8 +70,12 @@ cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.5.1 -- \
   cópia do próprio checkout, que o utilizador da aplicação pode alterar. O `-H`
   dá ao root a sua própria cache do npm, em vez da do utilizador.
 - **O `--dir` é obrigatório** e nunca é tirado do diretório atual. Tem de ser um
-  caminho absoluto sem ligações simbólicas, com `package.json` e `.git`, e não
-  pode ser um diretório do sistema (`/`, `/srv`, `/home`, …).
+  caminho absoluto sem ligações simbólicas, feito de letras, dígitos e
+  `. _ @ + -`, com `package.json` e `.git`, e não pode ser um diretório do
+  sistema (`/`, `/srv`, `/home`, …). Prefira um checkout num diretório do root
+  (`/srv/acme`) a um na home do utilizador: um diretório pai em que o
+  utilizador escreve deixa-o trocar o checkout por uma ligação (o vhost do
+  Apache protege-se disso; o Caddy não consegue, e o `install` avisa).
 
 O `bootstrap` instala apenas o que falta: pacotes base, Docker com compose, o
 Node indicado em `engines.node` e o pnpm que o lockfile regista. Entrega o

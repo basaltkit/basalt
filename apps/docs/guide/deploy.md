@@ -68,8 +68,12 @@ cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.5.1 -- \
   checkout's own copy, which the app user can change. `-H` gives root its own
   npm cache instead of the user's.
 - **`--dir` is required** and is never taken from the working directory. It must
-  be an absolute path with no symbolic link in it, holding `package.json` and
-  `.git`, and must not be a system directory (`/`, `/srv`, `/home`, …).
+  be an absolute path with no symbolic link in it, made of letters, digits and
+  `. _ @ + -`, holding `package.json` and `.git`, and must not be a system
+  directory (`/`, `/srv`, `/home`, …). Prefer a checkout under a root-owned
+  directory (`/srv/acme`) to one in the user's home: a parent the user can
+  write lets it swap the checkout for a link (the Apache vhost guards against
+  it; Caddy cannot, and `install` warns).
 
 `bootstrap` installs only what is missing: base packages, Docker with compose,
 Node at `engines.node`, and the pnpm your lockfile records. It gives the
