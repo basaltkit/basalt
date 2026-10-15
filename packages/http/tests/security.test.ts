@@ -489,8 +489,13 @@ describe('a full MemoryRateLimitStore stays cheap per hit (no O(n) sweep per new
       return { store: s, ms: performance.now() - started }
     }
     admit(2_000) // warm-up (JIT)
-    const small = admit(2_000).ms
-    const { store, ms: large } = admit(100_000)
+    // The best of three: a GC pause or a preempted runner lands in one run, not in all.
+    const best = (entries: number) => {
+      const runs = [admit(entries), admit(entries), admit(entries)]
+      return runs.reduce((a, b) => (b.ms < a.ms ? b : a))
+    }
+    const small = best(2_000).ms
+    const { store, ms: large } = best(100_000)
     // The floor keeps a sub-millisecond baseline from turning noise into a failure.
     expect(large).toBeLessThan(Math.max(small, 5) * 10)
     expect(store.size).toBe(100_000)
