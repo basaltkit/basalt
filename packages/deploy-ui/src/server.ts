@@ -26,6 +26,8 @@ export interface UiServerOptions {
   osUser?: string
   /** Default 15, at most 240. */
   idleMinutes?: number
+  /** `--pair`: the browser opens the bare URL; the person types {@link UiServer.pairCode} (RFC 0009 Q1). */
+  pair?: boolean
   /** Where the compiled client modules are (default: `dist/client` next to this file); null: none. */
   clientDir?: string | null
   /** One line to the terminal. Never a request body, never an answer. */
@@ -44,8 +46,10 @@ export interface UiServer {
   port: number
   /** `http://127.0.0.1:<port>/` */
   url: string
-  /** The URL with the one-time launch code in its fragment. */
+  /** The URL with the one-time launch code in its fragment — the bare URL with `pair`. */
   launchUrl: string
+  /** With `pair`: the code the person types in the page (the terminal shows it). */
+  pairCode?: string
   close(): Promise<void>
 }
 
@@ -77,7 +81,7 @@ async function loadClientFiles(dir: string | null): Promise<Map<string, Buffer>>
 
 export async function startUiServer(options: UiServerOptions): Promise<UiServer> {
   const idleMinutes = Math.min(Math.max(options.idleMinutes ?? 15, 1), MAX_IDLE_MINUTES)
-  const session = new Session(options.now, options.random)
+  const session = new Session(options.now, options.random, options.pair === true)
   const clientFiles = await loadClientFiles(options.clientDir === undefined ? fileURLToPath(new URL('./client/', import.meta.url)) : options.clientDir)
   const timeouts = { ...DEFAULT_TIMEOUTS, ...options.timeouts }
   const osActor = options.osUser && ACTOR.test(options.osUser) ? options.osUser : undefined
@@ -494,5 +498,5 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     }
   }
 
-  return { port, url, launchUrl: `${url}#launch=${session.launchCode}`, close }
+  return session.pair ? { port, url, launchUrl: url, pairCode: session.launchCode, close } : { port, url, launchUrl: `${url}#launch=${session.launchCode}`, close }
 }
