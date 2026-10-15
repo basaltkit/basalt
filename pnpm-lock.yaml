@@ -88,7 +88,7 @@ importers:
         version: 19.3.0(react@19.3.0)
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4.3.3
@@ -146,7 +146,7 @@ importers:
         version: 4.13.13
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
     devDependencies:
       '@types/autocannon':
         specifier: ^7.12.0
@@ -240,7 +240,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   apps/docs:
     devDependencies:
@@ -406,7 +406,7 @@ importers:
         version: 2.1.4(hono@4.13.13)
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
     devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:*
@@ -501,7 +501,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/admin-react:
     dependencies:
@@ -544,7 +544,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/admin-shadcn:
     dependencies:
@@ -599,7 +599,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/ai:
     dependencies:
@@ -611,7 +611,7 @@ importers:
         version: link:../generator
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
     devDependencies:
       '@basaltkit/tsconfig':
         specifier: workspace:^
@@ -680,7 +680,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/audit:
     dependencies:
@@ -708,7 +708,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/audit-prisma:
     devDependencies:
@@ -781,7 +781,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/auth:
     dependencies:
@@ -809,7 +809,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/auth-prisma:
     dependencies:
@@ -862,7 +862,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/auth-sqlite:
     devDependencies:
@@ -948,7 +948,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/cache:
     dependencies:
@@ -1064,7 +1064,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/comments-prisma:
     devDependencies:
@@ -1233,7 +1233,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/dashboard:
     dependencies:
@@ -1258,7 +1258,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/deploy:
     devDependencies:
@@ -1344,7 +1344,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/drives-dropbox:
     devDependencies:
@@ -1420,7 +1420,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/events:
     dependencies:
@@ -1442,7 +1442,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/events-prisma:
     devDependencies:
@@ -1547,7 +1547,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/fastify:
     dependencies:
@@ -1575,7 +1575,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/files:
     dependencies:
@@ -1606,7 +1606,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/files-prisma:
     devDependencies:
@@ -1717,7 +1717,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/http:
     dependencies:
@@ -1739,7 +1739,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/i18n:
     dependencies:
@@ -1832,7 +1832,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/logger:
     dependencies:
@@ -1879,7 +1879,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/mailer-smtp:
     dependencies:
@@ -1959,7 +1959,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/mcp-core:
     devDependencies:
@@ -2002,7 +2002,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/notifications-prisma:
     devDependencies:
@@ -2066,7 +2066,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/permissions-prisma:
     devDependencies:
@@ -2142,7 +2142,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/queue:
     dependencies:
@@ -2167,7 +2167,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/queue-bullmq:
     dependencies:
@@ -2323,7 +2323,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/sdk:
     devDependencies:
@@ -2341,7 +2341,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/search:
     dependencies:
@@ -2535,7 +2535,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/subscriptions-appypay:
     devDependencies:
@@ -2669,7 +2669,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/teams-prisma:
     devDependencies:
@@ -2742,7 +2742,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/tenancy:
     dependencies:
@@ -2767,7 +2767,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/tenancy-prisma:
     devDependencies:
@@ -2852,7 +2852,7 @@ importers:
         version: 4.1.11(@types/node@26.6.5)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       zod:
         specifier: ^4.5.4
-        version: 4.6.5
+        version: 4.6.6
 
   packages/webhooks:
     dependencies:
@@ -7665,8 +7665,8 @@ packages:
   zeptomatch@2.1.0:
     resolution: {integrity: sha512-KiGErG2J0G82LSpniV0CtIzjlJ10E04j02VOudJsPyPwNZgGnRKQy7I1R7GMyg/QswnE4l7ohSGrQbQbjXPPDA==}
 
-  zod@4.6.5:
-    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+  zod@4.6.6:
+    resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
@@ -12614,6 +12614,6 @@ snapshots:
       grammex: 3.1.13
       graphmatch: 1.1.1
 
-  zod@4.6.5: {}
+  zod@4.6.6: {}
 
   zwitch@2.0.4: {}
