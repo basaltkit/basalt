@@ -50,6 +50,9 @@ export interface Action {
 }
 
 const APT = ['env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get']
+/** The oldest pnpm root installs globally (lockfile v9; the app user chooses the version, root sets the floor). */
+export const MIN_PNPM = [9, 0, 0]
+
 // `/`, never a world-writable directory: a tool that reads project config from its working directory finds none there.
 const OUTSIDE = { cwd: '/' }
 const BIN = 'node_modules/@basaltkit/deploy/dist/bin.js'
@@ -131,6 +134,8 @@ export async function planSystem(host: Host, dir: string, user: string): Promise
     const lockfile = await readCheckoutFile(host, join(dir, 'pnpm-lock.yaml'), LOCKFILE_BYTES)
     const version = (lockfile && lockedPnpm(lockfile)) ?? pkg.packageManager.slice('pnpm@'.length).split('+')[0] as string
     if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new DeployError(`the pnpm version the project records ("${version}") is not a version`)
+    // The app user picks the version root installs globally: never one older than the floor.
+    if (below(minimumVersion(version) as number[], MIN_PNPM)) throw new DeployError(`the project records pnpm ${version}; bootstrap installs pnpm ${MIN_PNPM.join('.')} or newer globally, as root — update packageManager and the lockfile`)
     const current = (await host.exec('pnpm', ['--version'], OUTSIDE)).stdout.trim()
     if (current !== version) actions.push({ what: `pnpm ${version}${current ? ` (this server has ${current})` : ''}`, commands: [['npm', 'install', '-g', `pnpm@${version}`]] })
   }

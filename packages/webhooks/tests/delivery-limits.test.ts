@@ -135,9 +135,12 @@ describe('DNS resolution inside the per-attempt deadline', () => {
           })
         }),
     )
-    const d = new WebhookDeliverer({ secret: SECRET, timeoutMs: 40, maxRetries: 0, fetchImpl: fx as never, fetchImplPinsAddress: true, ssrf: { lookup } })
+    // A wide margin over the 20 ms lookup: a busy CI runner's late timer must not
+    // turn this into a DNS timeout (then the request would never start).
+    const d = new WebhookDeliverer({ secret: SECRET, timeoutMs: 250, maxRetries: 0, fetchImpl: fx as never, fetchImplPinsAddress: true, ssrf: { lookup } })
     const r = await d.deliver({ id: 'e', url: 'https://hook.example/', events: ['*'] }, 'a.b', {})
     expect(r).toMatchObject({ ok: false, attempts: 1, retryable: true })
+    expect(fx).toHaveBeenCalledTimes(1)
     expect(aborted).toBe(true)
   })
 })

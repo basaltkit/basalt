@@ -129,7 +129,14 @@ const LOCKED = new Set(['run', 'env', 'rollback'])
 
 const usage = (message: string, hint?: string) => new DeployError(message, [], 'usage', hint)
 
-/** The files root is about to run: node, and this package's own (its directory and modules). */
+/**
+ * The files root is about to run: node, and this package's own (its directory
+ * and modules). A guard against the mistake — `sudo node node_modules/…` from
+ * the checkout, a user's npm cache, an nvm node — not against a tampered
+ * copy: every module is already loaded when this runs. The defence is to run
+ * a copy only root can change (the pinned `npx` line, or a root-owned global
+ * install).
+ */
 async function assertTrustedTool(host: Host, unsafe: boolean): Promise<void> {
   const dir = dirname(fileURLToPath(import.meta.url))
   const modules = (await host.list(dir)).filter((name) => name.endsWith('.js')).map((name) => join(dir, name))
