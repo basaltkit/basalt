@@ -641,6 +641,14 @@ user; rootless Docker is still the fix. The vhost now sets
 checkout and the web root (a one-time diff on installed vhosts, whose header
 now names the install-plan flow); Caddy's `file_server` has no equivalent, so
 with `caddy()` a planted link still exposes what the `caddy` user can read.
+Since 0.5.3 the link rule is also set on every directory above the checkout
+(Apache checks a link against the options of the directory holding it, so a
+parent the app user can write — `/home/<user>` — could otherwise hold a link
+swapped in for the checkout, judged by the server's `<Directory />`);
+`install` refuses a checkout reached through a link and warns, under Caddy,
+when a parent is writable by another user. `bootstrap` no longer hands root's
+terminal to the app user's steps: their output comes through a pipe,
+sanitized.
 
 ### 14.2 One deploy at a time, and signals
 

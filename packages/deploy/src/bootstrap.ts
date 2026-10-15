@@ -1,10 +1,10 @@
-import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 import { below, lockedPnpm, minimumVersion } from './checks.js'
 import { DeployError } from './context.js'
+import { LineSplitter, sanitize, type SplitLine } from './events.js'
 import type { Host } from './host.js'
 import { install, parseInstallPlan } from './install-plan.js'
-import { USER_NAME } from './trust.js'
+import { CHECKOUT_PATH, USER_NAME } from './trust.js'
 
 /**
  * `basalt-deploy bootstrap` — a fresh Ubuntu/Debian server, once (RFC 0007 §7).
@@ -45,10 +45,13 @@ export interface Action {
   interactive?: boolean
   /** Asked at the terminal before a real run runs it; a "no" (or no terminal) stops bootstrap. */
   confirm?: string
+  /** Runs as the app user: its output reaches root's terminal only through a pipe, line by line, sanitized. */
+  user?: boolean
 }
 
 const APT = ['env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get']
-const OUTSIDE = { cwd: tmpdir() }
+// `/`, never a world-writable directory: a tool that reads project config from its working directory finds none there.
+const OUTSIDE = { cwd: '/' }
 const BIN = 'node_modules/@basaltkit/deploy/dist/bin.js'
 
 const sh = (script: string) => ['sh', '-c', script]
@@ -74,7 +77,7 @@ const SYSTEM_TREES = ['/bin/', '/boot/', '/dev/', '/etc/', '/lib/', '/lib32/', '
  * no link in it, not a system directory, holding package.json and .git.
  */
 export async function checkoutProblem(host: Host, dir: string): Promise<string | undefined> {
-  if (!dir.startsWith('/') || normalize(dir) !== dir || (dir !== '/' && dir.endsWith('/')) || /[\0\n\r"'\\$`\s]/.test(dir)) return `${dir} must be an absolute, normalized path without quotes, spaces or shell characters`
+  if (!CHECKOUT_PATH.test(dir) || normalize(dir) !== dir || (dir !== '/' && dir.endsWith('/'))) return `${dir} must be an absolute, normalized path of letters, digits and . _ @ + - only`
   if (SYSTEM_DIRS.has(dir) || SYSTEM_TREES.some((tree) => dir.startsWith(tree))) return `${dir} is a system directory, not an app checkout`
   const stat = await host.stat(dir)
   if (stat?.kind !== 'dir') return `${dir} is not a directory${stat?.kind === 'symlink' ? ' (a symbolic link is refused)' : ''}`
@@ -160,6 +163,13 @@ export async function planSystem(host: Host, dir: string, user: string): Promise
  * of its own (`script`, run by root, relays the keys) — or, with no terminal
  * to relay, runs like the others and fails closed on a missing answer.
  *
+ * And never root's terminal as the step's stdout/stderr either: an inherited
+ * descriptor is the session's read-write pty, and a process the step leaves
+ * behind could keep it and read root's keystrokes for the rest of the SSH
+ * session. Its output comes through a pipe instead — split into lines, every
+ * escape sequence and control character stripped — and the pipe is closed
+ * once the step exits, whatever it left running.
+ *
  * A Ctrl-C does not reach a step in its own session: bootstrap stops, the
  * step finishes on its own.
  */
@@ -170,8 +180,8 @@ export function userSteps(user: string, dir: string, tty: boolean): Action[] {
     ? ['script', '--quiet', '--return', '--command', asUser('node', BIN, 'env').join(' '), '/dev/null']
     : ['setsid', '-w', ...asUser('node', BIN, 'env')]
   return [
-    { what: `as ${user}: dependencies`, cwd: dir, commands: [['setsid', '-w', ...asUser('env', '-u', 'NODE_ENV', 'pnpm', 'install', '--frozen-lockfile')]] },
-    { what: `as ${user}: the .env (asks what it cannot generate)`, cwd: dir, ...(tty ? { interactive: true } : {}), commands: [env] },
+    { what: `as ${user}: dependencies`, cwd: dir, user: true, commands: [['setsid', '-w', ...asUser('env', '-u', 'NODE_ENV', 'pnpm', 'install', '--frozen-lockfile')]] },
+    { what: `as ${user}: the .env (asks what it cannot generate)`, cwd: dir, ...(tty ? { interactive: true } : { user: true }), commands: [env] },
   ]
 }
 
@@ -250,6 +260,18 @@ export function lockedDeployVersion(lockfile: string): string | undefined {
   return /['"]?@basaltkit\/deploy@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)['"]?:/.exec(lockfile)?.[1]
 }
 
+/** A user step's output, for root's terminal: whole lines, sanitized, nothing that can drive the terminal. */
+export function relay(host: Host): { write: (text: string, stream: 'stdout' | 'stderr') => void; flush: () => void } {
+  const splitters = { stdout: new LineSplitter(), stderr: new LineSplitter() }
+  const show = (lines: SplitLine[]) => {
+    for (const line of lines) host.out.info(`    ${sanitize(line.text)}${line.cut ? ' …' : ''}`)
+  }
+  return {
+    write: (text, stream) => show(splitters[stream].push(text)),
+    flush: () => { show(splitters.stdout.end()); show(splitters.stderr.end()) },
+  }
+}
+
 async function runActions(host: Host, actions: Action[], dryRun: boolean): Promise<void> {
   for (const action of actions) {
     host.out.info(action.what)
@@ -259,10 +281,12 @@ async function runActions(host: Host, actions: Action[], dryRun: boolean): Promi
     for (const command of action.commands) {
       host.out.info(`  + ${command.join(' ')}${action.cwd ? `   (in ${action.cwd})` : ''}`)
       if (dryRun) continue
+      const output = action.user && !action.interactive ? relay(host) : undefined
       const result = await host.exec(command[0] as string, command.slice(1), {
         cwd: action.cwd ?? OUTSIDE.cwd,
-        ...(action.interactive ? { interactive: true } : { stream: true }),
+        ...(action.interactive ? { interactive: true } : output ? { stream: true, onOutput: output.write } : { stream: true }),
       })
+      output?.flush()
       if (result.code !== 0) throw new DeployError(`${action.what}: \`${command.join(' ')}\` failed (exit ${result.code}) — re-run bootstrap after fixing it; what is done is not redone`)
     }
     if (!dryRun && action.commands.length) host.out.ok(action.what)
@@ -298,7 +322,7 @@ export async function bootstrap(host: Host, dir: string, options: BootstrapOptio
   const command = planCommand(user)
   host.out.info(`as ${user}: the install plan\n      + ${command.join(' ')}`)
   const written = await host.exec(command[0] as string, command.slice(1), { cwd: dir })
-  if (written.code !== 0) throw new DeployError(`install-plan as ${user} failed (exit ${written.code}): ${written.stderr.trim().split('\n').slice(-3).join(' ')}`)
+  if (written.code !== 0) throw new DeployError(`install-plan as ${user} failed (exit ${written.code}): ${sanitize(written.stderr.trim().split('\n').slice(-3).join(' '))}`)
   const plan = parseInstallPlan(written.stdout, `the install plan from ${user}`)
   if (plan.dir !== dir) throw new DeployError(`the install plan names ${plan.dir}, not ${dir} — refused`)
 
