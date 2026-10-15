@@ -1,6 +1,6 @@
 {
   "name": "@basaltkit/deploy",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "engines": {
     "node": ">=22.5.0"
   },
