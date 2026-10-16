@@ -19,7 +19,7 @@ describe('validateConfig', () => {
       acmeConfig({ app: 'Lex Firma' }),
       acmeConfig({ domain: 'acme.example.com/x' }),
       acmeConfig({ proxy: apache({ vhost: '../../evil.conf' }) }),
-      acmeConfig({ infra: dockerInfra('acme', { minio: { buckets: ['UPPER'] } }) }),
+      acmeConfig({ infra: dockerInfra('acme', { seaweedfs: { buckets: ['UPPER'] } }) }),
     ]
     for (const config of bad) expect(() => validateConfig(config)).toThrow(DeployConfigError)
   })
@@ -33,11 +33,11 @@ describe('validateConfig', () => {
 
 describe('server overrides', () => {
   it('apply port, branch and infra ports; nothing else', () => {
-    const base = acmeConfig({ infra: dockerInfra('acme', { minio: { buckets: ['acme-documents'] } }) })
-    const next = applyOverrides(base, { port: 3002, branch: 'main', infra: { postgres: { port: 5434 }, minio: { consolePort: 9111 } } })
+    const base = acmeConfig({ infra: dockerInfra('acme', { seaweedfs: { buckets: ['acme-documents'] } }) })
+    const next = applyOverrides(base, { port: 3002, branch: 'main', infra: { postgres: { port: 5434 }, seaweedfs: { port: 8334 } } })
     expect(next.runtime).toMatchObject({ kind: 'pm2', port: 3002 })
     expect(next.branch).toBe('main')
-    expect(next.infra).toMatchObject({ postgres: { port: 5434 }, minio: { consolePort: 9111, port: 'auto' } })
+    expect(next.infra).toMatchObject({ postgres: { port: 5434 }, seaweedfs: { port: 8334 } })
     expect(base.runtime).toMatchObject({ port: 'auto' })
   })
 

@@ -1,9 +1,10 @@
 import { join } from 'node:path'
-import type { DockerInfra } from './config.js'
+import { DEFAULT_S3_KEYS, type DockerInfra } from './config.js'
 import { DeployError, type DeployContext, type Finding } from './context.js'
 import type { EnvChange } from './dotenv.js'
 import { freePort } from './ports.js'
-import { appRoleEnv, appRoleOf, ensureAppRole, ensureBuckets, externalFindings, externalOf, externalPostgres, minioHandle, type PostgresHandle } from './services.js'
+import { ensureBuckets, s3Findings, type S3Target } from './s3.js'
+import { appRoleEnv, appRoleOf, ensureAppRole, externalFindings, externalOf, externalPostgres, type PostgresHandle } from './services.js'
 
 /**
  * Dedicated containers, adopted or created (RFC 0006 §6.3).
@@ -11,14 +12,16 @@ import { appRoleEnv, appRoleOf, ensureAppRole, ensureBuckets, externalFindings, 
  * The running container is the truth: its credentials are read back and the
  * `.env` follows them, never the other way round. A fresh password written over
  * an initialised volume is exactly the `P1000` that cost a production deploy
- * (incident 7) — Postgres and MinIO keep the first credentials in the data.
+ * (incident 7) — Postgres keeps the first credentials in the data. (SeaweedFS
+ * does not: its S3 credentials come from the container's environment, so a
+ * new pair on an old volume is a rotation, not a lock-out — RFC 0010 §2.)
  *
  * Passwords never reach a command line (visible in `ps`) or the generated
  * compose file: compose reads them from its own environment, and `docker exec
  * -e NAME` (no value) copies them from the CLI's environment.
  */
 
-export type ServiceName = 'postgres' | 'redis' | 'minio'
+export type ServiceName = 'postgres' | 'redis' | 'seaweedfs'
 
 export interface ServicePlan {
   service: ServiceName
@@ -26,7 +29,6 @@ export interface ServicePlan {
   volume: string
   action: 'adopt' | 'create'
   port: number
-  consolePort?: number
   user?: string
   database?: string
   /** Where the password came from — printed; the password itself never is. */
@@ -37,7 +39,7 @@ export interface InfraPlan {
   services: ServicePlan[]
   env: EnvChange[]
   findings: Finding[]
-  /** Values compose interpolates (`${BASALT_PG_PASSWORD}`); passed in its environment only. */
+  /** Values compose interpolates (`${BASALT_PG_PASSWORD}`); passed in its environment only. Never printed. */
   secrets: Record<string, string>
   /** The dedicated Postgres's owner URL, as the `.env` will hold it (the app role's is derived from it). */
   ownerUrl?: string
@@ -109,6 +111,10 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
   const plan: InfraPlan = { services: [], env: [], findings: [], secrets: {}, hostUrls: [] }
   if (infra?.kind === 'external') {
     plan.findings.push(...await externalFindings(ctx))
+    if (infra.s3) {
+      const target = externalS3Target(ctx, values)
+      plan.findings.push(...('error' in target ? [{ id: 'infra', level: 'error' as const, message: target.error }] : await s3Findings(ctx, target)))
+    }
     const pg = infra.postgres
     if (pg) plan.env.push(...appRoleEnv(ctx, values, values.get(pg.urlKey ?? 'DATABASE_URL')))
     return plan
@@ -181,40 +187,40 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
     plan.services.push({ service: 'redis', container, volume, action: running ? 'adopt' : 'create', port, source })
   }
 
-  if (infra.minio) {
-    const minio = infra.minio
-    const { container, volume } = names(app, project, 'minio', minio.container)
+  if (infra.seaweedfs) {
+    const sw = infra.seaweedfs
+    const { container, volume } = names(app, project, 'seaweedfs', sw.container)
     const running = await inspect(ctx, container)
-    let user = running?.env.get('MINIO_ROOT_USER')
-    let password = running?.env.get('MINIO_ROOT_PASSWORD')
+    let accessKey = running?.env.get('AWS_ACCESS_KEY_ID')
+    let secretKey = running?.env.get('AWS_SECRET_ACCESS_KEY')
     let source: ServicePlan['source'] = 'container'
-    if ((user === undefined || password === undefined) && values.get(minio.keys.secretKey)) {
-      user = values.get(minio.keys.accessKey) ?? minio.user
-      password = values.get(minio.keys.secretKey) as string
+    if ((!accessKey || !secretKey) && values.get(sw.keys.secretKey)) {
+      accessKey = values.get(sw.keys.accessKey) || sw.accessKey
+      secretKey = values.get(sw.keys.secretKey) as string
       source = 'env'
     }
-    if (user === undefined || password === undefined) {
-      if (await volumeExists(ctx, volume)) plan.findings.push(unknownPassword('minio', volume))
-      user = minio.user
-      password = ctx.host.randomHex(24)
-      source = 'generated'
-    }
+    // Not kept in the data (unlike Postgres): an old volume opens with new
+    // credentials, and the objects stay readable — verified, RFC 0010 §2.
+    if (!accessKey || !secretKey) { accessKey = sw.accessKey; secretKey = ctx.host.randomHex(24); source = 'generated' }
     let endpointPort: number | undefined
     try {
-      const endpoint = values.get(minio.keys.endpoint)
+      const endpoint = values.get(sw.keys.endpoint)
       endpointPort = endpoint && !inContainers ? Number(new URL(endpoint).port) || undefined : undefined
     } catch {
       endpointPort = undefined
     }
-    const port = await pick(minio.port, running?.ports.get('9000/tcp') ?? endpointPort, 9100)
-    const consolePort = await pick(minio.consolePort, running?.ports.get('9001/tcp'), port + 1)
-    const reason = source === 'container' ? `from the running ${container}` : source === 'generated' ? 'new minio' : 'port'
-    setEnv(minio.keys.endpoint, `http://${address(container, 9000, port)}`, reason)
-    setEnv(minio.keys.accessKey, user, reason)
-    setEnv(minio.keys.secretKey, password, reason)
-    plan.secrets['BASALT_MINIO_USER'] = user
-    plan.secrets['BASALT_MINIO_PASSWORD'] = password
-    plan.services.push({ service: 'minio', container, volume, action: running ? 'adopt' : 'create', port, consolePort, user, source })
+    const port = await pick(sw.port, running?.ports.get('8333/tcp') ?? endpointPort, 8333)
+    const reason = source === 'container' ? `from the running ${container}` : source === 'generated' ? 'new storage' : 'port'
+    setEnv(sw.keys.endpoint, `http://${address(container, 8333, port)}`, reason)
+    setEnv(sw.keys.accessKey, accessKey, reason)
+    setEnv(sw.keys.secretKey, secretKey, reason)
+    plan.secrets['BASALT_S3_ACCESS_KEY'] = accessKey
+    plan.secrets['BASALT_S3_SECRET_KEY'] = secretKey
+    // Closes SeaweedFS's admin gRPC (identities, policies) to anything but a
+    // signed caller: 4.48 accepted them unauthenticated from any neighbour on
+    // the network — an `attach`ed sandbox could have made itself an admin.
+    plan.secrets['BASALT_S3_SIGNING_KEY'] = running?.env.get('WEED_JWT_FILER_SIGNING_KEY') || ctx.host.randomHex(32)
+    plan.services.push({ service: 'seaweedfs', container, volume, action: running ? 'adopt' : 'create', port, source })
   }
   return plan
 }
@@ -281,24 +287,32 @@ export function renderCompose(app: string, infra: DockerInfra, plan: InfraPlan):
         '      retries: 10',
       )
     }
-    if (service.service === 'minio' && infra.minio) {
+    if (service.service === 'seaweedfs' && infra.seaweedfs) {
       lines.push(
-        '  minio:',
-        `    image: ${infra.minio.image}`,
+        '  seaweedfs:',
+        `    image: ${infra.seaweedfs.image}`,
         `    container_name: ${service.container}`,
         '    restart: unless-stopped',
         `    labels: { basalt.app: ${app} }`,
-        "    command: ['server', '/data', '--console-address', ':9001']",
-        `    ports: ['127.0.0.1:${service.port}:9000', '127.0.0.1:${service.consolePort}:9001']`,
+        // One process runs master, volume, filer and S3. Only the S3 API listens
+        // beyond the container's loopback: the others have no authentication,
+        // and `runtime.attach` puts this container on the app's networks.
+        // Iceberg and Lance are extra listeners nothing here uses.
+        "    command: ['server', '-dir=/data', '-s3', '-s3.port=8333', '-ip=127.0.0.1', '-ip.bind=127.0.0.1', '-s3.ip.bind=0.0.0.0', '-s3.port.iceberg=0', '-s3.port.lance=0']",
+        `    ports: ['127.0.0.1:${service.port}:8333']`,
         '    environment:',
-        '      MINIO_ROOT_USER: ${BASALT_MINIO_USER:?missing}',
-        '      MINIO_ROOT_PASSWORD: ${BASALT_MINIO_PASSWORD:?missing}',
+        '      AWS_ACCESS_KEY_ID: ${BASALT_S3_ACCESS_KEY:?missing}',
+        '      AWS_SECRET_ACCESS_KEY: ${BASALT_S3_SECRET_KEY:?missing}',
+        '      WEED_JWT_FILER_SIGNING_KEY: ${BASALT_S3_SIGNING_KEY:?missing}',
         `    volumes: ['${key}:/data']`,
         '    healthcheck:',
-        "      test: ['CMD', 'mc', 'ready', 'local']",
+        // `/healthz` answers before the volume server has joined: reads fail
+        // for a few seconds more. Healthy = a data node registered too.
+        `      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8333/healthz && wget -q -O- http://127.0.0.1:9333/dir/status | grep -q Url']`,
         '      interval: 10s',
         '      timeout: 5s',
-        '      retries: 10',
+        '      retries: 12',
+        '      start_period: 30s',
       )
     }
   }
@@ -342,8 +356,31 @@ export async function applyInfra(ctx: DeployContext, plan: InfraPlan): Promise<F
         { env: { REDISCLI_AUTH: plan.secrets['BASALT_REDIS_PASSWORD'] ?? '' } })
       if (!check.stdout.includes('PONG')) findings.push({ id: 'C7', level: 'error', message: `redis refuses the password in ${ctx.config.env.file ?? '.env'}` })
     }
+    if (service.service === 'seaweedfs') {
+      const target = seaweedfsTarget(plan)
+      if (target) findings.push(...(await s3Findings(ctx, target)).map((f) => ({ ...f, id: 'C7' })))
+    }
   }
   return findings
+}
+
+/** The dedicated store, from the host: its published port, the credentials the `.env` holds. */
+function seaweedfsTarget(plan: InfraPlan): S3Target | undefined {
+  const sw = plan.services.find((s) => s.service === 'seaweedfs')
+  if (!sw) return undefined
+  return { label: 'seaweedfs', endpoint: `http://127.0.0.1:${sw.port}`, accessKey: plan.secrets['BASALT_S3_ACCESS_KEY'] ?? '', secretKey: plan.secrets['BASALT_S3_SECRET_KEY'] ?? '' }
+}
+
+/** An external store, from the `.env` (and `hostEndpoint` when the `.env` names a container). */
+export function externalS3Target(ctx: DeployContext, values: Map<string, string>): S3Target | { error: string } {
+  const s3 = externalOf(ctx.config)?.s3
+  const keys = s3?.keys ?? DEFAULT_S3_KEYS
+  const endpoint = s3?.hostEndpoint ?? values.get(keys.endpoint)
+  const accessKey = values.get(keys.accessKey)
+  const secretKey = values.get(keys.secretKey)
+  const missing = [[keys.endpoint, endpoint], [keys.accessKey, accessKey], [keys.secretKey, secretKey]].filter(([, v]) => !v).map(([k]) => k)
+  if (missing.length || !endpoint || !accessKey || !secretKey) return { error: `s3: ${missing.join(', ')} missing in ${ctx.config.env.file ?? '.env'}` }
+  return { label: 's3', endpoint, accessKey, secretKey }
 }
 
 /** The dedicated Postgres as its owner, over TCP — the credentials the `.env` holds. */
@@ -367,20 +404,20 @@ export async function maintainServices(ctx: DeployContext, plan: InfraPlan, valu
     lines.push(await ensureAppRole(ctx, pg, role, values))
   }
   const infra = ctx.config.infra
-  if (infra?.kind === 'docker' && infra.minio?.buckets.length) {
-    const minio = plan.services.find((s) => s.service === 'minio')
-    if (minio) {
-      lines.push(await ensureBuckets(ctx, { container: minio.container, user: plan.secrets['BASALT_MINIO_USER'] ?? '', password: plan.secrets['BASALT_MINIO_PASSWORD'] ?? '' }, infra.minio.buckets))
-    }
+  const dedicated = seaweedfsTarget(plan)
+  if (infra?.kind === 'docker' && dedicated && infra.seaweedfs?.buckets.length) lines.push(await ensureBuckets(ctx, dedicated, infra.seaweedfs.buckets))
+  const external = externalOf(ctx.config)?.s3
+  if (external?.buckets?.length) {
+    const target = externalS3Target(ctx, values)
+    if ('error' in target) throw new DeployError(target.error)
+    lines.push(await ensureBuckets(ctx, target, external.buckets))
   }
-  const external = externalOf(ctx.config)?.minio
-  if (external?.buckets?.length) lines.push(await ensureBuckets(ctx, await minioHandle(ctx, external.container), external.buckets))
   return lines
 }
 
 export function describeInfra(plan: InfraPlan): string[] {
   return plan.services.map((s) => {
-    const ports = s.consolePort === undefined ? `127.0.0.1:${s.port}` : `127.0.0.1:${s.port} (console ${s.consolePort})`
+    const ports = `127.0.0.1:${s.port}`
     const credentials = s.source === 'container' ? 'credentials from the container' : s.source === 'env' ? 'credentials from .env' : 'new credentials'
     return `${s.service}: ${s.action} ${s.container} on ${ports}, ${credentials}`
   })

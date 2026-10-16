@@ -79,7 +79,7 @@
 
   <rect x="620" y="204" width="152" height="90" rx="8" fill="#F7F8FA" stroke="#C9D1D8"/>
   <text class="t s" x="632" y="226" style="font-weight:600;fill:#0B0E13">Dedicated infra</text>
-  <text class="t xs" x="632" y="246">Postgres, Redis, MinIO</text>
+  <text class="t xs" x="632" y="246">Postgres, Redis, SeaweedFS</text>
   <text class="t xs" x="632" y="262">named acme-pg, …</text>
   <text class="t xs" x="632" y="278">dump before migrating</text>
 

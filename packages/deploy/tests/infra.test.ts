@@ -6,7 +6,7 @@ import { context, FakeHost, fail, acmeConfig, ok } from './fake-host.js'
 const config = () => acmeConfig({
   infra: dockerInfra('acme', {
     postgres: { urlParams: { schema: 'public' } },
-    minio: { buckets: ['acme-documents', 'acme-backups'] },
+    seaweedfs: { buckets: ['acme-documents', 'acme-backups'] },
   }),
 })
 
@@ -20,7 +20,7 @@ describe('dedicated infra', () => {
         if (command !== 'docker' || args[0] !== 'inspect') return undefined
         if (args[1] === 'acme-pg') return inspectOutput(['POSTGRES_PASSWORD=pg-in-volume', 'POSTGRES_USER=acme', 'POSTGRES_DB=acme'], { '5432/tcp': '5434' })
         if (args[1] === 'acme-redis') return inspectOutput(['REDIS_PASSWORD=redis-pw'], { '6379/tcp': '6381' })
-        if (args[1] === 'acme-minio') return inspectOutput(['MINIO_ROOT_USER=acme', 'MINIO_ROOT_PASSWORD=minio-pw'], { '9000/tcp': '9110', '9001/tcp': '9111' })
+        if (args[1] === 'acme-seaweedfs') return inspectOutput(['AWS_ACCESS_KEY_ID=acme', 'AWS_SECRET_ACCESS_KEY=s3-pw', 'WEED_JWT_FILER_SIGNING_KEY=kept-signing'], { '8333/tcp': '8340' })
         return undefined
       })
       .on(({ command }) => (command === 'ss' ? ok('') : undefined))
@@ -29,16 +29,18 @@ describe('dedicated infra', () => {
 
     expect(plan.findings).toEqual([])
     expect(plan.services.map((s) => `${s.service}:${s.action}:${s.port}:${s.source}`)).toEqual([
-      'postgres:adopt:5434:container', 'redis:adopt:6381:container', 'minio:adopt:9110:container',
+      'postgres:adopt:5434:container', 'redis:adopt:6381:container', 'seaweedfs:adopt:8340:container',
     ])
     expect(Object.fromEntries(plan.env.map((c) => [c.key, c.kind === 'set' ? c.value : '']))).toEqual({
       DATABASE_URL: 'postgresql://acme:pg-in-volume@127.0.0.1:5434/acme?schema=public',
       REDIS_URL: 'redis://:redis-pw@127.0.0.1:6381',
-      S3_ENDPOINT: 'http://127.0.0.1:9110',
+      S3_ENDPOINT: 'http://127.0.0.1:8340',
       S3_ACCESS_KEY: 'acme',
-      S3_SECRET_KEY: 'minio-pw',
+      S3_SECRET_KEY: 's3-pw',
     })
     expect(plan.env[0]?.reason).toBe('from the running acme-pg')
+    // The signing key is the container's: replacing it would only restart the store for nothing.
+    expect(plan.secrets['BASALT_S3_SIGNING_KEY']).toBe('kept-signing')
   })
 
   it('C7: a volume with no container and no known password is an error, never a fresh password', async () => {
@@ -55,8 +57,7 @@ describe('dedicated infra', () => {
       .on(({ command, args }) => (command === 'docker' && (args[0] === 'inspect' || args[0] === 'volume') ? fail() : undefined))
       .on(({ command }) => (command === 'ss' ? ok('LISTEN 0 511 127.0.0.1:5433 0.0.0.0:*') : undefined))
     const plan = await planInfra(context(host, config()), new Map())
-    expect(plan.services.map((s) => `${s.service}:${s.action}:${s.port}`)).toEqual(['postgres:create:5434', 'redis:create:6380', 'minio:create:9100'])
-    expect(plan.services[2]?.consolePort).toBe(9101)
+    expect(plan.services.map((s) => `${s.service}:${s.action}:${s.port}`)).toEqual(['postgres:create:5434', 'redis:create:6380', 'seaweedfs:create:8333'])
   })
 
   it('no secret is ever in the compose file or on a command line', async () => {
@@ -73,16 +74,22 @@ describe('dedicated infra', () => {
     expect(await maintainServices(ctx, plan, new Map())).toEqual(['buckets: acme-documents, acme-backups'])
 
     const secrets = Object.values(plan.secrets).filter((v) => v !== 'acme')
+    expect(secrets).toHaveLength(4)
     const compose = host.file(`${ctx.stateDir}/infra.compose.yml`) ?? ''
     expect(compose).toContain("ports: ['127.0.0.1:")
     expect(compose).toContain('labels: { basalt.app: acme }')
     const argv = host.calls.map((c) => c.args.join(' ')).join('\n')
+    // The S3 requests are signed: the secret key is in no URL and no header.
+    const requests = JSON.stringify(host.requests)
     for (const secret of secrets) {
       expect(compose).not.toContain(secret)
       expect(argv).not.toContain(secret)
+      expect(requests).not.toContain(secret)
     }
     expect(host.mode(`${ctx.stateDir}/infra.compose.yml`)).toBe(0o600)
-    expect(host.commands('docker')).toContain('docker exec -e MC_HOST_local acme-minio mc mb -p local/acme-documents local/acme-backups')
+    expect(host.requests.map((r) => `${r.method} ${r.url}`)).toEqual([
+      'GET http://127.0.0.1:8333/', 'HEAD http://127.0.0.1:8333/acme-documents', 'HEAD http://127.0.0.1:8333/acme-backups',
+    ])
   })
 
   it('C7: postgres refusing the password after start is reported with the safe fix', async () => {

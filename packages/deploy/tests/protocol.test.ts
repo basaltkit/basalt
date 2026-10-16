@@ -186,7 +186,7 @@ describe('the redactor', () => {
 
   it('knows secret keys by config and by name; finds passwords in URLs', () => {
     const config = { env: { generate: { SESSION: { kind: 'secret', bytes: 32 } }, ask: { SMTP: { secret: true }, NAME: { secret: false } } } } as unknown as Parameters<typeof isSecretKey>[1]
-    expect(['SESSION', 'SMTP', 'API_TOKEN', 'DATABASE_URL', 'BASALT_MINIO_USER', 'PGPASSWORD'].every((k) => isSecretKey(k, config))).toBe(true)
+    expect(['SESSION', 'SMTP', 'API_TOKEN', 'DATABASE_URL', 'BASALT_S3_SECRET_KEY', 'PGPASSWORD'].every((k) => isSecretKey(k, config))).toBe(true)
     expect(['NAME', 'PORT', 'HOST'].some((k) => isSecretKey(k, config))).toBe(false)
     expect(isSecretKey('NAME')).toBe(false)
     expect(urlPasswords('postgresql://u:p%40ss@h/db')).toEqual(['p%40ss', 'p@ss'])

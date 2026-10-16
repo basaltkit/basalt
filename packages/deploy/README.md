@@ -1,10 +1,11 @@
 # @basaltkit/deploy
 
 One deploy pipeline for a Basalt app on a single Linux server: the `.env`,
-dedicated Docker infra (Postgres, Redis, MinIO), PM2, Apache, a database dump
+dedicated Docker infra (Postgres, Redis, SeaweedFS for S3), PM2, Apache, a database dump
 before migrating, a health check, and a rollback when the new release does not
 answer. Design and decisions: [RFC 0006](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0006-basalt-deploy.md)
-and [RFC 0007](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0007-deploy-zero-scripts.md).
+[RFC 0007](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0007-deploy-zero-scripts.md)
+and [RFC 0010](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0010-deploy-seaweedfs.md) (object storage).
 
 ```sh
 pnpm add -D @basaltkit/deploy
@@ -54,7 +55,7 @@ export default defineDeploy({
   },
   infra: dockerInfra('acme', {
     postgres: { urlParams: { schema: 'public' } },
-    minio: { buckets: ['acme-documents', 'acme-backups'] },
+    seaweedfs: { buckets: ['acme-documents', 'acme-backups'] },   // S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY
   }),
   build: { prisma: ['prisma.config.ts', 'prisma/tenants/prisma.config.ts'], web: 'web' },
   migrate: { central: true, tenants: true },
@@ -407,11 +408,11 @@ infra: dockerInfra('myapp', {
   access: 'containers',       // URLs name the containers (myapp-pg:5432); migrations get 127.0.0.1:<port>
   postgres: { user: 'myapp_owner', urlKey: 'OWNER_DATABASE_URL', appRole: { name: 'myapp_app', urlKey: 'DATABASE_URL' } },
   redis: { urlKey: 'REDIS_URL' },
-  minio: { buckets: [{ name: 'myapp-documents', versioned: true }] },
+  seaweedfs: { buckets: [{ name: 'myapp-documents', versioned: true }] },
 }),
 runtime: compose({
   // …
-  attach: { 'myapp-pg': ['data'], 'myapp-redis': ['data'], 'myapp-minio': ['data'] },
+  attach: { 'myapp-pg': ['data'], 'myapp-redis': ['data'], 'myapp-seaweedfs': ['data'] },
   passEnv: ['REDIS_URL'],     // a service without env_file gets it through ${REDIS_URL}: from memory only
 }),
 ```
@@ -431,7 +432,10 @@ infra: external({
     appRole: { name: 'myapp_app', urlKey: 'DATABASE_URL' }, // what the app connects as: no DDL
   },
   redis: { container: 'myapp-redis' },
-  minio: { container: 'minio', buckets: [{ name: 'myapp-documents', versioned: true }, { name: 'myapp-quarantine', expireDays: 1 }] },
+  s3: {                                                    // any S3-compatible store; credentials from the .env
+    hostEndpoint: 'http://127.0.0.1:8333',                 // where the deploy reaches it, if the .env names a container
+    buckets: [{ name: 'myapp-documents', versioned: true }, { name: 'myapp-quarantine', expireDays: 1 }],
+  },
 }),
 runtime: compose({
   // …
@@ -451,14 +455,47 @@ verify: {
   changed, granted DML through the owner's default privileges — never on
   existing tables, which an app may keep append-only. With `migrate.tenants`,
   every `tenant_*` schema too, after the migration.
-- **Buckets:** created; versioning on; the expiry rule added once — the rules
-  are read first. The credentials are the running MinIO's.
+- **Buckets:** over the S3 API itself (signed in the deploy, no vendor CLI):
+  created; versioning on; the expiry rule added once, next to any rule already
+  there. The store and its credentials are checked before the build.
 - **Attach:** on a fresh server the project is created first (`up --no-start`)
   so its networks exist and the first release is healthy, not the second.
 - **Jobs:** `docker compose run --rm --no-deps` with this commit's images,
   before `up`; `once` skips them when the path exists.
 - **The dump** runs inside `infra.postgres.container` as the owner.
 - `dockerInfra` services take `container` (adopt another name) and `appRole` too.
+
+**Object storage: SeaweedFS** (RFC 0010) — `dockerInfra(app, { seaweedfs })`
+runs one `chrislusf/seaweedfs` container (master, volume, filer and S3 in one
+process) and writes `S3_ENDPOINT`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` (rename
+them with `keys`):
+
+- Only the S3 API is published, on 127.0.0.1. The master, the volume server and
+  the filer listen on the container's loopback only — they have no
+  authentication, and `runtime.attach` puts the container on the app's
+  networks. The Iceberg and Lance listeners are off.
+- The admin gRPC (identities, policies) requires a signed token: the deploy
+  generates the signing key and keeps it. SeaweedFS 4.48 otherwise accepts an
+  identity from any neighbour on the network — verified, RFC 0010 §3.
+- Healthy means a volume server has joined, not only that `/healthz` answers:
+  reads fail for a few seconds after `/healthz` turns green.
+- The credentials are not stored in the data: a new pair on an old volume is a
+  rotation (the objects stay readable), not the lock-out it is for Postgres.
+
+**Moving off MinIO.** MinIO's community edition is archived (no images, no
+fixes), and `minio` is gone from this package: a config that still names it is
+refused with this pointer. Per app:
+
+1. Replace `minio: { … }` with `seaweedfs: { … }` (same `buckets` and `keys`),
+   or `external({ s3: { … } })` for a store you run yourself.
+2. `basalt-deploy plan`, then `run`: the new store is created next to the old
+   one, on its own port, with the buckets.
+3. Copy the objects, old store to new, with any S3 tool — e.g. `rclone sync`
+   from a container on the host network, both remotes set by environment
+   variables, so no key lands in a file or a command line. Versioned buckets:
+   only the current versions come across.
+4. Check the app, then remove the old container and, once you are sure,
+   its volume.
 
 **Hooks** — what only your app does, as commands that also run by hand:
 
