@@ -89,6 +89,8 @@ describe('the dedicated SeaweedFS', () => {
     const file = renderCompose('acme', ctx.config.infra as never, plan)
     expect(file).toContain("ports: ['127.0.0.1:8333:8333']")
     expect(file).toContain("'-ip.bind=127.0.0.1', '-s3.ip.bind=0.0.0.0', '-s3.port.iceberg=0', '-s3.port.lance=0'")
+    // Not (free disk / 30 GB) volumes: with little disk, the second bucket could not write at all.
+    expect(file).toContain("'-master.volumeSizeLimitMB=1024', '-volume.max=1000'")
     expect(file).toContain('WEED_JWT_FILER_SIGNING_KEY: ${BASALT_S3_SIGNING_KEY:?missing}')
     expect(file).toContain('image: chrislusf/seaweedfs:4.48')
     expect(file).toContain("volumes: ['acme-seaweedfs-data:/data']")

@@ -298,7 +298,12 @@ export function renderCompose(app: string, infra: DockerInfra, plan: InfraPlan):
         // beyond the container's loopback: the others have no authentication,
         // and `runtime.attach` puts this container on the app's networks.
         // Iceberg and Lance are extra listeners nothing here uses.
-        "    command: ['server', '-dir=/data', '-s3', '-s3.port=8333', '-ip=127.0.0.1', '-ip.bind=127.0.0.1', '-s3.ip.bind=0.0.0.0', '-s3.port.iceberg=0', '-s3.port.lance=0']",
+        // Volumes: each bucket gets its own, seven at a time, and by default
+        // SeaweedFS allows (free disk / 30 GB) of them — on a server with less
+        // than ~60 GB free the second bucket had none and every write was a
+        // 500 (`No writable volumes and no free volumes left`). 1 GB volumes
+        // and an explicit count; a volume takes no disk until it holds data.
+        "    command: ['server', '-dir=/data', '-s3', '-s3.port=8333', '-ip=127.0.0.1', '-ip.bind=127.0.0.1', '-s3.ip.bind=0.0.0.0', '-s3.port.iceberg=0', '-s3.port.lance=0', '-master.volumeSizeLimitMB=1024', '-volume.max=1000']",
         `    ports: ['127.0.0.1:${service.port}:8333']`,
         '    environment:',
         '      AWS_ACCESS_KEY_ID: ${BASALT_S3_ACCESS_KEY:?missing}',
