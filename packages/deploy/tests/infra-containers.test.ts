@@ -24,7 +24,7 @@ function globex(extra: Partial<DeployConfig> = {}): DeployConfig {
       access: 'containers',
       postgres: { user: 'globex_owner', database: 'globex', urlKey: 'GLOBEX_OWNER_DATABASE_URL', appRole: { name: 'globex_app', urlKey: 'GLOBEX_DATABASE_URL' } },
       redis: { urlKey: 'GLOBEX_REDIS_URL' },
-      minio: { buckets: ['globex-documents'], keys: { endpoint: 'GLOBEX_S3_ENDPOINT', accessKey: 'GLOBEX_S3_ACCESS_KEY_ID', secretKey: 'GLOBEX_S3_SECRET_ACCESS_KEY' } },
+      seaweedfs: { buckets: ['globex-documents'], keys: { endpoint: 'GLOBEX_S3_ENDPOINT', accessKey: 'GLOBEX_S3_ACCESS_KEY_ID', secretKey: 'GLOBEX_S3_SECRET_ACCESS_KEY' } },
     }),
     runtime: compose({
       file: 'docker/compose.prod.yml',
@@ -51,13 +51,13 @@ describe('dedicated infra for a compose app', () => {
     expect(env.get('GLOBEX_OWNER_DATABASE_URL')).toMatch(/^postgresql:\/\/globex_owner:[0-9a-f]{48}@globex-pg:5432\/globex$/)
     expect(env.get('GLOBEX_DATABASE_URL')).toMatch(/^postgresql:\/\/globex_app:[0-9a-f]{48}@globex-pg:5432\/globex$/)
     expect(env.get('GLOBEX_REDIS_URL')).toMatch(/^redis:\/\/:[0-9a-f]{48}@globex-redis:6379$/)
-    expect(env.get('GLOBEX_S3_ENDPOINT')).toBe('http://globex-minio:9000')
-    expect(plan.hostUrls).toEqual([['globex-pg:5432', '127.0.0.1:5433'], ['globex-redis:6379', '127.0.0.1:6380'], ['globex-minio:9000', '127.0.0.1:9100']])
+    expect(env.get('GLOBEX_S3_ENDPOINT')).toBe('http://globex-seaweedfs:8333')
+    expect(plan.hostUrls).toEqual([['globex-pg:5432', '127.0.0.1:5433'], ['globex-redis:6379', '127.0.0.1:6380'], ['globex-seaweedfs:8333', '127.0.0.1:8333']])
 
     const onHost = migrationValues(ctx.config, env, plan.hostUrls)
     expect(onHost.get('GLOBEX_OWNER_DATABASE_URL')).toMatch(/@127\.0\.0\.1:5433\/globex$/)
     expect(onHost.get('GLOBEX_DATABASE_URL')).toMatch(/@127\.0\.0\.1:5433\/globex$/)
-    expect(onHost.get('GLOBEX_S3_ENDPOINT')).toBe('http://127.0.0.1:9100')
+    expect(onHost.get('GLOBEX_S3_ENDPOINT')).toBe('http://127.0.0.1:8333')
   })
 
   it('its own compose project and volumes, still bound to 127.0.0.1', async () => {
@@ -65,7 +65,7 @@ describe('dedicated infra for a compose app', () => {
     const plan = await planInfra(ctx, new Map())
     const file = renderCompose('globex', ctx.config.infra as never, plan)
     expect(file).toContain('name: globex-infra')
-    expect(plan.services.map((s) => s.volume)).toEqual(['globex-infra_globex-pg-data', 'globex-infra_globex-redis-data', 'globex-infra_globex-minio-data'])
+    expect(plan.services.map((s) => s.volume)).toEqual(['globex-infra_globex-pg-data', 'globex-infra_globex-redis-data', 'globex-infra_globex-seaweedfs-data'])
     expect(file).toContain("volumes: ['globex-pg-data:/var/lib/postgresql/data']")
     expect(file).toContain("ports: ['127.0.0.1:5433:5432']")
   })

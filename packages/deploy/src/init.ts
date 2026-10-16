@@ -1,5 +1,5 @@
 import { relative } from 'node:path'
-import { APP_NAME } from './config.js'
+import { APP_NAME, DEFAULT_S3_KEYS } from './config.js'
 import type { Host } from './host.js'
 
 /**
@@ -308,14 +308,14 @@ function managedKeys(facts: ProjectFacts): Set<string> {
   const keys = new Set(['NODE_ENV'])
   if (!facts.compose) {
     for (const key of ['PORT', 'HOST', 'DATABASE_URL', 'REDIS_URL']) keys.add(key)
-    if (hasMinio(facts)) for (const key of MINIO_KEYS) keys.add(key)
+    if (hasS3(facts)) for (const key of S3_KEYS) keys.add(key)
   }
   return keys
 }
 
-/** What `dockerInfra`'s MinIO writes (`minio.keys`); all three in the schema → a dedicated MinIO. */
-const MINIO_KEYS = ['S3_ENDPOINT', 'S3_ACCESS_KEY', 'S3_SECRET_KEY']
-const hasMinio = (facts: ProjectFacts) => MINIO_KEYS.every((k) => facts.env?.keys.some((e) => e.name === k))
+/** What `dockerInfra`'s SeaweedFS writes (`seaweedfs.keys`); all three in the schema → a dedicated store. */
+const S3_KEYS = Object.values(DEFAULT_S3_KEYS)
+const hasS3 = (facts: ProjectFacts) => S3_KEYS.every((k) => facts.env?.keys.some((e) => e.name === k))
 
 export function renderConfig(facts: ProjectFacts, answers: InitAnswers): string {
   const helpers = new Set(['defineDeploy'])
@@ -347,12 +347,12 @@ export function renderConfig(facts: ProjectFacts, answers: InitAnswers): string 
   if (ask.length) lines.push(...block('ask', ask))
   lines.push('  },')
 
-  if (!facts.compose && (has('DATABASE_URL') || has('REDIS_URL') || hasMinio(facts) || !typed)) {
+  if (!facts.compose && (has('DATABASE_URL') || has('REDIS_URL') || hasS3(facts) || !typed)) {
     helpers.add('dockerInfra')
     const options: string[] = []
     if (typed && !has('DATABASE_URL')) options.push('postgres: false')
     if (typed && !has('REDIS_URL')) options.push('redis: false')
-    if (hasMinio(facts)) options.push('minio: {}')
+    if (hasS3(facts)) options.push('seaweedfs: {}')
     lines.push(`  infra: dockerInfra(${quote(facts.app)}${options.length ? `, { ${options.join(', ')} }` : ''}),`)
   }
 

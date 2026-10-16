@@ -192,7 +192,27 @@ export interface ExternalInfra<E extends object = EnvShape> {
   kind: 'external'
   postgres?: ExternalPostgres<E>
   redis?: { container: string }
-  minio?: { container: string; buckets?: Bucket[] }
+  /** Any S3-compatible store the app reaches with the `.env`'s credentials: its buckets kept. */
+  s3?: ExternalS3<E>
+}
+
+/** The `.env` keys that hold an S3 store's endpoint and credentials. */
+export interface S3Keys<E extends object = EnvShape> {
+  endpoint: EnvKey<E>
+  accessKey: EnvKey<E>
+  secretKey: EnvKey<E>
+}
+
+export interface ExternalS3<E extends object = EnvShape> {
+  /** @default { endpoint: 'S3_ENDPOINT', accessKey: 'S3_ACCESS_KEY', secretKey: 'S3_SECRET_KEY' } */
+  keys?: S3Keys<E>
+  /**
+   * Where THIS deploy reaches the store, when the `.env`'s endpoint is an
+   * address only the app's containers resolve (`http://storage:8333`).
+   * @example 'http://127.0.0.1:8333'
+   */
+  hostEndpoint?: string
+  buckets?: Bucket[]
 }
 
 export interface ExternalPostgres<E extends object = EnvShape> {
@@ -228,7 +248,7 @@ export interface DockerInfra<E extends object = EnvShape> {
   kind: 'docker'
   postgres?: PostgresService<E>
   redis?: RedisService<E>
-  minio?: MinioService
+  seaweedfs?: SeaweedfsService<E>
   /**
    * The compose project the containers belong to. Default: the app — what an
    * older compose file of the app's infra already used. An app whose own
@@ -274,15 +294,21 @@ export interface RedisService<E extends object = EnvShape> {
   container?: string
 }
 
-export interface MinioService {
+/**
+ * S3-compatible object storage in one SeaweedFS container (RFC 0010). Only
+ * the S3 API is published (127.0.0.1); the master, volume and filer listen
+ * inside the container only — they have no authentication of their own.
+ */
+export interface SeaweedfsService<E extends object = EnvShape> {
   image: string
+  /** Host port on 127.0.0.1 for the S3 API; `auto` keeps the running container's, else the `.env` endpoint's, else the first free from 8333. */
   port: number | 'auto'
-  consolePort: number | 'auto'
-  user: string
+  /** The access key a new store gets. @default the app */
+  accessKey: string
   buckets: Bucket[]
   /** The `.env` keys that receive the endpoint and the credentials. */
-  keys: { endpoint: string; accessKey: string; secretKey: string }
-  /** Adopt a container under another name. Default `<app>-minio`. */
+  keys: S3Keys<E>
+  /** Adopt a container under another name. Default `<app>-seaweedfs`. */
   container?: string
 }
 
@@ -579,23 +605,31 @@ export const external = <E extends object = EnvShape>(services: NoInfer<Omit<Ext
 /** A bucket's name, whichever form it was given in. */
 export const bucketName = (bucket: Bucket): string => (typeof bucket === 'string' ? bucket : bucket.name)
 
-export const MINIO_IMAGE = 'minio/minio:RELEASE.2025-03-12T18-04-18Z'
+/** Pinned: a SeaweedFS upgrade is a decision, not a side effect of a deploy. */
+export const SEAWEEDFS_IMAGE = 'chrislusf/seaweedfs:4.48'
+
+/** What a config that still names MinIO is told (RFC 0010 §1). */
+export const MINIO_REMOVED = 'minio was removed in @basaltkit/deploy 0.6: MinIO\'s community edition is archived (no images, no fixes). '
+  + 'Use seaweedfs: { … } in dockerInfra(), or s3: { … } in external() for a store you run yourself — moving the data: the README, "Moving off MinIO"'
+
+export const DEFAULT_S3_KEYS = { endpoint: 'S3_ENDPOINT', accessKey: 'S3_ACCESS_KEY', secretKey: 'S3_SECRET_KEY' } as const
 
 export interface DockerInfraOptions<E extends object = EnvShape> {
   project?: string
   access?: 'host' | 'containers'
   postgres?: Partial<PostgresService<E>> | false
   redis?: Partial<RedisService<E>> | false
-  minio?: Partial<MinioService> | false
+  seaweedfs?: Partial<SeaweedfsService<E>> | false
 }
 
 /**
  * Dedicated containers on 127.0.0.1 for this app only. Names are fixed by the
- * app label — `<app>-pg`, `<app>-redis`, `<app>-minio` — so a server that
+ * app label — `<app>-pg`, `<app>-redis`, `<app>-seaweedfs` — so a server that
  * already runs them (created by hand or by an older script) is adopted, not
  * duplicated.
  */
 export function dockerInfra<E extends object = EnvShape>(app: string, options: NoInfer<DockerInfraOptions<E>> = {}): DockerInfra<E> {
+  if ('minio' in options) throw new DeployConfigError([MINIO_REMOVED])
   const infra: DockerInfra<E> = { kind: 'docker', ...(options.project ? { project: options.project } : {}), ...(options.access ? { access: options.access } : {}) }
   if (options.postgres !== false) {
     infra.postgres = {
@@ -606,11 +640,11 @@ export function dockerInfra<E extends object = EnvShape>(app: string, options: N
   if (options.redis !== false) {
     infra.redis = { image: 'redis:7-alpine', port: 'auto', urlKey: 'REDIS_URL' as EnvKey<E>, ...options.redis }
   }
-  if (options.minio !== false && options.minio !== undefined) {
-    infra.minio = {
-      image: MINIO_IMAGE, port: 'auto', consolePort: 'auto', user: app, buckets: [],
-      keys: { endpoint: 'S3_ENDPOINT', accessKey: 'S3_ACCESS_KEY', secretKey: 'S3_SECRET_KEY' },
-      ...options.minio,
+  if (options.seaweedfs !== false && options.seaweedfs !== undefined) {
+    infra.seaweedfs = {
+      image: SEAWEEDFS_IMAGE, port: 'auto', accessKey: app, buckets: [],
+      keys: { ...DEFAULT_S3_KEYS } as S3Keys<E>,
+      ...options.seaweedfs,
     }
   }
   return infra
@@ -710,24 +744,20 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
   for (const key of config.env.forbid ?? []) {
     if (keys.includes(key)) problems.push(`env key "${key}" is both forbidden and set`)
   }
-  if (config.infra?.kind === 'docker') {
-    const minio = config.infra.minio
-    for (const bucket of minio?.buckets ?? []) {
-      if (!/^[a-z0-9][a-z0-9.-]{2,62}$/.test(bucketName(bucket))) problems.push(`bucket "${bucketName(bucket)}" is not a valid S3 bucket name`)
-    }
-  }
+  if (config.infra && 'minio' in config.infra) problems.push(MINIO_REMOVED)
   const services = config.infra?.kind === 'external' ? config.infra : undefined
-  for (const bucket of services?.minio?.buckets ?? []) {
+  const buckets = [...(services?.s3?.buckets ?? []), ...(config.infra?.kind === 'docker' ? config.infra.seaweedfs?.buckets ?? [] : [])]
+  for (const bucket of buckets) {
     if (!/^[a-z0-9][a-z0-9.-]{2,62}$/.test(bucketName(bucket))) problems.push(`bucket "${bucketName(bucket)}" is not a valid S3 bucket name`)
-  }
-  for (const bucket of [...(services?.minio?.buckets ?? []), ...(config.infra?.kind === 'docker' ? config.infra.minio?.buckets ?? [] : [])]) {
     if (typeof bucket === 'object' && bucket.expireDays !== undefined && (!Number.isInteger(bucket.expireDays) || bucket.expireDays < 1)) {
       problems.push(`bucket "${bucket.name}": expireDays must be a whole number ≥ 1`)
     }
   }
+  const hostEndpoint = services?.s3?.hostEndpoint
+  if (hostEndpoint !== undefined && !/^https?:\/\/[^/\s]+\/?$/.test(hostEndpoint)) problems.push(`s3.hostEndpoint "${hostEndpoint}" must be http(s)://host[:port]`)
   const containers = [
-    services?.postgres?.container, services?.redis?.container, services?.minio?.container,
-    ...(config.infra?.kind === 'docker' ? [config.infra.postgres?.container, config.infra.redis?.container, config.infra.minio?.container] : []),
+    services?.postgres?.container, services?.redis?.container,
+    ...(config.infra?.kind === 'docker' ? [config.infra.postgres?.container, config.infra.redis?.container, config.infra.seaweedfs?.container] : []),
   ]
   for (const container of containers) {
     if (container !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(container)) problems.push(`container "${container}" is not a container name`)
@@ -783,7 +813,7 @@ export interface ServerOverrides {
   domain?: string
   branch?: string
   port?: number
-  infra?: { postgres?: { port?: number }; redis?: { port?: number }; minio?: { port?: number; consolePort?: number } }
+  infra?: { postgres?: { port?: number }; redis?: { port?: number }; seaweedfs?: { port?: number } }
 }
 
 export function applyOverrides(config: DeployConfig, overrides: ServerOverrides): DeployConfig {
@@ -800,13 +830,7 @@ export function applyOverrides(config: DeployConfig, overrides: ServerOverrides)
     const o = overrides.infra
     if (infra.postgres && o.postgres?.port !== undefined) infra.postgres = { ...infra.postgres, port: o.postgres.port }
     if (infra.redis && o.redis?.port !== undefined) infra.redis = { ...infra.redis, port: o.redis.port }
-    if (infra.minio && o.minio) {
-      infra.minio = {
-        ...infra.minio,
-        ...(o.minio.port === undefined ? {} : { port: o.minio.port }),
-        ...(o.minio.consolePort === undefined ? {} : { consolePort: o.minio.consolePort }),
-      }
-    }
+    if (infra.seaweedfs && o.seaweedfs?.port !== undefined) infra.seaweedfs = { ...infra.seaweedfs, port: o.seaweedfs.port }
     next.infra = infra
   }
   return next

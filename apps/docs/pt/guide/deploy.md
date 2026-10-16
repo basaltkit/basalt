@@ -2,7 +2,7 @@
 
 O `@basaltkit/deploy` faz o deploy de uma aplicação Basalt para um único
 servidor Linux. Um comando trata do `.env`, da infraestrutura Docker (Postgres,
-Redis, MinIO), do build, de um dump da base de dados antes de migrar, da
+Redis, SeaweedFS), do build, de um dump da base de dados antes de migrar, da
 migração, do PM2 ou Docker Compose, do Apache ou Caddy, de um health check e de
 um rollback quando a nova release não responde. O `@basaltkit/deploy-ui` é uma
 interface web opcional para ele. Corre na **tua** máquina e executa os mesmos
@@ -591,5 +591,6 @@ utilizador). Os comandos do utilizador da aplicação recusam correr como root.
   externa e hooks.
 - RFCs [0006](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0006-basalt-deploy.md)
   (o pipeline), [0008](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0008-deploy-machine-protocol.md)
-  (modo máquina) e [0009](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0009-deploy-local-ui.md)
-  (a interface).
+  (modo máquina), [0009](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0009-deploy-local-ui.md)
+  (a interface) e [0010](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0010-deploy-seaweedfs.md)
+  (SeaweedFS no lugar do MinIO).

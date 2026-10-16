@@ -116,7 +116,7 @@ async function nameFindings(ctx: DeployContext, sha: string): Promise<Finding[]>
     ? [
         infra.postgres && (infra.postgres.container ?? `${ctx.config.app}-pg`),
         infra.redis && (infra.redis.container ?? `${ctx.config.app}-redis`),
-        infra.minio && (infra.minio.container ?? `${ctx.config.app}-minio`),
+        infra.seaweedfs && (infra.seaweedfs.container ?? `${ctx.config.app}-seaweedfs`),
       ].filter((c): c is string => Boolean(c))
     : [])
   for (const container of Object.keys(rt.attach ?? {})) {

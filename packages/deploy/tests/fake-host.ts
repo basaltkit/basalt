@@ -31,6 +31,9 @@ export class FakeHost implements Host {
   handlers: Handler[] = []
   certificates = new Map<string, TlsCertificate | { error: string }>()
   http: (url: string, host?: string) => { status: number } | { error: string } = () => ({ status: 200 })
+  /** Every `httpRequest`, and what answers it (an S3 store, by default an empty 200). */
+  requests: Array<{ url: string; method: string; headers: Record<string, string>; body: string }> = []
+  respond: (request: { url: string; method: string; headers: Record<string, string>; body: string }) => { status: number; body?: string } | { error: string } = () => ({ status: 200 })
   env: Record<string, string | undefined> = { USER: 'deployer' }
   userId = 1000
   tty = false
@@ -194,6 +197,12 @@ export class FakeHost implements Host {
     return this.certificates.get(servername) ?? this.certificates.get('*') ?? { error: 'getaddrinfo ENOTFOUND' }
   }
   async httpGet(url: string, options: { host?: string } = {}) { return this.http(url, options.host) }
+  async httpRequest(url: string, options: { method: string; headers?: Record<string, string>; body?: string }) {
+    const request = { url, method: options.method, headers: options.headers ?? {}, body: options.body ?? '' }
+    this.requests.push(request)
+    const answer = this.respond(request)
+    return 'error' in answer ? answer : { status: answer.status, body: answer.body ?? '' }
+  }
   uid() { return this.userId }
   pid() { return this.processId }
   hostname() { return this.name }

@@ -527,7 +527,7 @@ async function writeEnvSecure(ctx: DeployContext, plan: EnvPlan): Promise<void> 
 async function infraStep(ctx: DeployContext, infra: InfraPlan, values: Map<string, string>): Promise<void> {
   stopOnErrors(ctx, await applyInfra(ctx, infra), 'infra')
   const external = externalOf(ctx.config)
-  const adopted = [external?.postgres?.container, external?.redis?.container, external?.minio?.container].filter(Boolean)
+  const adopted = [external?.postgres?.container, external?.redis?.container].filter(Boolean)
   if (infra.services.length > 0) ctx.host.out.ok(`${infra.services.map((s) => s.container).join(', ')} healthy; credentials accepted`)
   else if (adopted.length > 0) ctx.host.out.ok(`${adopted.join(', ')} running (external)`)
   else ctx.host.out.ok('nothing to start (external infra)')

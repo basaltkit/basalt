@@ -1,12 +1,12 @@
-import { bucketName, type AppRole, type Bucket, type DeployConfig } from './config.js'
+import { DEFAULT_S3_KEYS, type AppRole, type DeployConfig } from './config.js'
 import { DeployError, type DeployContext, type Finding } from './context.js'
 import type { EnvChange } from './dotenv.js'
 
 /**
  * What every deploy keeps true of the app's services, dedicated or not
  * (RFC 0007 §4): the external containers are running, the app's database role
- * exists with the `.env`'s password and its grants, the buckets exist with
- * their policies. Each is idempotent and says what it did.
+ * exists with the `.env`'s password and its grants. Each is idempotent and
+ * says what it did. (The buckets: `s3.ts`.)
  *
  * Credentials never reach a command line: `docker exec -e NAME` (no value)
  * copies them from this process's environment, SQL with a password goes on
@@ -23,12 +23,6 @@ export interface PostgresHandle {
   tcp: boolean
   /** The owner's URL, from which the app role's URL is derived. */
   url: string | undefined
-}
-
-export interface MinioHandle {
-  container: string
-  user: string
-  password: string
 }
 
 export const externalOf = (config: DeployConfig) => (config.infra?.kind === 'external' ? config.infra : undefined)
@@ -50,7 +44,7 @@ export async function externalFindings(ctx: DeployContext): Promise<Finding[]> {
   const services = externalOf(ctx.config)
   if (!services) return []
   const findings: Finding[] = []
-  for (const [service, container] of [['postgres', services.postgres?.container], ['redis', services.redis?.container], ['minio', services.minio?.container]] as const) {
+  for (const [service, container] of [['postgres', services.postgres?.container], ['redis', services.redis?.container]] as const) {
     if (!container) continue
     const state = await ctx.host.exec('docker', ['inspect', '--format', '{{.State.Running}}', container])
     if (state.stdout.trim() === 'true') continue
@@ -171,60 +165,17 @@ SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'tenant\\_%';
   return `role ${role.name}: granted on ${result.stdout.trim().split('\n').pop() ?? '0'} company schema(s)`
 }
 
-/** Credentials of a running MinIO: its own, never the config's. */
-export async function minioHandle(ctx: DeployContext, container: string): Promise<MinioHandle> {
-  const result = await ctx.host.exec('docker', ['inspect', container, '--format', '{{json .Config.Env}}'])
-  if (result.code !== 0) throw new DeployError(`minio: cannot inspect ${container}`)
-  const env = new Map((JSON.parse(result.stdout.trim() || '[]') as string[]).map((e) => [e.slice(0, e.indexOf('=')), e.slice(e.indexOf('=') + 1)] as const))
-  const user = env.get('MINIO_ROOT_USER')
-  const password = env.get('MINIO_ROOT_PASSWORD')
-  if (!user || !password) throw new DeployError(`minio: ${container} has no MINIO_ROOT_USER/MINIO_ROOT_PASSWORD`)
-  return { container, user, password }
-}
-
-/** Each bucket exists; versioning on where asked; the expiry rule added once. */
-export async function ensureBuckets(ctx: DeployContext, minio: MinioHandle, buckets: Bucket[]): Promise<string> {
-  if (buckets.length === 0) return ''
-  const alias = `http://${encodeURIComponent(minio.user)}:${encodeURIComponent(minio.password)}@127.0.0.1:9000`
-  const mc = (args: string[]) => ctx.host.exec('docker', ['exec', '-e', 'MC_HOST_local', minio.container, 'mc', ...args], { env: { MC_HOST_local: alias } })
-  const fail = (what: string, result: { stderr: string }) => new DeployError(`minio: ${what}: ${result.stderr.trim().split('\n')[0] ?? 'mc failed'}`)
-
-  const made = await mc(['mb', '-p', ...buckets.map((b) => `local/${bucketName(b)}`)])
-  if (made.code !== 0) throw fail('creating the buckets', made)
-  const said: string[] = []
-  for (const bucket of buckets) {
-    if (typeof bucket === 'string') { said.push(bucket); continue }
-    const notes: string[] = []
-    if (bucket.versioned) {
-      const versioned = await mc(['version', 'enable', `local/${bucket.name}`])
-      if (versioned.code !== 0) throw fail(`versioning ${bucket.name}`, versioned)
-      notes.push('versioned')
-    }
-    if (bucket.expireDays !== undefined) {
-      // `mc ilm rule add` adds ANOTHER rule every time: read the rules first.
-      const rules = await mc(['ilm', 'rule', 'ls', '--json', `local/${bucket.name}`])
-      const present = new RegExp(`"Expiration":\\s*\\{[^}]*"Days":\\s*${bucket.expireDays}\\b`).test(rules.stdout)
-      if (!present) {
-        const added = await mc(['ilm', 'rule', 'add', '--expire-days', String(bucket.expireDays), `local/${bucket.name}`])
-        if (added.code !== 0) throw fail(`expiry on ${bucket.name}`, added)
-      }
-      notes.push(`${bucket.expireDays}-day expiry${present ? '' : ' (added)'}`)
-    }
-    said.push(notes.length ? `${bucket.name} (${notes.join(', ')})` : bucket.name)
-  }
-  return `buckets: ${said.join(', ')}`
-}
-
 /** What `plan` says about the services: the external containers, the role, the buckets. */
 export function describeServices(config: DeployConfig): string[] {
   const lines: string[] = []
   const external = externalOf(config)
-  for (const [service, container] of [['postgres', external?.postgres?.container], ['redis', external?.redis?.container], ['minio', external?.minio?.container]] as const) {
+  for (const [service, container] of [['postgres', external?.postgres?.container], ['redis', external?.redis?.container]] as const) {
     if (container) lines.push(`${service}: ${container} (external, kept running by its owner)`)
   }
+  if (external?.s3) lines.push(`s3: ${external.s3.hostEndpoint ?? (external.s3.keys ?? DEFAULT_S3_KEYS).endpoint} (external; credentials from the .env, checked before the build)`)
   const role = appRoleOf(config)
   if (role) lines.push(`role ${role.name}: created if missing, password from ${role.urlKey}, DML grants${config.migrate?.tenants ? ' (company schemas too, after the migration)' : ''}`)
-  const buckets = [...(external?.minio?.buckets ?? []), ...(config.infra?.kind === 'docker' ? config.infra.minio?.buckets ?? [] : [])]
+  const buckets = [...(external?.s3?.buckets ?? []), ...(config.infra?.kind === 'docker' ? config.infra.seaweedfs?.buckets ?? [] : [])]
   const policies = buckets.filter((b) => typeof b === 'object' && (b.versioned || b.expireDays))
   if (policies.length) lines.push(`buckets: ${policies.map((b) => typeof b === 'object' ? `${b.name} (${[b.versioned ? 'versioned' : '', b.expireDays ? `${b.expireDays}-day expiry` : ''].filter(Boolean).join(', ')})` : b).join(', ')}`)
   return lines

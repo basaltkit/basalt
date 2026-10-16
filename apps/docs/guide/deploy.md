@@ -1,7 +1,7 @@
 # Deploying to a server
 
 `@basaltkit/deploy` deploys a Basalt app to a single Linux server. One command
-covers the `.env`, the Docker infra (Postgres, Redis, MinIO), the build, a
+covers the `.env`, the Docker infra (Postgres, Redis, SeaweedFS), the build, a
 database dump before migrating, the migration, PM2 or Docker Compose, Apache or
 Caddy, a health check, and a rollback when the new release does not answer.
 `@basaltkit/deploy-ui` is an optional web UI for it. It runs on **your**
@@ -569,5 +569,6 @@ per-user Node). The app user's commands refuse to run as root.
   `deploy.config.ts`, Docker Compose apps, external infra and hooks.
 - RFCs [0006](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0006-basalt-deploy.md)
   (the pipeline), [0008](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0008-deploy-machine-protocol.md)
-  (machine mode) and [0009](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0009-deploy-local-ui.md)
-  (the UI).
+  (machine mode), [0009](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0009-deploy-local-ui.md)
+  (the UI) and [0010](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0010-deploy-seaweedfs.md)
+  (SeaweedFS in place of MinIO).

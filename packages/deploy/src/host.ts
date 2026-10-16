@@ -68,6 +68,8 @@ export interface Host {
   tlsCertificate(servername: string): Promise<TlsCertificate | { error: string }>
   /** GET with an explicit `Host` header (fetch forbids setting it). Never throws. */
   httpGet(url: string, options?: { host?: string; timeoutMs?: number }): Promise<{ status: number } | { error: string }>
+  /** Any method, with headers and a body; the response body as text. Never throws. */
+  httpRequest(url: string, options: { method: string; headers?: Record<string, string>; body?: string; timeoutMs?: number }): Promise<{ status: number; body: string } | { error: string }>
   /** The environment the deploy itself was started with (answers for non-interactive runs). */
   env: Readonly<Record<string, string | undefined>>
   /** Whether a person can answer a prompt (a terminal, not CI). */
@@ -573,6 +575,27 @@ export function nodeHost(output: Output = consoleOutput()): Host {
         request.on('timeout', () => request.destroy(new Error('timed out')))
         request.on('error', (error) => resolve({ error: error.message }))
         request.end()
+      })
+    },
+
+    httpRequest(url, options) {
+      return new Promise((resolve) => {
+        const target = new URL(url)
+        const client = target.protocol === 'https:' ? https : http
+        const body = options.body ?? ''
+        const request = client.request(target, {
+          method: options.method,
+          headers: { ...options.headers, ...(body ? { 'content-length': String(Buffer.byteLength(body)) } : {}) },
+          timeout: options.timeoutMs ?? 15_000,
+        }, (response) => {
+          const chunks: Buffer[] = []
+          response.on('data', (chunk: Buffer) => chunks.push(chunk))
+          response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))
+          response.on('error', (error) => resolve({ error: error.message }))
+        })
+        request.on('timeout', () => request.destroy(new Error('timed out')))
+        request.on('error', (error) => resolve({ error: error.message }))
+        request.end(body)
       })
     },
   }

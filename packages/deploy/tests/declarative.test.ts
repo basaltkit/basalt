@@ -16,6 +16,8 @@ const OLD = 'a'.repeat(40)
 const NEW = 'b'.repeat(40)
 const OWNER = 'postgresql://globex_owner:ownerpw@globex-postgres:5432/globex'
 const APP = 'postgresql://globex_app:apppw@globex-postgres:5432/globex'
+/** The app reaches the store as a container; the deploy, through `hostEndpoint`. */
+const S3_ENV = 'S3_ENDPOINT=http://globex-storage:8333\nS3_ACCESS_KEY=globex\nS3_SECRET_KEY=s3secretpw\n'
 
 function globex(extra: Partial<DeployConfig> = {}): DeployConfig {
   return {
@@ -26,7 +28,7 @@ function globex(extra: Partial<DeployConfig> = {}): DeployConfig {
     infra: external({
       postgres: { container: 'globex-postgres', urlKey: 'GLOBEX_OWNER_DATABASE_URL', appRole: { name: 'globex_app', urlKey: 'GLOBEX_DATABASE_URL' } },
       redis: { container: 'globex-redis' },
-      minio: { container: 'minio', buckets: [{ name: 'globex-documents', versioned: true }, { name: 'globex-quarantine', expireDays: 1 }] },
+      s3: { hostEndpoint: 'http://127.0.0.1:8333', buckets: [{ name: 'globex-documents', versioned: true }, { name: 'globex-quarantine', expireDays: 1 }] },
     }),
     migrate: { command: ['pnpm', 'db:deploy'], tenants: true },
     runtime: compose({
@@ -51,7 +53,8 @@ interface World {
   up: () => string | undefined
   roles: Set<string>
   networks: Map<string, Set<string>>
-  rules: string[]
+  /** The S3 store the deploy talks to: buckets, which are versioned, each bucket's lifecycle document. */
+  store: { buckets: Set<string>; versioned: Set<string>; lifecycle: Map<string, string> }
   sql: string[]
 }
 
@@ -70,9 +73,27 @@ function server(options: {
   const networks = new Map<string, Set<string>>(options.networks === false ? [] : [['globex_data', new Set(['globex-postgres'])], ['globex_sandbox', new Set()]])
   const images = new Set(['globex:aaaaaaa'])
   const volumes = new Set(options.networks === false ? [] : ['globex-clamdb'])
-  const rules: string[] = []
+  const store: World['store'] = { buckets: new Set(), versioned: new Set(), lifecycle: new Map() }
   const sql: string[] = []
-  const host = new FakeHost().put(API_ENV, options.env ?? `NODE_ENV=production\nGLOBEX_OWNER_DATABASE_URL=${OWNER}\nGLOBEX_DATABASE_URL=${APP}\n`, 0o600)
+  const host = new FakeHost().put(API_ENV, options.env ?? `NODE_ENV=production\nGLOBEX_OWNER_DATABASE_URL=${OWNER}\nGLOBEX_DATABASE_URL=${APP}\n${S3_ENV}`, 0o600)
+  host.respond = ({ url, method, body }) => {
+    const u = new URL(url)
+    const bucket = u.pathname.slice(1)
+    const sub = [...u.searchParams.keys()][0]
+    if (!bucket) return { status: 200, body: '<ListAllMyBucketsResult/>' }
+    if (method === 'HEAD') return { status: store.buckets.has(bucket) ? 200 : 404 }
+    if (method === 'PUT' && !sub) { store.buckets.add(bucket); return { status: 200 } }
+    if (sub === 'versioning') {
+      if (method === 'PUT') { store.versioned.add(bucket); return { status: 200 } }
+      return { status: 200, body: store.versioned.has(bucket) ? '<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>' : '<VersioningConfiguration/>' }
+    }
+    if (sub === 'lifecycle') {
+      if (method === 'PUT') { store.lifecycle.set(bucket, body); return { status: 200 } }
+      const doc = store.lifecycle.get(bucket)
+      return doc ? { status: 200, body: doc } : { status: 404, body: '<Error><Code>NoSuchLifecycleConfiguration</Code></Error>' }
+    }
+    return { status: 400 }
+  }
   host.put(`${DIR}/package.json`, '{}').put(`${DIR}/docker/compose.prod.yml`, 'services: {}\n')
   host.put('/etc/apache2/sites-available/globex-app.conf', 'ProxyPass "/api/" "http://127.0.0.1:3001/"\n')
   host.files.set('/etc/apache2/sites-enabled/globex-app.conf', { kind: 'symlink', target: '../sites-available/globex-app.conf' })
@@ -80,7 +101,6 @@ function server(options: {
   const docker = ({ args, options: o }: Call) => {
     const [verb, ...rest] = args
     if (verb === 'inspect' && rest[0] === '--format') return rest[2] === options.stopped ? ok('false\n') : ok('true\n')
-    if (verb === 'inspect' && rest[1] === '--format') return ok(JSON.stringify(['MINIO_ROOT_USER=globex', 'MINIO_ROOT_PASSWORD=miniopw']))
     if (verb === 'exec' && args.includes('psql')) {
       const text = o.stdin ?? ''
       sql.push(text)
@@ -92,12 +112,6 @@ function server(options: {
       return ok()
     }
     if (verb === 'exec' && args.includes('pg_dump')) return ok('PGDMP')
-    if (verb === 'exec' && args.includes('mc')) {
-      const mc = args.slice(args.indexOf('mc') + 1)
-      if (mc[0] === 'ilm' && mc[2] === 'ls') return ok(rules.includes(mc[4] as string) ? '{"config":{"Rules":[{"Expiration":{"Days":1}}]}}' : '{"config":{"Rules":[]}}')
-      if (mc[0] === 'ilm' && mc[2] === 'add') rules.push(mc[5] as string)
-      return ok()
-    }
     if (verb === 'network' && rest[0] === 'inspect') {
       const members = networks.get(rest[1] as string)
       return members ? ok([...members].map((m) => `${m} `).join('')) : fail('no such network')
@@ -138,7 +152,7 @@ function server(options: {
     .on(({ command }) => (command === 'node' ? ok('v24.17.0') : undefined))
     .on(({ command }) => (command === 'pnpm' ? ok('10.0.0') : undefined))
     .on(({ command }) => (command === process.execPath ? ok('\n@@basalt-deploy@@{"ok":true,"trueKeys":[]}\n') : undefined))
-  return { host, up: () => upSha, roles, networks, rules, sql }
+  return { host, up: () => upSha, roles, networks, store, sql }
 }
 
 const dockerArgs = (host: FakeHost) => host.calls.filter((c) => c.command === 'docker').map((c) => c.args.join(' '))
@@ -159,17 +173,23 @@ describe('a Globex deploy with no scripts', () => {
     for (const argv of dockerArgs(world.host)) {
       expect(argv).not.toContain('apppw')
       expect(argv).not.toContain('ownerpw')
-      expect(argv).not.toContain('miniopw')
+      expect(argv).not.toContain('s3secretpw')
     }
+    expect(JSON.stringify(world.host.requests)).not.toContain('s3secretpw')
     // §11.3 — company schemas after the migration.
     const grants = world.sql.findIndex((s) => s.includes('DO $basalt$'))
     expect(grants).toBeGreaterThan(-1)
     expect(world.host.transcript).toContain('role globex_app: granted on 4 company schema(s)')
 
     // §4.2 — buckets, versioning, the expiry rule once.
-    expect(dockerArgs(world.host)).toContain('exec -e MC_HOST_local minio mc mb -p local/globex-documents local/globex-quarantine')
-    expect(dockerArgs(world.host)).toContain('exec -e MC_HOST_local minio mc version enable local/globex-documents')
-    expect(world.rules).toEqual(['local/globex-quarantine'])
+    expect(world.store.buckets).toEqual(new Set(['globex-documents', 'globex-quarantine']))
+    expect(world.store.versioned).toEqual(new Set(['globex-documents']))
+    expect([...world.store.lifecycle.keys()]).toEqual(['globex-quarantine'])
+    expect(world.store.lifecycle.get('globex-quarantine')).toContain('<Expiration><Days>1</Days></Expiration>')
+    // Over the hostEndpoint, never the container address the app uses.
+    expect(world.host.requests.every((r) => r.url.startsWith('http://127.0.0.1:8333/'))).toBe(true)
+    expect(world.host.requests.find((r) => r.method === 'PUT' && r.url.endsWith('?lifecycle='))?.headers['content-md5']).toMatch(/^[A-Za-z0-9+/]{22}==$/)
+    expect(world.host.transcript).toContain('globex-quarantine (1-day expiry (added))')
 
     // The dump runs inside the external Postgres, as its owner — no backup.container needed.
     expect(dockerArgs(world.host).some((a) => a.startsWith('exec -e PGPASSWORD globex-postgres pg_dump -U globex_owner -d globex'))).toBe(true)
@@ -196,13 +216,18 @@ describe('a Globex deploy with no scripts', () => {
 
   it('the second deploy changes nothing: role in place, rule kept, job done, nothing to attach', async () => {
     const world = server({ seeded: true })
-    world.rules.push('local/globex-quarantine')
+    for (const b of ['globex-documents', 'globex-quarantine']) world.store.buckets.add(b)
+    world.store.versioned.add('globex-documents')
+    // A rule set by hand stays: the deploy adds to the document, never replaces it.
+    const existing = '<LifecycleConfiguration><Rule><ID>by-hand</ID><Status>Enabled</Status><Filter><Prefix>tmp/</Prefix></Filter><Expiration><Days>7</Days></Expiration></Rule><Rule><ID>x</ID><Status>Enabled</Status><Filter><Prefix></Prefix></Filter><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>'
+    world.store.lifecycle.set('globex-quarantine', existing)
     world.networks.set('globex_data', new Set(['globex-postgres', 'globex-redis']))
     world.networks.set('globex_sandbox', new Set(['globex-redis']))
     expect(await run(ctxOf(world.host), { skip: ['tls'] })).toBe(0)
     expect(world.host.transcript).toContain('role globex_app: in place; grants in place')
     expect(world.sql.some((s) => s.includes('PASSWORD'))).toBe(false)
-    expect(world.rules).toEqual(['local/globex-quarantine'])
+    expect(world.store.lifecycle.get('globex-quarantine')).toBe(existing)
+    expect(world.host.requests.filter((r) => r.method === 'PUT')).toEqual([])
     expect(world.host.transcript).toContain('globex-quarantine (1-day expiry)')
     expect(world.host.transcript).toContain('job freshclam: already done')
     // The glob is the shell's $1, never part of its script.
@@ -218,13 +243,13 @@ describe('a Globex deploy with no scripts', () => {
   })
 
   it('an app URL that does not exist yet is generated from the owner\'s, then kept', async () => {
-    const world = server({ env: `NODE_ENV=production\nGLOBEX_OWNER_DATABASE_URL=${OWNER}\n`, seeded: true })
+    const world = server({ env: `NODE_ENV=production\nGLOBEX_OWNER_DATABASE_URL=${OWNER}\n${S3_ENV}`, seeded: true })
     expect(await run(ctxOf(world.host), { skip: ['tls'] })).toBe(0)
     expect(world.host.file(API_ENV)).toMatch(/^GLOBEX_DATABASE_URL=postgresql:\/\/globex_app:[0-9a-f]{48}@globex-postgres:5432\/globex$/m)
   })
 
   it('passEnv hands compose the value this deploy just wrote, not the one before it', async () => {
-    const world = server({ env: `NODE_ENV=production\nGLOBEX_OWNER_DATABASE_URL=${OWNER}\n`, seeded: true })
+    const world = server({ env: `NODE_ENV=production\nGLOBEX_OWNER_DATABASE_URL=${OWNER}\n${S3_ENV}`, seeded: true })
     const config = globex({ runtime: compose({ ...(globex().runtime as ReturnType<typeof compose>), passEnv: ['GLOBEX_DATABASE_URL'] }) })
     expect(await run(ctxOf(world.host, config), { skip: ['tls'] })).toBe(0)
     const written = /^GLOBEX_DATABASE_URL=(.+)$/m.exec(world.host.file(API_ENV) ?? '')?.[1]
@@ -283,7 +308,7 @@ describe('found before anything is built', () => {
     const bad = globex({
       infra: external({
         postgres: { container: 'bad name', appRole: { name: 'Globex-App', urlKey: 'X' } },
-        minio: { container: 'minio', buckets: [{ name: 'Bad_Bucket' }, { name: 'ok-bucket', expireDays: 0 }] },
+        s3: { hostEndpoint: 'ftp://nope', buckets: [{ name: 'Bad_Bucket' }, { name: 'ok-bucket', expireDays: 0 }] },
       }),
     })
     try {
@@ -294,6 +319,7 @@ describe('found before anything is built', () => {
       const text = (error as Error).message
       expect(text).toContain('bucket "Bad_Bucket" is not a valid S3 bucket name')
       expect(text).toContain('bucket "ok-bucket": expireDays must be a whole number ≥ 1')
+      expect(text).toContain('s3.hostEndpoint "ftp://nope" must be http(s)://host[:port]')
       expect(text).toContain('container "bad name" is not a container name')
       expect(text).toContain('appRole "Globex-App" must be a lowercase Postgres identifier')
     }

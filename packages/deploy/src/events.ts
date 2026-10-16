@@ -205,7 +205,7 @@ export class Redactor {
   }
 }
 
-const INFRA_SECRETS = /^BASALT_(PG|REDIS|MINIO)_/
+const INFRA_SECRETS = /^BASALT_(PG|REDIS|S3)_/
 
 /** Whether the value of `key` is a secret for this config: generated, asked as a secret, or named like one. */
 export function isSecretKey(key: string, config?: DeployConfig): boolean {
