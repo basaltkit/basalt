@@ -258,7 +258,8 @@ first `run` writes the `.env`. Nothing about a server lives in a `deploy.conf`
 any more.
 
 `bootstrap` is the only command that installs packages. It never runs from
-`run`.
+`run`. (Since §12, *system packages*: `install` also installs the app's
+declared `system.packages` — root, from the plan.)
 
 ## 8. The `caddy` target
 
@@ -387,3 +388,23 @@ the apps change their config once.
 - **§8:** one on-demand TLS `ask` endpoint per server (Caddy's limit). On a
   server whose Caddyfile is not the stock one, `install` only adds the import
   line and says what to add to the global block.
+- **System packages (added in 0.7):** an app that runs OS binaries (OCR, PDF
+  tools, `unzip`) declares them — `system: { packages: [...] }`, apt names
+  matching `[a-z0-9][a-z0-9.+-]{1,62}`, each once. The split is the one of
+  RFC 0006 §11.4:
+  - **As the app user**, preflight checks each with `dpkg-query -W
+    -f=${Status} <pkg>` (argv, outside the checkout): a missing one is
+    **C12**, an error that stops the run before the build and prints
+    `sudo apt-get install -y <missing>`; no `dpkg-query` (not Debian/Ubuntu)
+    is a warning. `plan` prints `system: <names> (installed | missing: …)`.
+    A deploy never installs: it is not root.
+  - **As root**, the list travels in the install plan as data
+    (`system.packages`, validated again field by field; root never loads the
+    config). `bootstrap` (phase 3, after the plan) and `install` install the
+    missing ones: `apt-get update`, then `apt-get install -y
+    --no-install-recommends`, `DEBIAN_FRONTEND=noninteractive`, argv only,
+    from the server's own apt sources. The app user chose the names and a
+    package's maintainer scripts run as root, so the list is shown and needs a
+    "yes" at the terminal, as Caddy `extra` does; nothing missing, nothing is
+    asked. A dry run of `bootstrap` has no plan: it shows the commands with a
+    `<system.packages>` placeholder.

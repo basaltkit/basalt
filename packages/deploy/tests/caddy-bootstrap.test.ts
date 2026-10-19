@@ -93,6 +93,7 @@ describe('basalt-deploy bootstrap', () => {
       'as ubuntu: dependencies',
       'as ubuntu: the .env (asks what it cannot generate)',
       'as ubuntu: the install plan (data only)',
+      'system packages: those of system.packages not installed (from the install plan)',
       'swap 4 GB (3.8 GB RAM, none yet)',
       'ufw on: SSH (22), 80, 443 only',
       'Caddy (cloudsmith)',

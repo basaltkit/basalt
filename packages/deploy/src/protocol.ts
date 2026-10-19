@@ -14,7 +14,7 @@
 // browser UI type-checks against them without @types/node).
 
 export interface Finding {
-  /** The RFC 0006 §5 check id (`C1`…`C10`) or a step name. */
+  /** The RFC 0006 §5 check id (`C1`…`C12`) or a step name. */
   id: string
   level: 'error' | 'warning'
   message: string
@@ -94,6 +94,8 @@ export interface InstallPlan {
   docker: boolean
   /** `bootstrap` settings, for `bootstrap` only. */
   bootstrap?: { swapGb?: number; firewall?: boolean }
+  /** `system.packages`: apt package names root installs when missing (bootstrap, install). */
+  system?: { packages: string[] }
   /** The @basaltkit/deploy version that wrote the plan (informational). */
   tool: string
 }

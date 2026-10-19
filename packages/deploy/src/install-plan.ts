@@ -9,6 +9,7 @@ import type { Host } from './host.js'
 import type { InstallPlan, PlanProxy } from './protocol.js'
 import { acquireLock } from './lock.js'
 import { covers } from './checks.js'
+import { aptInstall, fixCommand, packageStatus, systemPackageProblems } from './system.js'
 import { API_PREFIX, ASK_PATH, assertRootOwnedDir, caddyExtraProblem, CERT_NAME, CHECKOUT_PATH, envLocationProblem, isConfigRoot, isWebRoot, untrustedAncestor, USER_NAME, vhostFileProblem } from './trust.js'
 
 /**
@@ -52,6 +53,8 @@ export async function buildInstallPlan(ctx: DeployContext, tool: string): Promis
     envFiles: [envFile(ctx), ...envMirrors(ctx)].filter((f) => !f.startsWith(`${ctx.dir}/`)),
     docker: config.infra?.kind === 'docker' || config.runtime.kind === 'compose',
     ...(config.bootstrap ? { bootstrap: { ...config.bootstrap } } : {}),
+    // Names only: root installs them from this list, validated again, never from the config.
+    ...(config.system?.packages?.length ? { system: { packages: [...config.system.packages] } } : {}),
     tool,
   }
   // Root will run exactly these checks: refuse now, where the fix is.
@@ -96,7 +99,7 @@ export function parseInstallPlan(text: string, source: string): InstallPlan {
   const known = (record: Record<string, unknown>, keys: string[], where: string) => {
     for (const key of Object.keys(record)) if (!keys.includes(key)) problems.push(`${where}: unknown key "${key}"`)
   }
-  known(plan, ['kind', 'version', 'app', 'domain', 'tenants', 'dir', 'port', 'proxy', 'envFiles', 'docker', 'bootstrap', 'tool'], 'plan')
+  known(plan, ['kind', 'version', 'app', 'domain', 'tenants', 'dir', 'port', 'proxy', 'envFiles', 'docker', 'bootstrap', 'system', 'tool'], 'plan')
   if (plan['kind'] !== PLAN_KIND || plan['version'] !== 1) problems.push(`not a version-1 ${PLAN_KIND}`)
   const app = typeof plan['app'] === 'string' && APP_NAME.test(plan['app']) ? plan['app'] : undefined
   if (!app) problems.push('app is not an app name')
@@ -128,6 +131,16 @@ export function parseInstallPlan(text: string, source: string): InstallPlan {
       known(b, ['swapGb', 'firewall'], 'bootstrap')
       if (b['swapGb'] !== undefined && (typeof b['swapGb'] !== 'number' || !Number.isInteger(b['swapGb']) || b['swapGb'] < 0 || b['swapGb'] > 64)) problems.push('bootstrap.swapGb must be a whole number from 0 to 64')
       if (b['firewall'] !== undefined && typeof b['firewall'] !== 'boolean') problems.push('bootstrap.firewall must be true or false')
+    }
+  }
+
+  const system = plan['system']
+  if (system !== undefined) {
+    if (typeof system !== 'object' || system === null || Array.isArray(system)) problems.push('system must be an object')
+    else {
+      known(system as Record<string, unknown>, ['packages'], 'system')
+      // What root hands to apt-get as arguments: names only, never an option.
+      problems.push(...systemPackageProblems((system as Record<string, unknown>)['packages'], 'system.packages'))
     }
   }
 
@@ -258,6 +271,7 @@ export async function install(host: Host, plan: InstallPlan, user: string | unde
 
     const ctx = contextOf(host, plan, stateDir)
     summary(host, plan, user, stateDir, ctx)
+    await systemPackages(host, plan.system?.packages ?? [])
     await envOwnership(host, plan, owner)
 
     if (plan.proxy.kind === 'apache' && plan.proxy.managed) {
@@ -308,7 +322,37 @@ function summary(host: Host, plan: InstallPlan, user: string, stateDir: string, 
       ? `Caddy ${caddyPaths(ctx).site} for ${names} → 127.0.0.1:${plan.port}, ${join(plan.dir, plan.proxy.webRoot)} served`
       : 'no proxy site'
   host.out.info(`install for "${plan.app}" (plan by @basaltkit/deploy ${plan.tool}), for ${user}, checkout ${plan.dir}:`)
-  host.out.info(`  state ${stateDir} · ${site}${plan.envFiles.length ? ` · env ${plan.envFiles.join(', ')}` : ''}`)
+  host.out.info(`  state ${stateDir} · ${site}${plan.envFiles.length ? ` · env ${plan.envFiles.join(', ')}` : ''}${plan.system?.packages.length ? ` · system packages ${plan.system.packages.join(', ')}` : ''}`)
+}
+
+/**
+ * `system.packages`: the missing ones, installed with apt — names the plan
+ * carries (validated: never an option), as argv, from this server's own apt
+ * sources. The app user chose them, and a package's install scripts run as
+ * root: the list is shown and needs a "yes", as Caddy `extra` does. Already
+ * installed, nothing is asked. Not Debian/Ubuntu: said, and left to the
+ * administrator.
+ */
+async function systemPackages(host: Host, packages: string[]): Promise<void> {
+  if (packages.length === 0) return
+  host.out.step('system packages')
+  const { missing, unverified } = await packageStatus(host, packages, '/')
+  if (unverified) {
+    host.out.warn(`no dpkg-query here (not Debian/Ubuntu): ${packages.join(', ')} not checked nor installed — install them by hand`)
+    return
+  }
+  if (missing.length === 0) {
+    host.out.ok(`${packages.join(', ')} installed`)
+    return
+  }
+  host.out.info(`not installed: ${missing.join(', ')} — apt-get install, as root, from this server's apt sources`)
+  if (!(await host.confirm(`Install ${missing.join(', ')} as root?`))) throw new DeployError(`system packages not confirmed — nothing installed (a terminal must answer; or, by hand: ${fixCommand(missing)})`)
+  for (const command of aptInstall(missing)) {
+    host.out.info(`  + ${command.join(' ')}`)
+    const result = await host.exec(command[0] as string, command.slice(1), { cwd: '/', stream: true })
+    if (result.code !== 0) throw new DeployError(`system packages: \`${command.join(' ')}\` failed (exit ${result.code})`)
+  }
+  host.out.ok(`${missing.join(', ')} installed`)
 }
 
 /** The host names a proxy config file serves: Apache ServerName/ServerAlias, Caddy site addresses. */

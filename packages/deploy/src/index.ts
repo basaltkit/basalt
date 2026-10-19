@@ -31,6 +31,7 @@ export {
   type ExternalPostgres,
   type AppRole,
   type Bucket,
+  type SystemConfig,
   type VerifyConfig,
   type ComposeJob,
   type PostgresService,
