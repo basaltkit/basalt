@@ -147,7 +147,7 @@ v1 reader skips types it does not know. Anything else is `v: 2`.
 | `step-start` | `id: StepId`, `title` | A pipeline step begins |
 | `step-end` | `id`, `status: 'ok'\|'failed'\|'skipped'\|'aborted'`, `durationMs` | It ends; every `step-start` has exactly one `step-end` unless the process is killed (§8.5) |
 | `log` | `stream: 'tool'\|'child'\|'foreign'`, `level: 'info'\|'ok'\|'warn'\|'error'`, `text`, `redacted: boolean`, `step?: StepId`, `source?` (child's command basename, e.g. `pnpm`, `docker`), `truncated?: true` | `Host.out.info/ok/warn/error`; a line of a child's output; a foreign stdout write (§5.4) |
-| `finding` | `id` (`C1`…`C11`, `git`, `backup`, `health`, `dumps`, …), `level: 'error'\|'warning'`, `message`, `fix?` | Each `Finding` passed to `report()` — structured, instead of the formatted `[id] message → fix` text |
+| `finding` | `id` (`C1`…`C12`, `git`, `backup`, `health`, `dumps`, …), `level: 'error'\|'warning'`, `message`, `fix?` | Each `Finding` passed to `report()` — structured, instead of the formatted `[id] message → fix` text |
 | `prompt` | `id`, `kind: 'text'\|'secret'\|'confirm'\|'choice'`, `message`, `key?`, `optional`, `attempt`, `default?` (never for `secret`), `choices?` (`choice` only) | An answer is needed (§7.2) |
 | `result` | `command`, `data` (per command, §4.3) | The command produced its payload |
 | `error` | `code: ErrorCode`, `message`, `hint?`, `holder?` (`locked` only), `findings?` (the blocking ones) | The command failed or refused |

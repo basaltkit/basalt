@@ -46,9 +46,10 @@ As root, with a copy of the tool root owns — never the checkout's node_modules
   cd / && sudo -H npx --yes --package=@basaltkit/deploy@<exact version> -- basalt-deploy <command>
   bootstrap --user=<name> --dir=<checkout> [--dry-run] [--proxy=…] [--swap-gb=<n>] [--no-firewall]
                      a fresh Ubuntu/Debian server, once: Docker, Node, pnpm; as the user
-                     pnpm install, env, install-plan; then swap, ufw, Caddy and install
+                     pnpm install, env, install-plan; then system packages, swap, ufw, Caddy and install
   install --plan=<file> --user=<name>
-                     once per server: state directory, proxy site, env file ownership
+                     once per server: state directory, proxy site, env file ownership,
+                     the app's missing system packages (apt, after a yes)
 
 Run the app user's commands with \`node\`, not \`pnpm exec\`: pnpm ≥ 12 may rewrite
 pnpm-lock.yaml on any command it runs. As root, nothing loads deploy.config.ts.

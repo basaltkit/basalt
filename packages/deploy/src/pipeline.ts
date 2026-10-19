@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import { apachePreflight } from './apache.js'
 import { caddyPreflight } from './caddy.js'
 import { backupDatabase, backupDir, backupPlaceFindings, restoreCommand } from './backup.js'
@@ -17,6 +18,7 @@ import { auditOf } from './audit.js'
 import { questionDescriptors } from './env-step.js'
 import type { EnvResult, RunResult, StatusResult, StepId, StepStatus } from './protocol.js'
 import { activeRun, lastRun } from './runs.js'
+import { describeSystem, packageStatus, systemFindings, type PackageStatus } from './system.js'
 
 /**
  * The pipeline (RFC 0006 §4): preflight → fetch → env → infra → build →
@@ -208,6 +210,8 @@ export interface Preflight {
   findings: Finding[]
   port: number
   values: Map<string, string>
+  /** `system.packages` as this server has them; undefined when none are declared. */
+  system?: PackageStatus
 }
 
 export async function preflight(ctx: DeployContext, options: RunOptions = {}): Promise<Preflight> {
@@ -221,6 +225,8 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
   const port = await resolvePort(ctx, values)
   findings.push(...await toolingFindings(ctx))
   findings.push(...await lockfileFindings(ctx))
+  const system = await systemStatus(ctx)
+  if (system) findings.push(...systemFindings(ctx.config.system?.packages ?? [], system))
   const head = (await ctx.host.exec('git', ['rev-parse', 'HEAD'], { cwd: ctx.dir })).stdout.trim()
   findings.push(...await runtimePreflight(ctx, port, head))
   findings.push(...await mirrorFindings(ctx))
@@ -228,7 +234,18 @@ export async function preflight(ctx: DeployContext, options: RunOptions = {}): P
   if (ctx.config.proxy?.kind === 'caddy') findings.push(...await caddyPreflight(ctx, port))
   if (!options.skip?.includes('tls')) findings.push(...await tlsFindings(ctx))
   findings.push(...await backupFindings(ctx, values, options))
-  return { findings, port, values }
+  return { findings, port, values, ...(system ? { system } : {}) }
+}
+
+/**
+ * C12's probe, as the app user: read-only, outside the checkout. Installing
+ * needs root, so a deploy never does — it stops before the build and prints
+ * the command an administrator runs.
+ */
+async function systemStatus(ctx: DeployContext): Promise<PackageStatus | undefined> {
+  const packages = ctx.config.system?.packages ?? []
+  if (packages.length === 0) return undefined
+  return packageStatus(ctx.host, packages, tmpdir())
 }
 
 /** The dump's container running — found now, not after the build, minutes later. */
@@ -577,6 +594,7 @@ function planLines(ctx: DeployContext, options: RunOptions, checked: Preflight, 
   const lines = [
     options.skip?.includes('fetch') ? 'fetch: skipped' : ((t) => `fetch: git ${fetchArgs(t).filter((a) => a !== '--quiet').join(' ')} && git merge --ff-only ${t.tracking}`)(gitTarget(ctx)),
     ...describeEnv(env).map((l) => `env: ${l}`),
+    ...describeSystem(config.system?.packages ?? [], checked.system).map((l) => `system: ${l}`),
     ...describeInfra(infra).map((l) => `infra: ${l}`),
     ...describeServices(config).map((l) => `infra: ${l}`),
     `build: ${pm} install (frozen), ${(config.build?.prisma ?? []).map((c) => `prisma generate --config ${c}`).join(', ') || 'no prisma'}${config.build?.script ? `, ${pm} run ${config.build.script}` : ''}${config.build?.web ? `, ${config.build.web} build` : ''}${isCompose(ctx) ? `, docker build ${composeOf(ctx).images.map((i) => i.tag).join(', ')} (skipped when the commit's tag exists)` : ''}`,

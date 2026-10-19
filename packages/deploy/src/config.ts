@@ -6,6 +6,7 @@
  * without running anything.
  */
 
+import { systemPackageProblems } from './system.js'
 import { API_PREFIX, ASK_PATH, caddyExtraProblem, CERT_NAME, envLocationProblem, isConfigRoot, isWebRoot, vhostFileProblem } from './trust.js'
 
 /**
@@ -89,6 +90,13 @@ export interface DeployConfig<E extends object = EnvShape> {
    * release to the system log (`logger -t basalt-deploy`).
    */
   audit?: { syslog?: boolean }
+  /**
+   * What the app needs from the operating system, outside node_modules
+   * (RFC 0007 §12, system packages). Checked on every deploy (C12, before
+   * anything is built); installed by root — `bootstrap` and `install` — from
+   * the install plan, never by a deploy.
+   */
+  system?: SystemConfig
   /** What `basalt-deploy bootstrap` sets up on a fresh server (RFC 0007 §7). */
   bootstrap?: {
     /** Swap created when RAM is under 6 GB and there is none; 0 = never. @default 4 */
@@ -96,6 +104,16 @@ export interface DeployConfig<E extends object = EnvShape> {
     /** ufw: SSH (+ 80/443 behind a proxy), turned on only when nothing else listens. @default true */
     firewall?: boolean
   }
+}
+
+export interface SystemConfig {
+  /**
+   * Debian/Ubuntu apt package names the app runs (binaries it spawns, shared
+   * libraries it loads): `[a-z0-9][a-z0-9.+-]{1,62}`, each once — names only,
+   * no version, no release.
+   * @example ['tesseract-ocr', 'tesseract-ocr-por', 'poppler-utils', 'unzip']
+   */
+  packages?: string[]
 }
 
 export interface VerifyConfig {
@@ -797,6 +815,8 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
     const problem = typeof file === 'string' ? envLocationProblem(config.app, file) : 'must be a string'
     if (problem) problems.push(`env file ${problem}`)
   }
+  // Root installs these from the plan: a name is never an option, never shell syntax.
+  if (config.system?.packages !== undefined) problems.push(...systemPackageProblems(config.system.packages, 'system.packages'))
   if (config.proxy?.kind === 'caddy' && config.tenants === 'subdomain' && !config.proxy.onDemandTls) {
     problems.push(`tenants: 'subdomain' behind caddy() needs onDemandTls: { ask: '/…' } — a certificate per tenant host, issued only for hosts the app vouches for`)
   }

@@ -109,7 +109,8 @@ Node at `engines.node` (NodeSource), the pnpm the lockfile records — gives the
 checkout and the `docker` group to the user (said plainly: that group is root on
 the machine; rootless Docker is a later step), then, **as the user, in the
 checkout**: `pnpm install`, `env` (it asks what it cannot generate) and
-`install-plan`. From that plan (data, validated) it adds swap when RAM is under
+`install-plan`. From that plan (data, validated) it installs the app's
+[system packages](#system-packages), adds swap when RAM is under
 6 GB (`bootstrap.swapGb`), ufw with SSH and 80/443 (turned on only when nothing
 else listens; `--no-firewall`), Caddy when the proxy is `caddy()`, and runs
 `install`. It never loads `deploy.config.ts` itself. A step that fails stops it;
@@ -166,6 +167,34 @@ and asks the app before each certificate. Someone's own Caddyfile only gets the
 import line. `caddy validate` runs before the reload; a failure puts every file
 back. Deploys diff the site and never rewrite it; C1, C2 (not imported) and C8
 (no `ask`) are checked as for Apache.
+
+### System packages
+
+What the app runs from the operating system — binaries it spawns, libraries
+it loads — is declared with the app, as Debian/Ubuntu apt package names:
+
+```ts
+system: { packages: ['tesseract-ocr', 'poppler-utils', 'unzip'] },
+```
+
+Each name matches `[a-z0-9][a-z0-9.+-]{1,62}` (no option, no version, no shell
+syntax) and appears once. Every deploy checks them as the app user
+(`dpkg-query -W -f='${Status}' <pkg>`, no shell): a missing one is a **C12**
+error that stops the run before anything is built and prints the fix,
+`sudo apt-get install -y <missing>` — not the first user who reaches the
+feature. Without `dpkg-query` (not Debian/Ubuntu) it is a warning: nothing
+could be checked. `plan` prints `system: tesseract-ocr, poppler-utils, unzip
+(installed)` or `(missing: …)`.
+
+A deploy never installs them (it is not root). Root does, from the install
+plan, which carries the names as data: `bootstrap` (after the user's
+`install-plan`) and `install` run `apt-get update` and `apt-get install -y
+--no-install-recommends` for the missing ones, non-interactively, from the
+server's own apt sources. The app user chose the names and a package's install
+scripts run as root, so the list is shown and needs a "yes" at the terminal;
+when nothing is missing nothing is asked. Adding a package later: commit it,
+then `install-plan` and `install` once (or the `apt-get` line the deploy
+printed).
 
 ## Commands
 
@@ -556,6 +585,7 @@ incident (RFC 0006 §5):
 - **C9** run with a package manager major other than the one `packageManager` declares;
 - **C10** keep a forbidden key, or a fixed key with another value.
 - **C11** build a commit whose `packageManager` (pnpm ≥ 12) the lockfile does not record — checked in preflight and again on the commit the fetch brings, before any install. A lockfile the package manager rewrites during the deploy is put back to the committed version (with a warning), so the next deploy is not blocked; and no check runs the package manager inside the checkout.
+- **C12** build when a `system.packages` entry is not installed (the fix is printed; a deploy never runs apt).
 
 Secrets never reach a command line, the compose file, or the terminal: the
 summary names keys, passwords travel in child-process environments only.

@@ -4,6 +4,7 @@ import { DeployError } from './context.js'
 import { LineSplitter, sanitize, type SplitLine } from './events.js'
 import type { Host } from './host.js'
 import { install, parseInstallPlan } from './install-plan.js'
+import { APT, aptInstall, fixCommand, packageStatus } from './system.js'
 import { CHECKOUT_PATH, USER_NAME } from './trust.js'
 
 /**
@@ -18,11 +19,13 @@ import { CHECKOUT_PATH, USER_NAME } from './trust.js'
  *      the user;
  *   2. as the user, in the checkout: `pnpm install`, `env` (it may ask), then
  *      `install-plan`, whose JSON comes back as data;
- *   3. as root, from that plan: swap (< 6 GB RAM), ufw (only when nothing but
- *      SSH listens), Caddy (proxy: caddy), then `install`.
+ *   3. as root, from that plan: the app's `system.packages`, swap (< 6 GB
+ *      RAM), ufw (only when nothing but SSH listens), Caddy (proxy: caddy),
+ *      then `install`.
  *
  * `--dry-run` prints every command and runs none (phase 3 then assumes
- * `--proxy`, or none: the plan is not written in a dry run).
+ * `--proxy`, or none, and shows the system packages as a placeholder: the
+ * plan is not written in a dry run).
  */
 
 export interface BootstrapOptions {
@@ -45,11 +48,12 @@ export interface Action {
   interactive?: boolean
   /** Asked at the terminal before a real run runs it; a "no" (or no terminal) stops bootstrap. */
   confirm?: string
+  /** With `confirm`: what the operator can do instead of answering, said when the answer is not "yes". */
+  otherwise?: string
   /** Runs as the app user: its output reaches root's terminal only through a pipe, line by line, sanitized. */
   user?: boolean
 }
 
-const APT = ['env', 'DEBIAN_FRONTEND=noninteractive', 'apt-get']
 /** The oldest pnpm root installs globally (lockfile v9; the app user chooses the version, root sets the floor). */
 export const MIN_PNPM = [9, 0, 0]
 
@@ -146,6 +150,7 @@ export async function planSystem(host: Host, dir: string, user: string): Promise
       what: `${dir} owned by ${user}`,
       commands: [['chown', '-R', `${user}:`, dir]],
       confirm: `${dir} is ${owner || 'unknown'}'s: give it and everything in it to ${user} (chown -R)?`,
+      otherwise: `make ${dir} the user's first`,
     })
   }
   const groups = (await host.exec('id', ['-nG', user], OUTSIDE)).stdout.split(/\s+/)
@@ -193,10 +198,23 @@ export function userSteps(user: string, dir: string, tty: boolean): Action[] {
 /** The phase-2 command whose stdout is the install plan (JSON) — in its own session, like the other steps. */
 export const planCommand = (user: string) => ['setsid', '-w', 'sudo', '-u', user, '-H', '--', 'node', BIN, 'install-plan', '--out=-']
 
-/** Phase 3 — swap, ufw, Caddy, from the plan (or the flags). */
-export async function planServer(host: Host, options: { proxy: 'apache' | 'caddy' | 'none'; swapGb: number; firewall: boolean }): Promise<{ actions: Action[]; notes: string[] }> {
+/**
+ * Phase 3 — the app's system packages, swap, ufw, Caddy, from the plan (or
+ * the flags). `packages` undefined: a dry run, which has no plan — the
+ * install is shown with a placeholder for the names.
+ */
+export async function planServer(host: Host, options: { proxy: 'apache' | 'caddy' | 'none'; swapGb: number; firewall: boolean; packages?: string[] }): Promise<{ actions: Action[]; notes: string[] }> {
   const actions: Action[] = []
   const notes: string[] = []
+  if (options.packages === undefined) {
+    actions.push({ what: 'system packages: those of system.packages not installed (from the install plan)', commands: aptInstall(['<system.packages>']) })
+  } else if (options.packages.length > 0) {
+    // Names the plan carries, validated by parseInstallPlan; apt only checked for (planSystem refused a server without it).
+    const { missing, unverified } = await packageStatus(host, options.packages, OUTSIDE.cwd)
+    const install = unverified ? options.packages : missing
+    // The app user chose them and their install scripts run as root: asked, as install asks.
+    if (install.length) actions.push({ what: `system packages: ${install.join(', ')}`, commands: aptInstall(install), confirm: `Install ${install.join(', ')} (system.packages) as root?`, otherwise: `install them first: ${fixCommand(install)}` })
+  }
   const meminfo = (await host.readFile('/proc/meminfo')) ?? ''
   const memGb = Number(/MemTotal:\s+(\d+)/.exec(meminfo)?.[1] ?? 0) / 1024 / 1024
   const swapKb = Number(/SwapTotal:\s+(\d+)/.exec(meminfo)?.[1] ?? 0)
@@ -281,7 +299,7 @@ async function runActions(host: Host, actions: Action[], dryRun: boolean): Promi
   for (const action of actions) {
     host.out.info(action.what)
     if (action.confirm && !dryRun && !(await host.confirm(action.confirm))) {
-      throw new DeployError(`${action.what}: not confirmed — nothing more was done (a terminal must answer; or make ${action.what.split(' ')[0]} the user's first)`)
+      throw new DeployError(`${action.what}: not confirmed — nothing more was done (a terminal must answer${action.otherwise ? `; or ${action.otherwise}` : ''})`)
     }
     for (const command of action.commands) {
       host.out.info(`  + ${command.join(' ')}${action.cwd ? `   (in ${action.cwd})` : ''}`)
@@ -335,6 +353,7 @@ export async function bootstrap(host: Host, dir: string, options: BootstrapOptio
     proxy: options.proxy ?? plan.proxy.kind,
     swapGb: options.swapGb ?? plan.bootstrap?.swapGb ?? 4,
     firewall: options.firewall ?? plan.bootstrap?.firewall ?? true,
+    packages: plan.system?.packages ?? [],
   })
   await runActions(host, server.actions, false)
   await install(host, plan, user)
