@@ -45,6 +45,9 @@ jobs:
           publish-script: pnpm release
           commit-message: "chore: version packages"
           pr-title: "chore: version packages"
+          # One tag per package version, no GitHub release: the per-package
+          # notes live in each CHANGELOG.md; releases are the umbrella v1.x ones.
+          create-github-releases: false
           # A pull request opened with GITHUB_TOKEN starts no workflow runs —
           # GitHub's own guard against a workflow triggering itself forever. The
           # consequence here is that the "Version Packages" PR arrives with no
