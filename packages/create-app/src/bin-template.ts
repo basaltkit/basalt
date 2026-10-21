@@ -177,11 +177,38 @@ async function databaseInUse(): Promise<{ name: string; target: string }> {
 }
 `
 
+/**
+ * The GENERATORS PRELUDE, after the dev prelude and still before anything of
+ * the app is imported: `make:*` only writes source files, so — like `upgrade` —
+ * it runs without booting the app. Booting it would run every boot check, and
+ * a generator would refuse to work until the database is up and migrated (or
+ * every environment variable is set), which is often exactly when the
+ * resource is being written. Any other command, and a `make:*` the generator
+ * does not know, falls through to the booted CLI below.
+ */
+const GENERATORS_PRELUDE = `// The generators (make:*) only write source files: like \`upgrade\`, they run
+// without booting the app, so they work before the database is up or migrated.
+if (process.argv[2]?.startsWith('make:')) {
+  const { consoleIo, parseArgv } = await import('@basaltkit/cli')
+  const { generatorCommands } = await import('@basaltkit/generator')
+  const { command, args, flags } = parseArgv(process.argv.slice(2))
+  const make = generatorCommands().find((candidate) => candidate.name === command)
+  if (make) {
+    // The generators read only io/args/flags — there is no app to hand them.
+    const context = { io: consoleIo(), args, flags } as unknown as Parameters<typeof make.handle>[0]
+    process.exit((await make.handle(context)) ?? 0)
+  }
+}
+`
+
 /** Marker proving a bin/basalt.ts already delegates the project commands. */
 export const PROJECT_COMMANDS_MARKER = "['update', 'add', 'doctor', 'info'].includes(process.argv[2]"
 
 /** Marker proving a bin/basalt.ts already has the dev prelude (.env loading, `upgrade`, env errors). */
 export const DEV_PRELUDE_MARKER = 'process.loadEnvFile(envFile)'
+
+/** Marker proving a bin/basalt.ts already runs the generators without booting the app. */
+export const GENERATORS_PRELUDE_MARKER = "process.argv[2]?.startsWith('make:')"
 
 const APP_IMPORT = "await import('../src/app.js')"
 const APP_IMPORT_EXPLAINED = `${APP_IMPORT}.catch(explainBootFailure)`
@@ -191,6 +218,7 @@ export function basaltBin(): string {
   return `#!/usr/bin/env node
 ${PRELUDE}
 ${DEV_PRELUDE}
+${GENERATORS_PRELUDE}
 // The dev tools are imported dynamically, after the project commands above.
 const { runCli } = await import('@basaltkit/cli')
 const { generatorCommands } = await import('@basaltkit/generator')
@@ -235,24 +263,33 @@ export const LEGACY_BIN_HASHES: ReadonlySet<string> = new Set([
   // 2026-10-01 (create-basalt 1.10): project commands (update/add/doctor/info)
   // delegated before boot — but no .env loading and `upgrade` booted the app.
   'sha256-9091e137a5de39929d0e70b2fd973386b9cc1c2f996e130989a22c795b9d0893',
+  // 2026-10-01 (create-basalt 1.11): the dev prelude — but make:* booted the
+  // app, so a generator needed a migrated database.
+  'sha256-bd0b6c9c40089a18c2c2f1a70953044d6a74a329d38a72903b494b1f2265a114',
+  // 2026-10-08: database diagnoses in explainBootFailure — make:* still booted.
+  'sha256-abea8cbfdb41a302cabad7929617f7fc2fe822345aa8db6ff777e923eb0fc96b',
 ])
 
 export const hasProjectCommands = (content: string): boolean => content.includes(PROJECT_COMMANDS_MARKER)
 export const hasDevPrelude = (content: string): boolean => content.includes(DEV_PRELUDE_MARKER)
+export const hasGeneratorsPrelude = (content: string): boolean => content.includes(GENERATORS_PRELUDE_MARKER)
 
 /**
  * Upgrades a template-generated bin/basalt.ts to the current template, step by
  * step: (1) without the project commands, inserts their prelude after the
  * shebang and turns the remaining static imports into dynamic ones (so they no
  * longer run before it); (2) without the dev prelude, inserts it right after
- * the project commands and routes the app import through `explainBootFailure`.
- * Deterministic for the known templates — for the latest ones (1.9, 1.10) the
+ * the project commands and routes the app import through `explainBootFailure`;
+ * (3) without the generators prelude, inserts it right before the dev tools
+ * are imported for the booted CLI.
+ * Deterministic for the known templates — for the latest ones (1.9 to 1.14) the
  * result is exactly {@link basaltBin}.
  */
 export function patchBasaltBin(content: string): string {
   let text = content.replace(/\r\n/g, '\n')
   if (!hasProjectCommands(text)) text = addProjectCommands(text)
   if (!hasDevPrelude(text)) text = addDevPrelude(text)
+  if (!hasGeneratorsPrelude(text)) text = addGeneratorsPrelude(text)
   return text
 }
 
@@ -282,12 +319,20 @@ function addDevPrelude(content: string): string {
   return `${content.slice(0, end)}${DEV_PRELUDE}\n${rest}`
 }
 
+/** Inserts the generators prelude right before the dev tools are imported for the booted CLI. */
+function addGeneratorsPrelude(content: string): string {
+  const anchor = /^(?:\/\/ The dev tools are imported dynamically[^\n]*\n)?const \{ runCli \} = await import\('@basaltkit\/cli'\)$/m.exec(content)
+  // Without the template's dynamic CLI import, the file is not ours to rearrange.
+  if (!anchor || !hasDevPrelude(content)) return content
+  return `${content.slice(0, anchor.index)}${GENERATORS_PRELUDE}\n${content.slice(anchor.index)}`
+}
+
 export type BinStatus = 'current' | 'patchable' | 'modified' | 'absent'
 
 /** Where a bin/basalt.ts stands: already current, an untouched old template, or user code. */
 export function binStatus(content: string | undefined, manifestHash?: string): BinStatus {
   if (content === undefined) return 'absent'
-  if (hasProjectCommands(content) && hasDevPrelude(content)) return 'current'
+  if (hasProjectCommands(content) && hasDevPrelude(content) && hasGeneratorsPrelude(content)) return 'current'
   const hash = hashContent(content)
   return LEGACY_BIN_HASHES.has(hash) || hash === manifestHash ? 'patchable' : 'modified'
 }
@@ -310,6 +355,13 @@ and explains env errors — and change the app import to
 \`const { buildApp } = ${APP_IMPORT_EXPLAINED}\`:
 
 ${DEV_PRELUDE}`)
+  }
+  if (!hasGeneratorsPrelude(content)) {
+    steps.push(`${steps.length > 0 ? 'Then paste' : 'Paste'} this after the dev prelude (before the dev tools are imported for the
+booted CLI) — it runs the make:* generators without booting the app, so they
+work before the database is up or migrated:
+
+${GENERATORS_PRELUDE}`)
   }
   return steps.join('\n')
 }

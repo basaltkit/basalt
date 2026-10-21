@@ -123,12 +123,15 @@ describe('scaffold manifest', () => {
   it('binStatus tells current, untouched-legacy and customised bins apart', () => {
     expect(binStatus(undefined)).toBe('absent')
     const projectCommands = "if (['update', 'add', 'doctor', 'info'].includes(process.argv[2] ?? '')) {}\n"
-    expect(binStatus(`${projectCommands}if (existsSync(envFile)) process.loadEnvFile(envFile)\n`)).toBe('current')
+    const devPrelude = 'if (existsSync(envFile)) process.loadEnvFile(envFile)\n'
+    expect(binStatus(`${projectCommands}${devPrelude}if (process.argv[2]?.startsWith('make:')) {}\n`)).toBe('current')
+    // Without the generators prelude it is behind, and customised unless its hash is known.
+    expect(binStatus(`${projectCommands}${devPrelude}`)).toBe('modified')
     // Project commands alone (a customised 1.10 bin) are no longer current: .env loading is missing.
     expect(binStatus(projectCommands)).toBe('modified')
     expect(binStatus('// custom\n')).toBe('modified')
     expect(binStatus('// custom\n', hashContent('// custom\n'))).toBe('patchable')
-    expect(LEGACY_BIN_HASHES.size).toBe(5)
+    expect(LEGACY_BIN_HASHES.size).toBe(7)
   })
 })
 

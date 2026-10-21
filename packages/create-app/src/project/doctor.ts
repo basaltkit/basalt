@@ -395,10 +395,10 @@ export async function runDoctor(ctx: ProjectContext, options: DoctorOptions = {}
   const bin = await readText(join(dir, 'bin', 'basalt.ts'))
   const status = binStatus(bin, ctx.manifest?.files['bin/basalt.ts'])
   if (status === 'patchable') {
-    push('warn', 'tooling', 'bin/basalt.ts is an older template (no .env loading / pre-boot project commands) — `npx create-basalt@latest update` patches it.')
+    push('warn', 'tooling', 'bin/basalt.ts is an older template (it lacks some of: .env loading, pre-boot project commands, make:* without booting the app) — `npx create-basalt@latest update` patches it.')
   }
   if (status === 'modified') {
-    push('info', 'tooling', 'bin/basalt.ts is customised and lacks the current preludes (project commands, .env loading, pre-boot `upgrade`) — see `create-basalt update` for the snippet.')
+    push('info', 'tooling', 'bin/basalt.ts is customised and lacks the current preludes (project commands, .env loading, pre-boot `upgrade` and make:*) — see `create-basalt update` for the snippet.')
   }
   const dev = await readText(join(dir, 'src', 'dev.ts'))
   const devStatus = devEntryStatus(dev, ctx.manifest?.files['src/dev.ts'])
