@@ -511,7 +511,7 @@ With the CLI (the default, or after adding `@basaltkit/cli` + `@basaltkit/genera
 yourself), `pnpm basalt` generates whole resource verticals:
 
 ```bash
-pnpm basalt make:resource Project                        # in-memory repository
+pnpm basalt make:resource Project                        # in-memory — or Prisma-backed in a --prisma app
 pnpm basalt make:resource Project --prisma               # Prisma-backed + a schema.prisma model
 pnpm basalt make:resource Project --prisma --soft-delete # + a deletedAt column & restore
 pnpm basalt make:service Project                         # just one artifact
@@ -536,9 +536,18 @@ for tenant-owned data, that one tenant cannot see another's rows. A short
 security note after generation says which of these applies. Row-level
 authorization (who may read or write which rows) is still up to you.
 
+In an app with `prisma/schema.prisma` (scaffolded with `--prisma`) the resource
+is **Prisma-backed without the flag**: the repository is typed against the
+project's generated client (`#db/client.js`), the model is appended to
+`prisma/schema.prisma` — never twice — and the generator prints the
+`db:migrate` / `db:generate` line that creates the table; the test boots
+`prismaPlugin` with the client from `src/db.ts` and skips when no database URL
+is set. `--no-prisma` keeps the in-memory repository. The whole flow, and the
+SQLite alternative, is in [Database](/guide/database).
+
 | Generator flag | Applies to | What it does |
 | --- | --- | --- |
-| `--prisma` | `make:resource`, `make:repository` | Prisma-backed repository plus a model appended to `schema.prisma` |
+| `--prisma` / `--no-prisma` | `make:resource`, `make:repository`, `make:test` | Prisma-backed repository plus its model — appended to `prisma/schema.prisma` when the project has one, otherwise written to `src/modules/<name>/<name>.prisma` to paste (also for `--tenant=schema\|database`: it goes to the tenant schema). Default: on when `prisma/schema.prisma` exists |
 | `--soft-delete` | `make:resource` and the artifacts it builds | `deletedAt` column, `restore()`, restore route, filtered reads |
 | `--dir=<path>` | all `make:*` | Target root (default: the current directory) |
 | `--force` | all `make:*` | Overwrite existing files instead of refusing |

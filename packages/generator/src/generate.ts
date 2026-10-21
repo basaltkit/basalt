@@ -187,6 +187,42 @@ export async function writeGenerated(
   return written.sort()
 }
 
+/** Where `make:resource --prisma` puts the model when the project has one schema file. */
+export const PRISMA_SCHEMA = 'prisma/schema.prisma'
+
+/**
+ * Appends a generated model (the `.prisma` file of `make:resource --prisma`)
+ * to `prisma/schema.prisma` under `write.baseDir`.
+ *
+ * - `'appended'` — the model is now at the end of the schema;
+ * - `'present'` — the schema already declares a model of that name, and is
+ *   left untouched (even with `force`: a model may hold hand-written fields);
+ * - `'no schema'` — there is no `prisma/schema.prisma` (a multi-file schema, a
+ *   custom path): the caller writes the `.prisma` file for the developer to paste.
+ */
+export async function appendPrismaModel(
+  model: GeneratedFile,
+  write: WriteOptions = {},
+): Promise<{ result: 'appended' | 'present' | 'no schema'; path: string }> {
+  const path = join(resolve(write.baseDir ?? process.cwd()), PRISMA_SCHEMA)
+  let schema: string
+  try {
+    schema = await readFile(path, 'utf8')
+  } catch {
+    return { result: 'no schema', path }
+  }
+  // The block without its "paste this" comment lines.
+  const block = model.content
+    .split('\n')
+    .filter((line) => !line.startsWith('//'))
+    .join('\n')
+    .trim()
+  const name = /^model\s+(\w+)/m.exec(block)?.[1]
+  if (name && new RegExp(`^model\\s+${name}\\s*\\{`, 'm').test(schema)) return { result: 'present', path }
+  await writeFile(path, `${schema.trimEnd()}\n\n${block}\n`)
+  return { result: 'appended', path }
+}
+
 export interface AppRegistration {
   registered: boolean
   /** When not registered, why: 'src/app.ts not found', 'already registered', or 'shape'. */

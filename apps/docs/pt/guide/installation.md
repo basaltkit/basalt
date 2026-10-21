@@ -528,7 +528,7 @@ Com a CLI (por omissão, ou depois de acrescentares tu o `@basaltkit/cli` +
 `@basaltkit/generator`), o `pnpm basalt` gera verticais de recurso completas:
 
 ```bash
-pnpm basalt make:resource Project                        # repositório em memória
+pnpm basalt make:resource Project                        # em memória — ou Prisma numa app --prisma
 pnpm basalt make:resource Project --prisma               # repositório Prisma + modelo no schema.prisma
 pnpm basalt make:resource Project --prisma --soft-delete # + coluna deletedAt e restore
 pnpm basalt make:service Project                         # apenas um artefacto
@@ -554,9 +554,18 @@ outro. Uma breve nota de segurança após a geração diz o que se aplica. A
 autorização por linha (quem pode ler ou escrever que linhas) continua a ser
 contigo.
 
+Numa app com `prisma/schema.prisma` (criada com `--prisma`) o recurso é **Prisma
+sem a flag**: o repositório é tipado contra o cliente gerado do projeto
+(`#db/client.js`), o modelo é acrescentado ao `prisma/schema.prisma` — nunca duas
+vezes — e o gerador mostra a linha `db:migrate` / `db:generate` que cria a
+tabela; o teste arranca o `prismaPlugin` com o cliente de `src/db.ts` e é saltado
+quando não há URL de base de dados. O `--no-prisma` mantém o repositório em
+memória. O fluxo completo, e a alternativa SQLite, estão em
+[Base de dados](/pt/guide/database).
+
 | Flag do gerador | Aplica-se a | O que faz |
 | --- | --- | --- |
-| `--prisma` | `make:resource`, `make:repository` | Repositório com Prisma mais um modelo acrescentado ao `schema.prisma` |
+| `--prisma` / `--no-prisma` | `make:resource`, `make:repository`, `make:test` | Repositório com Prisma mais o seu modelo — acrescentado ao `prisma/schema.prisma` quando o projeto o tem, senão escrito em `src/modules/<name>/<name>.prisma` para colares (também com `--tenant=schema\|database`: vai para o schema do tenant). Por omissão: ligado quando existe `prisma/schema.prisma` |
 | `--soft-delete` | `make:resource` e os artefactos que constrói | Coluna `deletedAt`, `restore()`, rota de restore, leituras filtradas |
 | `--dir=<path>` | todos os `make:*` | Raiz de destino (por predefinição, a diretoria atual) |
 | `--force` | todos os `make:*` | Sobrescreve ficheiros existentes em vez de recusar |

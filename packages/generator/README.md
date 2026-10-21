@@ -127,7 +127,17 @@ Options (common to all `make:*` commands, unless noted):
 pnpm basalt make:resource BlogPost --prisma
 ```
 
-Instead of the in-memory repository, generates `PrismaBlogPostRepository` (which uses `db()` from `@basaltkit/prisma`) and an extra file `src/modules/blog-post/blog-post.prisma` with the model block to copy into your `schema.prisma`. Then run `prisma migrate dev`.
+Instead of the in-memory repository, generates `PrismaBlogPostRepository` (which uses `db()` from `@basaltkit/prisma`) and the model block. When the project has `prisma/schema.prisma`, the model is appended to it (never twice — a model of that name already there is left alone); otherwise it is written to `src/modules/blog-post/blog-post.prisma` for you to paste. Either way the generator prints the command that creates the table (`pnpm db:migrate --name add_blog_post && pnpm db:generate` when the project has those scripts).
+
+#### In an app scaffolded with `create-basalt --prisma`
+
+The `make:*` commands read the project and need no configuration there:
+
+- `prisma/schema.prisma` exists → repositories are **Prisma-backed by default** (`--no-prisma` for an in-memory one);
+- `package.json` maps `"#db/*"` (Prisma 7 generates the client into the project) → the repository is typed against `PrismaClient` from `#db/client.js`, not `@prisma/client`;
+- `src/db.ts` exports `db` → the generated test registers `prismaPlugin({ client: db })`, runs against the app's database under fresh tenants each run, and skips when no database URL is set.
+
+Anything passed to `generatorCommands({ … })` wins over what is detected.
 
 #### Project defaults, including which Prisma client
 

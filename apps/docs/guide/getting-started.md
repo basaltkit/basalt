@@ -224,6 +224,10 @@ Now users survive a restart. The same pattern swaps any in-memory store for a
 durable one — see [Persistence & durable stores](/guide/persistence) for the
 full map (SQLite and Prisma backends for auth, teams, audit, tenancy and more).
 
+Those are the framework's tables. For **your own** — products, orders, whatever
+the app is about — [Database](/guide/database) walks through all three options
+end to end: in memory, SQLite in one file, and PostgreSQL with Prisma.
+
 ## Where to next
 
 - [Installation](/guide/installation) — every scaffolder flag, the requirements,
@@ -231,6 +235,8 @@ full map (SQLite and Prisma backends for auth, teams, audit, tenancy and more).
   adding features to it later.
 - [Configuration](/guide/config) — `src/env.ts`, fail-closed secrets and the
   settings repository.
+- [Database](/guide/database) — your own tables in memory, in SQLite or in
+  PostgreSQL with Prisma.
 - [Core Concepts](/guide/concepts) — plugins, the DI container, request context
   and hooks.
 - [HTTP Adapters](/guide/adapters) — the same routes on Fastify, Express or Hono.

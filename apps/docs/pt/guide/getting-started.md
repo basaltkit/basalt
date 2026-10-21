@@ -228,6 +228,11 @@ store em memória por um durável — vê [Persistência e stores duráveis](/pt
 para o mapa completo (backends SQLite e Prisma para auth, teams, auditoria,
 tenancy e mais).
 
+Essas são as tabelas da framework. Para **as tuas** — produtos, encomendas,
+aquilo de que a app trata — a página [Base de dados](/pt/guide/database) percorre
+as três opções de ponta a ponta: em memória, SQLite num ficheiro e PostgreSQL
+com Prisma.
+
 ## Para onde a seguir
 
 - [Instalação](/pt/guide/installation) — todas as flags do scaffolder, os
@@ -235,6 +240,8 @@ tenancy e mais).
   como atualizar uma app ou acrescentar-lhe funcionalidades depois.
 - [Configuração](/pt/guide/config) — o `src/env.ts`, segredos que falham
   fechados e o repositório de definições.
+- [Base de dados](/pt/guide/database) — as tuas tabelas em memória, em SQLite ou
+  em PostgreSQL com Prisma.
 - [Conceitos Fundamentais](/pt/guide/concepts) — plugins, o container de DI,
   contexto de pedido e hooks.
 - [Adaptadores HTTP](/pt/guide/adapters) — as mesmas rotas em Fastify, Express
