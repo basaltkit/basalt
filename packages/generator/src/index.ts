@@ -5,6 +5,8 @@ export {
   generate,
   generateResource,
   writeGenerated,
+  appendPrismaModel,
+  PRISMA_SCHEMA,
   registerResourceInApp,
   serviceSiblingsExist,
   expectedSiblings,

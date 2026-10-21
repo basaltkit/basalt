@@ -32,6 +32,21 @@ export interface GeneratorOptions {
    */
   prismaClient?: PrismaClientRef
   /**
+   * Where the generated test gets the app's Prisma client. Set, a Prisma-backed
+   * resource's test registers `prismaPlugin({ client })` with it and runs
+   * against the app's database; the import fails without a database URL, and
+   * the suite then skips instead of failing. Unset, the test has no client and
+   * every request answers 500 (`DbUnavailableError`).
+   *
+   * ```ts
+   * testClient: { import: '../src/db.js', export: 'db' } // relative to tests/
+   * ```
+   *
+   * The `make:*` commands set it when the project has the scaffold's
+   * `src/db.ts`.
+   */
+  testClient?: { import: string; export: string }
+  /**
    * Add a soft-delete column (`deletedAt`): `delete` marks the row instead of
    * removing it, `list`/`find` skip soft-deleted rows, and a `restore()` method
    * (+ `POST /…/:id/restore` route) brings it back.
@@ -646,6 +661,9 @@ ${restoreRoute}]${authApply}
 export function testFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
   const auth = options.auth !== false
   const tenant = tenantMode(options) !== undefined
+  // A Prisma-backed resource is tested against the app's database: rows
+  // outlive the run, so tenants are unique per run and counts are relative.
+  const database = options.prisma === true && options.testClient !== undefined ? options.testClient : undefined
   const coreImport = auth ? `\nimport { definePlugin, ensureMetadata } from '@basaltkit/core'` : ''
   const fastifyImport = auth ? 'fastifyPlugin, HttpError, type RouteGuard' : 'fastifyPlugin'
   const authStub = auth
@@ -665,17 +683,20 @@ const testAuth = definePlugin({
 })
 `
     : ''
-  const plugins = auth
-    ? `testAuth, ${n.camel}Plugin, fastifyPlugin({ routes: ${n.camel}Routes })`
-    : `${n.camel}Plugin, fastifyPlugin({ routes: ${n.camel}Routes })`
-  const actor = [auth ? `.actingAs({ id: 'user-1' })` : '', tenant ? `.asTenant('acme')` : ''].join('')
+  const resource = `${n.camel}Plugin, fastifyPlugin({ routes: ${n.camel}Routes })`
+  const plugins = [database ? 'prismaPlugin({ client: client! })' : '', auth ? 'testAuth' : '', resource]
+    .filter(Boolean)
+    .join(', ')
+  const acme = database ? 'acme' : "'acme'"
+  const globex = database ? 'globex' : "'globex'"
+  const actor = [auth ? `.actingAs({ id: 'user-1' })` : '', tenant ? `.asTenant(${acme})` : ''].join('')
   const anonymous = auth
     ? `
 
   it('rejects anonymous callers', async () => {
     const app = await boot()
-    expect((await app.get('/${n.pluralKebab}'${tenant ? ", { tenant: 'acme' }" : ''})).statusCode).toBe(401)
-    expect((await app.post('/${n.pluralKebab}', { name: 'x' }${tenant ? ", { tenant: 'acme' }" : ''})).statusCode).toBe(401)
+    expect((await app.get('/${n.pluralKebab}'${tenant ? `, { tenant: ${acme} }` : ''})).statusCode).toBe(401)
+    expect((await app.post('/${n.pluralKebab}', { name: 'x' }${tenant ? `, { tenant: ${acme} }` : ''})).statusCode).toBe(401)
     await app.shutdown()
   })`
     : ''
@@ -687,7 +708,7 @@ const testAuth = definePlugin({
     const created = await app.post('/${n.pluralKebab}', { name: 'Acme only' })
     const id = created.json().id
 
-    const other = { ${auth ? "user: { id: 'user-2' }, " : ''}tenant: 'globex' }
+    const other = { ${auth ? "user: { id: 'user-2' }, " : ''}tenant: ${globex} }
     expect((await app.get('/${n.pluralKebab}', other)).json()).toHaveLength(0)
     expect((await app.get(\`/${n.pluralKebab}/\${id}\`, other)).statusCode).toBe(404)
     expect((await app.patch(\`/${n.pluralKebab}/\${id}\`, { name: 'Hijacked' }, other)).statusCode).toBe(404)
@@ -697,35 +718,49 @@ const testAuth = definePlugin({
     await app.shutdown()
   })`
     : ''
+  const databaseSetup = database
+    ? `
+// Runs against the app's database: it needs a migrated one (the database URL
+// set, as in .env.example, and \`pnpm db:migrate\` run). Without a URL the
+// client cannot be imported and the suite skips instead of failing.
+const client = await import('${database.import}').then((m) => m.${database.export}).catch(() => undefined)
+${tenant ? '\n// The rows stay in the database: fresh tenants per run keep runs apart.\nconst acme = `acme-${randomUUID()}`\nconst globex = `globex-${randomUUID()}`\n' : ''}`
+    : ''
+  const imports = [
+    `import { describe, expect, it } from 'vitest'`,
+    ...(database && tenant ? [`import { randomUUID } from 'node:crypto'`] : []),
+  ]
+  const before = database ? `    const before = (await app.get('/${n.pluralKebab}')).json().length\n` : ''
+  const count = (delta: string) => (database ? `before${delta}` : delta === '' ? '0' : '1')
   return {
     path: `tests/${n.kebab}.test.ts`,
-    content: `import { describe, expect, it } from 'vitest'${coreImport}
-import { ${fastifyImport} } from '@basaltkit/fastify'
+    content: `${imports.join('\n')}${coreImport}
+import { ${fastifyImport} } from '@basaltkit/fastify'${database ? "\nimport { prismaPlugin } from '@basaltkit/prisma'" : ''}
 import { createTestApp } from '@basaltkit/testing'
 import { ${n.camel}Plugin } from '../src/modules/${n.kebab}/${n.kebab}.plugin.js'
 import { ${n.camel}Routes } from '../src/modules/${n.kebab}/${n.kebab}.routes.js'
-${authStub}
+${authStub}${databaseSetup}
 const boot = () =>
   createTestApp({
     plugins: [${plugins}],
   })
 
-describe('${n.kebab} resource', () => {
+describe${database ? '.skipIf(!client)' : ''}('${n.kebab} resource', () => {
   it('creates, lists, fetches, updates and deletes', async () => {
     const app = (await boot())${actor}
-
+${before}
     const created = await app.post('/${n.pluralKebab}', { name: 'First' })
     expect(created.statusCode).toBe(201)
     const id = created.json().id
 
-    expect((await app.get('/${n.pluralKebab}')).json()).toHaveLength(1)
+    expect((await app.get('/${n.pluralKebab}')).json()).toHaveLength(${count(' + 1')})
     expect((await app.get(\`/${n.pluralKebab}/\${id}\`)).json().name).toBe('First')
 
     const updated = await app.patch(\`/${n.pluralKebab}/\${id}\`, { name: 'Renamed' })
     expect(updated.json().name).toBe('Renamed')
 
     expect((await app.delete(\`/${n.pluralKebab}/\${id}\`)).statusCode).toBe(204)
-    expect((await app.get('/${n.pluralKebab}')).json()).toHaveLength(0)
+    expect((await app.get('/${n.pluralKebab}')).json()).toHaveLength(${count('')})
 
     await app.shutdown()
   })${anonymous}${isolation}

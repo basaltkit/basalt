@@ -1,8 +1,10 @@
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { defineCommand, type CommandDefinition } from '@basaltkit/cli'
 import {
+  appendPrismaModel,
   FileExistsError,
+  PRISMA_SCHEMA,
   GENERATORS,
   generate,
   generateResource,
@@ -15,6 +17,7 @@ import {
   type GeneratorOptions,
   type WriteOptions,
 } from './generate.js'
+import { names } from './names.js'
 import { TENANT_MODES, tenantMode, type TenantMode } from './templates.js'
 
 interface MakeSpec {
@@ -94,26 +97,80 @@ function tenantNote(mode: TenantMode | undefined, prisma: boolean): string {
   }
 }
 
+/** What happened to the Prisma model, and the commands that make it a table. */
+function modelNote(
+  name: string,
+  modelPath: string,
+  result: 'appended' | 'present' | 'no schema' | undefined,
+  scripts: Record<string, unknown>,
+): string[] {
+  const n = names(name)
+  const migrate =
+    typeof scripts['db:migrate'] === 'string' && typeof scripts['db:generate'] === 'string'
+      ? `pnpm db:migrate --name add_${n.constant.toLowerCase()} && pnpm db:generate`
+      : `prisma migrate dev --name add_${n.constant.toLowerCase()} && prisma generate`
+  switch (result) {
+    case 'appended':
+      return [`Added model ${n.pascal} to prisma/schema.prisma. Create the table: ${migrate}`]
+    case 'present':
+      return [`prisma/schema.prisma already has a model ${n.pascal} — left it as is. After changing it: ${migrate}`]
+    default:
+      return [
+        `Model ${n.pascal} is in ${modelPath}: paste it into your schema.prisma${
+          result === undefined ? ' (the tenant one)' : ''
+        }, then: ${migrate}`,
+      ]
+  }
+}
+
 /** Packages whose presence marks the project as multi-tenant. */
 const TENANCY_PACKAGES = /^@basaltkit\/tenancy(?:-[a-z0-9-]+)?$/
 
-/**
- * Whether the project at `baseDir` depends on `@basaltkit/tenancy` (or one of
- * its drivers). An unreadable or missing package.json counts as "no".
- */
-async function projectUsesTenancy(baseDir: string): Promise<boolean> {
+/** What the project at `baseDir` says about itself, read once per invocation. */
+interface ProjectFacts {
+  /** Depends on `@basaltkit/tenancy` (or one of its drivers). */
+  tenancy: boolean
+  /**
+   * Has `prisma/schema.prisma`: its repositories are Prisma-backed by default.
+   * Not the `@basaltkit/prisma` dependency — every scaffold has it, for
+   * `prisma:sync`, database or not.
+   */
+  prisma: boolean
+  /** The scaffold's client alias (`"imports": { "#db/*": … }`): the generated client is `#db/client.js`. */
+  dbAlias: boolean
+  /** The scaffold's `src/db.ts`, exporting the application client `db`. */
+  dbModule: boolean
+  /** The package.json scripts, to name the migrate command the project actually has. */
+  scripts: Record<string, unknown>
+}
+
+/** An unreadable or missing package.json counts as a project with none of these. */
+async function projectFacts(baseDir: string): Promise<ProjectFacts> {
+  let pkg: Record<string, unknown> = {}
   try {
-    const pkg = JSON.parse(await readFile(join(baseDir, 'package.json'), 'utf8')) as Record<string, unknown>
-    for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
-      const deps = pkg[field]
-      if (deps && typeof deps === 'object' && Object.keys(deps).some((dep) => TENANCY_PACKAGES.test(dep))) {
-        return true
-      }
-    }
+    pkg = JSON.parse(await readFile(join(baseDir, 'package.json'), 'utf8')) as Record<string, unknown>
   } catch {
-    // no package.json / not JSON: not detectably multi-tenant
+    // no package.json / not JSON: nothing detectable
   }
-  return false
+  const deps = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].flatMap((field) => {
+    const value = pkg[field]
+    return value && typeof value === 'object' ? Object.keys(value) : []
+  })
+  const imports = pkg['imports'] && typeof pkg['imports'] === 'object' ? (pkg['imports'] as Record<string, unknown>) : {}
+  const dbModule = await readFile(join(baseDir, 'src', 'db.ts'), 'utf8').then(
+    (source) => /^export const db\b/m.test(source),
+    () => false,
+  )
+  return {
+    tenancy: deps.some((dep) => TENANCY_PACKAGES.test(dep)),
+    prisma: await access(join(baseDir, PRISMA_SCHEMA)).then(
+      () => true,
+      () => false,
+    ),
+    dbAlias: '#db/*' in imports,
+    dbModule,
+    scripts: pkg['scripts'] && typeof pkg['scripts'] === 'object' ? (pkg['scripts'] as Record<string, unknown>) : {},
+  }
 }
 
 /**
@@ -170,7 +227,8 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
           typeof flags[flag] === 'boolean' ? flags[flag] : (fallback ?? false)
         // Secure by default: auth is on unless explicitly turned off; tenant
         // scoping follows the project's dependencies unless explicitly set.
-        const tenantDefault = defaults.tenant ?? (await projectUsesTenancy(resolve(options.baseDir ?? process.cwd())))
+        const project = await projectFacts(resolve(options.baseDir ?? process.cwd()))
+        const tenantDefault = defaults.tenant ?? project.tenancy
         // `--tenant=<mode>` picks the isolation explicitly; a bare `--tenant`
         // keeps a project-level mode default (`generatorCommands({ tenant: 'schema' })`).
         let tenant: boolean | TenantMode
@@ -193,9 +251,13 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
               ? false
               : defaults.crud
         const genOptions: GeneratorOptions = {
+          // What the scaffold's layout implies, under anything configured:
+          // Prisma 7 generates the client into the project, not @prisma/client.
+          ...(project.dbAlias ? { prismaClient: { import: '#db/client.js', type: 'PrismaClient' } } : {}),
+          ...(project.dbModule ? { testClient: { import: '../src/db.js', export: 'db' } } : {}),
           ...defaults,
           ...(crud === undefined ? {} : { crud }),
-          prisma: flagOr('prisma', defaults.prisma),
+          prisma: flagOr('prisma', defaults.prisma ?? project.prisma),
           softDelete: flagOr('soft-delete', defaults.softDelete),
           // `--public` is the named opt-out; `--no-auth` (parsed as auth: false)
           // is accepted too, as are the literal negation keys programmatic
@@ -206,7 +268,14 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
         }
         try {
           const resolved = spec.resolve ? await spec.resolve(name, genOptions, options) : genOptions
-          const files = spec.build(name, resolved)
+          let files = spec.build(name, resolved)
+          // The model goes straight into prisma/schema.prisma when the project
+          // has one and the model belongs there (a tenant schema/database model
+          // goes to the tenant schema, which the generator cannot know).
+          const modelFile = files.find((file) => file.path.endsWith('.prisma'))
+          const sharedSchema = tenantMode(resolved) !== 'schema' && tenantMode(resolved) !== 'database'
+          const model = modelFile && sharedSchema ? await appendPrismaModel(modelFile, options) : undefined
+          if (model && model.result !== 'no schema') files = files.filter((file) => file !== modelFile)
           // Computed before writing: what this artifact imports and neither it
           // nor the project has. The file is written either way — the sibling
           // may be about to be written by hand — but the developer hears about
@@ -218,6 +287,7 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
           const note = spec.note?.(resolved)
           if (note) io.log(note)
           for (const line of missingSiblingsWarning(name, files[0]?.path ?? name, missing)) io.log(line)
+          if (modelFile) for (const line of modelNote(name, modelFile.path, model?.result, project.scripts)) io.log(line)
           if (spec.secured) {
             io.log('Security:')
             io.log(
