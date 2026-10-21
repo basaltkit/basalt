@@ -50,6 +50,12 @@ auditConfig:
     # majors under someone else's peer SDK buys nothing for it. Revisit if a
     # direct dependency ever starts using v3/v5/v6.
     - GHSA-w5hq-g745-h8pq
+    # vite <=6.4.3 bundles a launch-editor whose `fs.existsSync()` check can be
+    # steered by the requested path (dev server only). The same vitepress corner
+    # as GHSA-fx2h-pf6j-xcff: the fix is vite 6.4.4 and vitepress requires
+    # `vite ^5.4.14`. The standalone launch-editor (via @changesets/cli) is
+    # raised by an override below, not covered by this entry's reasoning.
+    - GHSA-587h-7wmj-h5pm
 
 minimumReleaseAgeExclude:
   - '@typescript-eslint/eslint-plugin@8.68.0'
@@ -118,6 +124,12 @@ overrides:
   #   whole vue line is raised together so its exact-pinned subpackages agree.
   proxy-addr: ^2.0.8
   source-map-js: ^1.2.2
+  # Advisories published 2026-10, raised in place (dev/docs tooling only):
+  # - markdown-it (high, GHSA-r7fv-28h4-cvq7 / GHSA-gfr2-rv44-r23c, quadratic
+  #   rendering): docs tooling (typedoc, vitepress); 14.3.3 is the same major.
+  # - launch-editor (high, GHSA-587h-7wmj-h5pm): @changesets/cli; a patch release.
+  markdown-it: ^14.3.3
+  launch-editor: ^2.14.2
   shell-quote: ^1.11.0
   vue: ^3.5.42
   jsdom: ^30.0.1
