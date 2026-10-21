@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { binStatus, hasProjectCommands, manualBinSnippet, patchBasaltBin } from '../bin-template.js'
+import { binStatus, hasDevPrelude, hasProjectCommands, manualBinSnippet, patchBasaltBin } from '../bin-template.js'
 import { devEntryStatus, MANUAL_DEV_SNIPPET, patchDevEntry, patchEnvExample } from '../dev-entry.js'
 import {
   alwaysLatest,
@@ -327,7 +327,9 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
       toolingNotes.push(
         `bin/basalt.ts: unmodified template from an earlier release — ${
           hasProjectCommands(bin) ? '' : 'gains update/add/doctor/info; '
-        }loads .env for development, runs \`upgrade\` without booting the app, explains env errors`,
+        }${
+          hasDevPrelude(bin) ? '' : 'loads .env for development, runs \`upgrade\` without booting the app, explains env errors; '
+        }runs make:* without booting the app (no database needed to generate code)`,
       )
     } else if (status === 'modified' && bin !== undefined) {
       manual.push(`bin/basalt.ts was customised, so it was not patched. To bring it up to date:\n${manualBinSnippet(bin)}`)

@@ -151,7 +151,7 @@ mudam o que está lá dentro:
 | `tsconfig.build.json`, `Dockerfile` | O [caminho de produção](/pt/guide/production#build-e-envio): o `pnpm build` compila o `src/` para `dist/` (rootDir `.`, por isso `src/server.ts` → `dist/src/server.js`); o `Dockerfile` multi-stage — o mesmo ficheiro que o `basalt publish dockerfile` escreve — faz o build da app e corre-a em node puro como o utilizador `node` |
 | `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem; o `.env.example` usa os nomes com prefixo da app e, com o README, explica a [armadilha de precedência do `--env-file`](#o-env-file-nunca-sobrepoe-variaveis-exportadas); o `pnpm-workspace.yaml` exclui `@basaltkit/*` e `create-basalt` do `minimumReleaseAge` e documenta as [definições do pnpm 11](#pnpm-11-idade-minima-e-verifydepsbeforerun)) |
 | `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | Com `--prisma`: o schema (os modelos de cada domínio Basalt ativo mais os teus), a configuração do Prisma 7 com o URL de ligação, o(s) cliente(s) que a app usa e o seed do tenant `demo` |
-| `bin/basalt.ts` | Por omissão (não com `--no-cli`): o ponto de entrada da CLI que liga os geradores e o `prisma:sync`. Reencaminha `update`, `add`, `doctor` e `info` para o create-basalt e corre o `upgrade` (os codemods) **antes** de importar a app, para funcionarem mesmo com a app partida a meio de uma atualização; depois carrega o `.env` (as variáveis exportadas ganham) e transforma um ambiente inválido, uma base de dados inacessível ou por migrar numa correção legível em vez de um stack trace |
+| `bin/basalt.ts` | Por omissão (não com `--no-cli`): o ponto de entrada da CLI que liga os geradores e o `prisma:sync`. Reencaminha `update`, `add`, `doctor` e `info` para o create-basalt e corre o `upgrade` (os codemods) e os geradores `make:*` **antes** de importar a app, para funcionarem mesmo com a app partida a meio de uma atualização — e um gerador não precisa da base de dados, nem a correr nem migrada; depois carrega o `.env` (as variáveis exportadas ganham) e transforma um ambiente inválido, uma base de dados inacessível ou por migrar numa correção legível em vez de um stack trace |
 | `.mcp.json` | Com `--mcp`: regista a ponte `basalt-ai-mcp`, **só de desenvolvimento**, para clientes MCP |
 | `web/…` | Com `--ui`: o frontend React + shadcn, membro do workspace pnpm |
 
@@ -413,8 +413,8 @@ instalação falhar, as edições ficam e o comando diz como revertê-las com gi
 O `--offline` é recusado — o `update` precisa do registry. As ferramentas do
 projeto vêm por arrasto: uma app sem a devDependency `create-basalt` recebe-a
 (mais um script `basalt`); um `bin/basalt.ts` gerado por uma versão anterior
-aprende os comandos de projeto, o carregamento do `.env`, um `upgrade` antes do
-arranque e o erro de ambiente legível; um `src/dev.ts` do create-basalt 1.9/1.10
+aprende os comandos de projeto, o carregamento do `.env`, um `upgrade` e os
+`make:*` antes do arranque, e o erro de ambiente legível; um `src/dev.ts` do create-basalt 1.9/1.10
 aprende a carregar o `.env`; e o cabeçalho do `.env.example` deixa de dizer que
 "nada carrega este ficheiro". Cada ficheiro só é corrigido **quando** é byte a
 byte um template conhecido ou o manifesto o regista como intacto. Um

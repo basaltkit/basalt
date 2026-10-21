@@ -417,9 +417,15 @@ export function appTs(options: ProjectOptions): string {
   if (options.prisma) {
     imports.push(`import { prismaPlugin } from '@basaltkit/prisma'`)
     imports.push(`import { db, prisma } from './db.js'`)
-    plugins.push(`prismaPlugin({
+    plugins.push(`prismaPlugin({${
+      options.tenancy
+        ? `
       // \`db\` is the tenant-scoped client (src/db.ts): db<PrismaClient>() in a
-      // handler returns it, already filtered by the request's tenant.
+      // handler returns it, already filtered by the request's tenant.`
+        : `
+      // \`db\` is the application client (src/db.ts): db<PrismaClient>() in a
+      // handler returns it. No tenancy, so queries are not filtered by tenant.`
+    }
       client: db,
       // Fail the BOOT when this database is not the migrated one — a shell that
       // exported another project's DATABASE_URL, a typo in the database name.
