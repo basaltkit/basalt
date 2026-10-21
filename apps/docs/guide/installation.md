@@ -513,6 +513,7 @@ yourself), `pnpm basalt` generates whole resource verticals:
 ```bash
 pnpm basalt make:resource Project                        # in-memory — or Prisma-backed in a --prisma app
 pnpm basalt make:resource Project --prisma               # Prisma-backed + a schema.prisma model
+pnpm basalt make:resource Project --sqlite               # SQLite-backed + its table in src/db.ts
 pnpm basalt make:resource Project --prisma --soft-delete # + a deletedAt column & restore
 pnpm basalt make:service Project                         # just one artifact
 ```
@@ -548,6 +549,7 @@ SQLite alternative, is in [Database](/guide/database).
 | Generator flag | Applies to | What it does |
 | --- | --- | --- |
 | `--prisma` / `--no-prisma` | `make:resource`, `make:repository`, `make:test` | Prisma-backed repository plus its model — appended to `prisma/schema.prisma` when the project has one, otherwise written to `src/modules/<name>/<name>.prisma` to paste (also for `--tenant=schema\|database`: it goes to the tenant schema). Default: on when `prisma/schema.prisma` exists |
+| `--sqlite` / `--no-sqlite` | `make:resource`, `make:repository`, `make:plugin` | SQLite-backed repository over `node:sqlite`, opened with `database()` from `src/db.ts`. `make:resource` appends its `CREATE TABLE` to the `MIGRATIONS` there, and creates that module (plus `DATABASE_PATH` in `src/env.ts`) when the project has none. Tenant isolation by `tenant_id` column only. Default: on when `src/db.ts` is that module. See [SQLite](/guide/database#sqlite-—-one-file-no-server) |
 | `--soft-delete` | `make:resource` and the artifacts it builds | `deletedAt` column, `restore()`, restore route, filtered reads |
 | `--dir=<path>` | all `make:*` | Target root (default: the current directory) |
 | `--force` | all `make:*` | Overwrite existing files instead of refusing |

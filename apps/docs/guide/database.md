@@ -13,7 +13,7 @@ There are three ways to keep it:
 | --- | --- | --- | --- |
 | Survives a restart | No | Yes | Yes |
 | Needs a server | No | No — one file | Yes |
-| How you get it | The default | Write one repository class | `create-basalt --prisma` |
+| How you get it | The default | `make:resource --sqlite` | `create-basalt --prisma` |
 | Migrations | — | An append-only list of SQL steps | `prisma migrate` |
 | Several app instances | — | No (one machine) | Yes |
 | Good for | Prototypes, tests | Small apps on one server | Production SaaS |
@@ -67,13 +67,40 @@ or a test suite with nothing to install.
 ## SQLite — one file, no server
 
 SQLite keeps the whole database in one file, through Node's built-in
-`node:sqlite`: no ORM, no service to run, no extra dependency. Four steps
-turn the in-memory app above into one that remembers.
+`node:sqlite`: no ORM, no service to run, no extra dependency. One flag on the
+generator gets you there; the four steps after it show what it writes, and are
+how you move a resource you already have.
 
 ::: tip Node version
 `node:sqlite` is stable on **Node 24**. On Node 22.5+ run with
 `--experimental-sqlite`.
 :::
+
+### The short way: `--sqlite`
+
+```bash
+pnpm basalt make:resource Product --sqlite
+```
+
+The generator (`@basaltkit/generator` 1.7+) writes `SqliteProductRepository` in
+`product.repository.ts` instead of the in-memory class, and the plugin opens it
+with `database()`. The first time, it also does steps 1 and 2 below for you:
+it creates `src/db.ts`, declares `DATABASE_PATH` in `src/env.ts` and adds
+`data/` to `.gitignore`. Every later resource appends its `CREATE TABLE` to
+the `MIGRATIONS` in `src/db.ts`, and needs no flag: once `src/db.ts` is that
+module, `--sqlite` is the default (`--no-sqlite` for an in-memory one).
+
+```txt
+Created src/db.ts: one SQLite file (DATABASE_PATH, default ./data/app.db; in memory under NODE_ENV=test), migrated on first use. Its first step creates the products table.
+  DATABASE_PATH is declared in src/env.ts.
+```
+
+A tenant-owned resource gets an indexed `tenant_id` column and the
+`requireTenantId()` filter of [step 3](#_3-the-repository); with `--no-tenant`
+the table is shared by the whole app. Only the column isolation exists here:
+one file has no schema or database per tenant, so `--tenant=schema|database`
+asks for `--prisma`. Then do [step 4](#_4-the-framework-s-tables-in-the-same-file),
+so your users survive a restart too.
 
 ### 1. Where the file lives
 
@@ -149,7 +176,9 @@ A step that fails rolls back whole, so the file is never left half-migrated.
 
 ### 3. The repository
 
-Write a second implementation of the generated interface, next to it:
+`--sqlite` writes this class into `product.repository.ts`. By hand, for a
+resource that is in memory today, write it as a second implementation of the
+generated interface, next to it:
 
 ```ts
 // src/modules/product/product.sqlite.ts

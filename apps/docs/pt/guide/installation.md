@@ -530,6 +530,7 @@ Com a CLI (por omissão, ou depois de acrescentares tu o `@basaltkit/cli` +
 ```bash
 pnpm basalt make:resource Project                        # em memória — ou Prisma numa app --prisma
 pnpm basalt make:resource Project --prisma               # repositório Prisma + modelo no schema.prisma
+pnpm basalt make:resource Project --sqlite               # repositório SQLite + a tabela no src/db.ts
 pnpm basalt make:resource Project --prisma --soft-delete # + coluna deletedAt e restore
 pnpm basalt make:service Project                         # apenas um artefacto
 ```
@@ -566,6 +567,7 @@ memória. O fluxo completo, e a alternativa SQLite, estão em
 | Flag do gerador | Aplica-se a | O que faz |
 | --- | --- | --- |
 | `--prisma` / `--no-prisma` | `make:resource`, `make:repository`, `make:test` | Repositório com Prisma mais o seu modelo — acrescentado ao `prisma/schema.prisma` quando o projeto o tem, senão escrito em `src/modules/<name>/<name>.prisma` para colares (também com `--tenant=schema\|database`: vai para o schema do tenant). Por omissão: ligado quando existe `prisma/schema.prisma` |
+| `--sqlite` / `--no-sqlite` | `make:resource`, `make:repository`, `make:plugin` | Repositório SQLite sobre o `node:sqlite`, aberto com `database()` do `src/db.ts`. O `make:resource` acrescenta o seu `CREATE TABLE` aos `MIGRATIONS` desse ficheiro, e cria esse módulo (mais o `DATABASE_PATH` no `src/env.ts`) quando o projeto não o tem. Isolamento de tenants só por coluna `tenant_id`. Por omissão: ligado quando o `src/db.ts` é esse módulo. Vê [SQLite](/pt/guide/database#sqlite-—-um-ficheiro-sem-servidor) |
 | `--soft-delete` | `make:resource` e os artefactos que constrói | Coluna `deletedAt`, `restore()`, rota de restore, leituras filtradas |
 | `--dir=<path>` | todos os `make:*` | Raiz de destino (por predefinição, a diretoria atual) |
 | `--force` | todos os `make:*` | Sobrescreve ficheiros existentes em vez de recusar |

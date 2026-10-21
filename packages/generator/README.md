@@ -14,7 +14,7 @@ Code generator ("scaffolding") for Basalt applications: the `basalt make:*` comm
 
 Writing these six pieces by hand for every resource is slow and prone to naming mistakes — swap `blogPost` for `blogpost` in one spot and nothing compiles. The generator derives all the name variations at once (`BlogPost`, `blogPost`, `blog-post`, `blog-posts`, `BLOG_POST`) and uses them consistently across all files.
 
-Besides generating the files, `make:resource` also wires the new resource into `src/app.ts` automatically (imports the plugin and routes and inserts them in the right places) and, with `--prisma`, generates a repository connected to the database via Prisma instead of the in-memory version.
+Besides generating the files, `make:resource` also wires the new resource into `src/app.ts` automatically (imports the plugin and routes and inserts them in the right places) and, with `--prisma` or `--sqlite`, generates a repository connected to a database instead of the in-memory version.
 
 ## Installation
 
@@ -115,6 +115,7 @@ Options (common to all `make:*` commands, unless noted):
 | `--dir=<path>` | Project root to write to (default: current directory) |
 | `--force` | Overwrites existing files instead of refusing |
 | `--prisma` | Generates a repository connected to Prisma + a model for `schema.prisma` |
+| `--sqlite` | Generates a repository over `node:sqlite` + its table in the `MIGRATIONS` of `src/db.ts` (created when missing) |
 | `--no-register` | (only `make:resource`) Doesn't touch `src/app.ts` |
 | `--public` | Generates routes WITHOUT `meta.auth` (anonymous access). Default: every route requires an authenticated user. Alias: `--no-auth` |
 | `--tenant` / `--no-tenant` | Forces tenant scoping on/off. Default: on when `package.json` depends on `@basaltkit/tenancy` |
@@ -138,6 +139,34 @@ The `make:*` commands read the project and need no configuration there:
 - `src/db.ts` exports `db` → the generated test registers `prismaPlugin({ client: db })`, runs against the app's database under fresh tenants each run, and skips when no database URL is set.
 
 Anything passed to `generatorCommands({ … })` wins over what is detected.
+
+### `--sqlite` — one file, no server
+
+```bash
+pnpm basalt make:resource BlogPost --sqlite
+```
+
+Generates `SqliteBlogPostRepository` over Node's built-in `node:sqlite` (no ORM,
+no extra dependency): `?` placeholders in every statement, and, for a
+tenant-owned resource, an indexed `tenant_id` column with `requireTenantId()`
+in every `WHERE`. The plugin opens it with `database()` from `src/db.ts`.
+
+The table goes into `src/db.ts`, an append-only `MIGRATIONS` list that runs
+each step once (recorded in `app_migrations`, each in a transaction):
+
+- no `src/db.ts` → it is created (one file at `DATABASE_PATH`, default
+  `./data/app.db`; `:memory:` under `NODE_ENV=test`), `DATABASE_PATH` is added
+  to `src/env.ts` and `data/` to `.gitignore`;
+- the SQLite `src/db.ts` → the `CREATE TABLE` is appended (never twice — a step
+  that already creates the table is left alone), and `--sqlite` is the default
+  from then on (`--no-sqlite` for an in-memory one);
+- any other `src/db.ts` (a Prisma app's) → it is left untouched and the step
+  is written to `src/modules/blog-post/blog-post.sql`.
+
+`--tenant=schema|database` is refused: one SQLite file has no schema or
+database per tenant. `--prisma --sqlite` is refused too: one database per
+resource. The framework's own stores share the file through the `*-sqlite`
+packages — `sqliteAuthStores(database())` and the like.
 
 #### Project defaults, including which Prisma client
 
@@ -195,7 +224,7 @@ pnpm basalt make:test Invoice          # tests/invoice.test.ts
 Without a name, any command prints usage and returns exit code 1:
 
 ```
-Usage: basalt make:resource <Name> [--dir=<path>] [--force] [--prisma] [--soft-delete] [--public] [--tenant[=column|schema|database]|--no-tenant]
+Usage: basalt make:resource <Name> [--dir=<path>] [--force] [--prisma|--sqlite] [--soft-delete] [--public] [--tenant[=column|schema|database]|--no-tenant]
 ```
 
 ### Services that are not CRUD
@@ -423,7 +452,7 @@ vertical, or `make:service <Name> --crud` if you are writing the siblings
 yourself.
 
 **Data disappears when I restart the server.**
-This is the expected behavior of the in-memory repository (the default). For real persistence, generate with `--prisma` or implement the `<Name>Repository` interface yourself and register it in the plugin.
+This is the expected behavior of the in-memory repository (the default). For real persistence, generate with `--sqlite` or `--prisma`, or implement the `<Name>Repository` interface yourself and register it in the plugin.
 
 **`Usage: basalt make:resource <Name> …` and exit code 1.**
 The resource name is missing: `pnpm basalt make:resource Project`.
@@ -437,5 +466,6 @@ Correct — wiring is idempotent. The message `Already wired into src/app.ts —
 - **`@basaltkit/core`** — the generated code uses `createToken`, `definePlugin`, and `ctx` from the framework core.
 - **`@basaltkit/fastify`** — generated routes use `route(...)` and `HttpError`; automatic wiring looks for `fastifyPlugin({ routes: [...] })` in `app.ts`.
 - **`@basaltkit/prisma`** — with `--prisma`, the generated repository uses `db()` from this package.
+- **`@basaltkit/auth-sqlite`, `@basaltkit/teams-sqlite`, `@basaltkit/tenancy-sqlite`** — with `--sqlite`, the framework's stores can share the app's `database()` handle.
 - **`@basaltkit/testing`** — the generated test uses `createTestApp` to exercise the full CRUD.
 - **`create-basalt`** — with `--cli`, the new project already comes with `@basaltkit/generator` installed and the commands registered.

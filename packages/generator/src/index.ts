@@ -7,6 +7,8 @@ export {
   writeGenerated,
   appendPrismaModel,
   PRISMA_SCHEMA,
+  addSqliteMigration,
+  SQLITE_DATABASE,
   registerResourceInApp,
   serviceSiblingsExist,
   expectedSiblings,
@@ -18,5 +20,6 @@ export {
   type PrismaClientRef,
   type WriteOptions,
   type AppRegistration,
+  type SqliteMigrationResult,
 } from './generate.js'
 export { generatorCommands } from './commands.js'
