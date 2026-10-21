@@ -9,7 +9,11 @@ import {
   moduleFile,
   schemaFile,
   serviceFile,
+  sqliteDatabaseModule,
+  sqliteMigrationFile,
+  sqliteMigrationStep,
   testFile,
+  usesSqlite,
   type GeneratedFile,
   type GeneratorOptions,
 } from './templates.js'
@@ -42,6 +46,7 @@ export function generateResource(name: string, options: GeneratorOptions = {}): 
     schemaFile(n, options),
     repositoryFile(n, options),
     ...(options.prisma ? [prismaModelFile(n, options)] : []),
+    ...(usesSqlite(options) ? [sqliteMigrationFile(n, options)] : []),
     // The vertical always gets the CRUD service: the repository and schema it
     // imports are generated right here, in the same batch. Stated explicitly so
     // it does not ride on the default.
@@ -221,6 +226,105 @@ export async function appendPrismaModel(
   if (name && new RegExp(`^model\\s+${name}\\s*\\{`, 'm').test(schema)) return { result: 'present', path }
   await writeFile(path, `${schema.trimEnd()}\n\n${block}\n`)
   return { result: 'appended', path }
+}
+
+/** The module `make:resource --sqlite` keeps the app's database and migrations in. */
+export const SQLITE_DATABASE = 'src/db.ts'
+
+/** What {@link addSqliteMigration} did with the table's migration step. */
+export interface SqliteMigrationResult {
+  /**
+   * - `'created'` — the project had no `src/db.ts`: it now has one, opening a
+   *   SQLite file and running this step first;
+   * - `'appended'` — the step is now the last one in `MIGRATIONS`;
+   * - `'present'` — a step already creates the table, and the file is left
+   *   untouched (even with `force`: the table may hold hand-written columns);
+   * - `'unrecognized'` — `src/db.ts` is not the SQLite module (no `MIGRATIONS`
+   *   array, e.g. a Prisma app's): the caller writes the `.sql` file for the
+   *   developer to place.
+   */
+  result: 'created' | 'appended' | 'present' | 'unrecognized'
+  path: string
+  /** With `'created'`: whether `DATABASE_PATH` is now in src/env.ts (or already was). */
+  env?: boolean
+}
+
+/**
+ * Puts a generated migration step (the `.sql` file of `make:resource --sqlite`)
+ * into `src/db.ts` under `write.baseDir`, creating that module — and its
+ * `DATABASE_PATH` in `src/env.ts`, and `data/` in `.gitignore` — when the
+ * project has none.
+ */
+export async function addSqliteMigration(
+  migration: GeneratedFile,
+  write: WriteOptions = {},
+): Promise<SqliteMigrationResult> {
+  const baseDir = resolve(write.baseDir ?? process.cwd())
+  const path = join(baseDir, SQLITE_DATABASE)
+  // The SQL without its "add this step" comment lines.
+  const sql = migration.content
+    .split('\n')
+    .filter((line) => !line.startsWith('--'))
+    .join('\n')
+    .trim()
+  const step = sqliteMigrationStep(sql)
+  let source: string
+  try {
+    source = await readFile(path, 'utf8')
+  } catch {
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, sqliteDatabaseModule([step]))
+    await ignoreDataDir(baseDir)
+    return { result: 'created', path, env: await addDatabasePathToEnv(baseDir) }
+  }
+  const anchor = /^const MIGRATIONS\b[^=\n]*=\s*\[/m.exec(source)
+  if (!anchor) return { result: 'unrecognized', path }
+  const table = /^CREATE TABLE\s+(\w+)/.exec(sql)?.[1]
+  if (table && new RegExp(`CREATE TABLE\\s+(?:IF NOT EXISTS\\s+)?${table}\\b`, 'i').test(source)) {
+    return { result: 'present', path }
+  }
+  // The array closes on the first line that is just `]` after it opens.
+  const close = /^\]/m.exec(source.slice(anchor.index))
+  if (!close) return { result: 'unrecognized', path }
+  const at = anchor.index + close.index
+  await writeFile(path, `${source.slice(0, at)}${step}\n${source.slice(at)}`)
+  return { result: 'appended', path }
+}
+
+/**
+ * Declares `DATABASE_PATH` in the scaffold's `src/env.ts`, right after
+ * `NODE_ENV`. False when there is no such file or no `NODE_ENV:` line to
+ * anchor on — the developer adds it.
+ */
+async function addDatabasePathToEnv(baseDir: string): Promise<boolean> {
+  const path = join(baseDir, 'src', 'env.ts')
+  let source: string
+  try {
+    source = await readFile(path, 'utf8')
+  } catch {
+    return false
+  }
+  if (/\bDATABASE_PATH\b/.test(source)) return true
+  const anchor = /^([ \t]*)NODE_ENV:.*$/m.exec(source)
+  if (!anchor) return false
+  const indent = anchor[1] ?? ''
+  const at = anchor.index + anchor[0].length
+  const line = `\n${indent}// The SQLite file (src/db.ts). Tests use an in-memory database instead.\n${indent}DATABASE_PATH: z.string().default('./data/app.db'),`
+  await writeFile(path, `${source.slice(0, at)}${line}${source.slice(at)}`)
+  return true
+}
+
+/** Keeps the default database directory out of git, when the project has a .gitignore. */
+async function ignoreDataDir(baseDir: string): Promise<void> {
+  const path = join(baseDir, '.gitignore')
+  let source: string
+  try {
+    source = await readFile(path, 'utf8')
+  } catch {
+    return
+  }
+  if (/^\/?data\/?$/m.test(source)) return
+  await writeFile(path, `${source.trimEnd()}\ndata/\n`)
 }
 
 export interface AppRegistration {

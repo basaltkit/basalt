@@ -18,6 +18,18 @@ export interface GeneratorOptions {
   /** Generate a Prisma-backed repository (and a schema.prisma model) instead of in-memory. */
   prisma?: boolean
   /**
+   * Generate a SQLite-backed repository (`node:sqlite`, no ORM) instead of
+   * in-memory, plus the `CREATE TABLE` migration step. The repository takes the
+   * app's `DatabaseSync` handle, which the plugin gets from `database()` in
+   * `src/db.ts`; the `make:*` commands create that module when the project has
+   * none and append the table to its `MIGRATIONS`.
+   *
+   * Tenant-owned resources are isolated by an indexed `tenant_id` column only
+   * (`tenant: 'column'`): one SQLite file has no schemas to split tenants into.
+   * Ignored when `prisma` is set.
+   */
+  sqlite?: boolean
+  /**
    * The Prisma client the repository is typed against. Defaults to
    * `PrismaClient` from `@prisma/client`.
    *
@@ -391,7 +403,7 @@ import type { ${n.pascal}, Create${n.pascal}Input, Update${n.pascal}Input } from
 
 ${repositoryInterface(n, soft)}
 
-/** In-memory implementation — pass --prisma to generate a Prisma-backed one. */
+/** In-memory implementation — pass --sqlite or --prisma to generate one backed by a database. */
 export class InMemory${n.pascal}Repository implements ${n.pascal}Repository {
 ${storage}
 
@@ -427,14 +439,215 @@ export const ${n.constant}_REPOSITORY = createToken<${n.pascal}Repository>('${n.
 `
 }
 
+/** The SQLite repository is asked for (and the Prisma one, which wins, is not). */
+export const usesSqlite = (options: GeneratorOptions): boolean => options.sqlite === true && options.prisma !== true
+
+/** `projects`, `blog_posts`: the resource's SQLite table. */
+export const sqliteTable = (n: Names): string => n.pluralKebab.replace(/-/g, '_')
+
+/** Refuses a tenant isolation SQLite cannot give: one file has no schema or database per tenant. */
+function sqliteTenant(options: GeneratorOptions): boolean {
+  const mode = tenantMode(options)
+  if (mode === 'schema' || mode === 'database') {
+    throw new Error(`SQLite isolates tenants by a tenant_id column only; ${mode}-per-tenant needs Prisma (--prisma).`)
+  }
+  return mode === 'column'
+}
+
+/**
+ * SQLite-backed repository over `node:sqlite`. Every statement uses `?`
+ * placeholders; a tenant-owned one carries `requireTenantId()` in every WHERE,
+ * so a row of another tenant is simply "not found".
+ */
+function sqliteRepository(n: Names, soft: boolean, tenant: boolean): string {
+  const table = sqliteTable(n)
+  const scope = tenant ? ['tenant_id = ?'] : []
+  const scopeArgs = tenant ? ['requireTenantId()'] : []
+  const live = soft ? ['deleted_at IS NULL'] : []
+  const where = (conds: string[]) => (conds.length > 0 ? ` WHERE ${conds.join(' AND ')}` : '')
+  const byId = ['id = ?', ...scope]
+  const byIdArgs = ['id', ...scopeArgs].join(', ')
+  const insertColumns = ['id', ...(tenant ? ['tenant_id'] : []), 'name', 'created_at', 'updated_at']
+  const insertArgs = ['item.id', ...scopeArgs, 'item.name', 'now', 'now'].join(', ')
+  const deleteBody = soft
+    ? `const { changes } = this.db
+      .prepare('UPDATE ${table} SET deleted_at = ?, updated_at = ?${where([...byId, ...live])}')
+      .run(now, now, ${byIdArgs})
+    return Number(changes) > 0`
+    : `const { changes } = this.db.prepare('DELETE FROM ${table}${where(byId)}').run(${byIdArgs})
+    return Number(changes) > 0`
+  const restore = soft
+    ? `
+
+  async restore(id: string): Promise<boolean> {
+    const { changes } = this.db
+      .prepare('UPDATE ${table} SET deleted_at = NULL, updated_at = ?${where([...byId, 'deleted_at IS NOT NULL'])}')
+      .run(new Date().toISOString(), ${byIdArgs})
+    return Number(changes) > 0
+  }`
+    : ''
+  const docs = tenant
+    ? `/**
+ * SQLite-backed, tenant-owned: every statement filters on the context tenant
+ * (\`requireTenantId()\` — no tenant resolved, no query: TENANT_REQUIRED, 400), so
+ * a row of another tenant is "not found". The table is created by its step in
+ * \`MIGRATIONS\` (src/db.ts).
+ */`
+    : `/** SQLite-backed. The table is created by its step in \`MIGRATIONS\` (src/db.ts). */`
+  return `import { randomUUID } from 'node:crypto'
+import type { DatabaseSync } from 'node:sqlite'
+import { createToken } from '@basaltkit/core'${tenant ? `\nimport { requireTenantId } from '@basaltkit/tenancy'` : ''}
+import type { ${n.pascal}, Create${n.pascal}Input, Update${n.pascal}Input } from './${n.kebab}.schema.js'
+
+// The row as SQLite stores it (snake_case columns), mapped to the API type.
+interface ${n.pascal}Row {
+  id: string
+  name: string
+  created_at: string
+  updated_at: string${soft ? '\n  deleted_at: string | null' : ''}
+}
+
+const to${n.pascal} = (r: ${n.pascal}Row): ${n.pascal} => ({
+  id: r.id,
+  name: r.name,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,${soft ? '\n  deletedAt: r.deleted_at,' : ''}
+})
+
+${repositoryInterface(n, soft)}
+
+${docs}
+export class Sqlite${n.pascal}Repository implements ${n.pascal}Repository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  async list(): Promise<${n.pascal}[]> {
+    const rows = this.db.prepare('SELECT * FROM ${table}${where([...scope, ...live])} ORDER BY created_at').all(${scopeArgs.join(', ')})
+    return (rows as unknown as ${n.pascal}Row[]).map(to${n.pascal})
+  }
+
+  async find(id: string): Promise<${n.pascal} | null> {
+    const row = this.db.prepare('SELECT * FROM ${table}${where([...byId, ...live])}').get(${byIdArgs})
+    return row ? to${n.pascal}(row as unknown as ${n.pascal}Row) : null
+  }
+
+  async create(input: Create${n.pascal}Input): Promise<${n.pascal}> {
+    const now = new Date().toISOString()
+    const item: ${n.pascal} = { id: randomUUID(), ...input, createdAt: now, updatedAt: now${soft ? ', deletedAt: null' : ''} }
+    this.db
+      .prepare('INSERT INTO ${table} (${insertColumns.join(', ')}) VALUES (${insertColumns.map(() => '?').join(', ')})')
+      .run(${insertArgs})
+    return item
+  }
+
+  async update(id: string, input: Update${n.pascal}Input): Promise<${n.pascal} | null> {
+    const existing = await this.find(id)
+    if (!existing) return null
+    const updated: ${n.pascal} = { ...existing, ...input, updatedAt: new Date().toISOString() }
+    this.db
+      .prepare('UPDATE ${table} SET name = ?, updated_at = ?${where([...byId, ...live])}')
+      .run(updated.name, updated.updatedAt, ${byIdArgs})
+    return updated
+  }
+
+  async delete(id: string): Promise<boolean> {${soft ? '\n    const now = new Date().toISOString()' : ''}
+    ${deleteBody}
+  }${restore}
+}
+
+export const ${n.constant}_REPOSITORY = createToken<${n.pascal}Repository>('${n.kebab}.repository')
+`
+}
+
 export function repositoryFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
   const soft = options.softDelete === true
   return {
     path: `${dir(n)}/${n.kebab}.repository.ts`,
     content: options.prisma
       ? prismaRepository(n, soft, options.prismaClient, tenantMode(options))
-      : memoryRepository(n, soft, tenantMode(options) !== undefined),
+      : usesSqlite(options)
+        ? sqliteRepository(n, soft, sqliteTenant(options))
+        : memoryRepository(n, soft, tenantMode(options) !== undefined),
   }
+}
+
+/** The `CREATE TABLE` step for the resource, as SQL (no comments). */
+export function sqliteMigration(n: Names, options: GeneratorOptions = {}): string {
+  const table = sqliteTable(n)
+  const tenant = sqliteTenant(options)
+  const columns = [
+    'id         TEXT PRIMARY KEY',
+    ...(tenant ? ['tenant_id  TEXT NOT NULL'] : []),
+    'name       TEXT NOT NULL',
+    'created_at TEXT NOT NULL',
+    'updated_at TEXT NOT NULL',
+    ...(options.softDelete ? ['deleted_at TEXT'] : []),
+  ]
+  const index = tenant ? `\nCREATE INDEX ${table}_tenant ON ${table} (tenant_id);` : ''
+  return `CREATE TABLE ${table} (\n${columns.map((c) => `  ${c}`).join(',\n')}\n);${index}`
+}
+
+/** The migration step as a file (emitted with --sqlite), for a project whose src/db.ts the generator cannot extend. */
+export function sqliteMigrationFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
+  return {
+    path: `${dir(n)}/${n.kebab}.sql`,
+    content: `-- Add this step to the END of the MIGRATIONS array in src/db.ts — never edit a
+-- step that has already run somewhere.
+${sqliteMigration(n, options)}
+`,
+  }
+}
+
+/** One `MIGRATIONS` element: the SQL in a template literal, indented like the array. */
+export const sqliteMigrationStep = (sql: string): string => `  \`${sql.split('\n').join('\n   ')}\`,`
+
+/** `src/db.ts` for a project with no database yet: one SQLite file, migrated on first use. */
+export function sqliteDatabaseModule(steps: string[]): string {
+  return `import { mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { env } from './env.js'
+
+/**
+ * The app's tables, in order. Each step runs once and is recorded in
+ * \`app_migrations\`; to change the schema, append a step — never edit one that
+ * has already run somewhere. \`basalt make:resource\` appends its table here.
+ */
+const MIGRATIONS: string[] = [
+${steps.join('\n')}
+]
+
+let shared: DatabaseSync | undefined
+
+/** The app's database, opened and migrated on first use. Tests get a fresh in-memory one. */
+export function database(): DatabaseSync {
+  shared ??= openDatabase(env.NODE_ENV === 'test' ? ':memory:' : env.DATABASE_PATH)
+  return shared
+}
+
+export function openDatabase(path: string): DatabaseSync {
+  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
+  const db = new DatabaseSync(path)
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;')
+  db.exec('CREATE TABLE IF NOT EXISTS app_migrations (step INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')
+  const done = new Set(
+    (db.prepare('SELECT step FROM app_migrations').all() as { step: number }[]).map((row) => row.step),
+  )
+  MIGRATIONS.forEach((sql, step) => {
+    if (done.has(step)) return
+    // A step that fails is undone whole: the file is never half-migrated.
+    db.exec('BEGIN')
+    try {
+      db.exec(sql)
+      db.prepare('INSERT INTO app_migrations (step, applied_at) VALUES (?, ?)').run(step, new Date().toISOString())
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  })
+  return db
+}
+`
 }
 
 /**
@@ -512,17 +725,22 @@ export const ${n.constant}_SERVICE = createToken<${n.pascal}Service>('${n.kebab}
 }
 
 export function pluginFile(n: Names, options: GeneratorOptions = {}): GeneratedFile {
-  const repoClass = options.prisma ? `Prisma${n.pascal}Repository` : `InMemory${n.pascal}Repository`
+  const sqlite = usesSqlite(options)
+  const repoClass = options.prisma
+    ? `Prisma${n.pascal}Repository`
+    : sqlite
+      ? `Sqlite${n.pascal}Repository`
+      : `InMemory${n.pascal}Repository`
   return {
     path: `${dir(n)}/${n.kebab}.plugin.ts`,
-    content: `import { definePlugin } from '@basaltkit/core'
+    content: `import { definePlugin } from '@basaltkit/core'${sqlite ? `\nimport { database } from '../../db.js'` : ''}
 import { ${n.constant}_REPOSITORY, ${repoClass} } from './${n.kebab}.repository.js'
 import { ${n.constant}_SERVICE, ${n.pascal}Service } from './${n.kebab}.service.js'
 
 export const ${n.camel}Plugin = definePlugin({
   name: 'app:${n.kebab}',
   register({ container }) {
-    container.singleton(${n.constant}_REPOSITORY, () => new ${repoClass}())
+    container.singleton(${n.constant}_REPOSITORY, () => new ${repoClass}(${sqlite ? 'database()' : ''}))
     container.singleton(
       ${n.constant}_SERVICE,
       (c) => new ${n.pascal}Service(c.get(${n.constant}_REPOSITORY)),

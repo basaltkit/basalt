@@ -13,7 +13,7 @@ Há três formas de os guardar:
 | --- | --- | --- | --- |
 | Sobrevive a um reinício | Não | Sim | Sim |
 | Precisa de um servidor | Não | Não — um ficheiro | Sim |
-| Como se obtém | O default | Escrever uma classe de repositório | `create-basalt --prisma` |
+| Como se obtém | O default | `make:resource --sqlite` | `create-basalt --prisma` |
 | Migrações | — | Uma lista de passos SQL, só se acrescenta | `prisma migrate` |
 | Várias instâncias da app | — | Não (uma máquina) | Sim |
 | Indicado para | Protótipos, testes | Apps pequenas num servidor | SaaS em produção |
@@ -68,12 +68,40 @@ protótipo ou uma suite de testes sem nada para instalar.
 
 O SQLite guarda a base de dados inteira num ficheiro, através do `node:sqlite`
 que vem com o Node: sem ORM, sem serviço para correr, sem dependências extra.
-Quatro passos transformam a app em memória acima numa que se lembra.
+Uma flag no gerador trata disso; os quatro passos a seguir mostram o que ela
+escreve, e são o caminho para mudar um recurso que já tens.
 
 ::: tip Versão do Node
 O `node:sqlite` é estável no **Node 24**. No Node 22.5+ corre com
 `--experimental-sqlite`.
 :::
+
+### O caminho curto: `--sqlite`
+
+```bash
+pnpm basalt make:resource Product --sqlite
+```
+
+O gerador (`@basaltkit/generator` 1.7+) escreve o `SqliteProductRepository` no
+`product.repository.ts`, em vez da classe em memória, e o plugin abre-o com
+`database()`. Da primeira vez faz também os passos 1 e 2 abaixo: cria o
+`src/db.ts`, declara o `DATABASE_PATH` no `src/env.ts` e acrescenta `data/` ao
+`.gitignore`. Cada recurso seguinte acrescenta o seu `CREATE TABLE` aos
+`MIGRATIONS` do `src/db.ts`, e já sem flag: quando o `src/db.ts` é esse módulo,
+o `--sqlite` passa a ser o default (`--no-sqlite` para um em memória).
+
+```txt
+Created src/db.ts: one SQLite file (DATABASE_PATH, default ./data/app.db; in memory under NODE_ENV=test), migrated on first use. Its first step creates the products table.
+  DATABASE_PATH is declared in src/env.ts.
+```
+
+Um recurso de tenant recebe uma coluna `tenant_id` indexada e o filtro
+`requireTenantId()` do [passo 3](#_3-o-repositorio); com `--no-tenant` a tabela é
+partilhada por toda a app. Aqui só existe o isolamento por coluna: um ficheiro
+não tem um schema ou uma base de dados por tenant, por isso
+`--tenant=schema|database` pede `--prisma`. Depois faz o
+[passo 4](#_4-as-tabelas-da-framework-no-mesmo-ficheiro), para os teus
+utilizadores também sobreviverem a um reinício.
 
 ### 1. Onde fica o ficheiro
 
@@ -150,7 +178,9 @@ meio migrado.
 
 ### 3. O repositório
 
-Escreve uma segunda implementação da interface gerada, ao lado dela:
+O `--sqlite` escreve esta classe no `product.repository.ts`. À mão, para um
+recurso que hoje está em memória, escreve-a como uma segunda implementação da
+interface gerada, ao lado dela:
 
 ```ts
 // src/modules/product/product.sqlite.ts

@@ -2,6 +2,7 @@ import { access, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { defineCommand, type CommandDefinition } from '@basaltkit/cli'
 import {
+  addSqliteMigration,
   appendPrismaModel,
   FileExistsError,
   PRISMA_SCHEMA,
@@ -12,13 +13,15 @@ import {
   missingSiblingsWarning,
   registerResourceInApp,
   serviceSiblingsExist,
+  SQLITE_DATABASE,
   writeGenerated,
   type GeneratorKind,
   type GeneratorOptions,
+  type SqliteMigrationResult,
   type WriteOptions,
 } from './generate.js'
 import { names } from './names.js'
-import { TENANT_MODES, tenantMode, type TenantMode } from './templates.js'
+import { sqliteTable, TENANT_MODES, tenantMode, usesSqlite, type TenantMode } from './templates.js'
 
 interface MakeSpec {
   command: string
@@ -84,12 +87,18 @@ function specs(): MakeSpec[] {
 }
 
 /** The security note's tenancy line: what isolates this resource's data, stated plainly. */
-function tenantNote(mode: TenantMode | undefined, prisma: boolean): string {
+function tenantNote(mode: TenantMode | undefined, prisma: boolean, sqlite = false): string {
   switch (mode) {
     case undefined:
       return '  Data is NOT tenant-scoped — shared by every tenant. Use --tenant if this resource belongs to a tenant.'
     case 'column':
-      return `  Data is tenant-scoped (isolation: tenantId column) via requireTenantId() (no tenant → 400)${prisma ? '; the model has an indexed tenantId column — migrate it.' : '.'}`
+      return `  Data is tenant-scoped (isolation: tenantId column) via requireTenantId() (no tenant → 400)${
+        prisma
+          ? '; the model has an indexed tenantId column — migrate it.'
+          : sqlite
+            ? '; the table has an indexed tenant_id column.'
+            : '.'
+      }`
     default:
       return `  Data is tenant-scoped (isolation: ${mode}-per-tenant): no tenantId column; every query requires a resolved tenant (requireTenantId(), no tenant → 400)${
         prisma ? ` and runs on that tenant's client from db() — add the model to the tenant schema.prisma and migrate every tenant.` : '.'
@@ -123,6 +132,30 @@ function modelNote(
   }
 }
 
+/** What happened to the SQLite table's migration step. */
+function sqliteNote(name: string, migrationPath: string, migration: SqliteMigrationResult): string[] {
+  const table = sqliteTable(names(name))
+  switch (migration.result) {
+    case 'created':
+      return [
+        `Created ${SQLITE_DATABASE}: one SQLite file (DATABASE_PATH, default ./data/app.db; in memory under NODE_ENV=test), migrated on first use. Its first step creates the ${table} table.`,
+        migration.env
+          ? '  DATABASE_PATH is declared in src/env.ts.'
+          : "  Declare it in src/env.ts: DATABASE_PATH: z.string().default('./data/app.db'),",
+        `  The framework's stores can share the same file: sqliteAuthStores(database()) from @basaltkit/auth-sqlite, and the other *-sqlite packages.`,
+      ]
+    case 'appended':
+      return [`Added the ${table} table to MIGRATIONS in ${SQLITE_DATABASE}: it is created on the next start.`]
+    case 'present':
+      return [`${SQLITE_DATABASE} already creates the ${table} table — left it as is. To change it, append a new step to MIGRATIONS.`]
+    case 'unrecognized':
+      return [
+        `${SQLITE_DATABASE} is not the SQLite module make:resource --sqlite expects (a \`const MIGRATIONS = [...]\` and a database() export).`,
+        `  The table is in ${migrationPath}: add it to your migrations, and export database(): DatabaseSync from ${SQLITE_DATABASE} — the plugin opens the repository with it.`,
+      ]
+  }
+}
+
 /** Packages whose presence marks the project as multi-tenant. */
 const TENANCY_PACKAGES = /^@basaltkit\/tenancy(?:-[a-z0-9-]+)?$/
 
@@ -140,6 +173,12 @@ interface ProjectFacts {
   dbAlias: boolean
   /** The scaffold's `src/db.ts`, exporting the application client `db`. */
   dbModule: boolean
+  /**
+   * `src/db.ts` is the SQLite module `make:resource --sqlite` writes (a
+   * `node:sqlite` handle and a `MIGRATIONS` array): its repositories are
+   * SQLite-backed by default.
+   */
+  sqlite: boolean
   /** The package.json scripts, to name the migrate command the project actually has. */
   scripts: Record<string, unknown>
 }
@@ -157,10 +196,8 @@ async function projectFacts(baseDir: string): Promise<ProjectFacts> {
     return value && typeof value === 'object' ? Object.keys(value) : []
   })
   const imports = pkg['imports'] && typeof pkg['imports'] === 'object' ? (pkg['imports'] as Record<string, unknown>) : {}
-  const dbModule = await readFile(join(baseDir, 'src', 'db.ts'), 'utf8').then(
-    (source) => /^export const db\b/m.test(source),
-    () => false,
-  )
+  const dbSource = await readFile(join(baseDir, SQLITE_DATABASE), 'utf8').catch(() => '')
+  const dbModule = /^export const db\b/m.test(dbSource)
   return {
     tenancy: deps.some((dep) => TENANCY_PACKAGES.test(dep)),
     prisma: await access(join(baseDir, PRISMA_SCHEMA)).then(
@@ -169,6 +206,7 @@ async function projectFacts(baseDir: string): Promise<ProjectFacts> {
     ),
     dbAlias: '#db/*' in imports,
     dbModule,
+    sqlite: /from 'node:sqlite'/.test(dbSource) && /^const MIGRATIONS\b/m.test(dbSource),
     scripts: pkg['scripts'] && typeof pkg['scripts'] === 'object' ? (pkg['scripts'] as Record<string, unknown>) : {},
   }
 }
@@ -177,6 +215,8 @@ async function projectFacts(baseDir: string): Promise<ProjectFacts> {
  * CLI commands: `basalt make:resource Project`, `basalt make:service Project`, …
  * Options: --dir=<path> (target root), --force (overwrite),
  * --prisma (Prisma-backed repository + schema.prisma model),
+ * --sqlite (SQLite-backed repository over `node:sqlite` + its table in the
+ * `MIGRATIONS` of `src/db.ts`, which is created when missing),
  * --soft-delete (deletedAt column + restore() + restore route),
  * --no-register (skip wiring the resource into src/app.ts),
  * --public / --no-auth (deliberately PUBLIC routes; by default every route
@@ -200,8 +240,11 @@ async function projectFacts(baseDir: string): Promise<ProjectFacts> {
  * })
  * ```
  *
+ * A project whose `src/db.ts` is that SQLite module gets `--sqlite` by default,
+ * as one with `prisma/schema.prisma` gets `--prisma`.
+ *
  * A flag still wins, in both directions: `--no-prisma` turns off a default of
- * `prisma: true`. A default a flag cannot override is a trap, and the CLI's
+ * `prisma: true`, and `--sqlite` / `--prisma` each turn off the other's default. A default a flag cannot override is a trap, and the CLI's
  * argv parser already gives the negation its own value.
  */
 export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefinition[] {
@@ -213,7 +256,7 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
         const name = args[0]
         if (!name) {
           io.error(
-            `Usage: basalt ${spec.command} <Name> [--dir=<path>] [--force] [--prisma] [--soft-delete] [--public] [--tenant[=column|schema|database]|--no-tenant]${spec.usage ?? ''}`,
+            `Usage: basalt ${spec.command} <Name> [--dir=<path>] [--force] [--prisma|--sqlite] [--soft-delete] [--public] [--tenant[=column|schema|database]|--no-tenant]${spec.usage ?? ''}`,
           )
           return 1
         }
@@ -250,6 +293,20 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
             : flags['no-crud'] === true
               ? false
               : defaults.crud
+        // One database per resource. An explicit flag beats the other's
+        // default: `--sqlite` in a Prisma project generates SQLite.
+        const prismaFlag = typeof flags['prisma'] === 'boolean' ? flags['prisma'] : undefined
+        const sqliteFlag = typeof flags['sqlite'] === 'boolean' ? flags['sqlite'] : undefined
+        if (prismaFlag === true && sqliteFlag === true) {
+          io.error('Pick one database: --prisma or --sqlite.')
+          return 1
+        }
+        const sqlite = sqliteFlag ?? (prismaFlag === true ? false : (defaults.sqlite ?? project.sqlite))
+        const prisma = prismaFlag ?? (sqlite ? false : (defaults.prisma ?? project.prisma))
+        if (sqlite && !prisma && (tenant === 'schema' || tenant === 'database')) {
+          io.error(`SQLite isolates tenants by a tenant_id column only; --tenant=${tenant} needs --prisma.`)
+          return 1
+        }
         const genOptions: GeneratorOptions = {
           // What the scaffold's layout implies, under anything configured:
           // Prisma 7 generates the client into the project, not @prisma/client.
@@ -257,7 +314,8 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
           ...(project.dbModule ? { testClient: { import: '../src/db.js', export: 'db' } } : {}),
           ...defaults,
           ...(crud === undefined ? {} : { crud }),
-          prisma: flagOr('prisma', defaults.prisma ?? project.prisma),
+          prisma,
+          sqlite,
           softDelete: flagOr('soft-delete', defaults.softDelete),
           // `--public` is the named opt-out; `--no-auth` (parsed as auth: false)
           // is accepted too, as are the literal negation keys programmatic
@@ -276,6 +334,11 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
           const sharedSchema = tenantMode(resolved) !== 'schema' && tenantMode(resolved) !== 'database'
           const model = modelFile && sharedSchema ? await appendPrismaModel(modelFile, options) : undefined
           if (model && model.result !== 'no schema') files = files.filter((file) => file !== modelFile)
+          // The table's step goes into the MIGRATIONS of src/db.ts, which is
+          // created when the project has no database module yet.
+          const migrationFile = usesSqlite(resolved) ? files.find((file) => file.path.endsWith('.sql')) : undefined
+          const migration = migrationFile ? await addSqliteMigration(migrationFile, options) : undefined
+          if (migration && migration.result !== 'unrecognized') files = files.filter((file) => file !== migrationFile)
           // Computed before writing: what this artifact imports and neither it
           // nor the project has. The file is written either way — the sibling
           // may be about to be written by hand — but the developer hears about
@@ -288,6 +351,7 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
           if (note) io.log(note)
           for (const line of missingSiblingsWarning(name, files[0]?.path ?? name, missing)) io.log(line)
           if (modelFile) for (const line of modelNote(name, modelFile.path, model?.result, project.scripts)) io.log(line)
+          if (migrationFile && migration) for (const line of sqliteNote(name, migrationFile.path, migration)) io.log(line)
           if (spec.secured) {
             io.log('Security:')
             io.log(
@@ -295,7 +359,7 @@ export function generatorCommands(defaults: GeneratorOptions = {}): CommandDefin
                 ? '  Routes require an authenticated user (meta.auth) — register authPlugin; the app refuses to boot otherwise.'
                 : '  PUBLIC: routes were generated with --public and accept anonymous callers.',
             )
-            io.log(tenantNote(tenantMode(resolved), resolved.prisma === true))
+            io.log(tenantNote(tenantMode(resolved), resolved.prisma === true, usesSqlite(resolved)))
             io.log('  Add authorization (who may read/write which rows) before shipping.')
           }
 
