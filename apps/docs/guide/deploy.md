@@ -57,7 +57,7 @@ user for the app. In this guide that user is `deploy` and the checkout is
 sudo adduser --disabled-password deploy && sudo git clone <repo> /srv/acme
 
 # root runs its OWN copy, pinned to the version your lockfile records:
-cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.5.1 -- \
+cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.9.0 -- \
   basalt-deploy bootstrap --dir=/srv/acme --user=deploy --dry-run
 # read what it would do, then run it again without --dry-run
 ```
@@ -101,7 +101,7 @@ node node_modules/@basaltkit/deploy/dist/bin.js env           # writes the .env 
 node node_modules/@basaltkit/deploy/dist/bin.js install-plan  # writes the install plan (data) and prints the root command
 
 # once, as an administrator: the command install-plan printed, for example
-cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.5.1 -- \
+cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.9.0 -- \
   basalt-deploy install --plan=/srv/acme/.basalt/install-plan.json --user=deploy
 ```
 
@@ -303,7 +303,7 @@ SSH account (the app user) that you can already reach with `ssh`.
 On your machine, never on the server:
 
 ```console
-$ npx @basaltkit/deploy-ui@0.1.1
+$ npx @basaltkit/deploy-ui@0.5.0
 basalt-deploy-ui: listening on http://127.0.0.1:53119/ (this machine only)
 basalt-deploy-ui: targets in ~/.config/basalt/deploy-targets.json
 ```
@@ -349,7 +349,7 @@ version, the protocol and the server's host name. Under it you see which app
 the target really is: the app's name and where its code comes from
 (`github.com/acme/app (main)`, from `@basaltkit/deploy` 0.9.0):
 
-![The Targets page: three targets (staging, production marked protected, preview) and a green banner "staging answers: @basaltkit/deploy 0.5.1, protocol 1, host web-1.example.com"](/guide/deploy/ui-targets.png)
+![The Targets page: three targets (staging, production marked protected, preview) and a green banner "staging answers: @basaltkit/deploy 0.9.0, protocol 1, host web-1.example.com" with "app acme · git.example.com/acme/app (main)" below it](/guide/deploy/ui-targets.png)
 
 ### SSH keys: `~/.ssh/config` {#ssh-config}
 
@@ -412,7 +412,7 @@ your `packageManager` declares in that Node with `corepack enable`.
 process, the lock and the last run. It loads once when you choose a target.
 Choose **Refresh** to load it again; the UI does not poll.
 
-![The Status page for staging: current release b7e4c19d2a0f (healthy, deployed by alice via ui, migration 20261010_add_invoices), process pm2 acme-api running, lock free, last run exit 0](/guide/deploy/ui-status.png)
+![The Status page for staging, with the source git.example.com/acme/app (main) in the top bar: current release b7e4c19d2a0f (healthy, deployed by alice via ui, migration 20261010_add_invoices), process pm2 acme-api running, lock free, last run exit 0](/guide/deploy/ui-status.png)
 
 The bar at the top always shows where you are: the target, its SSH destination
 and checkout, and, once the server answered, its host name, the deploy version,
@@ -445,7 +445,7 @@ deploy until you fix it on the server and choose **Plan again**:
 
 With no error, the page shows the plan and the form for what the run will ask:
 
-![Plan & deploy: one C8 warning about the certificate expiry with the fix "certbot renew", the list of what a run would do (fetch, env, build, validate, backup, migrate, release, health), and the form "What the run will ask"](/guide/deploy/ui-plan.png)
+![Plan & deploy: one C8 warning about the certificate expiry with the fix "certbot renew", the three commits that will go out (b7e4c19 → e31d0a7), the list of what a run would do (fetch, env, build, validate, backup, migrate, release, health), and the form "What the run will ask"](/guide/deploy/ui-plan.png)
 
 **What will go out** lists the commits the run would deploy, newest first, with
 author and date. A merge is marked, and the commits it brings in are listed with
@@ -487,7 +487,7 @@ shows the new values.
 The run page shows the steps with their timings and the live log. Build and
 migration output is tagged with its source (`[pnpm]`, `[prisma]`, `[vite]`):
 
-![A live run at the backup step: lock, preflight, fetch, env, infra, build and validate done with timings; the log shows a C8 warning, the fetch b7e4c19 → e31d0a7, the build output and the pg_dump to /var/lib/basalt/acme/backups](/guide/deploy/ui-run-live.png)
+![A live run at the backup step: lock, preflight, fetch, env, infra, build and validate done with timings; the log shows the fetch b7e4c19 → e31d0a7, the build output and the pg_dump to /var/lib/basalt/acme/backups, and a C8 warning sits under Findings](/guide/deploy/ui-run-live.png)
 
 When it ends, the page shows the release, its URL and its migrations:
 
@@ -544,7 +544,7 @@ Deploy, **Write .env only** and rollback on a protected target require the
 target's name typed in the dialog. The button stays disabled until the name
 matches:
 
-![The dialog "Roll back production?" with the PROTECTED badge, "Back to the last healthy release.", and the name only partly typed, so the Roll back button is still disabled](/guide/deploy/ui-dialog-rollback-protected.png)
+![The dialog "Roll back production?" with the PROTECTED badge, "Back to the last healthy release — 9a1f3c7 now.", the one commit that leaves production, and the name only partly typed, so the Roll back button is still disabled](/guide/deploy/ui-dialog-rollback-protected.png)
 
 ### Language {#language}
 

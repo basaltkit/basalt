@@ -597,7 +597,7 @@ Or deploy from your machine with the local UI, which drives the same commands
 over your own `ssh`:
 
 ```bash
-npx @basaltkit/deploy-ui@latest
+npx @basaltkit/deploy-ui@0.5.0   # pin an exact version
 ```
 
 [Deploying to a server](/guide/deploy) covers each step in depth: the
