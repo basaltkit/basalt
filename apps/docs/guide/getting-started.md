@@ -243,4 +243,7 @@ end to end: in memory, SQLite in one file, and PostgreSQL with Prisma.
 - [Testing](/guide/testing) — boot the app in-process, impersonate a user or
   tenant, fake mail and queue, travel through time.
 - [Web UI & components](/guide/web-ui) — a type-safe SDK and admin tables/forms.
-- [Build a notes SaaS](/cookbook/notes-saas) — a complete end-to-end walkthrough.
+- [Build a notes SaaS](/cookbook/notes-saas) — the whole path, from an empty
+  folder to a live server.
+- [Built with Basalt](/guide/built-with-basalt) — four apps in production and
+  what each one uses.

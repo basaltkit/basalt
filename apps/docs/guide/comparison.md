@@ -76,3 +76,6 @@ billing model draws on **Soulbscription** — but rebuilt for TypeScript.
 > **The Laravel of TypeScript, built for multi-tenant SaaS** — Laravel's breadth
 > of batteries, a Nest-style plugin/DI core, HTTP-adapter-neutral, with
 > multi-tenancy from the ground up.
+
+See it in practice: [Built with Basalt](/guide/built-with-basalt) — four apps in
+production, in four different domains.

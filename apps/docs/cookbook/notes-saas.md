@@ -3,7 +3,8 @@
 This tutorial builds a **complete multi-tenant SaaS** from an empty folder to a
 production-shaped app: tenants with a **plan-based note quota** (basic = 5,
 pro = 10), authentication, an **operator admin dashboard**, and a swap to
-**Prisma** (database) and **Redis** (cache, queues, quota) for production.
+**Prisma** (database) and **Redis** (cache, queues, quota) for production —
+and finally onto a server with `@basaltkit/deploy`.
 
 By the end you'll have exactly the reference `notes` demo — API, tests, and a
 two-area web app (admin console + tenant workspace).
@@ -555,3 +556,52 @@ expect((await createNote('acme', 'overflow')).statusCode).toBe(402)
 Everything runs on in-memory stores, so the whole suite passes with **no
 database or Redis** — swap them in only for production. That's the point: the
 domain code you wrote in steps 3–9 never changes.
+
+## 17. Ship it to a server
+
+The last step takes the app from your machine to a Linux server.
+`@basaltkit/deploy` covers the `.env`, the Docker infra (Postgres, Redis), the
+build, a database dump before migrating, the migration, PM2, the reverse proxy,
+a health check, and a rollback when the new release does not answer.
+
+In the app, add the tool and let it write the config from the project. It reads
+`src/env.ts`, `prisma.config.ts` and `web/package.json`, and asks only what it
+cannot work out:
+
+```bash
+pnpm add -D @basaltkit/deploy
+pnpm exec basalt-deploy init --domain=notes.example.com
+git add deploy.config.ts package.json pnpm-lock.yaml && git commit -m "deploy config" && git push
+```
+
+`deploy.config.ts` is committed and holds no secret.
+
+On a fresh Ubuntu or Debian server, `bootstrap` installs what is missing and
+prepares the app user. Root runs its **own** copy, pinned to the version your
+`pnpm-lock.yaml` records, from outside the checkout:
+
+```bash
+sudo adduser --disabled-password notes && sudo git clone <repo> /srv/notes
+cd / && sudo -H npx --yes --package=@basaltkit/deploy@<locked version> -- \
+  basalt-deploy bootstrap --dir=/srv/notes --user=notes --dry-run
+# read what it would do, then run it again without --dry-run
+```
+
+From then on, every deploy is one command, as the app user:
+
+```bash
+sudo -u notes -H sh -c 'cd /srv/notes && node node_modules/@basaltkit/deploy/dist/bin.js run'
+```
+
+Or deploy from your machine with the local UI, which drives the same commands
+over your own `ssh`:
+
+```bash
+npx @basaltkit/deploy-ui@latest
+```
+
+[Deploying to a server](/guide/deploy) covers each step in depth: the
+[first server](/guide/deploy#first-server), [`plan` and
+`run`](/guide/deploy#terminal), rollbacks, and [the deploy UI](/guide/deploy#ui).
+That is the whole path, from an empty folder to a live server. Four apps in
+production took it — see [Built with Basalt](/guide/built-with-basalt).
