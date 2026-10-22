@@ -198,7 +198,7 @@ export class RunView {
       case 'prompt':
         return this.line('warn', `the deploy asks: ${event.message} (answer it in the form and run again)`)
       case 'result':
-        this.outcome.append(resultBanner(event.command, event.data))
+        this.outcome.append(resultBanner(event.command, event.data, this.runId ? this.app.previewedRollbacks.get(this.runId) : undefined))
         return
       case 'error':
         this.lastError = event
@@ -327,7 +327,7 @@ export class RunView {
   }
 }
 
-function resultBanner(command: string, data: unknown): HTMLElement {
+function resultBanner(command: string, data: unknown, previewed?: string): HTMLElement {
   const d = (data ?? {}) as Record<string, unknown>
   if (command === 'run') {
     return banner(d['status'] === 'ok' ? 'ok' : 'err', `Release ${clean(d['sha']).slice(0, 12)}: ${clean(d['status'])}`, [
@@ -336,7 +336,14 @@ function resultBanner(command: string, data: unknown): HTMLElement {
       d['note'] ? clean(d['note']) : '',
     ])
   }
-  if (command === 'rollback') return banner(d['status'] === 'ok' ? 'ok' : 'err', `Rolled back to ${clean(d['to']).slice(0, 12)}: ${clean(d['status'])}`, [`${clean(d['held']).slice(0, 12)} is held`])
+  if (command === 'rollback') {
+    const to = clean(d['to'])
+    return banner(d['status'] === 'ok' ? 'ok' : 'err', `Rolled back to ${to.slice(0, 12)}: ${clean(d['status'])}`, [
+      `${clean(d['held']).slice(0, 12)} is held`,
+      // The releases moved between the preview and the run: say which commit the deploy chose.
+      previewed && to && previewed !== to ? el('strong', {}, `The deploy chose ${to.slice(0, 12)}, not ${clean(previewed).slice(0, 12)} the preview showed: open History to see what changed.`) : '',
+    ])
+  }
   if (command === 'env') {
     const changes = Array.isArray(d['changes']) ? d['changes'] as Array<Record<string, unknown>> : []
     return banner('ok', `.env written (${changes.length} change${changes.length === 1 ? '' : 's'})`, changes.map((c) => `${clean(c['kind'])} ${clean(c['key'])}: ${clean(c['reason'])}`))

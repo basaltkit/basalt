@@ -12,11 +12,12 @@ import { envValues } from './dotenv.js'
 import { applyInfra, describeInfra, dockerPostgres, maintainServices, planInfra, type InfraPlan } from './infra.js'
 import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, externalPostgres, grantTenantSchemas } from './services.js'
 import { pm2List, pm2Preflight, pm2Release, resolvePort } from './pm2.js'
-import { clearHold, deployedOver, lastGood, migrationNames, readHold, readReleases, recordRelease, writeHold, type Release } from './state.js'
+import { clearHold, migrationNames, readHold, readReleases, recordRelease, rollbackTarget, writeHold, type Release } from './state.js'
+import { commitRange, commitSubjects, incomingCommits, resolveCommit } from './commits.js'
 import { acquireLock, describeHolder, readLock } from './lock.js'
 import { auditOf } from './audit.js'
 import { questionDescriptors } from './env-step.js'
-import type { EnvResult, RunResult, StatusResult, StepId, StepStatus } from './protocol.js'
+import type { Commits, CommitsResult, EnvResult, RunResult, StatusResult, StepId, StepStatus } from './protocol.js'
 import { activeRun, lastRun } from './runs.js'
 import { describeSystem, packageStatus, systemFindings, type PackageStatus } from './system.js'
 
@@ -575,6 +576,8 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
   const { host, config, pm } = ctx
   const blocking = errors([...checked.findings, ...infra.findings]).length > 0
   const lines = await stepped(ctx, 'plan', async () => planLines(ctx, options, checked, env, infra), 'plan — nothing below has run')
+  const commits = await planCommits(ctx, options)
+  host.out.info(describeCommits(commits))
   host.out.result?.('plan', {
     findings: [...checked.findings, ...infra.findings],
     lines: lines.map((line) => {
@@ -584,8 +587,30 @@ export async function plan(ctx: DeployContext, options: RunOptions = {}): Promis
     // What env/run would ask now — the deploy's own environment answers first, as it does there.
     questions: questionDescriptors(config, env.questions.filter((key) => host.env[key] === undefined)),
     blocking,
+    commits,
   })
   return blocking ? 1 : 0
+}
+
+/** What a run would deploy, marked when a rollback held that commit. Never a finding: a list it cannot get stops nothing. */
+async function planCommits(ctx: DeployContext, options: RunOptions): Promise<Commits> {
+  const commits = await incomingCommits(ctx, gitTarget(ctx), options.skip?.includes('fetch') ?? false)
+  if (!commits.ok) return commits
+  const hold = await readHold(ctx)
+  return hold?.sha === commits.range.to && commits.range.relation !== 'same' ? { ok: true, range: { ...commits.range, held: true } } : commits
+}
+
+/** One line for the terminal; the list itself is in the result (--json). */
+export function describeCommits(commits: Commits): string {
+  if (!commits.ok) return `commits: the list is unavailable (${commits.reason})`
+  const { range } = commits
+  const span = `${range.from.slice(0, 7)} → ${range.to.slice(0, 7)}`
+  switch (range.relation) {
+    case 'same': return `commits: nothing new (${range.to.slice(0, 7)})`
+    case 'ahead': return `commits: ${range.addedTotal} to go out (${span})${range.held ? ' — held by a rollback' : ''}`
+    case 'behind': return `commits: ${range.removedTotal} would leave (${span})`
+    case 'diverged': return `commits: the branch was rewritten — ${range.addedTotal} new, ${range.removedTotal} only here (${span}); run refuses it (--ff-only)`
+  }
 }
 
 /** What `plan` prints, one line per thing a run would do. */
@@ -859,7 +884,7 @@ async function rollbackLocked(ctx: DeployContext, to: string | undefined, option
   }
   // The last healthy release before this one; on the first recorded deploy,
   // the commit it was deployed over.
-  const target = wanted ?? lastGood(releases, current)?.sha ?? deployedOver(releases, current)
+  const target = rollbackTarget(releases, current, wanted)
   if (!target || target === current) throw new DeployError('no earlier release to go back to; pass --to=<sha>')
   const document = await readEnv(ctx)
   const values = envValues(document)
@@ -928,7 +953,49 @@ export async function status(ctx: DeployContext): Promise<number> {
       hold: hold ?? null,
       releases,
       process: running,
+      ...await subjectsOf(ctx, releases),
     })
   }
+  return 0
+}
+
+async function subjectsOf(ctx: DeployContext, releases: Release[]): Promise<Pick<StatusResult, 'subjects'>> {
+  const subjects = await commitSubjects(ctx, releases.map((r) => r.sha))
+  return subjects ? { subjects } : {}
+}
+
+/**
+ * `basalt-deploy commits --from=<sha> --to=<sha>` — what changed between two
+ * commits; `commits --rollback [--to=<sha>]` — what `rollback` would take
+ * out of production, to the commit it would choose. Read-only: no lock, no
+ * fetch. A list it cannot get is an answer (`unavailable`), not a failure.
+ */
+export async function commitsCommand(ctx: DeployContext, request: { from: string; to: string } | { rollback: true; to?: string }): Promise<number> {
+  const { host } = ctx
+  let result: CommitsResult
+  if ('rollback' in request) {
+    const current = await resolveCommit(ctx, 'HEAD')
+    const wanted = request.to === undefined ? undefined : await resolveCommit(ctx, request.to)
+    const target = current && (request.to === undefined || wanted) ? rollbackTarget(await readReleases(ctx), current, wanted) : undefined
+    result = {
+      purpose: 'rollback',
+      ...(current ? { from: current } : {}),
+      ...(target ? { to: target } : {}),
+      commits: !current ? { ok: false, reason: 'git-failed' }
+        : request.to !== undefined && !wanted ? { ok: false, reason: 'missing-commit' }
+        : !target || target === current ? { ok: false, reason: 'no-previous' }
+        : await commitRange(ctx, current, target),
+    }
+  } else {
+    const [from, to] = [await resolveCommit(ctx, request.from), await resolveCommit(ctx, request.to)]
+    result = { purpose: 'range', ...(from ? { from } : {}), ...(to ? { to } : {}), commits: from && to ? await commitRange(ctx, from, to) : { ok: false, reason: 'missing-commit' } }
+  }
+  host.out.info(describeCommits(result.commits))
+  if (result.commits.ok) {
+    for (const [label, list] of [['+', result.commits.range.added], ['-', result.commits.range.removed]] as const) {
+      for (const c of list) host.out.info(`${label} ${c.sha.slice(0, 7)} ${c.subject} (${c.author}${c.at ? `, ${c.at}` : ''})${c.merge ? ' [merge]' : ''}`)
+    }
+  }
+  host.out.result?.('commits', result)
   return 0
 }

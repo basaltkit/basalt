@@ -1,0 +1,5 @@
+---
+"@basaltkit/deploy": minor
+---
+
+Commit lists for the plan, the history and a rollback. `plan` reports the commits a run would deploy (`PlanResult.commits`). It fetches the branch into a private ref that it deletes again, and never touches the tracking ref `run` merges from. `status --json` adds the subject of each release (`StatusResult.subjects`). A new read-only command, `commits --from=<sha> --to=<sha>` or `commits --rollback [--to=<sha>]`, lists the commits between two releases, or what a rollback would take out of production. It resolves the target with the same function `rollback` uses. The lists hold the whole ancestry, with merges marked, and show both sides when history diverged. Each list is capped at 50 commits and reports the true total. Every git call is bounded in time and output (the new optional `ExecOptions.timeoutMs` and `maxOutputBytes`). The text is sanitised, capped and redacted. A list that cannot be read is reported as unavailable with a reason, and never stops a command. Additive within protocol v1.

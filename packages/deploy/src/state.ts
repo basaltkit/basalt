@@ -66,6 +66,14 @@ export function deployedOver(releases: Release[], current: string): string | und
   return target
 }
 
+/**
+ * The commit `rollback` goes back to: the one asked for, else the last
+ * healthy release before `current`, else the commit `current` was deployed
+ * over. What `rollback` does and what `commits --rollback` previews.
+ */
+export function rollbackTarget(releases: Release[], current: string, wanted?: string): string | undefined {
+  return wanted ?? lastGood(releases, current)?.sha ?? deployedOver(releases, current)
+}
 
 export const holdFile = (ctx: DeployContext) => join(ctx.stateDir, 'hold.json')
 

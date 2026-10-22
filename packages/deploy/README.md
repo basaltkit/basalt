@@ -204,11 +204,13 @@ As the app user, in the checkout (`node node_modules/@basaltkit/deploy/dist/bin.
 |---|---|
 | `init --domain=<host>` | writes `deploy.config.ts` from the project (`--server`: also from this server), then `check` |
 | `check` | the config is valid and types check (your `tsc`). No server needed — for CI. |
-| `plan` | every check, then what `run` would do. Writes nothing, asks nothing. |
+| `plan` | every check, then what `run` would do, and the commits it would deploy. Asks nothing, and changes nothing `run` uses: the commits are fetched into a private ref it deletes again. |
 | `run` | preflight → fetch → env → infra → build → validate → backup → migrate → release → health → record |
 | `env` | the `.env` and the containers only |
 | `rollback [--to=<sha>]` | the last healthy release. Code only — the database keeps its migrations. Holds the commit it left. |
 | `status` | the last releases (who, from where), the process, the deploy lock, a hold |
+| `commits --from=<sha> --to=<sha>` | the commits between two releases. Read-only: no lock, no fetch. |
+| `commits --rollback [--to=<sha>]` | what `rollback` would take out of production, to the commit it would choose |
 | `install-plan [--out=<file>\|-]` | what `install` needs, as JSON (default `<state dir>/install-plan.json`, 0600), and the root command to run |
 | `attach <runId> --json [--from-seq=<n>] [--follow]` | the events of a run, from any point (machine mode, below) |
 | `cancel <runId> [--first-only]` | SIGTERM to a detached run; a second `cancel` stops it at once (`--first-only` refuses instead) |

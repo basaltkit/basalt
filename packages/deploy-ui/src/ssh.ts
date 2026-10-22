@@ -29,7 +29,7 @@ export const SSH_OPTIONS = [
 /** The app's lockfile-pinned copy of the deploy, the invocation the CLI documents — never npx. */
 export const DEPLOY_BIN = 'node_modules/@basaltkit/deploy/dist/bin.js'
 
-export const REMOTE_COMMANDS = ['status', 'plan', 'env', 'run', 'rollback', 'attach', 'cancel'] as const
+export const REMOTE_COMMANDS = ['status', 'plan', 'env', 'run', 'rollback', 'commits', 'attach', 'cancel'] as const
 export type RemoteCommand = typeof REMOTE_COMMANDS[number]
 
 /** The commands that change the server (one at a time per target). */
@@ -48,8 +48,12 @@ export interface RemoteSpec {
   detach?: boolean
   /** run. */
   unhold?: boolean
-  /** rollback. */
+  /** rollback; commits (with `from`, or with `rollbackPreview`). */
   to?: string
+  /** commits: the older commit of a range. */
+  from?: string
+  /** commits: what a rollback (to `to`, or to the one it would choose) would take out of production. */
+  rollbackPreview?: boolean
   /** attach. */
   fromSeq?: number
   /** attach. */
@@ -94,8 +98,17 @@ export function remoteCommand(target: Target, spec: RemoteSpec, actor?: string):
     if (spec.command !== 'run') refuse('--unhold off run')
     words.push('--unhold')
   }
+  if (spec.command === 'commits') {
+    // Two shas, or the rollback preview: never anything else.
+    if (spec.rollbackPreview ? spec.from !== undefined : spec.from === undefined || spec.to === undefined) refuse('the commits range')
+    if (spec.rollbackPreview) words.push('--rollback')
+    if (spec.from !== undefined) {
+      if (!SHA.test(spec.from)) refuse('the commits range')
+      words.push(`--from=${spec.from}`)
+    }
+  } else if (spec.from !== undefined || spec.rollbackPreview) refuse('a commits range off commits')
   if (spec.to !== undefined) {
-    if (spec.command !== 'rollback' || !SHA.test(spec.to)) refuse('the rollback commit')
+    if ((spec.command !== 'rollback' && spec.command !== 'commits') || !SHA.test(spec.to)) refuse('the rollback commit')
     words.push(`--to=${spec.to}`)
   }
   if (spec.firstOnly) {

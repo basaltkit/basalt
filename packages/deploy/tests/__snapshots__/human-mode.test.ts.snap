@@ -41,6 +41,7 @@ exports[`human mode, byte for byte > plan 1`] = `
   "INFO migrate: prisma migrate deploy + tenant:migrate",
   "INFO release: pm2 acme-api on 127.0.0.1:3002",
   "INFO health: http://127.0.0.1:3002/health (Host: acme.example.com), then https://acme.example.com/api/health",
+  "INFO commits: the list is unavailable (git-failed)",
 ]
 `;
 

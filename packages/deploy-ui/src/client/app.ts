@@ -48,6 +48,10 @@ export class App {
   statusBusy = false
   planBusy = false
   stopped = false
+  /** The rollback target each previewed rollback showed, by run id: the run says when the deploy chose another. */
+  readonly previewedRollbacks = new Map<string, string>()
+  /** The commits between two releases never change: read once per target and pair. */
+  private readonly ranges = new Map<string, Promise<CommandReply>>()
 
   constructor(readonly api: Api, readonly shell: Shell, readonly storage: Storage | undefined) {
     api.onGone = (error) => this.serverGone(error)
@@ -214,6 +218,26 @@ export class App {
       this.planBusy = false
     }
     if (this.current?.name === t.name) this.refresh()
+  }
+
+  /** The commits between two releases of the current target (read-only on the server). */
+  commits(from: string, to: string): Promise<CommandReply> {
+    const t = this.current as TargetView
+    const key = `${t.name}\u0000${from}\u0000${to}`
+    let reply = this.ranges.get(key)
+    if (!reply) {
+      reply = this.api.post<CommandReply>('commits', { target: t.name, from, to })
+      // A failure is not remembered: the next click asks again.
+      reply.then((r) => { if (!r.ok) this.ranges.delete(key) }, () => this.ranges.delete(key))
+      this.ranges.set(key, reply)
+    }
+    return reply
+  }
+
+  /** What a rollback would take out of production, now (never cached: the releases move). */
+  rollbackPreview(to?: string): Promise<CommandReply> {
+    const t = this.current as TargetView
+    return this.api.post<CommandReply>('commits', { target: t.name, rollback: true, ...(to ? { to } : {}) })
   }
 
   /** A run to watch: a new view, attached from the seq this tab last saw (or 0). */

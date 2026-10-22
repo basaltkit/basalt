@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifySshFailure, DEPLOY_BIN, remoteCommand, shQuote, sshArgs, sshProgram, SSH_OPTIONS, type RemoteSpec } from '../src/ssh.js'
+import { classifySshFailure, DEPLOY_BIN, MUTATING, remoteCommand, shQuote, sshArgs, sshProgram, SSH_OPTIONS, type RemoteSpec } from '../src/ssh.js'
 import type { Target } from '../src/targets.js'
 import { posixWords } from './posix-words.mjs'
 
@@ -85,10 +85,27 @@ describe('the remote command', () => {
       [staging, { command: 'status', firstOnly: true }],
       [staging, { command: 'attach', runId: RUN, fromSeq: -1 }],
       [staging, { command: 'run' }, 'alice smith'],
+      [staging, { command: 'commits' }],
+      [staging, { command: 'commits', from: 'abcdef1' }],
+      [staging, { command: 'commits', from: 'abcdef1', to: 'HEAD' }],
+      [staging, { command: 'commits', from: '-x', to: 'abcdef1' }],
+      [staging, { command: 'commits', rollbackPreview: true, from: 'abcdef1' }],
+      [staging, { command: 'rollback', rollbackPreview: true }],
+      [staging, { command: 'status', from: 'abcdef1' }],
       [staging, { command: 'install' as RemoteSpec['command'] }],
       [staging, { command: 'bootstrap' as RemoteSpec['command'] }],
     ]
     for (const [target, spec, actor] of refused) expect(() => remoteCommand(target, spec, actor), JSON.stringify([target, spec, actor])).toThrow(/refused/)
+  })
+})
+
+describe('commits', () => {
+  it('a range or the rollback preview; read-only (never one change at a time)', () => {
+    const words = (spec: RemoteSpec) => posixWords(remoteCommand(staging, spec)).words.slice(6)
+    expect(words({ command: 'commits', from: 'abcdef1', to: 'a'.repeat(40) })).toEqual(['commits', '--json=1', '--from=abcdef1', `--to=${'a'.repeat(40)}`])
+    expect(words({ command: 'commits', rollbackPreview: true })).toEqual(['commits', '--json=1', '--rollback'])
+    expect(words({ command: 'commits', rollbackPreview: true, to: 'abcdef1' })).toEqual(['commits', '--json=1', '--rollback', '--to=abcdef1'])
+    expect(MUTATING.has('commits')).toBe(false)
   })
 })
 

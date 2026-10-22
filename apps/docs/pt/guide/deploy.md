@@ -142,8 +142,8 @@ commits são `aaaaaaa` e `bbbbbbb`).
 
 ### `plan`: o que uma execução faria {#plan}
 
-O `plan` corre todas as verificações e lista o que o `run` faria. Não escreve
-nada nem pergunta nada.
+O `plan` corre todas as verificações e lista o que o `run` faria. Não pergunta
+nada nem muda nada de que uma execução dependa.
 
 ```console
 $ node node_modules/@basaltkit/deploy/dist/bin.js plan
@@ -162,7 +162,18 @@ $ node node_modules/@basaltkit/deploy/dist/bin.js plan
     migrate: prisma migrate deploy + tenant:migrate
     release: pm2 acme-api on 127.0.0.1:3002
     health: http://127.0.0.1:3002/health (Host: acme.example.com), then https://acme.example.com/api/health
+    commits: 3 to go out (aaaaaaa → bbbbbbb)
 ```
+
+A última linha é o que a execução faria deploy: os commits entre o `HEAD` do
+checkout e a ponta do branch no remoto. Para os ler, o `plan` faz fetch do
+branch para uma ref privada (`refs/basalt-deploy/preview`, apagada a seguir) e
+nunca para `refs/remotes/<remote>/<branch>`, a ref de onde o `run` faz merge. O
+checkout, o `HEAD` e a ref de tracking ficam como estavam. Um branch reescrito
+é assinalado (`the branch was rewritten — … run refuses it`). Se a lista não
+puder ser lida (sem rede, um clone shallow, um commit que um force-push levou),
+a linha diz `unavailable` e porquê. Isso nunca bloqueia o plan nem o deploy. A
+lista completa está no resultado `--json`.
 
 ### `run`: fazer o deploy {#run}
 
@@ -217,6 +228,31 @@ $ node node_modules/@basaltkit/deploy/dist/bin.js status
     no deploy running
     pm2 acme-api: online (pid 4242, /srv/acme)
 ```
+
+### `commits`: o que mudou {#commits}
+
+O `commits` lista os commits entre duas releases, ou o que um rollback tiraria
+de produção. Só lê: sem lock, sem fetch.
+
+```sh
+node node_modules/@basaltkit/deploy/dist/bin.js commits --from=<sha> --to=<sha>
+node node_modules/@basaltkit/deploy/dist/bin.js commits --rollback [--to=<sha>]
+```
+
+```console
+$ node node_modules/@basaltkit/deploy/dist/bin.js commits --rollback
+    commits: 2 would leave (bbbbbbb → aaaaaaa)
+    - bbbbbbb Fix rounding in VAT totals (Ana, 2026-10-20T11:40:03Z)
+    - 1f3c2d9 Invoices: add due_date column (Ana, 2026-10-20T10:02:41Z)
+```
+
+O `--rollback` resolve o destino exatamente como o `rollback`. Cada lista
+inclui toda a ancestralidade, por isso os commits que um merge trouxe também
+aparecem (o merge vem marcado `[merge]`). Cada lado tem no máximo 50 commits,
+com o total real. Quando o histórico divergiu, os dois lados são listados. O
+texto de um commit é do autor: o deploy retira os caracteres de controlo e
+limita o comprimento, e um valor do `.env` numa mensagem de commit é redigido
+em `--json`.
 
 ### `rollback` e holds {#rollback}
 
@@ -404,6 +440,15 @@ perguntar:
 
 ![Plan & deploy: um aviso C8 sobre a expiração do certificado com a correção "certbot renew", a lista do que uma execução faria (fetch, env, build, validate, backup, migrate, release, health) e o formulário "What the run will ask"](/guide/deploy/ui-plan.png)
 
+**What will go out** lista os commits que a execução faria deploy, do mais
+recente para o mais antigo, com autor e data. Um merge vem marcado, e os
+commits que traz aparecem com ele. Se o branch foi reescrito no remoto, o
+cartão avisa que uma execução o recusaria e lista os commits que só o servidor
+tem. Se a lista não puder ser lida, o cartão diz porquê, e o **Deploy…**
+continua a funcionar.
+
+![What will go out: 57 commits de d4d4d4d a e8e8e8e, do mais recente para o mais antigo: um merge do pull request #218, três commits de Ana Silva e renovate[bot], um assunto longo cortado com reticências, e "+ 52 older commits not shown — the server sends at most 50 per list"](/guide/deploy/ui-plan-commits.png)
+
 ### O formulário do `.env` {#env-form}
 
 As perguntas vêm do `env.ask` no `deploy.config.ts`. As respostas secretas são
@@ -463,15 +508,26 @@ No fim, a página mostra a release, o seu URL e as suas migrações:
 
 ### Histórico e rollback {#history}
 
-O **History** lista as últimas 10 releases que o servidor registou: o commit, o
-estado, o ator, a forma como correu (`ui`, `ssh`, …), o endereço do cliente, as
-migrações e o dump tirado antes delas.
+O **History** lista as últimas 10 releases que o servidor registou: o commit e
+o seu assunto, o estado, o ator, a forma como correu (`ui`, `ssh`, …), o
+endereço do cliente, as migrações e o dump tirado antes delas. A seta de uma
+linha abre os commits que essa release trouxe em relação à anterior. São lidos
+uma vez do servidor e guardados durante a sessão.
 
-![History: quatro releases, uma falhada com a nota "the app does not answer on http://127.0.0.1:3002/health", e o cartão Roll back com "Back to: the last healthy release (the deploy decides)" e um botão Roll back…](/guide/deploy/ui-history.png)
+![History: quatro releases com o assunto dos commits; a mais recente está aberta e mostra os três commits que trouxe, entre eles um merge do pull request #212; em baixo, o cartão Roll back com "Back to: the last healthy release (the deploy decides)", Preview changes e Roll back…](/guide/deploy/ui-history.png)
 
 **Roll back** volta à última release saudável, ou a uma que escolhas em **Back
-to**. Tal como no terminal, repõe apenas o código e retém o commit que deixa. O
-rollback corre destacado, e a página abre o respetivo log ao vivo.
+to**. Tal como no terminal, repõe apenas o código e retém o commit que deixa.
+**Preview changes** lista os commits que sairiam de produção. **Roll back…**
+volta a ler essa lista nesse momento e mostra-a na confirmação:
+
+![A confirmação do rollback: "Back to the last healthy release — c3c3c3c now", uma lista vermelha "Leaves production 3" com três commits de faturas, e "The commit it leaves is held until the branch moves on"](/guide/deploy/ui-dialog-rollback-commits.png)
+
+A página envia o mesmo pedido que enviaria sem a pré-visualização: com **the
+last healthy release**, é o deploy que escolhe o destino quando corre. Se
+escolher um commit diferente do pré-visualizado (porque entretanto houve um
+deploy), a execução avisa. Uma pré-visualização que falhe nunca bloqueia o
+rollback. O rollback corre destacado, e a página abre o respetivo log ao vivo.
 
 ### Targets protegidos {#protected}
 

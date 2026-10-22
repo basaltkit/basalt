@@ -429,6 +429,22 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
         const { target: t, actor } = await target(body)
         return json(res, 200, await collect(t, actor, { command: 'status' }, timeouts.status))
       }
+      case 'commits': {
+        // Read-only on the server (no lock): the history's changes and the rollback preview.
+        const { target: t, actor } = await target(body)
+        const sha = (name: 'from' | 'to') => {
+          const value = body[name]
+          if (value !== undefined && (typeof value !== 'string' || !SHA.test(value))) throw new HttpError(400, `${name}: a commit sha (7 to 40 lowercase hex)`)
+          return value as string | undefined
+        }
+        const from = sha('from')
+        const to = sha('to')
+        if (body['rollback'] !== undefined && body['rollback'] !== true) throw new HttpError(400, 'rollback: true or absent')
+        const preview = body['rollback'] === true
+        if (preview ? from !== undefined : from === undefined || to === undefined) throw new HttpError(400, 'commits: from and to, or rollback (with an optional to)')
+        const spec: RemoteSpec = { command: 'commits', ...(preview ? { rollbackPreview: true } : {}), ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }) }
+        return json(res, 200, await collect(t, actor, spec, timeouts.status))
+      }
       case 'plan': {
         const { target: t, actor } = await target(body)
         const reply = await collect(t, actor, { command: 'plan' }, timeouts.plan)

@@ -26,6 +26,10 @@ const PATHS = {
   refresh: 'M20 11a8 8 0 0 0-14.6-4.5M4 3v4h4M4 13a8 8 0 0 0 14.6 4.5M20 21v-4h-4',
   inbox: 'M3 13l3-8h12l3 8v6H3zM3 13h5l1.5 2h5L16 13h5',
   tag: 'M3 12V4h8l10 10-8 8zM7.5 8h.01',
+  chevron: 'M9 6l6 6-6 6',
+  arrow: 'M5 12h14M13 6l6 6-6 6',
+  commit: 'M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 1 1 0-7zM3 12h5.5M15.5 12H21',
+  merge: 'M7 4v10M7 14a3 3 0 1 0 0 6 3 3 0 1 0 0-6zM17 4a3 3 0 1 0 0 6 3 3 0 1 0 0-6zM17 10c0 4-4 6-10 6',
 } as const
 
 export type IconName = keyof typeof PATHS
