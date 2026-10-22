@@ -257,6 +257,18 @@ export interface PromptEvent extends Envelope, PromptDescriptor {
   attempt: number
 }
 
+/**
+ * The config's remote and branch, and the remote's address for a person:
+ * host and path only (`github.com/acme/app`) — never credentials, a query or
+ * a local path. `url` is absent when git could not say or the address is
+ * not a plain host and path.
+ */
+export interface Source {
+  remote: string
+  branch: string
+  url?: string
+}
+
 export interface StatusResult {
   app: string
   stateDir: string
@@ -268,6 +280,8 @@ export interface StatusResult {
   releases: Release[]
   /** The subject of each release's commit, by sha (`--json` only; absent when git could not say). */
   subjects?: Record<string, string>
+  /** Where a run fetches from (0.9.0+): which app a target really is. */
+  source?: Source
   process: { kind: 'pm2'; name: string; status?: string; pid?: number; running: boolean } | { kind: 'compose'; lines: string[] }
 }
 

@@ -11,6 +11,7 @@ import { renderPlan } from './view-plan.js'
 import { RunView } from './view-run.js'
 import { renderStatus } from './view-status.js'
 import { renderTargets } from './view-targets.js'
+import { behind, sourceText, validSource } from './version.js'
 
 export type Screen = 'targets' | 'status' | 'plan' | 'history' | 'run'
 
@@ -218,17 +219,19 @@ export class App {
     const target = this.current
     if (!target) return this.clearBar()
     const status = this.status
+    const source = validSource(status?.source)
     const sep = () => el('span', { class: 'ctx-sep', aria: { hidden: 'true' } }, ' · ')
-    const item = (name: IconName, value: string, label?: string): Child[] => [sep(),
-      el('span', { class: 'ctx-item' }, icon(name), label ? el('span', { class: 'ctx-label' }, label) : null, label ? ' ' : null, el('span', { class: 'ctx-val' }, value))]
+    const item = (name: IconName, value: string, label?: string, extra = ''): Child[] => [sep(),
+      el('span', { class: `ctx-item${extra}` }, icon(name), label ? el('span', { class: 'ctx-label' }, label) : null, label ? ' ' : null, el('span', { class: 'ctx-val' }, value))]
     this.shell.bar.classList.toggle('is-protected', target.protected === true)
     replace(this.shell.bar,
       el('span', { class: 'ctx-target' }, el('strong', { class: 'ctx-name' }, target.name),
         target.protected ? el('span', { class: 'badge badge-protected', title: t('protected.title') }, icon('shield'), quiet(' '), t('protected.badge')) : null),
       ...item('terminal', `${target.ssh}${target.port ? `:${target.port}` : ''}`),
       ...item('folder', target.dir),
-      ...(this.hello ? [...item('server', this.hello.host, t('ctx.host')), ...item('tag', this.hello.version, t('ctx.deploy'))] : []),
-      ...(status ? item('app', status.app, t('ctx.app')) : []))
+      ...(this.hello ? [...item('server', this.hello.host, t('ctx.host')), ...item('tag', this.hello.version, t('ctx.deploy'), behind(this.hello.version) ? ' is-behind' : '')] : []),
+      ...(status ? item('app', status.app, t('ctx.app')) : []),
+      ...(source ? item('branch', sourceText(source), t('ctx.source')) : []))
   }
 
   private clearBar(): void {

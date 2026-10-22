@@ -13,7 +13,7 @@ import { applyInfra, describeInfra, dockerPostgres, maintainServices, planInfra,
 import { appRoleOf, describeServices, dumpContainer, dumpUrlKey, externalOf, externalPostgres, grantTenantSchemas } from './services.js'
 import { pm2List, pm2Preflight, pm2Release, resolvePort } from './pm2.js'
 import { clearHold, migrationNames, readHold, readReleases, recordRelease, rollbackTarget, writeHold, type Release } from './state.js'
-import { commitRange, commitSubjects, incomingCommits, resolveCommit } from './commits.js'
+import { commitRange, commitSubjects, incomingCommits, remoteSource, resolveCommit } from './commits.js'
 import { acquireLock, describeHolder, readLock } from './lock.js'
 import { auditOf } from './audit.js'
 import { questionDescriptors } from './env-step.js'
@@ -918,6 +918,8 @@ export async function status(ctx: DeployContext): Promise<number> {
   const { host } = ctx
   const releases = (await readReleases(ctx)).slice(-10).reverse()
   host.out.step(`${ctx.config.app} — last ${releases.length} release(s)`)
+  const source = await remoteSource(ctx, gitTarget(ctx))
+  host.out.info(`source: ${source.remote}/${source.branch}${source.url ? ` (${source.url})` : ''}`)
   const lock = await readLock(host, ctx.stateDir)
   if (!lock) host.out.info('no deploy running')
   else if (lock.corrupt) host.out.warn(`${lock.path} is not a deploy lock (empty or unreadable): deploys are refused until it is removed`)
@@ -953,6 +955,7 @@ export async function status(ctx: DeployContext): Promise<number> {
       hold: hold ?? null,
       releases,
       process: running,
+      source,
       ...await subjectsOf(ctx, releases),
     })
   }

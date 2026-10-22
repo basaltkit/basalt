@@ -208,7 +208,7 @@ As the app user, in the checkout (`node node_modules/@basaltkit/deploy/dist/bin.
 | `run` | preflight → fetch → env → infra → build → validate → backup → migrate → release → health → record |
 | `env` | the `.env` and the containers only |
 | `rollback [--to=<sha>]` | the last healthy release. Code only — the database keeps its migrations. Holds the commit it left. |
-| `status` | the last releases (who, from where), the process, the deploy lock, a hold |
+| `status` | where the code comes from (remote, branch, address without credentials), the last releases (who, from where), the process, the deploy lock, a hold |
 | `commits --from=<sha> --to=<sha>` | the commits between two releases. Read-only: no lock, no fetch. |
 | `commits --rollback [--to=<sha>]` | what `rollback` would take out of production, to the commit it would choose |
 | `install-plan [--out=<file>\|-]` | what `install` needs, as JSON (default `<state dir>/install-plan.json`, 0600), and the root command to run |
@@ -368,7 +368,7 @@ node node_modules/@basaltkit/deploy/dist/bin.js cancel 20261013T100000Z-5f2c9a1b
   first signal: when the run was already cancelled once, from any client, it
   is refused (`already-cancelled`) and nothing is signalled. A client that
   asked for the mild cancel never sends the immediate one by surprise.
-- `status --json` reports the lock, the active run and the last run.
+- `status --json` reports the lock, the active run and the last run, and (0.9.0) `source`: the config's remote and branch, and the remote's address as `host/path`, never with credentials, a query or a local path.
 - `--via=ui` records `via: "ui"` with the release; like `--actor`, it
   attributes, it does not authenticate.
 

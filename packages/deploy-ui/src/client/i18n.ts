@@ -42,6 +42,18 @@ const en = defineMessages({
   'ctx.app': 'app',
   'ctx.hostPart': 'host {host}',
   'ctx.appPart': 'app {app}',
+  'ctx.source': 'source',
+
+  // ── the server's version ──
+  'drift.title': 'This server runs @basaltkit/deploy {version}; this page uses features up to {needed}',
+  'drift.missing': 'Not available until it is updated: {list}.',
+  'drift.how': 'To update, in the app\'s repository:',
+  'drift.howTail': ', then commit and push.',
+  'drift.twice': 'Then deploy once: that deploy still runs {version} and installs {needed}; the next one runs it. Check connection then shows the new version.',
+  'feature.commits': 'the commit lists in Plan, History and Rollback ({since})',
+  'feature.source': 'the app\'s git source in the target bar ({since})',
+  'targets.identity': 'app {app} · {source}',
+  'targets.app': 'app {app}',
 
   // ── start and pairing ──
   'start.failed': 'The UI could not start.',
@@ -388,6 +400,17 @@ const pt: Record<MessageKey, MessageValue> = {
   'ctx.app': 'app',
   'ctx.hostPart': 'host {host}',
   'ctx.appPart': 'app {app}',
+  'ctx.source': 'origem',
+
+  'drift.title': 'Este servidor tem o @basaltkit/deploy {version}; esta página usa funcionalidades até à {needed}',
+  'drift.missing': 'Indisponível até ser actualizado: {list}.',
+  'drift.how': 'Para actualizar, no repositório da app:',
+  'drift.howTail': ', depois commit e push.',
+  'drift.twice': 'Depois faz um deploy: esse deploy ainda corre a {version} e instala a {needed}; o seguinte já a usa. O Testar a ligação passa então a mostrar a versão nova.',
+  'feature.commits': 'as listas de commits no Plano, Histórico e Rollback ({since})',
+  'feature.source': 'a origem git da app na barra do destino ({since})',
+  'targets.identity': 'app {app} · {source}',
+  'targets.app': 'app {app}',
 
   'start.failed': 'A UI não conseguiu arrancar.',
   'start.sessionTaken': 'Esta UI já tem a sua sessão no navegador.',

@@ -133,6 +133,7 @@ exports[`human mode, byte for byte > status 1`] = `
 [
   "exit 0",
   "STEP acme — last 0 release(s)",
+  "INFO source: origin/master",
   "INFO no deploy running",
   "INFO pm2 acme-api: online (pid 4242, <dir>)",
 ]

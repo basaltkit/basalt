@@ -95,7 +95,7 @@ since then, nothing is sent, and the page shows the new values.
 
 ## What it does
 
-Per target: **check the connection**; **status** (current release, process,
+Per target: **check the connection** (which also names the app and where its code comes from); **status** (current release, process,
 lock, active and last run, a hold); **plan** (findings, what a run would do, the
 questions it would ask, and the commits that will go out); the **`.env` form** (secrets in password fields, never
 stored, emptied after sending); **deploy** — detached by default, so a closed
@@ -108,6 +108,11 @@ healthy release or one picked from **history** (the last 10 releases, each
 with its subject and, one click away, the commits it brought in), with the
 commits that would leave production listed before you confirm; and
 "Write .env only" for a first setup.
+
+When the server's `@basaltkit/deploy` is older than a feature the page uses,
+the version in the target bar turns amber. **Status** and **Check
+connection** also list what is missing, give the exact `pnpm add -D` for the
+app, and say that the first deploy still runs the old version.
 
 The page speaks **English and Portuguese**: your browser's language until you
 pick one in the sidebar, then the one kept in the targets file. Only its own

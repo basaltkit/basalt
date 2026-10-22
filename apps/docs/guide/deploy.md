@@ -212,13 +212,14 @@ applied a migration listed in `destructive` is never rolled back automatically.
 
 ### `status` {#status}
 
-`status` shows the last releases (who deployed and from where), the process,
-the deploy lock and any hold:
+`status` shows where the code comes from, the last releases (who deployed and
+from where), the process, the deploy lock and any hold:
 
 ```console
 $ node node_modules/@basaltkit/deploy/dist/bin.js status
 
 ==> acme — last 0 release(s)
+    source: origin/main (github.com/acme/app)
     no deploy running
     pm2 acme-api: online (pid 4242, /srv/acme)
 ```
@@ -344,7 +345,9 @@ names where your key and the `.env` answers you type are sent, so a commit to a
 shared repository must not be able to change it.
 
 Then choose **Check connection**. A working target answers with the deploy
-version, the protocol and the server's host name:
+version, the protocol and the server's host name. Under it you see which app
+the target really is: the app's name and where its code comes from
+(`github.com/acme/app (main)`, from `@basaltkit/deploy` 0.9.0):
 
 ![The Targets page: three targets (staging, production marked protected, preview) and a green banner "staging answers: @basaltkit/deploy 0.5.1, protocol 1, host web-1.example.com"](/guide/deploy/ui-targets.png)
 
@@ -412,8 +415,25 @@ Choose **Refresh** to load it again; the UI does not poll.
 ![The Status page for staging: current release b7e4c19d2a0f (healthy, deployed by alice via ui, migration 20261010_add_invoices), process pm2 acme-api running, lock free, last run exit 0](/guide/deploy/ui-status.png)
 
 The bar at the top always shows where you are: the target, its SSH destination
-and checkout, and, once the server answered, its host name, the deploy version
-and the app.
+and checkout, and, once the server answered, its host name, the deploy version,
+the app and its source (the remote's address without credentials, and the
+branch).
+
+#### When the server's deploy is older {#older-deploy}
+
+The page uses features from recent `@basaltkit/deploy` versions: the commit
+lists (0.8.0) and the app's source (0.9.0). When the server runs an older one,
+the deploy version in the bar turns amber, and **Status** and **Check
+connection** say what is missing and how to update:
+
+![The Status page with an amber notice: "This server runs @basaltkit/deploy 0.6.0; this page uses features up to 0.9.0", the features that are missing, the command pnpm add -D @basaltkit/deploy@^0.9.0, and that the first deploy still runs 0.6.0](/guide/deploy/ui-status-behind.png)
+
+The server always runs the version **the app's lockfile pins**, never the
+newest on npm. So, in the app's repository, run `pnpm add -D
+@basaltkit/deploy@^0.9.0`, then commit and push. Then deploy once: that
+deploy still runs the old version, and its `pnpm install --frozen-lockfile`
+installs the new one. From the next command on, the server runs it. Nothing
+is blocked meanwhile: a missing feature is just not shown.
 
 ### Plan & deploy {#plan-and-deploy}
 

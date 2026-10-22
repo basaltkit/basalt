@@ -189,6 +189,9 @@ code { background: var(--surface-3); border: 1px solid var(--border); padding: 0
 .ctx-item .icon { color: var(--faint); flex: none; }
 .ctx-label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .ctx-val { font-family: var(--font-mono); font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
+.ctx-item.is-behind .ctx-val { color: var(--warn); font-weight: 600; }
+.ctx-item.is-behind .icon { color: var(--warn); }
+.banner.drift code { font-size: 12px; }
 .badge { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 650; letter-spacing: 0.05em; line-height: 1; white-space: nowrap; }
 .badge .icon { width: 12px; height: 12px; }
 .badge-protected { background: var(--protected-bg); color: var(--protected-fg); box-shadow: 0 0 0 3px rgb(180 35 24 / 0.16); }

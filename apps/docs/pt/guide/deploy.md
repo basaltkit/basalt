@@ -218,13 +218,14 @@ automaticamente.
 
 ### `status` {#status}
 
-O `status` mostra as últimas releases (quem fez o deploy e de onde), o
-processo, o lock de deploy e um eventual hold:
+O `status` mostra de onde vem o código, as últimas releases (quem fez o deploy
+e de onde), o processo, o lock de deploy e um eventual hold:
 
 ```console
 $ node node_modules/@basaltkit/deploy/dist/bin.js status
 
 ==> acme — last 0 release(s)
+    source: origin/main (github.com/acme/app)
     no deploy running
     pm2 acme-api: online (pid 4242, /srv/acme)
 ```
@@ -353,7 +354,9 @@ segredos. Diz para onde vão a tua chave e as respostas do `.env` que escreves,
 por isso um commit num repositório partilhado não o pode alterar.
 
 Depois escolhe **Check connection**. Um target que funciona responde com a
-versão do deploy, o protocolo e o nome do servidor:
+versão do deploy, o protocolo e o nome do servidor. Por baixo vês que app é
+realmente esse target: o nome da app e de onde vem o seu código
+(`github.com/acme/app (main)`, a partir do `@basaltkit/deploy` 0.9.0):
 
 ![A página Targets: três targets (staging, production marcado como protegido, preview) e um aviso verde "staging answers: @basaltkit/deploy 0.5.1, protocol 1, host web-1.example.com"](/guide/deploy/ui-targets.png)
 
@@ -425,7 +428,24 @@ Escolhe **Refresh** para o carregar de novo; a interface não faz polling.
 
 A barra no topo mostra sempre onde estás: o target, o seu destino SSH e
 checkout e, depois de o servidor responder, o nome do servidor, a versão do
-deploy e a aplicação.
+deploy, a aplicação e a sua origem (o endereço do remoto sem credenciais, e o
+ramo).
+
+#### Quando o deploy do servidor é mais antigo {#older-deploy}
+
+A página usa funcionalidades de versões recentes do `@basaltkit/deploy`: as
+listas de commits (0.8.0) e a origem da app (0.9.0). Quando o servidor corre
+uma mais antiga, a versão do deploy na barra fica em âmbar, e o **Status** e o
+**Check connection** dizem o que falta e como atualizar:
+
+![A página Status com um aviso âmbar: "This server runs @basaltkit/deploy 0.6.0; this page uses features up to 0.9.0", as funcionalidades em falta, o comando pnpm add -D @basaltkit/deploy@^0.9.0, e que o primeiro deploy ainda corre a 0.6.0](/guide/deploy/ui-status-behind.png)
+
+O servidor corre sempre a versão **que o lockfile da app fixa**, nunca a mais
+recente do npm. Por isso, no repositório da app, corre `pnpm add -D
+@basaltkit/deploy@^0.9.0`, faz commit e push. Depois faz um deploy: esse deploy
+ainda corre a versão antiga, e o seu `pnpm install --frozen-lockfile` instala a
+nova. A partir do comando seguinte, o servidor já a usa. Entretanto nada fica
+bloqueado: uma funcionalidade em falta simplesmente não aparece.
 
 ### Plan & deploy {#plan-and-deploy}
 
