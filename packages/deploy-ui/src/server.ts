@@ -10,7 +10,7 @@ import { execRemote, follow, toReply, type FollowOptions, type SshRunner } from 
 import { CLIENT_FILE, checkRequest, MAX_BODY_BYTES, SECURITY_HEADERS } from './security.js'
 import { IdleTimer, Session, type TimerApi } from './session.js'
 import { MUTATING, SHA, type RemoteCommand, type RemoteSpec } from './ssh.js'
-import { ACTOR, checkTarget, NAME, readTargets, TargetsFileError, writeTargets, type Target, type TargetsFile } from './targets.js'
+import { ACTOR, checkTarget, isLocale, LOCALES, NAME, readTargets, TargetsFileError, writeTargets, type Target, type TargetsFile } from './targets.js'
 
 /**
  * The UI's local server (RFC 0009 §4, §7): `node:http` on 127.0.0.1 and a
@@ -230,7 +230,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
     try {
       const { file, exists } = await readTargets(options.targetsPath)
       const actor = file.actor ?? osActor
-      return { path: options.targetsPath, exists, ...(actor ? { actor } : {}), targets: file.targets }
+      return { path: options.targetsPath, exists, ...(actor ? { actor } : {}), ...(file.locale ? { locale: file.locale } : {}), targets: file.targets }
     } catch (error) {
       if (error instanceof TargetsFileError) return { path: options.targetsPath, exists: true, targets: [], error: error.message }
       throw error
@@ -413,7 +413,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServer>
           else if (typeof given !== 'string' || !ACTOR.test(given)) throw new HttpError(422, 'the actor is refused', { errors: { actor: 'letters, digits and ._@+-, at most 64' } })
           else actor = given
         }
-        await writeTargets(options.targetsPath, { version: 1, ...(actor ? { actor } : {}), targets })
+        let locale = file.locale
+        if (body['locale'] !== undefined) {
+          if (body['locale'] !== null && !isLocale(body['locale'])) throw new HttpError(422, 'the language is refused', { errors: { locale: `one of ${LOCALES.join(', ')}` } })
+          locale = body['locale'] ?? undefined
+        }
+        await writeTargets(options.targetsPath, { version: 1, ...(actor ? { actor } : {}), ...(locale ? { locale } : {}), targets })
         options.log(`targets saved to ${options.targetsPath}`)
         return json(res, 200, await targetsReply())
       }

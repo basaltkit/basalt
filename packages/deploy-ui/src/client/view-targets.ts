@@ -2,18 +2,19 @@ import type { App } from './app.js'
 import { ApiError } from './api.js'
 import { confirmDialog } from './dialog.js'
 import { button, card, el, emptyState, pageHead, replace } from './dom.js'
+import { serverText, t, type MessageKey } from './i18n.js'
 import { icon } from './icons.js'
 import type { CommandReply, TargetsReply, TargetView } from './messages.js'
 import { banner, describe, problem } from './reply.js'
 
-const FIELDS: Array<{ key: keyof TargetView; label: string; help: string; type?: 'number' | 'checkbox' }> = [
-  { key: 'name', label: 'Name', help: 'lowercase letters, digits and -, e.g. staging' },
-  { key: 'ssh', label: 'SSH destination', help: '[user@]host, or a Host alias from your ~/.ssh/config (jump hosts and keys go there)' },
-  { key: 'port', label: 'Port', help: 'optional; default: your ~/.ssh/config, else 22', type: 'number' },
-  { key: 'dir', label: 'Checkout on the server', help: 'absolute path, e.g. /srv/myapp' },
-  { key: 'node', label: 'node on the server', help: 'optional absolute path, when a non-interactive shell has no node on PATH' },
-  { key: 'config', label: 'Config file', help: 'optional, relative to the checkout (default deploy.config.ts)' },
-  { key: 'protected', label: 'Protected: type the name to deploy or roll back', help: '', type: 'checkbox' },
+const FIELDS: Array<{ key: keyof TargetView; label: MessageKey; help?: MessageKey; type?: 'number' | 'checkbox' }> = [
+  { key: 'name', label: 'field.name', help: 'field.name.help' },
+  { key: 'ssh', label: 'field.ssh', help: 'field.ssh.help' },
+  { key: 'port', label: 'field.port', help: 'field.port.help', type: 'number' },
+  { key: 'dir', label: 'field.dir', help: 'field.dir.help' },
+  { key: 'node', label: 'field.node', help: 'field.node.help' },
+  { key: 'config', label: 'field.config', help: 'field.config.help' },
+  { key: 'protected', label: 'field.protected', type: 'checkbox' },
 ]
 
 /** Targets: list, add/edit/remove, check the connection. */
@@ -21,40 +22,40 @@ export function renderTargets(app: App): HTMLElement {
   const root = el('section', { aria: { labelledby: 'targets-title' } })
   const checkArea = el('div', { aria: { live: 'polite' } })
   const formArea = el('div')
-  const t = app.targets
+  const file = app.targets
 
-  const list = t.targets.length === 0
-    ? emptyState('targets', 'No target yet', 'No target yet. Add the server you already reach with ssh as the app user.')
-    : card('Servers', [el('div', { class: 'table-wrap' }, el('table', {},
-      el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, 'Name'), el('th', { scope: 'col' }, 'SSH'), el('th', { scope: 'col' }, 'Checkout'), el('th', { scope: 'col' }, el('span', { class: 'sr-only' }, 'Protection')), el('th', { scope: 'col', class: 'num' }, 'Actions'))),
-      el('tbody', {}, ...t.targets.map((target) => el('tr', {},
+  const list = file.targets.length === 0
+    ? emptyState('targets', t('targets.none'), t('targets.noneText'))
+    : card(t('targets.servers'), [el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, t('field.name')), el('th', { scope: 'col' }, t('targets.ssh')), el('th', { scope: 'col' }, t('targets.checkout')), el('th', { scope: 'col' }, el('span', { class: 'sr-only' }, t('targets.protection'))), el('th', { scope: 'col', class: 'num' }, t('targets.actions')))),
+      el('tbody', {}, ...file.targets.map((target) => el('tr', {},
         el('td', { class: 'target-name' }, target.name),
         el('td', { class: 'mono' }, `${target.ssh}${target.port ? ` -p ${target.port}` : ''}`),
         el('td', { class: 'mono' }, target.dir),
-        el('td', {}, target.protected ? el('span', { class: 'badge badge-protected' }, icon('shield'), 'protected') : ''),
+        el('td', {}, target.protected ? el('span', { class: 'badge badge-protected' }, icon('shield'), t('targets.protected')) : ''),
         el('td', { class: 'num' }, el('div', { class: 'row' },
-          button('Use', () => { app.select(target.name); app.show('status'); void app.refreshStatus() }, { class: target.name === app.current?.name ? 'sm ghost' : 'sm' }),
-          button('Check connection', () => { void check(app, target, checkArea) }, { class: 'sm' }),
-          button('Edit', () => replace(formArea, targetForm(app, target)), { class: 'sm ghost' }),
-          button('Remove', () => { void remove(app, target) }, { class: 'sm ghost danger' }),
+          button(t('targets.use'), () => { app.select(target.name); app.show('status'); void app.refreshStatus() }, { class: target.name === app.current?.name ? 'sm ghost' : 'sm' }),
+          button(t('targets.check'), () => { void check(app, target, checkArea) }, { class: 'sm' }),
+          button(t('targets.edit'), () => replace(formArea, targetForm(app, target)), { class: 'sm ghost' }),
+          button(t('targets.remove'), () => { void remove(app, target) }, { class: 'sm ghost danger' }),
         )),
-      )))))], { bodyClass: 'flush', actions: [el('span', { class: 'muted num' }, `${t.targets.length} target${t.targets.length === 1 ? '' : 's'}`)] })
+      )))))], { bodyClass: 'flush', actions: [el('span', { class: 'muted num' }, t('targets.count', { count: file.targets.length }))] })
 
   replace(root,
-    pageHead('targets-title', 'Targets', ['Stored on this machine only, in ', el('code', {}, t.path), ' (0600). They hold no secret.'],
-      el('button', { type: 'button', class: 'primary', on: { click: () => replace(formArea, targetForm(app, undefined)) } }, 'Add a target')),
-    t.error ? banner('err', t.error) : null,
+    pageHead('targets-title', t('screen.targets'), [t('targets.storedIn'), el('code', {}, file.path), t('targets.storedTail')],
+      el('button', { type: 'button', class: 'primary', on: { click: () => replace(formArea, targetForm(app, undefined)) } }, t('targets.add'))),
+    file.error ? banner('err', file.error) : null,
     list,
     checkArea,
     formArea,
     actorForm(app),
   )
-  if (t.targets.length === 0 && !t.error) replace(formArea, targetForm(app, undefined))
+  if (file.targets.length === 0 && !file.error) replace(formArea, targetForm(app, undefined))
   return root
 }
 
 async function check(app: App, target: TargetView, area: HTMLElement): Promise<void> {
-  replace(area, el('p', { class: 'muted' }, `Connecting to ${target.ssh}…`))
+  replace(area, el('p', { class: 'muted' }, t('targets.connecting', { ssh: target.ssh })))
   let reply: CommandReply
   try {
     reply = await app.api.post<CommandReply>('status', { target: target.name })
@@ -63,7 +64,7 @@ async function check(app: App, target: TargetView, area: HTMLElement): Promise<v
     return
   }
   if (reply.hello?.protocol === 1 && !reply.failure) {
-    replace(area, banner('ok', `${target.name} answers: @basaltkit/deploy ${reply.hello.version}, protocol 1, host ${reply.hello.host}`))
+    replace(area, banner('ok', t('targets.answers', { name: target.name, version: reply.hello.version, host: reply.hello.host })))
     if (app.current?.name === target.name) { app.statusReply = reply; app.hello = reply.hello; app.renderBar() }
     return
   }
@@ -71,7 +72,7 @@ async function check(app: App, target: TargetView, area: HTMLElement): Promise<v
 }
 
 async function remove(app: App, target: TargetView): Promise<void> {
-  const ok = await confirmDialog({ title: `Remove ${target.name}?`, lines: ['Only this UI forgets it; nothing changes on the server.'], confirmLabel: 'Remove', danger: true })
+  const ok = await confirmDialog({ title: t('targets.removeTitle', { name: target.name }), lines: [t('targets.removeLine')], confirmLabel: t('targets.remove'), danger: true })
   if (!ok) return
   try {
     app.targets = await app.api.post<TargetsReply>('targets/remove', { name: target.name })
@@ -85,16 +86,16 @@ async function remove(app: App, target: TargetView): Promise<void> {
 
 function actorForm(app: App): HTMLElement {
   const input = el('input', { type: 'text', id: 'actor', value: app.targets.actor ?? '', autocomplete: 'off', spellcheck: false, aria: { describedby: 'actor-help' } })
-  const message = el('span', { id: 'actor-help', class: 'muted' }, 'Recorded with each release as --actor (letters, digits and ._@+-).')
-  const form = el('form', { class: 'card', aria: { label: 'Audit actor' }, on: { submit: (event) => {
+  const message = el('span', { id: 'actor-help', class: 'muted' }, t('targets.actorHelp'))
+  const form = el('form', { class: 'card', aria: { label: t('targets.auditActor') }, on: { submit: (event) => {
     event.preventDefault()
     void app.api.post<TargetsReply>('targets/save', { actor: input.value.trim() === '' ? null : input.value.trim() })
-      .then((reply) => { app.targets = reply; replace(message, 'Saved.') })
+      .then((reply) => { app.targets = reply; replace(message, t('targets.saved')) })
       .catch((error: unknown) => { replace(message, el('span', { class: 'field-error' }, describe(error))) })
   } } },
-  el('div', { class: 'card-head' }, el('h3', {}, 'Audit')),
-  el('div', { class: 'card-body' }, el('div', { class: 'field' }, el('label', { for: 'actor' }, 'Your name in the audit (actor)'), input, message)),
-  el('div', { class: 'card-foot' }, el('button', { type: 'submit' }, 'Save actor')))
+  el('div', { class: 'card-head' }, el('h3', {}, t('targets.audit'))),
+  el('div', { class: 'card-body' }, el('div', { class: 'field' }, el('label', { for: 'actor' }, t('targets.actorLabel')), input, message)),
+  el('div', { class: 'card-foot' }, el('button', { type: 'submit' }, t('targets.saveActor'))))
   return form
 }
 
@@ -112,12 +113,12 @@ function targetForm(app: App, existing: TargetView | undefined): HTMLElement {
       : el('input', { type: field.type === 'number' ? 'number' : 'text', id, value: value === undefined ? '' : String(value), autocomplete: 'off', spellcheck: false, required: field.key === 'name' || field.key === 'ssh' || field.key === 'dir', aria: { describedby: `${id}-help ${id}-error` } })
     inputs.set(field.key, input)
     if (field.type === 'checkbox') {
-      return el('div', { class: 'field check span-2' }, el('label', { for: id }, input, el('span', {}, field.label)), error)
+      return el('div', { class: 'field check span-2' }, el('label', { for: id }, input, el('span', {}, t(field.label))), error)
     }
     return el('div', { class: 'field' },
-      el('label', { for: id }, field.label, field.key === 'name' || field.key === 'ssh' || field.key === 'dir' ? el('span', { class: 'required' }, ' *') : null),
+      el('label', { for: id }, t(field.label), field.key === 'name' || field.key === 'ssh' || field.key === 'dir' ? el('span', { class: 'required' }, ' *') : null),
       input,
-      field.help ? el('span', { id: `${id}-help`, class: 'field-help' }, field.help) : null,
+      field.help ? el('span', { id: `${id}-help`, class: 'field-help' }, t(field.help)) : null,
       error)
   })
   const submit = async (event: Event) => {
@@ -142,15 +143,15 @@ function targetForm(app: App, existing: TargetView | undefined): HTMLElement {
       if (fieldErrors) {
         for (const [key, message] of Object.entries(fieldErrors)) {
           const slot = errors.get(key)
-          if (slot) replace(slot, message)
-          else general.append(el('p', { class: 'field-error' }, `${key}: ${message}`))
+          if (slot) replace(slot, serverText(message))
+          else general.append(el('p', { class: 'field-error' }, `${key}: ${serverText(message)}`))
         }
         ;(inputs.get(Object.keys(fieldErrors)[0] as keyof TargetView) ?? inputs.get('name'))?.focus()
       } else replace(general, problem(undefined, error))
     }
   }
-  return el('form', { class: 'card', aria: { label: existing ? `Edit ${existing.name}` : 'Add a target' }, on: { submit: (event) => { void submit(event) } } },
-    el('div', { class: 'card-head' }, el('h3', {}, existing ? `Edit ${existing.name}` : 'Add a target')),
+  return el('form', { class: 'card', aria: { label: existing ? t('targets.editTitle', { name: existing.name }) : t('targets.add') }, on: { submit: (event) => { void submit(event) } } },
+    el('div', { class: 'card-head' }, el('h3', {}, existing ? t('targets.editTitle', { name: existing.name }) : t('targets.add'))),
     el('div', { class: 'card-body' }, el('div', { class: 'form-grid' }, ...fields), general),
-    el('div', { class: 'card-foot' }, button('Cancel', () => app.show('targets')), el('button', { type: 'submit', class: 'primary' }, 'Save')))
+    el('div', { class: 'card-foot' }, button(t('cancel'), () => app.show('targets')), el('button', { type: 'submit', class: 'primary' }, t('save'))))
 }

@@ -526,6 +526,21 @@ matches:
 
 ![The dialog "Roll back production?" with the PROTECTED badge, "Back to the last healthy release.", and the name only partly typed, so the Roll back button is still disabled](/guide/deploy/ui-dialog-rollback-protected.png)
 
+### Language {#language}
+
+The page speaks English and Portuguese. Before a session it follows your
+browser's language (`pt-AO`, `pt-PT`, `pt-BR` → Portuguese; anything else →
+English). The switcher at the foot of the sidebar changes every screen at
+once, and the choice is kept as `"locale"` in your targets file for the next
+start. Dates follow your browser's variant of the language.
+
+Only the page's own words are translated. What the server's
+`@basaltkit/deploy` prints — step titles, log lines, findings, its errors — is
+shown exactly as it came, and so is any refusal of the local server the page
+does not know.
+
+![The Status screen in Portuguese: "Release actual", "Processo", "Lock" and "Última execução", with the language switcher set to Português at the foot of the sidebar](/guide/deploy/ui-status-pt.png)
+
 ### On a phone or a narrow window {#narrow}
 
 The layout folds into one column: the navigation becomes tabs and the target

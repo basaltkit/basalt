@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -94,6 +94,13 @@ describe('limits', () => {
       expect((await api('targets/remove', { name: '../x' })).status).toBe(400)
       expect((await api('targets/save', { actor: 'bad actor' })).status).toBe(422)
       expect((await (await api('targets/save', { actor: '' })).json() as { actor?: string }).actor).toBeUndefined()
+      // The page's language: kept in the targets file, kept across a target save, refused outside en/pt, cleared by null.
+      for (const locale of ['fr', 'PT', 1, true]) expect((await api('targets/save', { locale })).status, String(locale)).toBe(422)
+      expect((await (await api('targets/save', { locale: 'pt' })).json() as { locale?: string }).locale).toBe('pt')
+      expect((await (await api('targets/save', { target: { name: 'other', ssh: 'deploy@other.example.com', dir: '/srv/other' } })).json() as { locale?: string }).locale).toBe('pt')
+      expect((JSON.parse(await readFile(path, 'utf8')) as { locale?: string }).locale).toBe('pt')
+      expect((await (await api('targets/save', { locale: null })).json() as { locale?: string }).locale).toBeUndefined()
+      expect((await api('targets/remove', { name: 'other' })).status).toBe(200)
 
       // An attended run streams; ssh's stderr arrives as diagnostics.
       const attended = await api('run', { target: 'fast', confirmedTarget: shown('fast', 'fast.example.com'), confirm: true, attended: true, answers: [] })

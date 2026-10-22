@@ -543,6 +543,21 @@ coincidir:
 
 ![O diálogo "Roll back production?" com o selo PROTECTED, "Back to the last healthy release." e o nome escrito só em parte, por isso o botão Roll back continua desativado](/guide/deploy/ui-dialog-rollback-protected.png)
 
+### Idioma {#language}
+
+A página fala inglês e português. Antes de haver sessão, segue o idioma do
+browser (`pt-AO`, `pt-PT`, `pt-BR` → português; qualquer outro → inglês). O
+seletor no fundo da barra lateral muda todos os ecrãs de uma vez, e a escolha
+fica guardada como `"locale"` no teu ficheiro de targets para o próximo
+arranque. As datas seguem a variante do idioma do teu browser.
+
+Só as palavras da própria página são traduzidas. O que o `@basaltkit/deploy`
+do servidor imprime — títulos dos passos, linhas do log, findings, os seus
+erros — aparece exactamente como chegou, tal como qualquer recusa do servidor
+local que a página não conheça.
+
+![O ecrã Estado em português: «Release actual», «Processo», «Lock» e «Última execução», com o seletor de idioma em Português no fundo da barra lateral](/guide/deploy/ui-status-pt.png)
+
 ### Num telemóvel ou numa janela estreita {#narrow}
 
 O layout passa a uma coluna: a navegação transforma-se em separadores e a barra

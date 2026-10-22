@@ -1,5 +1,6 @@
-import type { CommitInfo, CommitRange, Commits, CommitsUnavailable } from '@basaltkit/deploy/protocol'
+import type { CommitInfo, CommitRange, Commits } from '@basaltkit/deploy/protocol'
 import { el, type Child } from './dom.js'
+import { formatLocale, reasonText, t } from './i18n.js'
 import { icon } from './icons.js'
 import { clean, short } from './sanitize.js'
 
@@ -10,23 +11,7 @@ import { clean, short } from './sanitize.js'
  * that is missing or unavailable is said so and never disables an action.
  */
 
-/** Fixed local text for each reason: the server's wording never reaches the page. */
-const REASONS: Record<CommitsUnavailable, string> = {
-  'skipped': 'the fetch is skipped, so a run deploys the commit already checked out',
-  'not-fetched': 'the server could not fetch the branch from its remote',
-  'no-previous': 'there is no earlier release to compare with',
-  'missing-commit': 'a commit is not in the server\'s checkout (rewritten history, or never fetched there)',
-  'shallow': 'the server\'s checkout is a shallow clone, so its history is incomplete',
-  'unrelated': 'the two commits share no history',
-  'timeout': 'git took too long on the server',
-  'too-large': 'git\'s answer was too large',
-  'malformed': 'git\'s answer could not be read',
-  'git-failed': 'git failed on the server',
-}
-
-export function reasonText(reason: unknown): string {
-  return typeof reason === 'string' && Object.hasOwn(REASONS, reason) ? REASONS[reason as CommitsUnavailable] : 'the server gave no usable reason'
-}
+export { reasonText }
 
 /** A shape check: anything from the server that is not a list of commits is "unavailable", never a crash. */
 export function validCommits(value: unknown): value is Commits {
@@ -40,15 +25,15 @@ export function validCommits(value: unknown): value is Commits {
 
 /** Why there is no list: a quiet note, never an error the operator must clear. */
 export function unavailable(text: string): HTMLElement {
-  return el('div', { class: 'commits-note' }, icon('info'), el('span', {}, el('strong', {}, 'Commit list unavailable'), ` — ${text}.`))
+  return el('div', { class: 'commits-note' }, icon('info'), el('span', {}, el('strong', {}, t('commits.unavailable')), ` — ${text}.`))
 }
 
-/** `1 Oct 2026, 10:00` in the operator's locale; the exact time in the tooltip. */
+/** `1 Oct 2026, 10:00` in the page's language (the browser's variant of it); the exact time in the tooltip. */
 function date(at: string | undefined): HTMLElement | null {
   if (typeof at !== 'string') return null
   const parsed = new Date(at)
   if (Number.isNaN(parsed.getTime())) return null
-  return el('time', { title: clean(at) }, parsed.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))
+  return el('time', { title: clean(at) }, parsed.toLocaleString(formatLocale(), { dateStyle: 'medium', timeStyle: 'short' }))
 }
 
 function commitItem(c: CommitInfo): HTMLElement {
@@ -57,7 +42,7 @@ function commitItem(c: CommitInfo): HTMLElement {
   return el('li', { class: c.merge ? 'commit is-merge' : 'commit' },
     el('span', { class: 'commit-dot', aria: { hidden: 'true' } }),
     el('code', { class: 'commit-sha', title: short(c.sha) }, short(c.sha).slice(0, 7)),
-    el('span', { class: 'commit-subject', title: subject }, c.merge ? icon('merge', 'icon commit-merge') : null, subject || el('span', { class: 'muted' }, '(no subject)')),
+    el('span', { class: 'commit-subject', title: subject }, c.merge ? icon('merge', 'icon commit-merge') : null, subject || el('span', { class: 'muted' }, t('commits.noSubject'))),
     el('span', { class: 'commit-meta' }, author ? el('span', { class: 'commit-author' }, author) : null, date(c.at)))
 }
 
@@ -74,7 +59,7 @@ export function commitGroup(tone: Tone, label: string, list: CommitInfo[], total
       el('span', { class: 'commit-group-title' }, label),
       el('span', { class: 'commit-count' }, String(total))),
     el('ol', { class: 'commit-list' }, ...list.map(commitItem)),
-    total > list.length ? el('p', { class: 'commit-more' }, `+ ${total - list.length} older commit${total - list.length === 1 ? '' : 's'} not shown — the server sends at most ${LIST_LIMIT} per list.`) : null)
+    total > list.length ? el('p', { class: 'commit-more' }, t('commits.olderNotShown', { count: total - list.length, limit: LIST_LIMIT })) : null)
 }
 
 export interface CommitLabels {
@@ -96,8 +81,8 @@ export function rangeSpan(range: Pick<CommitRange, 'from' | 'to'>): HTMLElement 
  * absent field (an older deploy on the server) is said plainly too.
  */
 export function commitsBlock(value: unknown, labels: CommitLabels, order: Tone[] = ['added', 'removed']): HTMLElement {
-  if (value === undefined) return unavailable('the server\'s @basaltkit/deploy is older than the commit lists')
-  if (!validCommits(value)) return unavailable('the server\'s answer could not be read')
+  if (value === undefined) return unavailable(t('commits.olderDeploy'))
+  if (!validCommits(value)) return unavailable(t('commits.unreadable'))
   if (!value.ok) return unavailable(reasonText(value.reason))
   const r = value.range
   if (r.addedTotal === 0 && r.removedTotal === 0) return el('div', { class: 'commits-note is-ok' }, icon('ok'), el('span', {}, labels.same))
@@ -114,5 +99,5 @@ export function commitSummary(tone: Tone, label: string, list: CommitInfo[], tot
   return el('span', { class: `commit-summary commit-group-${tone}` },
     el('span', { class: 'commit-summary-head' }, el('span', { class: 'commit-sign', aria: { hidden: 'true' } }, tone === 'added' ? '+' : '−'), `${label} `, el('span', { class: 'commit-count' }, String(total))),
     ...shown.map((c) => el('span', { class: 'commit-summary-row' }, el('code', { class: 'commit-sha' }, short(c.sha).slice(0, 7)), el('span', { class: 'commit-subject' }, clean(c.subject)))),
-    total > shown.length ? el('span', { class: 'commit-more' }, `and ${total - shown.length} more`) : null)
+    total > shown.length ? el('span', { class: 'commit-more' }, t('commits.andMore', { count: total - shown.length })) : null)
 }

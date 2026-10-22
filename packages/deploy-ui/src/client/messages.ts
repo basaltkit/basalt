@@ -53,6 +53,8 @@ export interface TargetsReply {
   path: string
   exists: boolean
   actor?: string
+  /** The page's language, as the operator last chose it. */
+  locale?: 'en' | 'pt'
   targets: TargetView[]
   error?: string
 }

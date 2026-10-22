@@ -96,3 +96,19 @@ describe('hostile/invalid locales (S-7)', () => {
     expect(i18n2.t('hi', { name: 'Ada' })).toBe('Hi Ada')
   })
 })
+
+describe('the framework-free subpath (@basaltkit/i18n/messages)', () => {
+  it('imports nothing, so browser code and CLIs can load it on its own', async () => {
+    const { readFile } = await import('node:fs/promises')
+    const source = await readFile(new URL('../src/messages.ts', import.meta.url), 'utf8')
+    expect(source).not.toMatch(/^\s*(import|export)\s[^\n]*\bfrom\s/m)
+    expect(source).not.toMatch(/import\(/)
+  })
+
+  it('renders interpolation and plurals without an I18n instance', async () => {
+    const { render } = await import('../src/messages.js')
+    expect(render('Hi {name}', 'en', { name: 'Ada' })).toBe('Hi Ada')
+    expect(render({ one: '{count} nota', other: '{count} notas' }, 'pt-PT', { count: 2 })).toBe('2 notas')
+    expect(render('{missing}', 'en', {})).toBe('{missing}')
+  })
+})

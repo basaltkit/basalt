@@ -33,7 +33,7 @@ export const INDEX_HTML = `<!doctype html>
   <div class="sidebar-foot">
     <p class="local-note" title="Local only: this page talks to 127.0.0.1, which talks to your servers over your own ssh.">
       <svg class="icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4"/></svg>
-      <span>Local only <span aria-hidden="true">·</span> <span class="mono">127.0.0.1</span></span>
+      <span><span class="local-label">Local only</span> <span aria-hidden="true">·</span> <span class="mono">127.0.0.1</span></span>
     </p>
     <div id="session" class="session"></div>
   </div>
@@ -168,7 +168,11 @@ code { background: var(--surface-3); border: 1px solid var(--border); padding: 0
 .local-note { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--muted); }
 .local-note .mono { font-size: var(--fs-sm); }
 .session:empty { display: none; }
+.session { display: grid; gap: var(--sp-2); }
 .session button { width: 100%; justify-content: flex-start; }
+.locale { position: relative; display: flex; align-items: center; }
+.locale .icon { position: absolute; left: 10px; color: var(--muted); pointer-events: none; }
+.locale select { height: 30px; padding-left: 32px; font-size: var(--fs-md); max-width: none; background-position: calc(100% - 15px) 12px, calc(100% - 10px) 12px; }
 
 .main-col { min-width: 0; display: flex; flex-direction: column; }
 .app { width: 100%; max-width: 1200px; padding: var(--sp-5) var(--sp-6) var(--sp-7); }
@@ -494,6 +498,8 @@ dialog.is-danger .dialog-icon { background: var(--err-soft); color: var(--err); 
   .brand { padding: 0; order: 1; }
   .sidebar-foot { order: 2; margin: 0 0 0 auto; padding: 0; border: 0; display: flex; align-items: center; gap: var(--sp-3); }
   .session button { width: auto; }
+  .session { display: flex; align-items: center; }
+  .locale select { width: 8.5rem; }
   .nav { order: 3; width: 100%; flex-direction: row; align-items: center; gap: var(--sp-3); min-width: 0; }
   .nav-target { padding: 0; display: flex; align-items: center; gap: var(--sp-2); flex: none; }
   .nav-target select { width: 10.5rem; }
