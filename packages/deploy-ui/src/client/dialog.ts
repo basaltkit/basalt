@@ -1,4 +1,5 @@
 import { append, button, el, type Child } from './dom.js'
+import { t } from './i18n.js'
 import { icon } from './icons.js'
 
 export interface ConfirmOptions {
@@ -28,7 +29,7 @@ export function confirmDialog(options: ConfirmOptions, host: HTMLElement = docum
       resolve(answer)
     }
     const confirm = button(options.confirmLabel, () => finish(true), { class: options.danger ? 'danger' : 'primary' })
-    const dismiss = button('Cancel', () => finish(false))
+    const dismiss = button(t('cancel'), () => finish(false))
     let typed: HTMLInputElement | undefined
     if (options.typeToConfirm !== undefined) {
       const expected = options.typeToConfirm
@@ -42,9 +43,9 @@ export function confirmDialog(options: ConfirmOptions, host: HTMLElement = docum
       el('div', { class: 'dialog-head' }, el('span', { class: 'dialog-icon' }, icon(options.danger ? 'alert' : 'info')), el('h2', { id: 'confirm-title' }, options.title)),
       el('div', { class: 'dialog-body' },
         options.context ? el('p', { class: 'dialog-context' }, options.context) : null,
-        options.typeToConfirm !== undefined ? el('p', { class: 'dialog-protected' }, el('span', { class: 'badge badge-protected' }, icon('shield'), 'PROTECTED'), ' This target is protected.') : null,
+        options.typeToConfirm !== undefined ? el('p', { class: 'dialog-protected' }, el('span', { class: 'badge badge-protected' }, icon('shield'), t('protected.badge')), t('dialog.protected')) : null,
         ...options.lines.filter((line) => line !== null && line !== undefined && line !== false && line !== '').map((line) => el('p', {}, line)),
-        typed ? el('div', { class: 'field' }, el('label', { for: 'confirm-name' }, 'Type ', el('code', {}, options.typeToConfirm as string), ' to confirm'), typed) : null),
+        typed ? el('div', { class: 'field' }, el('label', { for: 'confirm-name' }, t('dialog.typeTo'), el('code', {}, options.typeToConfirm as string), t('dialog.toConfirm')), typed) : null),
       el('div', { class: 'dialog-actions' }, dismiss, confirm),
     )
     dialog.addEventListener('cancel', (event) => { event.preventDefault(); finish(false) })

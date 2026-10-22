@@ -1,6 +1,7 @@
 import { Api, ApiError, exchange, ServerGone, type Credentials, type Fetch } from './api.js'
-import { App, forgetSession, SERVER_KEY, TOKEN_KEY } from './app.js'
+import { App, applyShell, forgetSession, SERVER_KEY, TOKEN_KEY } from './app.js'
 import { el, replace } from './dom.js'
+import { pickLocale, setLocale, t } from './i18n.js'
 import { describe } from './reply.js'
 
 export interface Env {
@@ -11,6 +12,8 @@ export interface Env {
   document: Document
   /** WebCrypto: the page checks its server before sending an answer. */
   crypto: Crypto | undefined
+  /** The browser's languages, most preferred first: the page's language until the operator picks one. */
+  languages?: readonly string[]
 }
 
 function storageOf(win: Window): Storage | undefined {
@@ -30,6 +33,9 @@ function storageOf(win: Window): Storage | undefined {
  */
 export async function boot(env: Env): Promise<App | undefined> {
   const doc = env.document
+  const languages = env.languages ?? []
+  setLocale(pickLocale(undefined, languages), languages)
+  applyShell(doc)
   const shell = {
     nav: doc.getElementById('nav') as HTMLElement,
     bar: doc.getElementById('target-bar') as HTMLElement,
@@ -66,7 +72,7 @@ export async function boot(env: Env): Promise<App | undefined> {
   } catch (error) {
     // The server is gone or not ours: the page already says so.
     if (error instanceof ServerGone) return undefined
-    replace(shell.main, el('div', { class: 'banner err', role: 'alert' }, el('strong', {}, 'The UI could not start.'), el('p', {}, describe(error))))
+    replace(shell.main, el('div', { class: 'banner err', role: 'alert' }, el('strong', {}, t('start.failed')), el('p', {}, describe(error))))
     return undefined
   }
   return app
@@ -89,10 +95,8 @@ const final = (error: unknown) => error instanceof ApiError && (error.status ===
 function refusal(error: unknown): HTMLElement {
   const taken = error instanceof ApiError && error.status === 409
   return el('div', { class: 'banner err', role: 'alert' },
-    el('strong', {}, taken ? 'This UI already has its browser session.' : 'The code was refused.'),
-    el('p', {}, taken
-      ? 'Another tab or browser claimed it first. If that was not you, stop basalt-deploy-ui in your terminal now (Ctrl-C) and start it again.'
-      : `${describe(error)}. Start basalt-deploy-ui again.`))
+    el('strong', {}, taken ? t('start.sessionTaken') : t('start.codeRefused')),
+    el('p', {}, taken ? t('start.sessionTakenHelp') : t('start.again', { why: describe(error) })))
 }
 
 /**
@@ -105,11 +109,11 @@ function pair(env: Env, main: HTMLElement): Promise<Credentials | undefined> {
   return new Promise((resolve) => {
     const input = el('input', { id: 'pair-code', name: 'code', type: 'text', autocomplete: 'off', spellcheck: false, required: true, placeholder: 'ABCD-EFGH', aria: { describedby: 'pair-help' } })
     const status = el('span', { class: 'field-error', role: 'alert' })
-    const submit = el('button', { type: 'submit', class: 'primary' }, 'Open the session')
-    const form = el('form', { class: 'card pair', aria: { label: 'Pair this page' }, on: { submit: (event) => {
+    const submit = el('button', { type: 'submit', class: 'primary' }, t('pair.open'))
+    const form = el('form', { class: 'card pair', aria: { label: t('pair.title') }, on: { submit: (event) => {
       event.preventDefault()
       const code = input.value.trim()
-      if (!/^[A-Za-z0-9_\s-]{1,128}$/.test(code)) { replace(status, 'Type the code your terminal shows.'); return }
+      if (!/^[A-Za-z0-9_\s-]{1,128}$/.test(code)) { replace(status, t('pair.typeCode')); return }
       submit.disabled = true
       void exchange(code, env.fetch).then((credentials) => resolve(keep(env, credentials)), (error: unknown) => {
         if (final(error)) { replace(main, refusal(error)); resolve(undefined); return }
@@ -119,12 +123,12 @@ function pair(env: Env, main: HTMLElement): Promise<Credentials | undefined> {
         replace(status, describe(error))
       })
     } } },
-      el('div', { class: 'card-head' }, el('h3', {}, 'Pair this page')),
+      el('div', { class: 'card-head' }, el('h3', {}, t('pair.title'))),
       el('div', { class: 'card-body' },
         el('div', { class: 'field' },
-          el('label', { for: 'pair-code' }, 'Pairing code'),
+          el('label', { for: 'pair-code' }, t('pair.code')),
           input,
-          el('span', { id: 'pair-help', class: 'field-help' }, 'Type the pairing code basalt-deploy-ui shows in your terminal (2 minutes, 5 tries). Without --pair, open the URL it printed instead.'),
+          el('span', { id: 'pair-help', class: 'field-help' }, t('pair.help')),
           status)),
       el('div', { class: 'card-foot' }, submit))
     replace(main, form)
@@ -133,5 +137,5 @@ function pair(env: Env, main: HTMLElement): Promise<Credentials | undefined> {
 }
 
 if (typeof window !== 'undefined' && document.getElementById('app')) {
-  void boot({ location: window.location, history: window.history, storage: storageOf(window), fetch: (input, init) => window.fetch(input, init), document, crypto: window.crypto })
+  void boot({ location: window.location, history: window.history, storage: storageOf(window), fetch: (input, init) => window.fetch(input, init), document, crypto: window.crypto, languages: window.navigator.languages ?? [window.navigator.language] })
 }

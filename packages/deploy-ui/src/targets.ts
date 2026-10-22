@@ -30,8 +30,15 @@ export interface TargetsFile {
   version: 1
   /** Becomes `--actor`: self-declared attribution. */
   actor?: string
+  /** The page's language, as the operator last chose it. */
+  locale?: Locale
   targets: Target[]
 }
+
+/** The languages the page speaks (client/i18n.ts). */
+export const LOCALES = ['en', 'pt'] as const
+export type Locale = typeof LOCALES[number]
+export const isLocale = (value: unknown): value is Locale => (LOCALES as readonly unknown[]).includes(value)
 
 export const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/
 const SSH_USER = /^[a-z_][a-z0-9_.-]{0,31}$/
@@ -43,7 +50,7 @@ export const RELATIVE_PATH = /^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,127}$/
 export const ACTOR = /^[A-Za-z0-9._@+-]{1,64}$/
 
 const TARGET_FIELDS = new Set(['name', 'ssh', 'port', 'dir', 'node', 'config', 'protected'])
-const FILE_FIELDS = new Set(['version', 'actor', 'targets'])
+const FILE_FIELDS = new Set(['version', 'actor', 'locale', 'targets'])
 /** No file the UI reads is larger: a targets file is a few hundred bytes. */
 const MAX_FILE_BYTES = 1024 * 1024
 export const MAX_TARGETS = 100
@@ -103,6 +110,8 @@ export function checkTargetsFile(input: unknown): Checked<TargetsFile> {
   if (input['version'] !== 1) errors['version'] = 'version must be 1'
   const actor = input['actor']
   if (actor !== undefined && (typeof actor !== 'string' || !ACTOR.test(actor))) errors['actor'] = 'letters, digits and ._@+-, at most 64'
+  const locale = input['locale']
+  if (locale !== undefined && !isLocale(locale)) errors['locale'] = `one of ${LOCALES.join(', ')}`
   const list = input['targets']
   const targets: Target[] = []
   if (!Array.isArray(list) || list.length > MAX_TARGETS) errors['targets'] = `targets must be a list of at most ${MAX_TARGETS}`
@@ -120,7 +129,7 @@ export function checkTargetsFile(input: unknown): Checked<TargetsFile> {
     })
   }
   if (Object.keys(errors).length > 0) return { ok: false, errors }
-  return { ok: true, value: { version: 1, ...(actor === undefined ? {} : { actor: actor as string }), targets } }
+  return { ok: true, value: { version: 1, ...(actor === undefined ? {} : { actor: actor as string }), ...(locale === undefined ? {} : { locale: locale as Locale }), targets } }
 }
 
 /** `$XDG_CONFIG_HOME/basalt/deploy-targets.json` (absolute only, per the spec), `%APPDATA%\basalt\…` on Windows. */

@@ -3,6 +3,7 @@ import type { App } from './app.js'
 import { ApiError } from './api.js'
 import { confirmDialog } from './dialog.js'
 import { append, button, el, quiet, replace } from './dom.js'
+import { serverText, t, type MessageKey } from './i18n.js'
 import { icon } from './icons.js'
 import { findingItem } from './view-plan.js'
 import type { CommandReply, StreamMessage, TargetView } from './messages.js'
@@ -45,14 +46,14 @@ export class RunView {
 
   constructor(private readonly app: App, private readonly target: TargetView, title: string, readonly runId: string | undefined) {
     this.stateLine = el('p', { class: 'run-state', role: 'status', aria: { live: 'polite' } })
-    this.steps = el('ol', { class: 'steps', aria: { label: 'Steps' } })
-    this.findings = el('ul', { class: 'findings', aria: { label: 'Findings' } })
-    this.log = el('ol', { class: 'log', aria: { label: 'Log' } })
+    this.steps = el('ol', { class: 'steps', aria: { label: t('run.steps') } })
+    this.findings = el('ul', { class: 'findings', aria: { label: t('run.findings') } })
+    this.log = el('ol', { class: 'log', aria: { label: t('run.log') } })
     this.outcome = el('div', { class: 'run-outcome' })
     this.actions = el('div', { class: 'page-actions' })
     this.diagnostics = el('pre', { class: 'diagnostics', hidden: true })
     this.findingsCard = el('div', { class: 'card', hidden: true },
-      el('div', { class: 'card-head' }, el('h3', {}, 'Findings')), el('div', { class: 'card-body flush' }, this.findings))
+      el('div', { class: 'card-head' }, el('h3', {}, t('run.findings'))), el('div', { class: 'card-body flush' }, this.findings))
     this.element = el('section', { aria: { labelledby: 'run-title' } },
       el('header', { class: 'page-head' },
         el('div', { class: 'page-title' }, el('h2', { id: 'run-title', class: 'mono-title' }, title),
@@ -61,9 +62,9 @@ export class RunView {
       this.stateLine,
       this.outcome,
       el('div', { class: 'run-grid' },
-        el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h3', {}, 'Steps')), el('div', { class: 'card-body' }, this.steps)),
+        el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h3', {}, t('run.steps'))), el('div', { class: 'card-body' }, this.steps)),
         el('div', { class: 'console' },
-          el('div', { class: 'console-head' }, el('h3', {}, icon('terminal'), 'Log'), el('span', { class: 'console-meta' }, target.name)),
+          el('div', { class: 'console-head' }, el('h3', {}, icon('terminal'), t('run.log')), el('span', { class: 'console-meta' }, target.name)),
           this.log)),
       this.findingsCard,
       this.diagnostics)
@@ -89,7 +90,7 @@ export class RunView {
 
   async attach(fromSeq: number): Promise<void> {
     if (!this.runId) return
-    if (fromSeq > 0) this.note(`(resuming from event ${fromSeq}: earlier events were shown before; "Show from the start" replays them)`)
+    if (fromSeq > 0) this.note(t('run.resuming', { seq: fromSeq }))
     await this.consume('attach', { target: this.target.name, runId: this.runId, fromSeq })
   }
 
@@ -115,7 +116,7 @@ export class RunView {
       this.following = false
       if (!this.ended) {
         this.settleSteps()
-        this.setState(this.controller.signal.aborted ? 'Stopped watching (the run goes on on the server).' : 'The stream ended.')
+        this.setState(this.controller.signal.aborted ? t('run.stoppedWatching') : t('run.streamEnded'))
       }
       this.renderActions()
     }
@@ -139,15 +140,15 @@ export class RunView {
   }
 
   private state(message: Extract<StreamMessage, { kind: 'state' }>): void {
-    if (message.state === 'connecting') return this.setState(`Connecting to ${this.target.ssh}…`, 'live')
+    if (message.state === 'connecting') return this.setState(t('run.connecting', { ssh: this.target.ssh }), 'live')
     if (message.state === 'reconnecting') {
-      return this.setState(`Connection lost (${clean(message.reason)}); reconnecting in ${Math.round((message.retryInMs ?? 0) / 1000)} s from event ${this.lastSeq === undefined ? 0 : this.lastSeq + 1}…`, 'live')
+      return this.setState(t('run.reconnecting', { reason: clean(message.reason), seconds: Math.round((message.retryInMs ?? 0) / 1000), seq: this.lastSeq === undefined ? 0 : this.lastSeq + 1 }), 'live')
     }
     this.ended = true
     if (message.exitCode !== undefined) this.exitCode = message.exitCode
     if (this.runId && message.exitCode !== undefined && !message.code) {
       this.runFinished = true
-      if (message.reason) this.note(`(${clean(message.reason)})`)
+      if (message.reason) this.note(`(${serverText(clean(message.reason))})`)
     }
     if (message.code) {
       this.failed = { code: message.code, ...(message.reason ? { reason: message.reason } : {}), ...(message.hint ? { hint: message.hint } : {}) }
@@ -164,17 +165,17 @@ export class RunView {
         // No storage (private mode): resume from 0 instead.
       }
     }
-    if (!known) return this.line('warn', `an event this UI does not know (${event.type}): ignored`)
+    if (!known) return this.line('warn', t('run.unknownEvent', { type: event.type }))
     switch (event.type) {
       case 'hello':
         return
       case 'step-start': {
         const node = el('li', { class: 'step is-running' }, el('span', { class: 'step-icon', aria: { hidden: 'true' } }, '▸'), ' ', el('span', { class: 'step-title' }, event.title),
-          el('span', { class: 'step-meta' }, quiet(' '), quiet('…'), el('span', { class: 'step-status', aria: { hidden: 'true' } }, 'running')))
+          el('span', { class: 'step-meta' }, quiet(' '), quiet('…'), el('span', { class: 'step-status', aria: { hidden: 'true' } }, t('step.running'))))
         this.stepNodes.set(event.id, node)
         this.stepTitles.set(event.id, event.title)
         this.steps.append(node)
-        this.setState(`Step: ${event.title}`, 'live')
+        this.setState(t('run.step', { title: event.title }), 'live')
         return
       }
       case 'step-end': {
@@ -185,7 +186,7 @@ export class RunView {
         node.className = `step is-${event.status === 'ok' ? 'ok' : event.status === 'skipped' ? 'skipped' : 'failed'}`
         // The text reads "✓ build — ok, 1.5 s"; the layout draws the mark as an icon and the duration in a column.
         replace(node, el('span', { class: 'step-icon', aria: { hidden: 'true' } }, mark), quiet(' '), el('span', { class: 'step-title' }, title),
-          el('span', { class: 'step-meta' }, quiet(' — '), el('span', { class: 'step-status' }, event.status), quiet(', '), el('span', { class: 'step-dur' }, `${(event.durationMs / 1000).toFixed(1)} s`)))
+          el('span', { class: 'step-meta' }, quiet(' — '), el('span', { class: 'step-status' }, stepStatus(event.status)), quiet(', '), el('span', { class: 'step-dur' }, `${(event.durationMs / 1000).toFixed(1)} s`)))
         if (!node.parentNode) this.steps.append(node)
         return
       }
@@ -196,7 +197,7 @@ export class RunView {
         this.findings.append(findingItem(event))
         return
       case 'prompt':
-        return this.line('warn', `the deploy asks: ${event.message} (answer it in the form and run again)`)
+        return this.line('warn', t('run.asks', { message: event.message }))
       case 'result':
         this.outcome.append(resultBanner(event.command, event.data, this.runId ? this.app.previewedRollbacks.get(this.runId) : undefined))
         return
@@ -210,7 +211,7 @@ export class RunView {
         return
       case 'event':
         // Only the server unwraps attach; a nested wrapper here is a log-worthy oddity.
-        return this.line('warn', 'an unexpected wrapped event was ignored')
+        return this.line('warn', t('run.wrapped'))
     }
   }
 
@@ -238,7 +239,7 @@ export class RunView {
       if (!node.classList.contains('is-running')) continue
       node.classList.replace('is-running', 'is-aborted')
       const status = node.querySelector('.step-status')
-      if (status) replace(status, 'no end seen')
+      if (status) replace(status, t('run.noEnd'))
     }
   }
 
@@ -248,7 +249,7 @@ export class RunView {
 
   private setState(textValue: string, tone?: 'live' | 'ok' | 'err'): void {
     this.stateLine.className = `run-state${tone ? ` is-${tone}` : ''}`
-    replace(this.stateLine, textValue, this.dropped > 0 ? ` (${this.dropped} older log lines dropped from the page)` : '')
+    replace(this.stateLine, textValue, this.dropped > 0 ? t('run.dropped', { count: this.dropped }) : '')
   }
 
   private finish(): void {
@@ -257,14 +258,16 @@ export class RunView {
     this.settleSteps()
     if (this.failed && this.exitCode === undefined) {
       const reconnectable = this.runId !== undefined
-      this.setState(`Stopped: ${clean(this.failed.reason ?? this.failed.code)}`, 'err')
-      this.outcome.append(banner('err', this.failed.reason ?? 'the stream ended', [this.failed.hint ?? '', reconnectable ? 'The run may still be going on the server: re-attach to see.' : ''], [], this.failed.code))
+      const reason = this.failed.reason === undefined ? undefined : serverText(clean(this.failed.reason))
+      this.setState(t('run.stoppedBecause', { why: reason ?? clean(this.failed.code) }), 'err')
+      this.outcome.append(banner('err', reason ?? t('run.streamEndedLower'), [this.failed.hint ? serverText(clean(this.failed.hint)) : '', reconnectable ? t('run.mayStillRun') : ''], [], this.failed.code))
     } else if (this.exitCode === 0) {
-      this.setState('Done.', 'ok')
-      this.outcome.append(banner('ok', 'Finished: exit 0'))
+      this.setState(t('run.done'), 'ok')
+      this.outcome.append(banner('ok', t('run.finishedOk')))
     } else {
-      this.setState(`Finished with exit ${this.exitCode ?? 'unknown'}`, 'err')
-      if (!this.lastError) this.outcome.append(banner('err', `Finished with exit ${this.exitCode ?? 'unknown'}`))
+      const finished = t('run.finishedWith', { code: this.exitCode ?? t('unknown') })
+      this.setState(finished, 'err')
+      if (!this.lastError) this.outcome.append(banner('err', finished))
     }
     this.renderActions()
   }
@@ -272,15 +275,15 @@ export class RunView {
   private renderActions(): void {
     const buttons: HTMLElement[] = []
     if (this.runId && !this.ended && this.following) {
-      buttons.push(button(this.cancels > 0 ? 'Cancel again (stop now)…' : 'Cancel…', () => { void this.cancel(this.cancels > 0) }, { class: 'danger' }))
-      buttons.push(button('Stop watching', () => this.stop()))
+      buttons.push(button(this.cancels > 0 ? t('run.cancelAgain') : t('run.cancel'), () => { void this.cancel(this.cancels > 0) }, { class: 'danger' }))
+      buttons.push(button(t('run.stopWatching'), () => this.stop()))
     }
     if (this.runId && !this.following) {
       // A finished run has nothing more to attach to: only a replay makes sense.
-      if (!this.runFinished) buttons.push(button('Re-attach', () => { void this.attach(this.lastSeq === undefined ? 0 : this.lastSeq + 1) }, { class: 'primary' }))
-      buttons.push(button('Show from the start', () => { this.app.watch(this.runId as string, `run ${this.runId}`, true) }, this.runFinished ? { class: 'primary' } : {}))
+      if (!this.runFinished) buttons.push(button(t('run.reattach'), () => { void this.attach(this.lastSeq === undefined ? 0 : this.lastSeq + 1) }, { class: 'primary' }))
+      buttons.push(button(t('run.fromStart'), () => { this.app.watch(this.runId as string, t('run.title', { runId: this.runId }), true) }, this.runFinished ? { class: 'primary' } : {}))
     }
-    if (!this.following) buttons.push(button('Refresh status', () => { void this.app.refreshStatus().then(() => this.app.show('status')) }))
+    if (!this.following) buttons.push(button(t('run.refreshStatus'), () => { void this.app.refreshStatus().then(() => this.app.show('status')) }))
     replace(this.actions, ...buttons)
   }
 
@@ -289,22 +292,19 @@ export class RunView {
     if (!this.runId) return
     const ok = await confirmDialog(second
       ? {
-        title: 'Stop the deploy NOW?',
+        title: t('run.stopNowTitle'),
         lines: [
-          'This ends the deploy at once, mid-step.',
-          el('strong', {}, 'A migration may be left half-applied'),
-          'The restore command for the pre-deploy dump is in the log. The lock is left stale.',
+          t('run.stopNowLine'),
+          el('strong', {}, t('run.halfApplied')),
+          t('run.restoreInLog'),
         ],
-        confirmLabel: 'Stop it now',
+        confirmLabel: t('run.stopItNow'),
         danger: true,
       }
       : {
-        title: `Cancel the run on ${this.target.name}?`,
-        lines: [
-          'It stops at the next step boundary before the migration; from the migration on, the deploy finishes first.',
-          'A second cancel would stop it at once. If this run was already cancelled once (from a terminal or another session), nothing is sent now: you are asked again first.',
-        ],
-        confirmLabel: 'Cancel the run',
+        title: t('run.cancelTitle', { name: this.target.name }),
+        lines: [t('run.cancelLine'), t('run.cancelSecondLine')],
+        confirmLabel: t('run.cancelRun'),
         danger: true,
       })
     if (!ok) return
@@ -319,7 +319,7 @@ export class RunView {
     if (reply.ok) {
       this.cancels++
       const result = reply.result as CancelResult | undefined
-      this.note(result?.second ? 'cancel sent a second time: the deploy stops at once' : 'cancel sent: the deploy stops at its next safe point')
+      this.note(result?.second ? t('run.cancelSentTwice') : t('run.cancelSent'))
       this.renderActions()
       return
     }
@@ -330,23 +330,28 @@ export class RunView {
 function resultBanner(command: string, data: unknown, previewed?: string): HTMLElement {
   const d = (data ?? {}) as Record<string, unknown>
   if (command === 'run') {
-    return banner(d['status'] === 'ok' ? 'ok' : 'err', `Release ${clean(d['sha']).slice(0, 12)}: ${clean(d['status'])}`, [
+    return banner(d['status'] === 'ok' ? 'ok' : 'err', t('run.release', { sha: clean(d['sha']).slice(0, 12), status: stepStatus(clean(d['status'])) }), [
       d['url'] ? `${clean(d['url'])}` : '',
-      Array.isArray(d['migrations']) && d['migrations'].length > 0 ? `migrations: ${d['migrations'].map(clean).join(', ')}` : '',
+      Array.isArray(d['migrations']) && d['migrations'].length > 0 ? t('run.migrations', { list: d['migrations'].map(clean).join(', ') }) : '',
       d['note'] ? clean(d['note']) : '',
     ])
   }
   if (command === 'rollback') {
     const to = clean(d['to'])
-    return banner(d['status'] === 'ok' ? 'ok' : 'err', `Rolled back to ${to.slice(0, 12)}: ${clean(d['status'])}`, [
-      `${clean(d['held']).slice(0, 12)} is held`,
+    return banner(d['status'] === 'ok' ? 'ok' : 'err', t('run.rolledBack', { sha: to.slice(0, 12), status: stepStatus(clean(d['status'])) }), [
+      t('run.isHeld', { sha: clean(d['held']).slice(0, 12) }),
       // The releases moved between the preview and the run: say which commit the deploy chose.
-      previewed && to && previewed !== to ? el('strong', {}, `The deploy chose ${to.slice(0, 12)}, not ${clean(previewed).slice(0, 12)} the preview showed: open History to see what changed.`) : '',
+      previewed && to && previewed !== to ? el('strong', {}, t('run.deployChose', { to: to.slice(0, 12), previewed: clean(previewed).slice(0, 12) })) : '',
     ])
   }
   if (command === 'env') {
     const changes = Array.isArray(d['changes']) ? d['changes'] as Array<Record<string, unknown>> : []
-    return banner('ok', `.env written (${changes.length} change${changes.length === 1 ? '' : 's'})`, changes.map((c) => `${clean(c['kind'])} ${clean(c['key'])}: ${clean(c['reason'])}`))
+    return banner('ok', t('run.envWritten', { count: changes.length }), changes.map((c) => `${clean(c['kind'])} ${clean(c['key'])}: ${clean(c['reason'])}`))
   }
-  return banner('ok', `${clean(command)} result`)
+  return banner('ok', t('run.result', { command: clean(command) }))
+}
+
+/** A step's or a release's status in the page's language; one this UI does not know is shown as the server wrote it. */
+function stepStatus(status: string): string {
+  return status === 'ok' || status === 'skipped' || status === 'failed' ? t(`step.${status}` as MessageKey) : status
 }

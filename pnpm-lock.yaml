@@ -1283,6 +1283,9 @@ importers:
         specifier: workspace:^
         version: link:../deploy
     devDependencies:
+      '@basaltkit/i18n':
+        specifier: workspace:^
+        version: link:../i18n
       '@basaltkit/tsconfig':
         specifier: workspace:^
         version: link:../../tooling/tsconfig

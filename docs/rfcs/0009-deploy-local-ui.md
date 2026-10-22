@@ -946,3 +946,29 @@ The views over RFC 0008 §18:
   text, so the server's wording never reaches the page. Nothing here disables
   a button.
 
+
+## 17. Addendum: the page's language
+
+The page speaks English and Portuguese.
+
+- **Catalogs.** `src/client/i18n.ts` holds both as `@basaltkit/i18n` catalogs
+  (`{param}` and CLDR plural forms). The Portuguese one is typed against the
+  English keys, and a test keeps their keys, placeholders and plural forms
+  equal. Plurals use European rules (`pt-PT`, as in Angola) whatever variant
+  the browser names; dates use the browser's own variant.
+- **No new runtime dependency.** The page imports only relative modules (CSP
+  `script-src 'self'`, no bundler, no import map). The build copies
+  `@basaltkit/i18n/messages` — that package's import-free subpath — into
+  `dist/client/i18n-messages.js`, and fails if any page module keeps a bare
+  specifier. `@basaltkit/i18n` is a devDependency, so `npx` installs nothing
+  more.
+- **Choice.** Before a session, the browser's languages. After `targets`, the
+  file's `locale` (`en` | `pt`, a closed grammar like every field). The
+  switcher re-renders in place and saves with `POST /api/targets/save
+  {locale}` (`null` clears it). A failed save still switches the tab.
+- **What is translated.** The page's own words only. The deploy's output
+  (step titles, logs, findings, errors) stays as it came: it is the operator's
+  data. A short list of the local server's fixed sentences, plus five patterns
+  whose only capture is a target name of the `NAME` grammar, map to
+  Portuguese. Anything else is shown unchanged, and a test checks that each
+  listed sentence is word for word what the server says.

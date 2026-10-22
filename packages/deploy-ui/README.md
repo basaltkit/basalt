@@ -64,6 +64,7 @@ repository must not be able to repoint it. The file holds no secret.
 {
   "version": 1,
   "actor": "alice",
+  "locale": "pt",
   "targets": [
     { "name": "staging", "ssh": "deploy@203.0.113.10", "dir": "/srv/myapp" },
     { "name": "production", "ssh": "myapp-prod", "port": 2222, "dir": "/srv/myapp", "node": "/usr/local/bin/node", "protected": true }
@@ -81,6 +82,7 @@ repository must not be able to repoint it. The file holds no secret.
 | `config` | optional `--config` path, relative to the checkout |
 | `protected` | deploy and rollback need the target's name typed |
 | `actor` | recorded with each release (`--actor`); default: your OS user name |
+| `locale` | the page's language, `en` or `pt`, as you last picked it; default: your browser's language |
 
 Every field has a closed grammar (no leading `-`, no spaces, no `..`); an
 unknown field is refused, not ignored. The UI refuses a targets file that is a
@@ -106,6 +108,10 @@ healthy release or one picked from **history** (the last 10 releases, each
 with its subject and, one click away, the commits it brought in), with the
 commits that would leave production listed before you confirm; and
 "Write .env only" for a first setup.
+
+The page speaks **English and Portuguese**: your browser's language until you
+pick one in the sidebar, then the one kept in the targets file. Only its own
+words are translated; what the server's deploy prints is shown as it came.
 
 Each action is one `ssh` invocation of the app's own, lockfile-pinned
 `node node_modules/@basaltkit/deploy/dist/bin.js <command> --json=1`, with

@@ -76,6 +76,21 @@ i18n.in('en').t('items', { count: 1 }) // '1 item'
 i18n.in('en').t('items', { count: 5 }) // '5 items'
 ```
 
+## Without the framework
+
+`@basaltkit/i18n/messages` is the catalog format on its own — `defineMessages`
+and `render` (interpolation and plurals), with **no import at all**: no
+`@basaltkit/core`, no Node API. Use it where there is no request context, such
+as browser code or a CLI; `@basaltkit/deploy-ui` builds its page's English and
+Portuguese text on it.
+
+```ts
+import { defineMessages, render } from '@basaltkit/i18n/messages'
+
+const pt = defineMessages({ notes: { one: '{count} nota', other: '{count} notas' } })
+render(pt.notes, 'pt', { count: 2 }) // '2 notas'
+```
+
 ## Formatting (Intl)
 
 Every `t` comes with formatters in the same locale:

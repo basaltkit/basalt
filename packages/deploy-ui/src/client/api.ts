@@ -1,3 +1,4 @@
+import { t } from './i18n.js'
 import type { StreamMessage } from './messages.js'
 
 /**
@@ -120,21 +121,21 @@ export class Api {
   async verifyServer(): Promise<void> {
     const crypto = this.options.crypto
     const serverKey = this.options.serverKey
-    if (!serverKey || !crypto?.subtle) throw this.stop('unverified', 'this page cannot check its local server (no server key, or no WebCrypto): nothing is sent')
+    if (!serverKey || !crypto?.subtle) throw this.stop('unverified', t('api.cannotCheck'))
     const nonce = toBase64Url(crypto.getRandomValues(new Uint8Array(32)))
     let proof: unknown
     try {
       proof = (await this.send<{ proof?: unknown }>('hello', { nonce })).proof
     } catch (error) {
       if (error instanceof ServerGone) throw error
-      throw this.stop('unverified', 'the local server refused to prove it is this UI: it is not the one this page was opened from')
+      throw this.stop('unverified', t('api.refusedProof'))
     }
     let valid = false
     if (typeof proof === 'string' && /^[A-Za-z0-9_-]{43}$/.test(proof)) {
       const key = await crypto.subtle.importKey('raw', fromBase64Url(serverKey), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
       valid = await crypto.subtle.verify('HMAC', key, fromBase64Url(proof), new TextEncoder().encode(`${PROOF_CONTEXT}${nonce}`))
     }
-    if (!valid) throw this.stop('unverified', 'the local server could not prove it is this UI: another program may be listening on its port')
+    if (!valid) throw this.stop('unverified', t('api.wrongProof'))
   }
 
   /** A call; one that carries answers checks the server first. */
@@ -169,7 +170,7 @@ export class Api {
     } catch (error) {
       // The page's own bug is not the server going away.
       if (handlerFailed || signal?.aborted) throw error
-      throw this.stop('unreachable', 'the deploy UI stopped while this stream was open')
+      throw this.stop('unreachable', t('api.streamStopped'))
     }
   }
 
@@ -186,7 +187,7 @@ export class Api {
       return await this.fetchImpl(`/api/${route}`, init(body, this.token, signal))
     } catch (error) {
       if (signal?.aborted) throw error
-      throw this.stop('unreachable', 'the deploy UI is not running any more (it stopped after its idle time, from Quit, or with Ctrl-C)')
+      throw this.stop('unreachable', t('api.notRunning'))
     }
   }
 
