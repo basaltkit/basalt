@@ -23,6 +23,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # init and analyze must run the same version: one bump alone fails the
+      # required analyze check ("Loaded a configuration file for version …").
+      codeql-action:
+        patterns:
+          - github/codeql-action*
     labels:
       - dependencies
       - ci
