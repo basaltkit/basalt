@@ -6,6 +6,7 @@ import { serverText, t, type MessageKey } from './i18n.js'
 import { icon } from './icons.js'
 import type { CommandReply, TargetsReply, TargetView } from './messages.js'
 import { banner, describe, problem } from './reply.js'
+import { driftBanner, sourceText, validSource } from './version.js'
 
 const FIELDS: Array<{ key: keyof TargetView; label: MessageKey; help?: MessageKey; type?: 'number' | 'checkbox' }> = [
   { key: 'name', label: 'field.name', help: 'field.name.help' },
@@ -64,7 +65,10 @@ async function check(app: App, target: TargetView, area: HTMLElement): Promise<v
     return
   }
   if (reply.hello?.protocol === 1 && !reply.failure) {
-    replace(area, banner('ok', t('targets.answers', { name: target.name, version: reply.hello.version, host: reply.hello.host })))
+    const result = reply.result as { app?: unknown; source?: unknown } | undefined
+    const source = validSource(result?.source)
+    const identity = typeof result?.app !== 'string' ? '' : source ? t('targets.identity', { app: result.app, source: sourceText(source) }) : t('targets.app', { app: result.app })
+    replace(area, banner('ok', t('targets.answers', { name: target.name, version: reply.hello.version, host: reply.hello.host }), [identity]), driftBanner(reply.hello.version))
     if (app.current?.name === target.name) { app.statusReply = reply; app.hello = reply.hello; app.renderBar() }
     return
   }

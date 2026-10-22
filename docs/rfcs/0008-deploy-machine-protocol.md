@@ -940,3 +940,15 @@ interface CommitsResult { purpose: 'range' | 'rollback'; from?: string; to?: str
 - **Human mode.** `plan` prints one `commits: …` line after the plan lines.
   `commits` prints the summary and one line per commit.
 
+
+## 19. Addendum: where the code comes from (`StatusResult.source`)
+
+`status` adds `source` (0.9.0, additive in protocol v1): `{ remote, branch,
+url? }`. `remote` and `branch` are the config's (`gitTarget`, checked as
+before). `url` comes from `git remote get-url <remote>`, bounded like every
+other git call (5 s, 256 KiB). It is reduced to `host[:port]/path` with
+`describeRemoteUrl`, which drops the scheme, any `user:token@`, the query,
+the fragment and `.git`. A local path, `file://`, another scheme, or anything
+outside a strict host-and-path grammar gives no `url`. A credential or a path
+of the server never reaches the output, and a git failure never stops
+`status`. The human output prints `source: origin/main (github.com/acme/app)`.

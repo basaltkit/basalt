@@ -5,6 +5,7 @@ import { t } from './i18n.js'
 import { icon } from './icons.js'
 import { banner, diagnosticsBlock, problem } from './reply.js'
 import { short } from './sanitize.js'
+import { driftBanner } from './version.js'
 
 /** Status: from `StatusResult` — release, process, lock, active and last run, hold. Refresh is manual (and once after an action). */
 export function renderStatus(app: App): HTMLElement {
@@ -15,6 +16,7 @@ export function renderStatus(app: App): HTMLElement {
       el('button', { type: 'button', disabled: app.statusBusy, on: { click: () => { void app.refreshStatus() } } }, icon('refresh'), app.statusBusy ? t('refreshing') : t('refresh'))),
     !reply && !app.statusBusy ? emptyState('status', t('status.notLoaded'), t('status.notLoadedText')) : null,
     !reply && app.statusBusy ? emptyState('refresh', t('status.asking'), t('status.askingText')) : null,
+    app.hello ? driftBanner(app.hello.version) : null,
     reply && !status ? problem(reply) : null,
     ...(status ? statusPanels(app, status) : []),
     status && reply?.error ? problem(reply) : null,

@@ -73,6 +73,8 @@ describe('--json framing', () => {
     expectFramed(status)
     expect(ofType(status.events, 'result')[0]?.data).toMatchObject({ app: 'acme', stateDir: `${dir}/.basalt`, lock: null, hold: null, releases: [], process: { kind: 'pm2', name: 'acme-api', running: true, status: 'online' } })
     expect(status.events[0]?.runId).toBeUndefined()
+    // Which app this is: the config's remote and branch (this fake git names no address).
+    expect((ofType(status.events, 'result')[0]?.data as { source?: unknown }).source).toMatchObject({ remote: 'origin' })
 
     const check = await runJson(['check', '--json', CONFIG], host, dir)
     expectFramed(check)

@@ -972,3 +972,23 @@ The page speaks English and Portuguese.
   whose only capture is a target name of the `NAME` grammar, map to
   Portuguese. Anything else is shown unchanged, and a test checks that each
   listed sentence is word for word what the server says.
+
+## 18. Addendum: which app, and an older deploy said plainly
+
+- **Which app.** The target bar adds the app's source from
+  `StatusResult.source`, checked and cleaned (`validSource`):
+  `github.com/acme/app (main)`, or `origin/main` without an address. **Check
+  connection** adds a line with the app and its source. An older deploy sends
+  none, so the line shows only the app.
+- **An older deploy.** `client/version.ts` lists what the page uses and from
+  which version (`FEATURES`: commit lists 0.8.0, source 0.9.0). The page
+  imports no code from the deploy package. When `hello.version` is behind one
+  of them, the version in the bar turns amber. **Status** and **Check
+  connection** then show a warning with:
+  - what is missing;
+  - the exact `pnpm add -D @basaltkit/deploy@^<needed>`;
+  - the note that the first deploy still runs the old version and installs
+    the new one.
+
+  A version that is not `x.y.z` is not compared, so there is no notice.
+  Nothing is disabled.

@@ -1,7 +1,7 @@
 import type { DeployContext } from './context.js'
 import { sanitize } from './events.js'
 import type { ExecResult } from './host.js'
-import { COMMITS_LIMIT, type CommitInfo, type Commits, type CommitsUnavailable } from './protocol.js'
+import { COMMITS_LIMIT, type CommitInfo, type Commits, type CommitsUnavailable, type Source } from './protocol.js'
 
 /**
  * The commits between two releases, for the plan, the history and a rollback
@@ -169,4 +169,44 @@ export async function incomingCommits(ctx: DeployContext, target: { remote: stri
   } finally {
     await git(ctx, ['update-ref', '-d', PREVIEW_REF])
   }
+}
+
+const HOST_PATH = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})(?::\d{1,5})?\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+){0,15}$/
+
+/**
+ * A remote's address as a person reads it: `host[:port]/path`, without the
+ * scheme, any `user:token@`, a query, a fragment or `.git`. scp-like
+ * addresses (`git@host:org/repo.git`) too. A local path, `file://`, or
+ * anything outside a plain host-and-path grammar gives undefined: the
+ * address never carries a secret or a path of the server to the page.
+ */
+export function describeRemoteUrl(raw: string): string | undefined {
+  const text = raw.trim()
+  let host: string
+  let path: string
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+    let url: URL
+    try {
+      url = new URL(text)
+    } catch {
+      return undefined
+    }
+    if (!['https:', 'http:', 'ssh:', 'git:'].includes(url.protocol) || url.hostname === '') return undefined
+    host = url.port ? `${url.hostname}:${url.port}` : url.hostname
+    path = url.pathname
+  } else {
+    const scp = /^(?:[^@/\s]+@)?([A-Za-z0-9][A-Za-z0-9.-]*):(?!\/)([^\s]+)$/.exec(text)
+    if (!scp) return undefined
+    host = scp[1] as string
+    path = scp[2] as string
+  }
+  const clean = `${host}/${path.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '')}`
+  return clean.length <= 200 && HOST_PATH.test(clean) ? clean : undefined
+}
+
+/** The config's remote and branch, and where that remote points; never throws. */
+export async function remoteSource(ctx: DeployContext, target: { remote: string; branch: string }): Promise<Source> {
+  const answer = await git(ctx, ['remote', 'get-url', target.remote])
+  const url = answer.ok && answer.code === 0 ? describeRemoteUrl(answer.stdout) : undefined
+  return { remote: target.remote, branch: target.branch, ...(url ? { url } : {}) }
 }

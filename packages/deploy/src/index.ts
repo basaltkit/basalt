@@ -95,6 +95,7 @@ export {
   type StepStatus,
   type ErrorCode,
   type AnswerLine,
+  type Source,
   type StatusResult,
   type CheckResult,
   type PlanResult,
