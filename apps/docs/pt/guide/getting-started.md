@@ -250,5 +250,7 @@ com Prisma.
   utilizador ou tenant, faz fake de mail e fila, viaja no tempo.
 - [Web UI e componentes](/pt/guide/web-ui) — um SDK type-safe e tabelas/formulários
   de admin.
-- [Construir um SaaS de notas](/pt/cookbook/notes-saas) — um passo-a-passo completo
-  ponta-a-ponta.
+- [Construir um SaaS de notas](/pt/cookbook/notes-saas) — o percurso inteiro, de
+  uma pasta vazia até um servidor no ar.
+- [Construído com Basalt](/pt/guide/built-with-basalt) — quatro apps em produção
+  e o que cada uma usa.

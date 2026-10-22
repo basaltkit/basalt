@@ -4,7 +4,7 @@ Este tutorial constrói um **SaaS multi-tenant completo** a partir de uma pasta
 vazia até uma app com forma de produção: tenants com uma **quota de notas baseada
 no plano** (basic = 5, pro = 10), autenticação, um **painel de administração de
 operador** e uma troca para **Prisma** (base de dados) e **Redis** (cache, filas,
-quota) para produção.
+quota) para produção — e, no fim, para um servidor com o `@basaltkit/deploy`.
 
 No fim terás exatamente a demo `notes` de referência — API, testes e uma app web
 de duas áreas (consola de administração + workspace do tenant).
@@ -564,3 +564,54 @@ expect((await createNote('acme', 'overflow')).statusCode).toBe(402)
 Tudo corre em stores em memória, por isso a suite inteira passa **sem base de
 dados nem Redis** — troca-os apenas para produção. É esse o objetivo: o código de
 domínio que escreveste nos passos 3–9 nunca muda.
+
+## 17. Pôr num servidor
+
+O último passo leva a app da tua máquina para um servidor Linux.
+O `@basaltkit/deploy` trata do `.env`, da infra Docker (Postgres, Redis), do
+build, de um dump da base de dados antes de migrar, da migração, do PM2, do
+reverse proxy, de um health check, e de um rollback quando a nova versão não
+responde.
+
+Na app, adiciona a ferramenta e deixa-a escrever a configuração a partir do
+projeto. Lê o `src/env.ts`, o `prisma.config.ts` e o `web/package.json`, e só
+pergunta o que não consegue deduzir:
+
+```bash
+pnpm add -D @basaltkit/deploy
+pnpm exec basalt-deploy init --domain=notes.example.com
+git add deploy.config.ts package.json pnpm-lock.yaml && git commit -m "deploy config" && git push
+```
+
+O `deploy.config.ts` vai no commit e não tem nenhum segredo.
+
+Num servidor Ubuntu ou Debian novo, o `bootstrap` instala o que falta e prepara o
+utilizador da app. O root corre a **sua própria** cópia, fixada na versão que o
+teu `pnpm-lock.yaml` regista, de fora do checkout:
+
+```bash
+sudo adduser --disabled-password notes && sudo git clone <repo> /srv/notes
+cd / && sudo -H npx --yes --package=@basaltkit/deploy@<versão do lockfile> -- \
+  basalt-deploy bootstrap --dir=/srv/notes --user=notes --dry-run
+# lê o que faria, e depois corre-o outra vez sem --dry-run
+```
+
+A partir daí, cada deploy é um comando, como utilizador da app:
+
+```bash
+sudo -u notes -H sh -c 'cd /srv/notes && node node_modules/@basaltkit/deploy/dist/bin.js run'
+```
+
+Ou faz o deploy a partir da tua máquina com a interface local, que corre os
+mesmos comandos pelo teu próprio `ssh`:
+
+```bash
+npx @basaltkit/deploy-ui@latest
+```
+
+O guia [Deploy para um servidor](/pt/guide/deploy) explica cada passo a fundo: o
+[primeiro servidor](/pt/guide/deploy#first-server), o [`plan` e o
+`run`](/pt/guide/deploy#terminal), os rollbacks e [a interface de
+deploy](/pt/guide/deploy#ui). É o percurso inteiro, de uma pasta vazia até um
+servidor no ar. Quatro apps em produção fizeram-no — vê
+[Construído com Basalt](/pt/guide/built-with-basalt).

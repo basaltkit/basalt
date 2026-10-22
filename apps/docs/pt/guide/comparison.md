@@ -77,3 +77,6 @@ TypeScript.
 > **O Laravel do TypeScript, feito para SaaS multi-tenant** — a amplitude de
 > baterias do Laravel, um núcleo de plugins/DI ao estilo Nest, agnóstico ao
 > adaptador HTTP, e multi-tenancy de raiz.
+
+Vê-o na prática: [Construído com Basalt](/pt/guide/built-with-basalt) — quatro
+apps em produção, em quatro domínios diferentes.
