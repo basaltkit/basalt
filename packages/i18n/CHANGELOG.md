@@ -1,5 +1,11 @@
 # @basaltkit/i18n
 
+## 1.1.0
+
+### Minor Changes
+
+- 1eff3af: New subpath `@basaltkit/i18n/messages`: `defineMessages` and `render` (interpolation and plurals) with no import at all — no `@basaltkit/core`, no Node API — for browser code and CLIs that have no request context. `@basaltkit/deploy-ui` builds its page's text on it.
+
 ## 1.0.3
 
 ### Patch Changes
