@@ -27,6 +27,7 @@ export interface Props {
   min?: string
   max?: string
   scope?: string
+  colspan?: number
   aria?: Record<string, string>
   on?: Partial<Record<'click' | 'submit' | 'input' | 'change', (event: Event) => void>>
 }
@@ -48,6 +49,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Props =
   if (props.checked) (node as HTMLInputElement).checked = true
   if (props.required) (node as HTMLInputElement).required = true
   if (props.hidden) node.hidden = true
+  if (props.colspan !== undefined) node.setAttribute('colspan', String(props.colspan))
   if (props.spellcheck !== undefined) node.spellcheck = props.spellcheck
   for (const [key, value] of Object.entries(props.aria ?? {})) node.setAttribute(`aria-${key}`, value)
   for (const [event, listener] of Object.entries(props.on ?? {})) node.addEventListener(event, listener as EventListener)

@@ -95,14 +95,16 @@ since then, nothing is sent, and the page shows the new values.
 
 Per target: **check the connection**; **status** (current release, process,
 lock, active and last run, a hold); **plan** (findings, what a run would do, the
-questions it would ask); the **`.env` form** (secrets in password fields, never
+questions it would ask, and the commits that will go out); the **`.env` form** (secrets in password fields, never
 stored, emptied after sending); **deploy** — detached by default, so a closed
 laptop lid does not stop it, or attended; the **live log**, which re-attaches
 after a dropped connection without a gap or a duplicate (even one cut
 mid-line); **cancel** (a second cancel, separately confirmed, stops it at
 once; the server decides which one it is, so a cancel already sent from a
 terminal counts); **rollback**, to the last
-healthy release or one picked from **history** (the last 10 releases); and
+healthy release or one picked from **history** (the last 10 releases, each
+with its subject and, one click away, the commits it brought in), with the
+commits that would leave production listed before you confirm; and
 "Write .env only" for a first setup.
 
 Each action is one `ssh` invocation of the app's own, lockfile-pinned

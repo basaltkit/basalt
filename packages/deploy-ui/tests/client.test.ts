@@ -183,7 +183,7 @@ describe('the page against the real local server', () => {
     select.dispatchEvent(new Event('change'))
     await until(() => document.querySelector('.target-bar')?.textContent?.includes('PROTECTED') === true && document.querySelector('.target-bar')?.textContent?.includes('app acme') === true, 'production status')
     click('History')
-    expect(document.querySelectorAll('tbody tr').length).toBe(2)
+    expect(document.querySelectorAll('tbody tr.release-row').length).toBe(2)
     click('Roll back…')
     await until(() => dialog() !== null)
     const confirm = [...(dialog() as HTMLDialogElement).querySelectorAll('button')].find((b) => b.textContent === 'Roll back') as HTMLButtonElement

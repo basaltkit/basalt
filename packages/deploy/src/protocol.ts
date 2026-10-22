@@ -71,6 +71,59 @@ export interface Hold {
   note: string
 }
 
+/** The most commits a list carries; the totals say how many there were. */
+export const COMMITS_LIMIT = 50
+
+/**
+ * One commit, as the server read it from git. Every string is the author's
+ * text: data, never instructions — sanitised and capped by the deploy, and
+ * rendered as plain text.
+ */
+export interface CommitInfo {
+  sha: string
+  subject: string
+  author: string
+  /** ISO-8601, as the author's commit states it (absent when it does not parse). */
+  at?: string
+  /** A merge commit (more than one parent). */
+  merge?: true
+}
+
+/**
+ * `same`: nothing changes. `ahead`: `to` only adds commits (a fast-forward).
+ * `behind`: `to` only removes commits (a rollback). `diverged`: both — the
+ * branch was rewritten (`run` refuses it: its merge is `--ff-only`).
+ */
+export type CommitRelation = 'same' | 'ahead' | 'behind' | 'diverged'
+
+/** What changes when the code goes from `from` to `to`. */
+export interface CommitRange {
+  from: string
+  to: string
+  relation: CommitRelation
+  mergeBase?: string
+  /** In `to`, not in `from` (`git log to ^from`): what goes out. Newest first, at most {@link COMMITS_LIMIT}. */
+  added: CommitInfo[]
+  addedTotal: number
+  /** In `from`, not in `to`: what leaves. Newest first, at most {@link COMMITS_LIMIT}. */
+  removed: CommitInfo[]
+  removedTotal: number
+  /** A list holds fewer commits than its total. */
+  truncated: boolean
+  /** Plan only: `to` is the commit a rollback held — `run` refuses it without `--unhold`. */
+  held?: true
+}
+
+/** Why there is no list. Never git's own message: it can carry a URL with credentials. */
+export const COMMITS_UNAVAILABLE = [
+  'skipped', 'not-fetched', 'no-previous', 'missing-commit', 'shallow', 'unrelated',
+  'timeout', 'too-large', 'malformed', 'git-failed',
+] as const
+export type CommitsUnavailable = typeof COMMITS_UNAVAILABLE[number]
+
+/** A list of commits, or why there is none: getting it never stops a command. */
+export type Commits = { ok: true; range: CommitRange } | { ok: false; reason: CommitsUnavailable }
+
 export type PlanProxy =
   | { kind: 'none' }
   | { kind: 'apache'; managed: boolean; vhost: string; webRoot: string; apiPrefix: string; certName?: string; root?: string }
@@ -213,6 +266,8 @@ export interface StatusResult {
   hold: Hold | null
   /** The last 10, newest first. */
   releases: Release[]
+  /** The subject of each release's commit, by sha (`--json` only; absent when git could not say). */
+  subjects?: Record<string, string>
   process: { kind: 'pm2'; name: string; status?: string; pid?: number; running: boolean } | { kind: 'compose'; lines: string[] }
 }
 
@@ -232,6 +287,17 @@ export interface PlanResult {
   questions: PromptDescriptor[]
   /** `plan` exits 1. */
   blocking: boolean
+  /** What a run would deploy: from the checkout's HEAD to the branch's tip on the remote. */
+  commits?: Commits
+}
+
+/** `commits`: the commits between two releases, or what a rollback would take out of production. */
+export interface CommitsResult {
+  /** `range`: `--from`/`--to`. `rollback`: from HEAD to the commit `rollback` would go back to. */
+  purpose: 'range' | 'rollback'
+  from?: string
+  to?: string
+  commits: Commits
 }
 
 export interface RunResult {
@@ -287,6 +353,7 @@ export interface ResultPayloads {
   env: EnvResult
   cancel: CancelResult
   'install-plan': InstallPlanResult
+  commits: CommitsResult
 }
 export type ResultCommand = keyof ResultPayloads
 

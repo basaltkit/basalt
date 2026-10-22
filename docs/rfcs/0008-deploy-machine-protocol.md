@@ -76,6 +76,7 @@ neither flag, every command behaves byte-for-byte as today.
 | `rollback` | yes | — (never asks) | yes | `RollbackResult` |
 | `env` | yes | yes | no (§8.1) | `EnvResult` |
 | `install-plan` | yes (§9) | — | — | `InstallPlanResult` |
+| `commits` (§18) | yes | — | — | `CommitsResult` |
 | `attach <runId>` (new) | **only** with `--json` | — | — | none: replays the run (§8.4) |
 | `cancel <runId>` (new) | yes | — | — | `CancelResult` |
 | `init`, `install`, `bootstrap` | **refused** (§9) | — | — | — |
@@ -198,6 +199,7 @@ interface StatusResult {
   lastRun?: { runId: string; command: string; exitCode?: number; complete: boolean; endedAt?: string }
   hold: Hold | null                                                        // readHold()
   releases: Release[]                                                      // last 10, newest first
+  subjects?: Record<string, string>                                        // §18: subject per release sha
   process: { kind: 'pm2'; name: string; status?: string; pid?: number; running: boolean }
          | { kind: 'compose'; lines: string[] }                            // composeStatus() as today
 }
@@ -207,6 +209,7 @@ interface PlanResult {
   lines: Array<{ step: string; text: string }>        // the lines plan() prints, split at the first ': '
   questions: PromptDescriptor[]                       // what env/run would ask now (§7.2), never with a value
   blocking: boolean                                   // plan() would exit 1
+  commits?: Commits                                   // §18: HEAD → the branch's tip on the remote
 }
 interface RunResult { sha: string; previous: string; status: Release['status']; migrations: string[]; backup?: string; url?: string; heldOverride?: true }
 interface RollbackResult { from: string; to: string; status: 'ok' | 'rollback-unhealthy'; held: string }
@@ -880,4 +883,60 @@ answer lines sent after the questions are done are never read; human mode is not
 are not tamper-evident against the app user itself; the detaching parent
 reads at most the first 1 MiB of the run log while it waits for the `lock`
 step (which a run writes within its first few events).
+
+## 18. Addendum: commit lists (plan, history, rollback)
+
+Added after phase 2, additive within v1: older readers ignore the new fields
+and an older deploy simply does not send them.
+
+```ts
+const COMMITS_LIMIT = 50
+interface CommitInfo { sha: string; subject: string; author: string; at?: string; merge?: true }
+interface CommitRange {
+  from: string; to: string
+  relation: 'same' | 'ahead' | 'behind' | 'diverged'
+  mergeBase?: string
+  added: CommitInfo[]; addedTotal: number      // git log to ^from — what goes out
+  removed: CommitInfo[]; removedTotal: number  // git log from ^to — what leaves
+  truncated: boolean
+  held?: true                                  // plan: `to` is the commit a rollback held
+}
+type CommitsUnavailable = 'skipped' | 'not-fetched' | 'no-previous' | 'missing-commit' | 'shallow'
+  | 'unrelated' | 'timeout' | 'too-large' | 'malformed' | 'git-failed'
+type Commits = { ok: true; range: CommitRange } | { ok: false; reason: CommitsUnavailable }
+interface CommitsResult { purpose: 'range' | 'rollback'; from?: string; to?: string; commits: Commits }
+```
+
+- **Where.** `PlanResult.commits`: `HEAD` to the tip of the branch on the
+  remote. `StatusResult.subjects` (`--json` only): one `git log --no-walk`.
+  `commits --from=<sha> --to=<sha>` and `commits --rollback [--to=<sha>]`: a
+  new read-only command (no lock, no run log, no fetch). `--rollback` uses
+  `rollbackTarget()`, the function `rollback` itself uses, so the preview and
+  the rollback choose the same commit.
+- **The plan's fetch.** It fetches into `refs/basalt-deploy/preview`, deletes it
+  afterwards, and passes `--refmap=` so git's opportunistic update of
+  `refs/remotes/<remote>/<branch>` does not happen. `run`'s tracking ref, `HEAD`
+  and the worktree are untouched. `--skip=fetch` gives `skipped`, because
+  `run` then deploys `HEAD`.
+- **Divergence and merges.** The two lists are the two sides of `from...to`,
+  so a rewritten branch shows what it drops as well as what it brings, and a
+  rollback shows what leaves. They hold the whole ancestry, not
+  `--first-parent`, because the commits a merge brings in ship too. Merges are
+  flagged. A shallow repository is `shallow`, because its merge base and counts
+  can be wrong. A sha that is gone (force-push plus gc) is `missing-commit`.
+- **Bounded and best effort.** Every git call has `timeoutMs` (5 s, 30 s for
+  the fetch) and `maxOutputBytes` (256 KiB), which are new optional
+  `ExecOptions`: the child is killed and `ExecResult.limit` says why. Each list
+  stops at 50. Any failure is an answer (`ok: false` plus a reason), never an
+  error, a finding or a non-zero exit. git's own messages are never passed on,
+  because they can carry a remote URL with credentials.
+- **Untrusted text.** Fields are NUL-framed (`-z`, `%x00`). A bad sha or a
+  wrong field count refuses the whole list (`malformed`). A date that does not
+  parse is dropped alone, because the author sets it. Subjects and authors go
+  through `sanitize()` plus bidi stripping and are capped (200 and 100
+  characters). The author's email is not sent. The result passes through the
+  redactor like every event, so a `.env` value in a commit message is
+  `[redacted:KEY]`.
+- **Human mode.** `plan` prints one `commits: …` line after the plan lines.
+  `commits` prints the summary and one line per commit.
 

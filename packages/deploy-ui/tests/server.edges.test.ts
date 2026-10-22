@@ -23,7 +23,14 @@ beforeAll(async () => {
       status: { transcript: 'status-ok', pauseMs: 800 },
       attach: { lines: ['{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":0,"type":"hello","tool":"@basaltkit/deploy","version":"0.0.0","protocol":1,"command":"attach","pid":4100,"host":"server-1"}'], pauseMs: 20_000 },
     },
-    'fast.example.com': { run: { transcript: 'env-answers', stderr: 'a warning on stderr\n' }, plan: { transcript: 'plan-questions' }, env: { stderr: 'Permission denied (publickey).\n', exit: 255 } },
+    'fast.example.com': {
+      run: { transcript: 'env-answers', stderr: 'a warning on stderr\n' }, plan: { transcript: 'plan-questions' }, env: { stderr: 'Permission denied (publickey).\n', exit: 255 },
+      commits: { lines: [
+        '{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":0,"type":"hello","tool":"@basaltkit/deploy","version":"0.0.0","protocol":1,"command":"commits","pid":4100,"host":"server-1"}',
+        '{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":1,"type":"result","command":"commits","data":{"purpose":"rollback","commits":{"ok":false,"reason":"no-previous"}}}',
+        '{"v":1,"ts":"2026-10-11T12:00:00.000Z","seq":2,"type":"done","exitCode":0}',
+      ] },
+    },
   })
 })
 afterAll(async () => {
@@ -105,6 +112,35 @@ describe('limits', () => {
         expect((await api('status', { target: 'fast' })).status).toBe(409)
         expect((await api('targets/save', { actor: 'x' })).status).toBe(409)
       }
+    } finally {
+      await server.close()
+    }
+  })
+})
+
+describe('commits', () => {
+  it('read-only: two shas or the rollback preview, nothing else reaches ssh; it never waits for a change in progress', async () => {
+    const { server, api } = await serverWith([{ name: 'fast', ssh: 'deploy@fast.example.com' }])
+    try {
+      const before = (await ssh.calls()).length
+      for (const body of [
+        { target: 'fast' },
+        { target: 'fast', from: 'a'.repeat(40) },
+        { target: 'fast', from: 'HEAD', to: 'b'.repeat(40) },
+        { target: 'fast', from: 'a'.repeat(40), to: '--upload-pack=x' },
+        { target: 'fast', rollback: true, from: 'a'.repeat(40) },
+        { target: 'fast', rollback: 'yes' },
+        { target: 'fast', rollback: true, to: 'B'.repeat(40) },
+      ]) expect((await api('commits', body)).status, JSON.stringify(body)).toBe(400)
+      expect((await ssh.calls()).length).toBe(before)
+
+      const reply = await (await api('commits', { target: 'fast', rollback: true, to: 'abcdef1' })).json() as { ok: boolean; result: unknown }
+      expect(reply).toMatchObject({ ok: true, result: { purpose: 'rollback', commits: { ok: false, reason: 'no-previous' } } })
+      const range = await api('commits', { target: 'fast', from: 'a'.repeat(40), to: 'b'.repeat(7) })
+      expect(range.status).toBe(200)
+      const words = (await ssh.calls()).slice(before).map((c) => c.words.slice(6))
+      expect(words[0]).toEqual(['commits', '--json=1', '--rollback', '--to=abcdef1'])
+      expect(words[1]).toEqual(['commits', '--json=1', `--from=${'a'.repeat(40)}`, `--to=${'b'.repeat(7)}`])
     } finally {
       await server.close()
     }

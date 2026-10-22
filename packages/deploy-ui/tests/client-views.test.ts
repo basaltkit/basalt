@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createHmac, webcrypto } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { PlanResult, StatusResult } from '@basaltkit/deploy/protocol'
+import type { Commits, PlanResult, StatusResult } from '@basaltkit/deploy/protocol'
 import { Api, ApiError, PROOF_CONTEXT, type Fetch } from '../src/client/api.js'
 import { App } from '../src/client/app.js'
 import type { CommandReply, TargetsReply } from '../src/client/messages.js'
@@ -353,8 +353,8 @@ describe('history, rollback, quit', () => {
     await start()
     await until(() => has('Current release'))
     click('History')
-    const rows = [...main().querySelectorAll('tbody tr')].map((tr) => tr.textContent)
-    expect(rows[0]).toMatch(/^bbbbbbbbbbbb.*ok.*alice.*ui.*192\.0\.2\.10.*20261011_init/)
+    const rows = [...main().querySelectorAll('tbody tr.release-row')].map((tr) => tr.textContent)
+    expect(rows[0]).toMatch(/^bbbbbbb.*ok.*alice.*ui.*192\.0\.2\.10.*20261011_init/)
     expect(rows[2]).toMatch(/failed.*x\.dump.*build failed/)
     const select = document.getElementById('rollback-to') as HTMLSelectElement
     expect([...select.options].map((o) => o.value)).toEqual(['', 'a'.repeat(40)])
@@ -364,7 +364,7 @@ describe('history, rollback, quit', () => {
     expect(has('held by pid 5100 on server-1, bob, run (run 20261011T120000Z-0123456789ab)')).toBe(true)
     select.value = 'a'.repeat(40)
     click('Roll back…')
-    await until(() => document.querySelector('dialog')?.textContent?.includes('Back to aaaaaaaaaaaa.') === true)
+    await until(() => document.querySelector('dialog')?.textContent?.includes('Back to aaaaaaa.') === true)
     await confirmDialog('Roll back')
     await until(() => document.getElementById('run-title')?.textContent === `rollback ${RUN}`)
     expect(sent.filter((s) => s.route === 'rollback').at(-1)?.body).toEqual({ target: 'staging', confirm: true, confirmedTarget: targets.targets[0], to: 'a'.repeat(40) })
@@ -393,5 +393,135 @@ describe('reply banners', () => {
     expect(problem(undefined, new Error('plain'))?.textContent).toMatch(/plain/)
     expect(problem(undefined, 'text')?.textContent).toMatch(/text/)
     expect(problem(undefined, new ApiError(409, 'busy'))?.textContent).toMatch(/busy \(HTTP 409\)/)
+  })
+})
+
+describe('commit lists', () => {
+  const sha = (c: string) => c.repeat(40)
+  const commit = (c: string, subject: string, over: Record<string, unknown> = {}) => ({ sha: sha(c), subject, author: 'Ana', at: '2026-10-11T10:00:00Z', ...over })
+  const range = (over: Record<string, unknown> = {}) => ({ ok: true, range: { from: sha('a'), to: sha('d'), relation: 'ahead', mergeBase: sha('a'), added: [commit('d', 'Merge feature', { merge: true }), commit('e', 'Add invoices')], addedTotal: 2, removed: [], removedTotal: 0, truncated: false, ...over } })
+  const card = (title: string) => [...main().querySelectorAll('.card')].find((c) => c.querySelector('h3')?.textContent === title) as HTMLElement
+  const openPlan = async () => {
+    await start()
+    click('Plan & deploy')
+    click('Run plan')
+    await until(() => has('What will go out'))
+    return card('What will go out')
+  }
+
+  it('plan: what goes out, newest first, merges marked, the range in the head', async () => {
+    routes['plan'] = () => json(reply(plan({ commits: range() as Commits })))
+    const out = await openPlan()
+    expect([...out.querySelectorAll('.commit-subject')].map((s) => s.textContent)).toEqual(['Merge feature', 'Add invoices'])
+    expect(out.querySelectorAll('.commit.is-merge')).toHaveLength(1)
+    expect(out.querySelector('.commit-span')?.textContent).toBe('aaaaaaaddddddd')
+    expect(out.textContent).toContain('2 commits')
+  })
+
+  it('plan: truncated, diverged and held say so; nothing new is said plainly', async () => {
+    routes['plan'] = () => json(reply(plan({ commits: range({ relation: 'diverged', addedTotal: 60, truncated: true, removed: [commit('b', 'Only here')], removedTotal: 1, held: true }) as Commits })))
+    let out = await openPlan()
+    expect(out.textContent).toContain('+ 58 older commits not shown')
+    expect(out.textContent).toContain('The branch was rewritten on the remote')
+    expect(out.textContent).toContain('held by a rollback')
+    expect(out.querySelector('.commit-group-removed')?.textContent).toContain('Only here')
+    routes['plan'] = () => json(reply(plan({ commits: range({ relation: 'same', to: sha('a'), added: [], addedTotal: 0 }) as Commits })))
+    out = await openPlan()
+    expect(out.textContent).toContain('Nothing new')
+  })
+
+  it('plan: absent (an older deploy), unavailable, or malformed — a note, and Deploy stays enabled', async () => {
+    for (const [commits, text] of [
+      [undefined, 'older than the commit lists'],
+      [{ ok: false, reason: 'not-fetched' }, 'could not fetch the branch'],
+      [{ ok: false, reason: '<img src=x onerror=alert(1)>' }, 'no usable reason'],
+      [{ ok: true, range: { added: 'nope' } }, 'could not be read'],
+    ] as const) {
+      routes['plan'] = () => json(reply(plan({ blocking: false, ...(commits === undefined ? {} : { commits: commits as Commits }) })))
+      const out = await openPlan()
+      expect(out.textContent, JSON.stringify(commits)).toContain(text)
+      expect(out.querySelector('img')).toBeNull()
+      expect((main().querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(false)
+    }
+  })
+
+  it('the author\'s text is text: markup, escapes and bidi never become markup or reorder anything', async () => {
+    const hostile = '<img src=x onerror=alert(1)>\u001b[31mred‮evil'
+    routes['plan'] = () => json(reply(plan({ commits: range({ added: [commit('d', hostile, { author: '<b>Mallory</b>' })], addedTotal: 1 }) as Commits })))
+    const out = await openPlan()
+    expect(out.querySelector('img, b')).toBeNull()
+    expect(out.querySelector('.commit-subject')?.textContent).toBe('<img src=x onerror=alert(1)>redevil')
+    expect(out.querySelector('.commit-author')?.textContent).toBe('<b>Mallory</b>')
+  })
+
+  it('history: a subject per release; a row opens its commits once (cached), a release with no earlier one cannot', async () => {
+    let asked = 0
+    routes['status'] = () => json(reply(status({ subjects: { [sha('b')]: 'Add invoices', [sha('a')]: '<script>x</script>' } })))
+    routes['commits'] = (body) => { asked++; return json(reply({ purpose: 'range', from: body['from'], to: body['to'], commits: range({ from: body['from'], to: body['to'] }) })) }
+    await start()
+    await until(() => has('Current release'))
+    click('History')
+    const rows = [...main().querySelectorAll('tr.release-row')]
+    expect(rows[0]?.querySelector('.release-subject')?.textContent).toBe('Add invoices')
+    expect(rows[1]?.querySelector('.release-subject')?.textContent).toBe('<script>x</script>')
+    expect(main().querySelector('script')).toBeNull()
+    const toggle = rows[0]?.querySelector('.disclosure-button') as HTMLButtonElement
+    toggle.click()
+    await until(() => main().querySelector('.release-changes:not([hidden]) .commit') !== null, 'the commits')
+    expect(sent.find((s) => s.route === 'commits')?.body).toEqual({ target: 'staging', from: sha('a'), to: sha('b') })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    toggle.click()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    toggle.click()
+    expect(asked).toBe(1)
+    // The last release on record has nothing to compare with.
+    expect((rows[2]?.querySelector('.disclosure-button') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('history: an older deploy on the server does not know the command — said plainly', async () => {
+    routes['commits'] = () => json({ ok: false, hello, error: { v: 1, ts: 'x', seq: 1, type: 'error', code: 'usage', message: 'unknown command "commits"' }, exitCode: 1, diagnostics: [] })
+    await start()
+    await until(() => has('Current release'))
+    click('History')
+    ;(main().querySelector('tr.release-row .disclosure-button') as HTMLButtonElement).click()
+    await until(() => has('older than the commit lists'))
+  })
+
+  it('rollback: the dialog lists what leaves production; the request is what it always was; a different choice is reported', async () => {
+    routes['commits'] = (body) => {
+      expect(body).toEqual({ target: 'staging', rollback: true })
+      return json(reply({ purpose: 'rollback', from: sha('b'), to: sha('a'), commits: range({ from: sha('b'), to: sha('a'), relation: 'behind', added: [], addedTotal: 0, removed: [commit('b', 'Add invoices')], removedTotal: 1 }) }))
+    }
+    routes['rollback'] = () => json(reply({ runId: RUN, pid: 5100, log: '/x' }))
+    routes['attach'] = () => new Response([
+      { kind: 'hello', hello },
+      { kind: 'event', known: true, event: { v: 1, ts: 'x', seq: 1, runId: RUN, type: 'result', command: 'rollback', data: { from: sha('b'), to: sha('c'), status: 'ok', held: sha('b') } } },
+      { kind: 'state', state: 'ended', exitCode: 0 },
+    ].map((m) => JSON.stringify(m)).join('\n') + '\n')
+    await start()
+    await until(() => has('Current release'))
+    click('History')
+    click('Roll back…')
+    await until(() => document.querySelector('dialog')?.textContent?.includes('Leaves production') === true, 'the preview in the dialog')
+    const dialog = document.querySelector('dialog') as HTMLDialogElement
+    expect(dialog.textContent).toContain('aaaaaaa now')
+    expect(dialog.textContent).toContain('Add invoices')
+    await confirmDialog('Roll back')
+    await until(() => sent.some((s) => s.route === 'rollback'))
+    expect(sent.find((s) => s.route === 'rollback')?.body).toEqual({ target: 'staging', confirm: true, confirmedTarget: targets.targets[0] })
+    await until(() => has(`The deploy chose ${'c'.repeat(12)}, not ${'a'.repeat(12)}`), 'the different choice')
+  })
+
+  it('rollback: a preview that fails never blocks the rollback', async () => {
+    routes['commits'] = () => json({ error: 'at most 4 ssh sessions at a time' }, 429)
+    routes['rollback'] = () => json(reply({ runId: RUN, pid: 5100, log: '/x' }))
+    routes['attach'] = () => new Response('')
+    await start()
+    await until(() => has('Current release'))
+    click('History')
+    click('Roll back…')
+    await until(() => document.querySelector('dialog')?.textContent?.includes('the rollback still works') === true, 'the note')
+    await confirmDialog('Roll back')
+    await until(() => sent.some((s) => s.route === 'rollback'))
   })
 })

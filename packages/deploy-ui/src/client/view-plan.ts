@@ -6,6 +6,7 @@ import { icon } from './icons.js'
 import type { CommandReply } from './messages.js'
 import { banner, describe, diagnosticsBlock, problem } from './reply.js'
 import { ApiError } from './api.js'
+import { commitsBlock, rangeSpan, validCommits } from './view-commits.js'
 
 /** Plan & deploy: what a run would do, the questions it would ask, and the `.env` form. */
 export function renderPlan(app: App): HTMLElement {
@@ -25,6 +26,7 @@ export function renderPlan(app: App): HTMLElement {
     return root
   }
   append(root, ...findings(plan.findings))
+  append(root, outgoing(plan.commits))
   if (plan.lines.length > 0) {
     append(root, card('What a run would do', [el('div', { class: 'table-wrap' }, el('table', { class: 'plan-lines' },
       el('tbody', {}, ...plan.lines.map((line) => el('tr', {}, el('th', { scope: 'row' }, el('span', { class: 'step-chip' }, line.step)), el('td', {}, line.text))))))],
@@ -33,6 +35,22 @@ export function renderPlan(app: App): HTMLElement {
   if (reply.diagnostics.length > 0) append(root, diagnosticsBlock(reply.diagnostics))
   append(root, deployForm(app, plan.questions, plan.blocking))
   return root
+}
+
+/** What a run would deploy: HEAD on the server to the branch's tip on its remote. */
+function outgoing(commits: unknown): HTMLElement {
+  const range = validCommits(commits) && commits.ok ? commits.range : undefined
+  const summary = !range ? null
+    : range.relation === 'ahead' ? `${range.addedTotal} commit${range.addedTotal === 1 ? '' : 's'}`
+    : range.relation === 'diverged' ? `${range.addedTotal} new · ${range.removedTotal} only on the server`
+    : range.relation === 'behind' ? `${range.removedTotal} behind`
+    : null
+  return card('What will go out', [
+    range?.relation === 'diverged' ? banner('warn', 'The branch was rewritten on the remote', ['A run refuses it: its merge is fast-forward only. The commits only on the server would be lost.']) : null,
+    range?.relation === 'behind' ? banner('warn', 'The remote\'s branch is behind the server', ['A run refuses it: its merge is fast-forward only.']) : null,
+    range?.held ? banner('warn', 'This commit is held by a rollback', ['A run refuses it unless you deploy anyway (--unhold).']) : null,
+    commitsBlock(commits, { added: 'Goes out', removed: 'Only on the server', same: 'Nothing new — the server already runs the tip of the branch.' }),
+  ], { actions: range && range.relation !== 'same' ? [summary ? el('span', { class: 'muted' }, summary) : null, rangeSpan(range)] : [] })
 }
 
 function findings(list: Finding[]): Child[] {

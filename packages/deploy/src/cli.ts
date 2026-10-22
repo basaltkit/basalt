@@ -18,7 +18,7 @@ import { VERSION } from './version.js'
 import { DeployLockedError } from './lock.js'
 import { envValues, parseEnv } from './dotenv.js'
 import { nodeHost, type Host } from './host.js'
-import { envCommand, plan, refuseRoot, rollback, run, SKIPPABLE, status, type ProtocolHooks, type RunOptions, type Skippable } from './pipeline.js'
+import { commitsCommand, envCommand, plan, refuseRoot, rollback, run, SKIPPABLE, status, type ProtocolHooks, type RunOptions, type Skippable } from './pipeline.js'
 
 export const USAGE = `basalt-deploy — deploy this Basalt app on this server (RFC 0006)
 
@@ -32,6 +32,9 @@ As the app user, in the checkout (node node_modules/@basaltkit/deploy/dist/bin.j
   env                the .env and the dedicated infra only (first setup)
   rollback [--to=<sha>]   back to the last healthy release (code only); holds the commit it left
   status             the last releases, the process, the lock
+  commits --from=<sha> --to=<sha> | --rollback [--to=<sha>]
+                     the commits between two releases, or what a rollback would take out
+                     of production; read-only (no lock, no fetch)
   install-plan [--out=<file>|-]
                      what install needs, as data (default <state dir>/install-plan.json);
                      prints the root command for install
@@ -58,7 +61,7 @@ Exit codes: 0 done · 1 failed (or refused) · 3 another deploy holds the lock �
   (a second signal ends the process at once: 130/129/143)
 
 Machine mode (RFC 0008): stdout carries NDJSON events only
-  --json[=1]          status, check, plan, run, env, rollback, install-plan, attach, cancel
+  --json[=1]          status, check, plan, run, env, rollback, commits, install-plan, attach, cancel
   --answers=stdin     run/env: answer lines {"v":1,"type":"answer","id":"env.KEY","value":"…"} on stdin
   --answer-timeout=<s>  how long a prompt waits for its answer (1–3600, default 600)
   --detach            run/rollback: in their own session; returns the runId once the lock is held
@@ -124,7 +127,7 @@ function parse(argv: string[]): Flags {
   return { command, args, values, switches }
 }
 
-const COMMANDS = ['init', 'check', 'plan', 'run', 'env', 'rollback', 'status', 'install-plan', 'install', 'bootstrap', 'attach', 'cancel', 'ui']
+const COMMANDS = ['init', 'check', 'plan', 'run', 'env', 'rollback', 'status', 'commits', 'install-plan', 'install', 'bootstrap', 'attach', 'cancel', 'ui']
 /** The commands that take the deploy lock, and so write a run log under --json. */
 const LOCKED = new Set(['run', 'env', 'rollback'])
 
@@ -419,6 +422,26 @@ function checkFlags(flags: Flags, json: boolean, env: Host['env']): void {
   if ((command === 'attach' || command === 'cancel') && !flags.args[0]) throw usage(`${command} <runId>`)
 }
 
+const SHA = /^[0-9a-f]{7,40}$/
+
+/** `commits`: two shas, or `--rollback` with the `--to` a rollback would take. */
+function commitsRequest(flags: Flags): { from: string; to: string } | { rollback: true; to?: string } {
+  const sha = (name: string) => {
+    const value = flags.values.get(name)
+    if (value !== undefined && !SHA.test(value)) throw usage(`--${name}=${value}: a commit sha (7 to 40 lowercase hex digits)`)
+    return value
+  }
+  const from = sha('from')
+  const to = sha('to')
+  if (flags.values.has('rollback')) throw usage('--rollback is a switch: commits --rollback [--to=<sha>]')
+  if (flags.switches.has('rollback')) {
+    if (from !== undefined) throw usage('commits --rollback takes no --from: it starts from what is deployed')
+    return { rollback: true, ...(to === undefined ? {} : { to }) }
+  }
+  if (from === undefined || to === undefined) throw usage('commits --from=<sha> --to=<sha>, or commits --rollback [--to=<sha>]')
+  return { from, to }
+}
+
 /** The flags a detached child gets again — never an answer. */
 function forwarded(flags: Flags): string[] {
   const out: string[] = []
@@ -519,6 +542,7 @@ async function session(flags: Flags, host: Host, cwd: string, reporter: Reporter
         if (detaching) return await detach(ctx, detachRequest('rollback'), reporter)
         return await rollback(ctx, flags.values.get('to'), options)
       case 'status': return await status(ctx)
+      case 'commits': return await commitsCommand(ctx, commitsRequest(flags))
       case 'install-plan': return await writeInstallPlan(host, ctx, cwd, flags.values.get('out'))
       case 'attach': {
         const runId = flags.args[0] as string

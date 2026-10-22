@@ -137,8 +137,8 @@ package's own human-mode test transcripts (whose commits are `aaaaaaa` and
 
 ### `plan`: what a run would do {#plan}
 
-`plan` runs every check, then lists what `run` would do. It writes nothing and
-asks nothing.
+`plan` runs every check, then lists what `run` would do. It asks nothing and
+changes nothing a run uses.
 
 ```console
 $ node node_modules/@basaltkit/deploy/dist/bin.js plan
@@ -157,7 +157,18 @@ $ node node_modules/@basaltkit/deploy/dist/bin.js plan
     migrate: prisma migrate deploy + tenant:migrate
     release: pm2 acme-api on 127.0.0.1:3002
     health: http://127.0.0.1:3002/health (Host: acme.example.com), then https://acme.example.com/api/health
+    commits: 3 to go out (aaaaaaa → bbbbbbb)
 ```
+
+The last line is what the run would deploy: the commits between the checkout's
+`HEAD` and the tip of the branch on the remote. To read them, `plan` fetches
+the branch into a private ref (`refs/basalt-deploy/preview`, deleted again)
+and never into `refs/remotes/<remote>/<branch>`, the ref `run` merges from. The
+checkout, `HEAD` and the tracking ref stay as they were. A rewritten branch says
+so (`the branch was rewritten — … run refuses it`). If the list cannot be read
+(no network, a shallow clone, a commit a force-push took away), the line says
+`unavailable` and why. That never blocks the plan or the deploy. The list
+itself is in the `--json` result.
 
 ### `run`: deploy {#run}
 
@@ -211,6 +222,30 @@ $ node node_modules/@basaltkit/deploy/dist/bin.js status
     no deploy running
     pm2 acme-api: online (pid 4242, /srv/acme)
 ```
+
+### `commits`: what changed {#commits}
+
+`commits` lists the commits between two releases, or what a rollback would take
+out of production. It only reads: no lock, no fetch.
+
+```sh
+node node_modules/@basaltkit/deploy/dist/bin.js commits --from=<sha> --to=<sha>
+node node_modules/@basaltkit/deploy/dist/bin.js commits --rollback [--to=<sha>]
+```
+
+```console
+$ node node_modules/@basaltkit/deploy/dist/bin.js commits --rollback
+    commits: 2 would leave (bbbbbbb → aaaaaaa)
+    - bbbbbbb Fix rounding in VAT totals (Ana, 2026-10-20T11:40:03Z)
+    - 1f3c2d9 Invoices: add due_date column (Ana, 2026-10-20T10:02:41Z)
+```
+
+`--rollback` resolves the target exactly as `rollback` does. Each list holds the
+whole ancestry, so the commits a merge brought in are listed too (the merge is
+marked `[merge]`). Each side is capped at 50 commits, with the true total. When
+history diverged, both sides are listed. Commit text is the author's: the
+deploy strips control characters and caps its length, and a value of the
+`.env` in a commit message is redacted under `--json`.
 
 ### `rollback` and holds {#rollback}
 
@@ -392,6 +427,14 @@ With no error, the page shows the plan and the form for what the run will ask:
 
 ![Plan & deploy: one C8 warning about the certificate expiry with the fix "certbot renew", the list of what a run would do (fetch, env, build, validate, backup, migrate, release, health), and the form "What the run will ask"](/guide/deploy/ui-plan.png)
 
+**What will go out** lists the commits the run would deploy, newest first, with
+author and date. A merge is marked, and the commits it brings in are listed with
+it. If the branch was rewritten on the remote, the card warns that a run would
+refuse it and lists the commits that only the server has. If the list cannot be
+read, the card says why, and **Deploy…** still works.
+
+![What will go out: 57 commits from d4d4d4d to e8e8e8e, newest first: a merge of pull request #218, three commits by Ana Silva and renovate[bot], a long subject cut with an ellipsis, and "+ 52 older commits not shown — the server sends at most 50 per list"](/guide/deploy/ui-plan-commits.png)
+
 ### The `.env` form {#env-form}
 
 The questions come from `env.ask` in `deploy.config.ts`. Secret answers are
@@ -448,15 +491,26 @@ When it ends, the page shows the release, its URL and its migrations:
 
 ### History and rollback {#history}
 
-**History** lists the last 10 releases the server recorded: the commit, status,
-actor, how it ran (`ui`, `ssh`, …), the client address, the migrations and the
-dump taken before them.
+**History** lists the last 10 releases the server recorded: the commit and its
+subject, status, actor, how it ran (`ui`, `ssh`, …), the client address, the
+migrations and the dump taken before them. The arrow on a row opens the commits
+that release brought in compared with the one before it. They are read once
+from the server and kept for the session.
 
-![History: four releases, one failed with the note "the app does not answer on http://127.0.0.1:3002/health", and the Roll back card with "Back to: the last healthy release (the deploy decides)" and a Roll back… button](/guide/deploy/ui-history.png)
+![History: four releases with their commit subjects; the newest is open and shows the three commits it brought in, a merge of pull request #212 among them; below, the Roll back card with "Back to: the last healthy release (the deploy decides)", Preview changes and Roll back…](/guide/deploy/ui-history.png)
 
 **Roll back** goes to the last healthy release, or to one you pick under **Back
 to**. As in the terminal, it restores code only and holds the commit it leaves.
-The rollback runs detached, and the page opens its live log.
+**Preview changes** lists the commits that would leave production. **Roll
+back…** reads that list again, right then, and shows it in the confirmation:
+
+![The rollback confirmation: "Back to the last healthy release — c3c3c3c now", a red "Leaves production 3" list with three invoice commits, and "The commit it leaves is held until the branch moves on"](/guide/deploy/ui-dialog-rollback-commits.png)
+
+The page sends the same request as without the preview: with **the last
+healthy release**, the deploy still chooses the target when it runs. If it
+chooses another commit than the one previewed (a deploy landed in between), the
+run says so. A preview that fails never blocks the rollback. The rollback runs
+detached, and the page opens its live log.
 
 ### Protected targets {#protected}
 

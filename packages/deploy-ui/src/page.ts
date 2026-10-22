@@ -276,6 +276,69 @@ td .row { flex-wrap: nowrap; justify-content: flex-end; }
 .step-chip { display: inline-block; padding: 1px 7px; border-radius: var(--radius-xs); background: var(--surface-3); border: 1px solid var(--border); font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text-2); }
 .plan-lines td { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }
 
+/* Commits (plan, history, rollback): a timeline per side, author text as plain text */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.commits { display: grid; gap: var(--sp-4); }
+.commits-note { display: flex; align-items: flex-start; gap: var(--sp-2); padding: 10px var(--sp-3); border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--muted); font-size: var(--fs-md); }
+.commits-note .icon { flex: none; margin-top: 2px; color: var(--faint); }
+.commits-note strong { color: var(--text-2); font-weight: 600; }
+.commits-note.is-ok { border-style: solid; border-color: var(--ok-line); background: var(--ok-soft); color: var(--text-2); }
+.commits-note.is-ok .icon { color: var(--ok); }
+.commit-group { --tone: var(--ok); --tone-soft: var(--ok-soft); --tone-line: var(--ok-line); min-width: 0; }
+.commit-group-removed { --tone: var(--err); --tone-soft: var(--err-soft); --tone-line: var(--err-line); }
+.commit-group-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.commit-group-title { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.commit-sign { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: var(--radius-xs); background: var(--tone-soft); border: 1px solid var(--tone-line); color: var(--tone); font: 600 13px/1 var(--font-mono); flex: none; }
+.commit-count { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); border: 1px solid var(--border); color: var(--text-2); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.commit-list { list-style: none; margin: 0; padding: 0; position: relative; }
+.commit-list::before { content: ""; position: absolute; left: 8px; top: 14px; bottom: 14px; width: 2px; border-radius: 2px; background: var(--tone-line); }
+.commit { position: relative; display: grid; grid-template-columns: 18px auto minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); padding: 6px var(--sp-2) 6px 0; border-radius: var(--radius-sm); }
+.commit:hover { background: var(--surface-2); }
+.commit-dot { justify-self: center; width: 10px; height: 10px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 0 3px var(--surface); position: relative; z-index: 1; }
+.commit.is-merge .commit-dot { background: var(--surface); border: 2px solid var(--tone); }
+.commit-sha { padding: 1px 6px; border-radius: var(--radius-xs); background: var(--surface-3); border: 1px solid var(--border); color: var(--text-2); font-size: var(--fs-sm); }
+.commit-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.commit.is-merge .commit-subject { color: var(--muted); }
+.commit-merge { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; color: var(--faint); }
+.commit-meta { display: flex; gap: var(--sp-2); align-items: baseline; justify-content: flex-end; color: var(--muted); font-size: var(--fs-sm); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.commit-author { max-width: 18ch; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+.commit-more { margin: var(--sp-1) 0 0 30px; color: var(--muted); font-size: var(--fs-sm); }
+.commit-span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.commit-span code { color: var(--text-2); }
+.commit-span .icon { width: 14px; height: 14px; }
+.card-actions .muted { font-size: var(--fs-md); }
+@media (max-width: 720px) {
+  .commit { grid-template-columns: 18px auto minmax(0, 1fr); row-gap: 2px; align-items: start; }
+  .commit-dot { margin-top: 5px; }
+  .commit-subject { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .commit-meta { grid-column: 3; justify-content: flex-start; }
+  .release-changes > td { padding-left: var(--sp-4); }
+  .release-changes-cell > * { max-width: calc(100vw - 64px); }
+}
+/* History: a chevron opens a release's commits under its row */
+.releases td.disclosure, .releases th.disclosure { width: 1%; padding-right: 0; }
+.disclosure-button { width: 26px; height: 26px; padding: 0; border-color: transparent; background: transparent; box-shadow: none; color: var(--muted); }
+.disclosure-button:hover { background: var(--surface-3); color: var(--text); }
+.disclosure-button .icon { transition: transform 150ms ease; }
+.disclosure-button[aria-expanded="true"] .icon { transform: rotate(90deg); color: var(--molten); }
+.releases td.release-commit { min-width: 28ch; max-width: 40ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.release-commit code { margin-right: var(--sp-2); }
+.release-subject { color: var(--text); }
+.release-row.is-open > * { background: var(--surface-2); border-bottom-color: transparent; }
+.release-changes > td { padding: var(--sp-2) var(--sp-4) var(--sp-4) 52px; background: var(--surface-2); }
+.release-changes:hover > * { background: var(--surface-2); }
+/* The cell spans a table wider than the card: the list stays within what is on screen. */
+.release-changes-cell > * { max-width: min(52rem, calc(100vw - var(--sidebar-w) - 160px)); }
+.rollback-preview:empty { display: none; }
+/* The confirmation dialog's compact list */
+.commit-summary { display: grid; gap: 4px; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--tone-line); border-left: 3px solid var(--tone); border-radius: var(--radius-sm); background: var(--tone-soft); --tone: var(--ok); --tone-soft: var(--ok-soft); --tone-line: var(--ok-line); }
+.commit-summary.commit-group-removed { --tone: var(--err); --tone-soft: var(--err-soft); --tone-line: var(--err-line); }
+.commit-summary-head { display: flex; align-items: center; gap: var(--sp-2); font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.commit-summary-row { display: flex; gap: var(--sp-2); min-width: 0; font-size: var(--fs-md); }
+.commit-summary-row .commit-subject { color: var(--text-2); }
+.commit-summary .commit-sha { background: var(--surface); }
+.commit-summary .commit-more { margin: 0; }
+
 /* Forms */
 .field { display: grid; gap: 6px; }
 .field + .field { margin-top: var(--sp-4); }

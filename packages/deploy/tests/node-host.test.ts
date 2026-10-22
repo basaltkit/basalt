@@ -167,3 +167,25 @@ describe('the real host: files, network, terminal', () => {
     expect(lines.join('')).toBe('\n==> preflight\n    i\n    ok o\n    warning w\n    error e\n')
   })
 })
+
+describe('exec limits (the commit lists: a git that hangs or prints too much)', () => {
+  it('timeoutMs kills the child and says so', async () => {
+    const started = Date.now()
+    const result = await nodeHost(quiet).exec('node', ['-e', 'setTimeout(() => {}, 10_000)'], { timeoutMs: 200 })
+    expect(result.limit).toBe('timeout')
+    expect(result.code).not.toBe(0)
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  it('maxOutputBytes kills the child once its output passes the bound', async () => {
+    const result = await nodeHost(quiet).exec('node', ['-e', 'process.stdout.write("x".repeat(2_000_000)); setTimeout(() => {}, 10_000)'], { maxOutputBytes: 100_000, timeoutMs: 10_000 })
+    expect(result.limit).toBe('too-large')
+    expect(result.stdout.length).toBeLessThanOrEqual(100_000)
+  })
+
+  it('under the bounds: the whole output, decoded across chunk boundaries', async () => {
+    const result = await nodeHost(quiet).exec('node', ['-e', 'process.stdout.write("é".repeat(100_000))'], { maxOutputBytes: 1_000_000, timeoutMs: 10_000 })
+    expect(result.limit).toBeUndefined()
+    expect(result).toMatchObject({ code: 0, stdout: 'é'.repeat(100_000) })
+  })
+})

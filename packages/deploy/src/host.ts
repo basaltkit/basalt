@@ -183,12 +183,18 @@ export interface ExecOptions {
    * here as decoded text, instead of going to the terminal (RFC 0008 §5.3).
    */
   onOutput?: (text: string, stream: 'stdout' | 'stderr') => void
+  /** Captured output only: the child is killed after this long (`limit: 'timeout'`). */
+  timeoutMs?: number
+  /** Captured output only: the child is killed once stdout + stderr pass this many bytes (`limit: 'too-large'`). */
+  maxOutputBytes?: number
 }
 
 export interface ExecResult {
   code: number
   stdout: string
   stderr: string
+  /** Set when `timeoutMs` or `maxOutputBytes` stopped the child: its output is partial. */
+  limit?: 'timeout' | 'too-large'
 }
 
 export interface TlsCertificate {
@@ -344,13 +350,33 @@ export function nodeHost(output: Output = consoleOutput()): Host {
           child.stdout?.on('data', (chunk: Buffer) => sink(decoders.stdout.write(chunk), 'stdout'))
           child.stderr?.on('data', (chunk: Buffer) => sink(decoders.stderr.write(chunk), 'stderr'))
         } else {
-          child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-          child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+          const max = options.maxOutputBytes
+          let bytes = 0
+          const capture = (key: 'stdout' | 'stderr') => (chunk: Buffer) => {
+            if (limit) return
+            bytes += chunk.length
+            if (max !== undefined && bytes > max) { stop('too-large'); return }
+            const text = max === undefined ? chunk.toString() : decoders[key].write(chunk)
+            if (key === 'stdout') stdout += text
+            else stderr += text
+          }
+          child.stdout?.on('data', capture('stdout'))
+          child.stderr?.on('data', capture('stderr'))
         }
+        let limit: ExecResult['limit']
+        const stop = (why: NonNullable<ExecResult['limit']>) => {
+          if (limit) return
+          limit = why
+          child.kill('SIGKILL')
+        }
+        const timer = options.timeoutMs !== undefined && !sink && !options.stream && !options.interactive
+          ? setTimeout(() => stop('timeout'), options.timeoutMs)
+          : undefined
         let finished = false
         const done = (code: number) => {
           if (finished) return
           finished = true
+          if (timer) clearTimeout(timer)
           if (fd !== undefined) closeSync(fd)
           if (sink) {
             // A process the child left behind may still hold the pipes: stop reading them.
@@ -359,7 +385,12 @@ export function nodeHost(output: Output = consoleOutput()): Host {
             sink(decoders.stdout.end(), 'stdout')
             sink(decoders.stderr.end(), 'stderr')
           }
-          resolve({ code, stdout, stderr })
+          if (!sink && options.maxOutputBytes !== undefined && !limit) {
+            stdout += decoders.stdout.end()
+            stderr += decoders.stderr.end()
+          }
+          if (limit) resolve({ code: code === 0 ? 1 : code, stdout, stderr, limit })
+          else resolve({ code, stdout, stderr })
         }
         child.on('error', (error) => { stderr += error.message; done(127) })
         child.on('close', (code) => done(code ?? 1))

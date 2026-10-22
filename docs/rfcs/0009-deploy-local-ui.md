@@ -913,3 +913,36 @@ and `win32`; the real `ssh.exe` quoting is not exercised in CI. The Windows
 release checklist also covers the program resolution: start the UI from a
 folder containing a dummy `ssh.exe` and check that the OpenSSH one runs.
 
+## 16. Addendum: commit lists
+
+The views over RFC 0008 §18:
+
+- **Plan & deploy → What will go out.** `PlanResult.commits`, newest first.
+  Merges are marked, and the head shows the count and `from → to`. A diverged
+  range warns that `run` refuses it and lists what only the server has. Held
+  and `behind` ranges are said too.
+- **History.** Each row shows `StatusResult.subjects`. A disclosure button
+  opens the commits between the release and the one before it (its `previous`,
+  else the next older release on record). That calls `POST /api/commits {target,
+  from, to}` lazily, and the answer is cached per target and pair (a failure is
+  not cached). A row with nothing to compare with cannot open.
+- **Rollback.** **Preview changes** and **Roll back…** call `POST /api/commits
+  {target, rollback: true, to?}` at that moment, never from an older status.
+  The confirmation lists what leaves production, plus what comes back when
+  history diverged. The rollback request is unchanged: with "the last healthy
+  release" the page still sends no `to`, so the deploy decides as before. When
+  the run's `RollbackResult.to` differs from the previewed target, the run view
+  says so.
+- **The route.** `commits` is a remote command but not in `MUTATING`, so it
+  never waits behind a change in progress. The server accepts only
+  `from`+`to`, or `rollback: true` with an optional `to`, each matching
+  `SHA`. `remoteCommand` checks the same again (`--from`/`--rollback` only on
+  `commits`).
+- **Older servers.** An absent field is "the server's @basaltkit/deploy is
+  older than the commit lists". So is an `unknown command` usage error from
+  `commits`.
+- **Rendering.** Text nodes only, and `clean()` again on every field. No
+  commit links are built from remote URLs. Each reason maps to fixed local
+  text, so the server's wording never reaches the page. Nothing here disables
+  a button.
+
