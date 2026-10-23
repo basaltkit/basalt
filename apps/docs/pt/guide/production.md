@@ -148,45 +148,225 @@ stores através do cliente do tenant ativo.
 
 ## Escalar leituras (read replicas)
 
-Quando uma base de dados já não aguenta a carga de leitura, acrescenta réplicas e
-divide o tráfego: as leituras vão para as réplicas, as escritas ficam no primary.
-O `readReplica` embrulha qualquer client Prisma e faz o routing — é um `Proxy`,
-não uma dependência:
+Quando uma base de dados já não aguenta a carga de leitura, acrescenta réplicas de
+leitura e divide o tráfego: as leituras vão para as réplicas, as escritas ficam no
+primary. O `readReplica` embrulha os teus clientes Prisma e faz o encaminhamento. É
+um `Proxy`, não uma dependência.
+
+### O que é uma réplica
+
+Uma réplica de leitura é uma **cópia da base de dados primary**, mantida em dia por
+replicação: streaming replication do PostgreSQL, ou a «read replica» do teu
+fornecedor (RDS, Neon, Supabase e outros). Tem os mesmos dados e recusa escritas.
+
+::: danger Uma réplica nunca é outra base de dados
+Apontar o URL de uma «réplica» para outra base de dados (outro nome no mesmo
+servidor, uma cópia de staging) não falha no arranque. Em vez disso, divide os
+teus dados: uma linha escrita no primary «não existe» na leitura seguinte, que vai
+para a outra base de dados.
+:::
+
+### 1. Declara os URLs em `src/env.ts`
+
+Uma lista opcional, para o mesmo código correr sem réplica (desenvolvimento, um só
+servidor) e com várias:
 
 ```ts
+// src/env.ts — dentro de defineEnv({ … })
+DATABASE_URL: z.string().url(),
+// Réplicas de leitura do DATABASE_URL, separadas por vírgulas. Vazio: tudo usa o primary.
+DATABASE_REPLICA_URLS: z
+  .string()
+  .default('')
+  .transform((value) => value.split(',').map((url) => url.trim()).filter(Boolean))
+  .pipe(z.array(z.string().url())),
+```
+
+```sh
+# .env
+DATABASE_URL=postgres://…@db-primary:5432/app
+DATABASE_REPLICA_URLS=postgres://…@db-replica-1:5432/app,postgres://…@db-replica-2:5432/app
+```
+
+### 2. Liga o cliente
+
+```ts
+// src/app.ts
 import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, readReplica } from '@basaltkit/prisma'
+import { env } from './env.js'
 
-const client = readReplica({
-  // aplica a MESMA extensão ao primary E às réplicas — nunca deixes uma réplica sem scoping
+// O Prisma 7 liga-se através de um driver adapter: um cliente por connection string.
+const pg = (connectionString: string) => new PrismaClient({ adapter: new PrismaPg({ connectionString }) })
+
+export const client = readReplica({
+  primary: pg(env.DATABASE_URL),
+  replicas: env.DATABASE_REPLICA_URLS.map(pg),
+  // Multi-tenant? Aplica a MESMA extensão ao primary e a cada réplica:
   // extend: (c) => c.$extends(tenancyExtension()),
-  primary: new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) }),
-  replicas: [
-    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.REPLICA_1_URL }) }),
-    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.REPLICA_2_URL }) }),
-  ],
 })
 
-app.use(prismaPlugin({ client }))
+// em createApp({ plugins: [ … ] }):
+prismaPlugin({ client })
 ```
 
-Multi-tenant? Passa `extend: (c) => c.$extends(tenancyExtension())` para **cada** réplica levar o teu filtro de tenant — uma réplica crua encaminharia leituras à volta dele e vazaria linhas. `$queryRaw`/`$queryRawUnsafe` ficam no **primary** por omissão (SQL raw pode mutar e leituras de gating não podem estar stale); opta por `rawReadsOnReplica: true` só para raw genuinamente read-only.
+Sem nenhum URL de réplica, o `readReplica` devolve o primary inalterado, mais o
+`$primary`.
 
-`findMany`, `findUnique`, `count`, `aggregate`, `groupBy` e `$queryRaw` fazem
-round-robin pelas réplicas; toda a escrita, `$transaction` e `$executeRaw` vão
-para o primary. Logo após uma escrita as réplicas podem estar atrasadas — força o
-primary para um read-your-writes com o escape hatch `$primary`:
+### 3. Usa-o dentro de um pedido
+
+O `db()` devolve o cliente do **pedido atual**. Chama-o dentro do handler, nunca no
+topo de um módulo: no carregamento não há pedido, e a app não arranca
+(`DbUnavailableError`).
 
 ```ts
-await db().order.create({ data })
-const fresh = await db<Client>().$primary.order.findMany({ where: { userId } })
+import { db } from '@basaltkit/prisma'
+import type { client } from '../app.js'
+
+route({
+  method: 'POST',
+  url: '/orders',
+  handler: async ({ body }) => {
+    const prisma = db<typeof client>()                       // aqui, não no topo do módulo
+    const order = await prisma.order.create({ data: body })  // escrita → primary
+    // Logo a seguir a escrever, uma réplica pode estar atrasada: lê do primary.
+    return prisma.$primary.order.findUnique({ where: { id: order.id } })
+  },
+})
 ```
 
-Com `replicas: []` devolve o primary inalterado, por isso a mesma montagem corre
-em dev e num deploy de nó único. Usas `tenancyExtension()`? Estende o primary **e**
-cada réplica, depois embrulha os clients estendidos. (TLS/detalhes de ligação são
-do teu fornecedor de base de dados; o Basalt só encaminha as chamadas.)
+### O que vai para onde
+
+| Chamada | Vai para |
+|---|---|
+| `findMany`, `findFirst`, `findFirstOrThrow`, `findUnique`, `findUniqueOrThrow`, `count`, `aggregate`, `groupBy` | uma réplica, em round-robin |
+| `create`, `update`, `upsert`, `delete` e as outras escritas | o primary |
+| `$transaction`, `$executeRaw`, `$executeRawUnsafe` | o primary |
+| `$queryRaw`, `$queryRawUnsafe` | o primary, a menos que passes `rawReadsOnReplica: true` |
+| tudo o que passa por `$primary` | o primary |
+
+As queries raw ficam no primary por omissão, por duas razões: SQL raw pode
+escrever (um `WITH … INSERT`), e uma leitura que decide acessos (uma permissão, uma
+sessão) não pode ler dados atrasados. Ativa `rawReadsOnReplica: true` só quando
+todas as queries raw da app forem só de leitura e tolerarem atraso. Se uma extensão
+acrescentar métodos de modelo que só leem, lista-os em `readOps: ['…']`.
+
+**Multi-tenant:** uma réplica crua, sem a extensão, encaminharia as leituras à
+volta do teu filtro de tenant e mostraria linhas de outros tenants. Passa o
+`extend`, como acima, para o primary e cada réplica terem o mesmo
+`tenancyExtension()`.
+
+### Experimentar localmente
+
+Este compose corre um primary PostgreSQL e uma réplica por streaming, clonada com
+`pg_basebackup`. É só para desenvolvimento: as passwords são fixas e não há TLS.
+
+::: details `docker/compose.replica.yml` e os seus dois scripts
+```yaml
+# docker/compose.replica.yml
+name: app-replica
+services:
+  primary:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres, POSTGRES_DB: app }
+    command: [postgres, -c, wal_level=replica, -c, max_wal_senders=5, -c, hot_standby=on]
+    ports: ["127.0.0.1:55460:5432"]
+    volumes:
+      - primary-data:/var/lib/postgresql/data
+      - ./replica/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres -d app"], interval: 2s, retries: 30 }
+  replica:
+    image: postgres:16-alpine
+    depends_on: { primary: { condition: service_healthy } }
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      PRIMARY_HOST: primary
+      REPLICATION_USER: replicator
+      REPLICATION_PASSWORD: replicator
+    entrypoint: ["/bin/sh", "/replica/start-replica.sh"]
+    ports: ["127.0.0.1:55461:5432"]
+    volumes:
+      - replica-data:/var/lib/postgresql/data
+      - ./replica/start-replica.sh:/replica/start-replica.sh:ro
+volumes: { primary-data: {}, replica-data: {} }
+```
+
+```sh
+#!/bin/sh
+# docker/replica/init-primary.sh — corre uma vez, quando o primary é criado
+set -eu
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  -c "CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD 'replicator';"
+echo "host replication replicator all scram-sha-256" >> "$PGDATA/pg_hba.conf"
+```
+
+```sh
+#!/bin/sh
+# docker/replica/start-replica.sh — clona o primary no primeiro arranque, depois corre só de leitura
+set -eu
+if [ ! -s "$PGDATA/PG_VERSION" ]; then
+  mkdir -p "$PGDATA" && chown postgres:postgres "$PGDATA" && chmod 700 "$PGDATA"
+  su-exec postgres env PGPASSWORD="$REPLICATION_PASSWORD" \
+    pg_basebackup -h "$PRIMARY_HOST" -U "$REPLICATION_USER" -D "$PGDATA" -R -X stream -P
+fi
+exec su-exec postgres postgres -c hot_standby=on
+```
+:::
+
+```sh
+chmod +x docker/replica/*.sh   # sem isto o primary termina: "bad interpreter: Permission denied"
+docker compose -f docker/compose.replica.yml up -d
+# .env
+DATABASE_URL=postgres://postgres:postgres@localhost:55460/app
+DATABASE_REPLICA_URLS=postgres://postgres:postgres@localhost:55461/app
+```
+
+Cria as tabelas **só no primary** (`prisma migrate deploy` com o `DATABASE_URL`). A
+réplica recebe-as pela replicação. Confirma que a replicação está a correr:
+
+```sh
+docker compose -f docker/compose.replica.yml exec primary \
+  psql -U postgres -d app -c "SELECT client_addr, state FROM pg_stat_replication"   # state: streaming
+docker compose -f docker/compose.replica.yml exec replica \
+  psql -U postgres -d app -c "SELECT pg_is_in_recovery()"                           # t: só de leitura
+```
+
+O `docker compose -f docker/compose.replica.yml down -v` para os dois e apaga os
+dados.
+
+### Confirmar o encaminhamento
+
+Pausa por um momento o replay na réplica: uma escrita que a app acabou de fazer
+fica visível pelo `$primary`, mas não numa leitura normal. Isso prova que as
+leituras vão para a réplica:
+
+```ts
+// scripts/replica-check.ts — corre com `pnpm tsx scripts/replica-check.ts`
+import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
+import { client } from '../src/app.js'
+
+const replica = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_REPLICA_URLS!.split(',')[0]! }) })
+const id = `replica-check-${Date.now()}`
+try {
+  await replica.$queryRawUnsafe('SELECT pg_wal_replay_pause()::text')
+  await client.order.create({ data: { id /* … */ } })                            // primary
+  console.log('leitura normal:', await client.order.findUnique({ where: { id } }))  // null: a réplica está pausada
+  console.log('$primary:', await client.$primary.order.findUnique({ where: { id } }))  // a linha
+} finally {
+  await replica.$queryRawUnsafe('SELECT pg_wal_replay_resume()::text')
+  await client.$primary.order.deleteMany({ where: { id } })
+  await replica.$disconnect()
+  await client.$primary.$disconnect()
+}
+```
+
+Uma escrita enviada diretamente à réplica falha com
+`cannot execute INSERT in a read-only transaction`.
+
+O TLS, os limites de ligações e o failover são do teu fornecedor de base de dados.
+O Basalt só encaminha as chamadas.
 
 ## Fazer sharding da base de dados
 
