@@ -1,0 +1,13 @@
+// use prisma-8
+
+// The central plane of the harness: one model, in `public` of its own database
+// (basalt_prisma8). Tenant contracts are generated from this file at test time,
+// wrapped in `namespace tenant_<id> { … }` (tests/support/tenants.ts).
+model Project {
+  id        String            @id
+  tenantId  String
+  name      String
+  createdAt TimestamptzString @default(now())
+
+  @@index([tenantId])
+}

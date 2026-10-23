@@ -1,0 +1,61 @@
+name: Prisma 8 RC (nightly)
+
+# Runs apps/prisma8-integration against the LATEST Prisma 8 release candidate, not the
+# one the lockfile pins, so a new RC that breaks the Basalt Prisma 8 design is known the
+# day it ships. Nothing is committed: the upgrade lives only in this run's checkout.
+# minimum-release-age is lifted for this one install because every RC is younger than
+# the workspace policy; the job has read-only permissions and no secrets.
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest-rc:
+    name: prisma 8 latest rc (postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: basalt
+          POSTGRES_PASSWORD: basalt
+          POSTGRES_DB: basalt_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U basalt"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://basalt:basalt@localhost:5432/basalt_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Move the harness to the latest RC
+        run: |
+          pnpm --filter prisma8-integration add --config.minimum-release-age=0 \
+            @prisma/orm-postgres@latest
+          pnpm --filter prisma8-integration add -D --config.minimum-release-age=0 \
+            prisma@latest
+          pnpm --filter prisma8-integration list prisma @prisma/orm-postgres
+
+      - name: Typecheck
+        run: pnpm --filter prisma8-integration typecheck
+
+      - name: Schema per tenant on the latest Prisma 8 RC (real PostgreSQL)
+        run: pnpm --filter prisma8-integration test:integration

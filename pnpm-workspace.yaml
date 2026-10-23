@@ -9,6 +9,9 @@ allowBuilds:
   msgpackr-extract: true
   prisma: true
   sharp: false
+  # Pulled in by the Prisma 8 CLI's platform packages (apps/prisma8-integration);
+  # the harness never runs a Worker, so its binary download is not needed.
+  workerd: false
 auditConfig:
   ignoreGhsas:
     # vite dev-server `server.fs.deny` bypass (Windows) — reaches us only through
@@ -72,6 +75,17 @@ minimumReleaseAgeExclude:
   - typescript-eslint@8.68.0
   - '@types/node@26.3.0'
   - bullmq@6.2.1
+  # apps/prisma8-integration tracks the Prisma 8 release candidate, so its exact
+  # RC versions are always younger than minimumReleaseAge. Pinned, private, never
+  # in a published package; bump these with the RC (see that app's README).
+  - '@prisma/composer-cli@0.34.0'
+  - '@prisma/composer@0.34.0'
+  - '@prisma/orm-family-sql@8.0.0-rc.20'
+  - '@prisma/orm-framework@8.0.0-rc.20'
+  - '@prisma/orm-postgres@8.0.0-rc.20'
+  - '@prisma/orm-target-postgres@8.0.0-rc.20'
+  - '@prisma/orm-toolchain@8.0.0-rc.20'
+  - prisma@8.0.0-rc.27
 
 # The zod entry below no longer forces a major — every package now declares
 # zod 4 — but it keeps the whole tree on one copy and one tested version.
@@ -101,6 +115,15 @@ overrides:
   # It reaches us only through eslint's minimatch (dev tooling), but eslint pins
   # a range that admits the vulnerable 5.0.x; 5.0.11 is a patch on the same line.
   brace-expansion: ^5.0.11
+  # GHSA-q5qw-h33p-qvwr and GHSA-88fw-hqm2-52qc (high, hono < 4.12.25) and
+  # GHSA-r5fr-rjxr-66jc (high, lodash <= 4.17.23). They reach us only through the
+  # Prisma 8 release-candidate CLI's platform packages (prisma > @prisma/composer >
+  # alchemy > @prisma/dev, @neon/functions, chevrotain), a devDependency of the
+  # private apps/prisma8-integration. Overridden by range, not ignored: only the
+  # vulnerable versions move, to the patched lines the workspace already resolves
+  # (hono 4.13 for @basaltkit/hono, lodash 4.18), same majors.
+  'hono@<4.12.25': ^4.13.13
+  'lodash@<4.17.24': ^4.18.1
   # GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf (high):
   # fast-uri can be made to disagree with the WHATWG parser about a URL's host —
   # skipped IDN normalisation, and SSRF through hosts it parses differently from
