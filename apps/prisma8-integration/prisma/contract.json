@@ -8,6 +8,10 @@
       "model": "Note",
       "namespace": "public"
     },
+    "NoteTag": {
+      "model": "NoteTag",
+      "namespace": "public"
+    },
     "Project": {
       "model": "Project",
       "namespace": "public"
@@ -41,7 +45,23 @@
                 }
               }
             },
-            "relations": {},
+            "relations": {
+              "tags": {
+                "cardinality": "1:N",
+                "on": {
+                  "localFields": [
+                    "id"
+                  ],
+                  "targetFields": [
+                    "noteId"
+                  ]
+                },
+                "to": {
+                  "model": "NoteTag",
+                  "namespace": "public"
+                }
+              }
+            },
             "storage": {
               "fields": {
                 "body": {
@@ -56,6 +76,74 @@
               },
               "namespaceId": "public",
               "table": "Note"
+            }
+          },
+          "NoteTag": {
+            "fields": {
+              "id": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
+              "label": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
+              "noteId": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
+              "tenantId": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              }
+            },
+            "relations": {
+              "note": {
+                "cardinality": "N:1",
+                "nullable": false,
+                "on": {
+                  "localFields": [
+                    "noteId"
+                  ],
+                  "targetFields": [
+                    "id"
+                  ]
+                },
+                "to": {
+                  "model": "Note",
+                  "namespace": "public"
+                }
+              }
+            },
+            "storage": {
+              "fields": {
+                "id": {
+                  "column": "id"
+                },
+                "label": {
+                  "column": "label"
+                },
+                "noteId": {
+                  "column": "noteId"
+                },
+                "tenantId": {
+                  "column": "tenantId"
+                }
+              },
+              "namespaceId": "public",
+              "table": "NoteTag"
             }
           },
           "Project": {
@@ -154,6 +242,75 @@
               },
               "uniques": []
             },
+            "NoteTag": {
+              "columns": {
+                "id": {
+                  "codecId": "pg/text@1",
+                  "dataType": "pg/text",
+                  "nullable": false
+                },
+                "label": {
+                  "codecId": "pg/text@1",
+                  "dataType": "pg/text",
+                  "nullable": false
+                },
+                "noteId": {
+                  "codecId": "pg/text@1",
+                  "dataType": "pg/text",
+                  "nullable": false
+                },
+                "tenantId": {
+                  "codecId": "pg/text@1",
+                  "dataType": "pg/text",
+                  "nullable": false
+                }
+              },
+              "foreignKeys": [
+                {
+                  "index": {
+                    "name": "NoteTag_noteId_idx_0612c5b1"
+                  },
+                  "source": {
+                    "columns": [
+                      "noteId"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "NoteTag"
+                  },
+                  "target": {
+                    "columns": [
+                      "id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "Note"
+                  }
+                }
+              ],
+              "indexes": [
+                {
+                  "columns": [
+                    "noteId"
+                  ],
+                  "name": "NoteTag_noteId_idx_0612c5b1",
+                  "prefix": "NoteTag_noteId_idx",
+                  "unique": false
+                },
+                {
+                  "columns": [
+                    "tenantId"
+                  ],
+                  "name": "NoteTag_tenantId_idx_c93ed4f1",
+                  "prefix": "NoteTag_tenantId_idx",
+                  "unique": false
+                }
+              ],
+              "primaryKey": {
+                "columns": [
+                  "id"
+                ]
+              },
+              "uniques": []
+            },
             "Project": {
               "columns": {
                 "createdAt": {
@@ -205,7 +362,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "1a6c7856535dcf8d53c7cfd68ae90e1773dcf93d0fc8ef007cdc529ea1689a09"
+    "storageHash": "717ae5bab7b4de1040cbc41219d39e4b451e469d81ba5707dfc603e7ad7de641"
   },
   "capabilities": {
     "postgres": {

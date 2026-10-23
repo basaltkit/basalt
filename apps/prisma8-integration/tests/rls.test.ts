@@ -51,6 +51,7 @@ describe.skipIf(!serverUrl)('Prisma 8 RC: row-level security', () => {
     await admin.query(`CREATE POLICY tenant_isolation ON public."Note"
       USING ("tenantId" = current_setting('app.tenant_id', true))
       WITH CHECK ("tenantId" = current_setting('app.tenant_id', true))`)
+    await admin.query(`DELETE FROM public."NoteTag"`) // its foreign key to Note
     await admin.query(`DELETE FROM public."Note"`)
     await admin.query(`INSERT INTO public."Note" (id, "tenantId", body) VALUES
       ('acme-1', 'acme', 'a1'), ('acme-2', 'acme', 'a2'), ('globex-1', 'globex', 'g1')`)

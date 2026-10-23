@@ -8,11 +8,24 @@
 // shared table, every row carries its tenant. Declared first so `Project` stays the
 // last model (writeTenantContract appends evolution fields to the last model).
 model Note {
-  id       String @id
+  id       String    @id
   tenantId String
   body     String
+  tags     NoteTag[]
 
   @@index([tenantId])
+}
+
+// A relation, for include/join behaviour under middleware and RLS (tests/prepared-includes.test.ts).
+model NoteTag {
+  id       String @id
+  tenantId String
+  label    String
+  noteId   String
+  note     Note   @relation(fields: [noteId], references: [id])
+
+  @@index([tenantId])
+  @@index([noteId])
 }
 
 model Project {

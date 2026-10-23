@@ -1,64 +1,45 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { readdir, rm } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readFile, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import pg from 'pg'
-import { appDir, databaseUrl, planSql, prisma, serverUrl } from './support/db.js'
-import { writeTenantContract } from './support/tenants.js'
+import { appDir, databaseUrl, prisma, serverUrl } from './support/db.js'
+import { authorMigration, MigrationRejected, migrateTenantSchema, orderedPackages, planNext, validateOperations, type Operation } from './support/runner.js'
+import { sqlState, writeTenantContract } from './support/tenants.js'
 
 // Migration FILES per tenant schema on Prisma 8 RC.
-//   1. The official path refuses: `db migrate` checks the database's single marker
-//      (prisma_contract.marker, one row per space) against each tenant's migration graph.
-//   2. What Basalt would own instead: plan the files with Prisma, take each package's SQL
-//      from `migration show --json`, apply it in one transaction per tenant schema, and
-//      record it in that schema's own ledger. Prisma's marker is never touched.
+//   - The official path refuses: `db migrate` checks the database's single marker.
+//   - The Basalt-owned runner (tests/support/runner.ts) applies Prisma-planned,
+//     attested packages to ONE tenant schema: integrity check, operation validation,
+//     and PostgreSQL's own permissions (a role that owns only that schema).
 // Gated on TEST_DATABASE_URL.
 
 const A = 'tenant_mf_a'
 const B = 'tenant_mf_b'
-const migrationsOf = (config: string) => join(dirname(config), 'migrations', 'app')
-
-/** Plans the next migration file from the last one on disk (Prisma asks for the origin explicitly). */
-async function planNext(config: string, name: string) {
-  const existing = (await readdir(migrationsOf(config)).catch(() => [] as string[])).sort()
-  const from = existing.at(-1)
-  return prisma(['migration', 'plan', '--name', name, ...(from ? ['--from', from] : [])], { config })
-}
-
-/** Basalt-side runner prototype: applies the planned packages a tenant schema has not run yet. */
-async function migrateTenantSchema(admin: pg.Client, schema: string, config: string): Promise<string[]> {
-  await admin.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`)
-  await admin.query(`CREATE TABLE IF NOT EXISTS "${schema}"."_basalt_migrations" (name text PRIMARY KEY, hash text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`)
-  const done = new Set((await admin.query(`SELECT name FROM "${schema}"."_basalt_migrations"`)).rows.map((r: { name: string }) => r.name))
-  const applied: string[] = []
-  for (const name of (await readdir(migrationsOf(config))).sort()) {
-    if (done.has(name)) continue
-    const shown = await prisma(['migration', 'show', name], { config })
-    const migration = (shown.result as { migration?: { hash: string } } | undefined)?.migration
-    if (!shown.ok || !migration) throw new Error(`migration show ${name} failed: ${JSON.stringify(shown)}`)
-    await admin.query('BEGIN')
-    try {
-      for (const statement of planSql({ ...shown, result: { ok: true, plan: (shown.result as any).migration } } as never)) await admin.query(statement)
-      await admin.query(`INSERT INTO "${schema}"."_basalt_migrations" (name, hash) VALUES ($1, $2)`, [name, migration.hash])
-      await admin.query('COMMIT')
-    } catch (error) {
-      await admin.query('ROLLBACK')
-      throw error
-    }
-    applied.push(name)
-  }
-  return applied
-}
+const configOf = (schema: string) => join(appDir, '.tenants', schema, 'prisma.config.ts')
 
 describe.skipIf(!serverUrl)('Prisma 8 RC: migration files per tenant schema', () => {
   let admin: pg.Client
   const marker = async () => (await admin.query(`SELECT core_hash FROM prisma_contract.marker WHERE space = 'app'`)).rows[0]?.core_hash as string
   const columns = async (schema: string) =>
     (await admin.query(`SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'Project' ORDER BY 1`, [schema])).rows.map((r: { column_name: string }) => r.column_name)
+  const ledger = async (schema: string) =>
+    (await admin.query(`SELECT name FROM "${schema}"."_basalt_migrations" ORDER BY name`)).rows.map((r: { name: string }) => r.name)
+  const rejection = async (run: Promise<unknown>) => {
+    try {
+      await run
+    } catch (error) {
+      return error
+    }
+    throw new Error('expected the runner to refuse')
+  }
 
   beforeAll(async () => {
     admin = new pg.Client({ connectionString: databaseUrl() })
     await admin.connect()
-    for (const schema of [A, B]) await rm(join(appDir, '.tenants', schema), { recursive: true, force: true })
+    for (const schema of [A, B]) {
+      await rm(join(appDir, '.tenants', schema), { recursive: true, force: true })
+      await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+    }
   })
   afterAll(async () => {
     await admin?.end()
@@ -76,34 +57,33 @@ describe.skipIf(!serverUrl)('Prisma 8 RC: migration files per tenant schema', ()
     expect(await columns(A)).toEqual([])
   })
 
-  it('applies the planned files per tenant with a Basalt-owned ledger, leaving the marker alone', async () => {
+  it('applies the planned files per tenant with its own ledger, idempotently, leaving the marker alone', async () => {
     const before = await marker()
     const configB = await writeTenantContract(B)
     expect((await prisma(['contract', 'emit'], { config: configB })).ok).toBe(true)
     expect((await prisma(['migration', 'plan', '--name', 'init'], { config: configB })).ok).toBe(true)
-    const configA = join(appDir, '.tenants', A, 'prisma.config.ts')
-
-    expect(await migrateTenantSchema(admin, A, configA)).toHaveLength(1)
+    expect(await migrateTenantSchema(admin, A, configOf(A))).toHaveLength(1)
     expect(await migrateTenantSchema(admin, B, configB)).toHaveLength(1)
     expect(await columns(A)).toEqual(['createdAt', 'id', 'name', 'tenantId'])
     expect(await columns(B)).toEqual(['createdAt', 'id', 'name', 'tenantId'])
-    // idempotent: a second run applies nothing
-    expect(await migrateTenantSchema(admin, A, configA)).toEqual([])
+    expect(await migrateTenantSchema(admin, A, configOf(A))).toEqual([])
     expect(await marker()).toBe(before)
+    // the tables belong to the tenant's role, not to the migrating superuser
+    expect((await admin.query(`SELECT tableowner FROM pg_tables WHERE schemaname = $1 AND tablename = 'Project'`, [A])).rows[0].tableowner).toBe(`${A}_owner`)
   })
 
   it('evolves one tenant with a new migration file, and only that tenant', async () => {
-    const before = await marker()
     const config = await writeTenantContract(A, ['status String?'])
     expect((await prisma(['contract', 'emit'], { config })).ok).toBe(true)
-    const planned = await planNext(config, 'add_status')
-    expect(planned.ok).toBe(true)
+    expect((await planNext(config, 'add_status')).ok).toBe(true)
     const applied = await migrateTenantSchema(admin, A, config)
     expect(applied).toHaveLength(1)
     expect(applied[0]).toMatch(/add_status$/)
+    // graph order, not name order: both packages carry the same minute, and "add_status" sorts before "init"
+    const order = await orderedPackages(join(appDir, '.tenants', A, 'migrations', 'app'))
+    expect(order.map((n) => n.replace(/^\d{8}T\d{4}_/, ''))).toEqual(['init', 'add_status'])
     expect(await columns(A)).toContain('status')
     expect(await columns(B)).not.toContain('status')
-    expect(await marker()).toBe(before)
   })
 
   it('rolls a failing migration back as a whole: nothing half-applied, nothing recorded', async () => {
@@ -114,7 +94,87 @@ describe.skipIf(!serverUrl)('Prisma 8 RC: migration files per tenant schema', ()
     // A NOT NULL column without a default cannot be added to a non-empty table.
     await expect(migrateTenantSchema(admin, B, config)).rejects.toThrow()
     expect(await columns(B)).not.toContain('code')
-    const ledger = (await admin.query(`SELECT name FROM "${B}"."_basalt_migrations"`)).rows.map((r: { name: string }) => r.name)
-    expect(ledger.some((n) => n.endsWith('add_code'))).toBe(false)
+    expect((await ledger(B)).some((n) => n.endsWith('add_code'))).toBe(false)
+  })
+
+  it('refuses a TypeScript data transform (operationClass "data"), applying nothing', async () => {
+    const before = await ledger(A)
+    const name = await authorMigration(configOf(A), 'backfill_status',
+      `[this.dataTransform(endContractObj, 'backfill-status', { run: () => db.${A}.Project.update({ status: 'active' }).where((f: any, fns: any) => fns.eq(f.status, null)) })]`)
+    const error = await rejection(migrateTenantSchema(admin, A, configOf(A)))
+    expect(error).toBeInstanceOf(MigrationRejected)
+    expect((error as MigrationRejected).migration).toBe(name)
+    expect((error as MigrationRejected).reasons.join(' ')).toMatch(/data transform/)
+    expect(await ledger(A)).toEqual(before)
+    await rm(join(appDir, '.tenants', A, 'migrations', 'app', name), { recursive: true, force: true })
+  })
+
+  it('refuses a hand-written operation that reaches another tenant, and the other tenant is untouched', async () => {
+    const before = await ledger(A)
+    const name = await authorMigration(configOf(A), 'cross_tenant', `[rawSql({
+      id: 'raw.cross-tenant', label: 'reach another tenant', operationClass: 'additive', target: { id: 'postgres' },
+      precheck: [], execute: [{ description: 'cross-tenant', sql: 'ALTER TABLE "${B}"."Project" ADD COLUMN "pwned" text' }], postcheck: [],
+    })]`)
+    const error = await rejection(migrateTenantSchema(admin, A, configOf(A)))
+    expect(error).toBeInstanceOf(MigrationRejected)
+    const reasons = (error as MigrationRejected).reasons.join(' ')
+    expect(reasons).toMatch(/no declared schema/)
+    expect(reasons).toContain(`names schema "${B}"`)
+    expect(await columns(B)).not.toContain('pwned')
+    expect(await ledger(A)).toEqual(before)
+    await rm(join(appDir, '.tenants', A, 'migrations', 'app', name), { recursive: true, force: true })
+  })
+
+  it('refuses a package whose ops.json was changed after it was attested (MIGRATION.CHECK_HASH_MISMATCH)', async () => {
+    const config = await writeTenantContract(A, ['status String?', 'note String?'])
+    expect((await prisma(['contract', 'emit'], { config })).ok).toBe(true)
+    expect((await planNext(config, 'add_note')).ok).toBe(true)
+    const dir = join(appDir, '.tenants', A, 'migrations', 'app')
+    const name = (await orderedPackages(dir)).at(-1)!
+    const opsPath = join(dir, name, 'ops.json')
+    const original = await readFile(opsPath, 'utf8')
+    const tampered = JSON.parse(original) as Array<{ execute?: Array<{ sql: string }> }>
+    const step = tampered.flatMap((op) => op.execute ?? []).find((e) => e.sql.includes('"note"'))!
+    step.sql = `${step.sql}, ADD COLUMN "extra" text`
+    await writeFile(opsPath, JSON.stringify(tampered, null, 2))
+    try {
+      const error = await rejection(migrateTenantSchema(admin, A, config))
+      expect((error as MigrationRejected).reasons.join(' ')).toContain('MIGRATION.CHECK_HASH_MISMATCH')
+      expect(await columns(A)).not.toContain('extra')
+    } finally {
+      await writeFile(opsPath, original)
+    }
+    expect(await migrateTenantSchema(admin, A, config)).toEqual([name])
+    expect(await columns(A)).toContain('note')
+  })
+
+  it('holds even with validation skipped: the tenant role cannot reach another schema', async () => {
+    const name = await authorMigration(configOf(A), 'cross_tenant_unchecked', `[rawSql({
+      id: 'raw.cross-tenant', label: 'reach another tenant', operationClass: 'additive', target: { id: 'postgres', details: { schema: '${A}' } },
+      precheck: [], execute: [{ description: 'cross-tenant', sql: 'ALTER TABLE "${B}"."Project" ADD COLUMN "pwned" text' }], postcheck: [],
+    })]`)
+    const error = await rejection(migrateTenantSchema(admin, A, configOf(A), { unsafeSkipValidation: true }))
+    // Without USAGE on the other schema its tables are not even visible to the role:
+    // 42P01 (undefined table) rather than 42501 (insufficient privilege).
+    expect(['42P01', '42501']).toContain(sqlState(error))
+    expect(await columns(B)).not.toContain('pwned')
+    expect((await ledger(A)).includes(name)).toBe(false)
+    await rm(join(appDir, '.tenants', A, 'migrations', 'app', name), { recursive: true, force: true })
+  })
+
+  it('validates statement by statement (no database needed)', () => {
+    const op = (sql: string, extra: Partial<Operation> = {}): Operation => ({
+      id: 'x', operationClass: 'additive', target: { id: 'postgres', details: { schema: A } }, execute: [{ sql }], ...extra,
+    })
+    expect(validateOperations(A, [op(`ALTER TABLE "${A}"."Project" ADD COLUMN "x" text`)])).toEqual([])
+    const reasons = (sql: string) => validateOperations(A, [op(sql)], [A, B, 'public']).join(' ')
+    expect(reasons(`ALTER TABLE "${A}"."Project" ADD COLUMN "x" text; DROP TABLE "${B}"."Project"`)).toMatch(/more than one statement/)
+    expect(reasons(`GRANT ALL ON ALL TABLES IN SCHEMA "${A}" TO PUBLIC`)).toMatch(/not allowed|forbidden/)
+    expect(reasons(`CREATE POLICY p ON "${A}"."Project" USING (true)`)).toMatch(/not allowed|forbidden/)
+    expect(reasons(`CREATE TABLE "public"."Leak" (id text)`)).toContain('names schema "public"')
+    expect(reasons(`CREATE FUNCTION "${A}".f() RETURNS int LANGUAGE sql AS 'select 1'`)).toMatch(/not allowed|forbidden/)
+    expect(validateOperations(A, [op(`ALTER TABLE "${A}"."Project" ADD COLUMN "x" text`, { target: { id: 'postgres' } })]).join(' ')).toMatch(/no declared schema/)
+    expect(validateOperations(A, [{ ...op(`ALTER TABLE "${A}"."Project" ADD COLUMN "x" text`), execute: [{ sql: `ALTER TABLE "${A}"."Project" ADD COLUMN "x" text`, params: [B] }] }], [A, B]).join(' '))
+      .toContain(`parameter names another schema "${B}"`)
   })
 })

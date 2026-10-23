@@ -440,6 +440,12 @@ importers:
         specifier: 8.22.0
         version: 8.22.0
     devDependencies:
+      '@basaltkit/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@basaltkit/prisma':
+        specifier: workspace:*
+        version: link:../../packages/prisma
       '@basaltkit/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig

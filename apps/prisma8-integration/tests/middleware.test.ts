@@ -28,6 +28,7 @@ describe.skipIf(!serverUrl)('Prisma 8 RC: middleware and tenancy', () => {
   beforeAll(async () => {
     admin = new pg.Client({ connectionString: databaseUrl() })
     await admin.connect()
+    await admin.query(`DELETE FROM public."NoteTag"`) // its foreign key to Note
     await admin.query(`DELETE FROM public."Note"`)
     await admin.query(`INSERT INTO public."Note" (id, "tenantId", body) VALUES ('m-acme', 'acme', 'a'), ('m-globex', 'globex', 'g')`)
   })
