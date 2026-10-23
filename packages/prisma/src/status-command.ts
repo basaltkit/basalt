@@ -4,6 +4,7 @@ import { describeDbError } from './describe-db-error.js'
 import { resolveTarget, type MigrateTarget } from './migrate.js'
 import { assertSchemaPerTenantSupported } from './schema.js'
 import { redactCredentials } from './assert-migrated.js'
+import { localPrismaArgs } from './npx.js'
 
 /** Where one migration plane stands, from `prisma migrate status`. */
 export type MigrationState = 'up-to-date' | 'pending' | 'failed' | 'drift' | 'unmanaged' | 'error'
@@ -24,10 +25,10 @@ export type PrismaCliRunner = (
   env: Record<string, string | undefined>,
 ) => Promise<{ output: string; exitCode: number }>
 
-/** Default runner: `npx prisma …` with the given env. */
+/** Default runner: the project's own Prisma CLI (`npx --no -- prisma …`, never a download) with the given env. */
 export const npxPrismaRunner: PrismaCliRunner = (args, env) =>
   new Promise((resolve) => {
-    execFile('npx', args, { env: { ...process.env, ...env } }, (error, stdout, stderr) => {
+    execFile('npx', localPrismaArgs(args[0] === 'prisma' ? args.slice(1) : args), { env: { ...process.env, ...env } }, (error, stdout, stderr) => {
       const code = (error as { code?: unknown } | null)?.code
       resolve({
         output: `${String(stdout)}\n${String(stderr)}`,

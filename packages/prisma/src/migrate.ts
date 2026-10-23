@@ -10,6 +10,7 @@ import {
   countTenantTables,
   EmptyTenantSchemaError,
 } from './schema.js'
+import { localPrismaArgs } from './npx.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -170,7 +171,7 @@ export interface PrismaMigratorOptions {
  */
 export function prismaMigrator(options: PrismaMigratorOptions = {}): MigrateFn {
   return async ({ url }) => {
-    await execFileAsync('npx', prismaMigrateArgs(options), {
+    await execFileAsync('npx', localPrismaArgs(prismaMigrateArgs(options).slice(1)), {
       env: { ...process.env, ...options.env, DATABASE_URL: url },
     })
   }

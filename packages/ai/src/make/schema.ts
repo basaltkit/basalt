@@ -57,10 +57,14 @@ export interface PrismaPushResult {
   output: string
 }
 
-/** Run `npx prisma db push` — creates the table(s) and regenerates the client. Best-effort. */
+/**
+ * Run the project's own `prisma db push` — creates the table(s) and regenerates the client.
+ * Best-effort. `--no` keeps npx from downloading a Prisma CLI the project does not have
+ * (npm's `latest` is the Prisma 8 release candidate, which has no `db push`).
+ */
 export async function runPrismaPush(baseDir: string): Promise<PrismaPushResult> {
   try {
-    const { stdout } = await run('npx', ['prisma', 'db', 'push'], {
+    const { stdout } = await run('npx', ['--no', '--', 'prisma', 'db', 'push'], {
       cwd: baseDir,
       timeout: 180_000,
       maxBuffer: 10 * 1024 * 1024,

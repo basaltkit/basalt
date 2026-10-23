@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { CommandDefinition } from './command.js'
+import { localPrismaArgs } from './npx.js'
 
 /** The @basalt domains that ship a Prisma reference schema. */
 const DOMAINS = ['auth', 'teams', 'subscriptions', 'permissions', 'comments', 'audit', 'activity', 'notifications', 'tenancy', 'events', 'webhooks', 'files']
@@ -377,7 +378,7 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
         // history at best, a surprise at worst.
         for (const path of escritos) {
           io.log(`Running: prisma ${args.join(' ')} --schema ${path}`)
-          const result = spawnSync('npx', ['prisma', ...args, '--schema', path], { stdio: 'inherit' })
+          const result = spawnSync('npx', localPrismaArgs([...args, '--schema', path]), { stdio: 'inherit' })
           if (result.status !== 0) {
             io.error('prisma command failed.')
             return result.status ?? 1
