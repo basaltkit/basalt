@@ -1,0 +1,24 @@
+{
+  "name": "prisma8-integration",
+  "private": true,
+  "type": "module",
+  "description": "Prisma 8 (release candidate) readiness harness: schema-per-tenant on @prisma/orm-postgres against a real PostgreSQL server, in its own database (gated on TEST_DATABASE_URL). Runs beside apps/pg-integration (Prisma 7); not part of the default test run.",
+  "scripts": {
+    "contract:emit": "prisma contract emit",
+    "test:integration": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/orm-postgres": "8.0.0-rc.20",
+    "pg": "8.22.0"
+  },
+  "devDependencies": {
+    "@basaltkit/tsconfig": "workspace:*",
+    "@prisma/cli-engine": "0.9.0",
+    "@types/node": "^26.6.5",
+    "@types/pg": "8.20.4",
+    "prisma": "8.0.0-rc.27",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

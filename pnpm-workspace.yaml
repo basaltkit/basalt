@@ -9,6 +9,9 @@ allowBuilds:
   msgpackr-extract: true
   prisma: true
   sharp: false
+  # Pulled in by the Prisma 8 CLI's platform packages (apps/prisma8-integration);
+  # the harness never runs a Worker, so its binary download is not needed.
+  workerd: false
 auditConfig:
   ignoreGhsas:
     # vite dev-server `server.fs.deny` bypass (Windows) — reaches us only through
@@ -72,6 +75,17 @@ minimumReleaseAgeExclude:
   - typescript-eslint@8.68.0
   - '@types/node@26.3.0'
   - bullmq@6.2.1
+  # apps/prisma8-integration tracks the Prisma 8 release candidate, so its exact
+  # RC versions are always younger than minimumReleaseAge. Pinned, private, never
+  # in a published package; bump these with the RC (see that app's README).
+  - '@prisma/composer-cli@0.34.0'
+  - '@prisma/composer@0.34.0'
+  - '@prisma/orm-family-sql@8.0.0-rc.20'
+  - '@prisma/orm-framework@8.0.0-rc.20'
+  - '@prisma/orm-postgres@8.0.0-rc.20'
+  - '@prisma/orm-target-postgres@8.0.0-rc.20'
+  - '@prisma/orm-toolchain@8.0.0-rc.20'
+  - prisma@8.0.0-rc.27
 
 # The zod entry below no longer forces a major — every package now declares
 # zod 4 — but it keeps the whole tree on one copy and one tested version.

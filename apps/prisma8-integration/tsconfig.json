@@ -1,0 +1,12 @@
+{
+  "extends": "@basaltkit/tsconfig/base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": ".",
+    "types": ["node"],
+    "noEmit": true,
+    "resolveJsonModule": true
+  },
+  "include": ["tests", "prisma"],
+  "exclude": [".tenants"]
+}
