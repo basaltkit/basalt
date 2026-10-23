@@ -115,6 +115,15 @@ overrides:
   # It reaches us only through eslint's minimatch (dev tooling), but eslint pins
   # a range that admits the vulnerable 5.0.x; 5.0.11 is a patch on the same line.
   brace-expansion: ^5.0.11
+  # GHSA-q5qw-h33p-qvwr and GHSA-88fw-hqm2-52qc (high, hono < 4.12.25) and
+  # GHSA-r5fr-rjxr-66jc (high, lodash <= 4.17.23). They reach us only through the
+  # Prisma 8 release-candidate CLI's platform packages (prisma > @prisma/composer >
+  # alchemy > @prisma/dev, @neon/functions, chevrotain), a devDependency of the
+  # private apps/prisma8-integration. Overridden by range, not ignored: only the
+  # vulnerable versions move, to the patched lines the workspace already resolves
+  # (hono 4.13 for @basaltkit/hono, lodash 4.18), same majors.
+  'hono@<4.12.25': ^4.13.13
+  'lodash@<4.17.24': ^4.18.1
   # GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf (high):
   # fast-uri can be made to disagree with the WHATWG parser about a URL's host —
   # skipped IDN normalisation, and SSRF through hosts it parses differently from
