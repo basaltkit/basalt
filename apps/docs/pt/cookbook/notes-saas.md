@@ -418,9 +418,12 @@ automaticamente no âmbito de `ctx().tenant`, tanto leituras *como* escritas:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, tenancyExtension } from '@basaltkit/prisma'
 
-const prisma = new PrismaClient().$extends(tenancyExtension()) // scopes by tenantId
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter }).$extends(tenancyExtension()) // scopes by tenantId
 
 // in buildApp plugins, before notesPlugin:
 prismaPlugin({ client: prisma })
@@ -455,7 +458,7 @@ uma partilhada com uma coluna `tenantId` — o código de domínio é idêntico:
 
 ```ts
 prismaPlugin({
-  forTenant: (id) => new PrismaClient({ datasourceUrl: `${env.DATABASE_URL}/${id}` }),
+  forTenant: (id) => new PrismaClient({ adapter: new PrismaPg({ connectionString: `${env.DATABASE_URL}/${id}` }) }),
 })
 ```
 

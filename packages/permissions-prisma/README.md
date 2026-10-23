@@ -73,8 +73,11 @@ all five.)
 import { permissionsPlugin } from '@basaltkit/permissions'
 import { prismaAccessStore } from '@basaltkit/permissions-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const p = prismaAccessStore(prisma)   // pass your client directly, no cast
 
 createApp({

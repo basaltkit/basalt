@@ -72,8 +72,11 @@ keeps working until you pass an `anchor`, turn on `deletion: 'soft'` or
 import { commentsPlugin } from '@basaltkit/comments'
 import { prismaCommentsStore } from '@basaltkit/comments-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const c = prismaCommentsStore(prisma)   // pass your client directly, no cast
 
 createApp({ plugins: [commentsPlugin({ store: c.store })] })

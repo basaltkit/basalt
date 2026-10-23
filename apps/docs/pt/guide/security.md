@@ -880,6 +880,9 @@ tenant ativo ao Postgres em cada operação limitada ao tenant:
 
 ```ts
 import { rlsPolicySql, tenancyExtension, tenantTransaction } from '@basaltkit/prisma'
+import { PrismaPg } from '@prisma/adapter-pg'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 
 // migração (uma vez): põe o SQL gerado numa migração Prisma — ativa e força
 // (FORCE) o RLS e cria uma política de isolamento por tenant em cada tabela
@@ -887,7 +890,7 @@ console.log(rlsPolicySql({ tables: ['invoices', 'projects'], tenantColumn: 'tena
 
 // cada operação de modelo com tenant em contexto corre agora como
 //   $transaction([ set_config('app.tenant_id', <tenant>, true), <operação> ])
-const db = new PrismaClient().$extends(tenancyExtension({ rls: true }))
+const db = new PrismaClient({ adapter }).$extends(tenancyExtension({ rls: true }))
 
 // transações interativas: abre-as com tenantTransaction, que define o tenant
 // primeiro na própria ligação da transação — o tx continua limitado ao tenant

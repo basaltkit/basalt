@@ -62,8 +62,11 @@ working for everything else; add them before using `groupKey`.
 import { notificationsPlugin } from '@basaltkit/notifications'
 import { prismaInAppStore, prismaPreferenceStore } from '@basaltkit/notifications-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const n = prismaInAppStore(prisma)   // pass your client directly, no cast
 
 createApp({ plugins: [notificationsPlugin({ inApp: n.store, preferences: prismaPreferenceStore(prisma), mailer })] })

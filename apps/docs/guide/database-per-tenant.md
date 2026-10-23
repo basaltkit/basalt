@@ -39,8 +39,9 @@ third is a PostgreSQL feature and is not abstracted away.
 
 It rests on two things PostgreSQL has and the others do not: a **schema** as a
 namespace *inside* a database, and a connection whose `search_path` selects it.
-Basalt uses Prisma's `?schema=` parameter for the second and
-`CREATE SCHEMA IF NOT EXISTS` for the first.
+Basalt uses Prisma's `?schema=` parameter for the second (with Prisma 7, your
+client factory hands it to the driver adapter) and `CREATE SCHEMA IF NOT EXISTS`
+for the first.
 
 In MySQL a "schema" **is** a database — the words are synonyms — so there is
 nothing to namespace *within* a database. SQLite has no equivalent at all.
@@ -68,11 +69,12 @@ per tenant, building them on demand:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin } from '@basaltkit/prisma'
 
 // database-per-tenant: a client per tenant connection string
 prismaPlugin({
-  forTenant: (tenantId) => new PrismaClient({ datasourceUrl: urlFor(tenantId) }),
+  forTenant: (tenantId) => new PrismaClient({ adapter: new PrismaPg({ connectionString: urlFor(tenantId) }) }),
   destroy: (client) => client.$disconnect(),
   max: 20, // at most 20 tenant clients open at once — never exceeded
   idleMs: 1_000, // grace period: an idle tenant keeps its slot this long (default)
@@ -159,15 +161,32 @@ switches the `search_path` at connect time (reliable, unlike per-request
 switching on a shared pool):
 
 ```ts
+import { PrismaPg } from '@prisma/adapter-pg'
+
 prismaPlugin({
   schemaPerTenant: {
     url: process.env.DATABASE_URL!,
-    createClient: (url) => new PrismaClient({ datasourceUrl: url }),
+    createClient: (url) => {
+      // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
+      // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
+      const u = new URL(url)
+      const schema = u.searchParams.get('schema') ?? 'public'
+      u.searchParams.delete('schema')
+      u.searchParams.set('options', `-c search_path=${schema},public`)
+      return new PrismaClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
+    },
     prefix: 'tenant_', // schema name = tenant_<id>
   },
   destroy: (client) => client.$disconnect(),
 })
 ```
+
+::: warning Prisma 7: pass the schema to the adapter
+Prisma 7 connects through a driver adapter, and the adapter **ignores**
+`?schema=`. Your `createClient` must read the schema from the URL and hand it
+to `PrismaPg` (and to `search_path`, for raw SQL), as above. A factory that only
+forwards the URL puts every tenant in `public`.
+:::
 
 In both cases the plugin attaches the right client to the request context — on
 HTTP requests (from the resolved tenant) and inside `tenancy.run()` (workers,
@@ -194,10 +213,14 @@ Before a tenant's first request, its storage has to exist. Declare it once as
 [At sign-up](/guide/tenancy#at-sign-up-—-provision-a-tenant-on-demand):
 
 ```ts
+import { PrismaPg } from '@prisma/adapter-pg'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
 tenancyPlugin({
   source, resolvers,
   async onProvision(tenant) {
-    const admin = new PrismaClient()
+    const admin = new PrismaClient({ adapter })
     await provisionTenantSchema(admin, tenantSchema(tenant.id))
     await migrateTenants({
       tenants: [tenant.id],
@@ -216,13 +239,16 @@ infra/provider), then migrate it the same way:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { provisionTenantSchema, tenantSchema, migrateTenants } from '@basaltkit/prisma'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 
 export async function provisionTenant(id: string, name: string) {
   await tenants.save({ id, name })                 // 1. register in the TenantSource
 
   // 2. schema-per-tenant: create the schema on an admin connection
-  const admin = new PrismaClient()
+  const admin = new PrismaClient({ adapter })
   await provisionTenantSchema(admin, tenantSchema(id)) // CREATE SCHEMA IF NOT EXISTS "tenant_<id>"
 
   // 3. bring its structure up to date (single-tenant slice of the migrator)
@@ -284,6 +310,8 @@ Now wire them into their plugins as usual. `tenancyPlugin` resolves the tenant;
 so the stores above land in the right database on every request:
 
 ```ts
+import { PrismaPg } from '@prisma/adapter-pg'
+
 createApp({
   plugins: [
     tenancyPlugin({
@@ -291,7 +319,7 @@ createApp({
       resolvers: [subdomainResolver({ base: 'myapp.com' })],
     }),
     prismaPlugin({
-      forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }),
+      forTenant: (id) => new PrismaClient({ adapter: new PrismaPg({ connectionString: urlFor(id) }) }),
       destroy: (client) => client.$disconnect(),
       max: 20,
     }),
@@ -359,13 +387,23 @@ routes that belong to exactly one. Both live in the same process.
 context has no tenant, and the per-tenant mode when it does.
 
 ```ts
+import { PrismaPg } from '@prisma/adapter-pg'
+
 prismaPlugin({
   // No tenant resolved → this client (the central database / `public` schema).
   client: prisma,
   // Tenant resolved → a client connected with `?schema=tenant_<id>`.
   schemaPerTenant: {
     url: process.env.DATABASE_URL!,
-    createClient: (url) => new PrismaClient({ datasourceUrl: url }),
+    createClient: (url) => {
+      // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
+      // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
+      const u = new URL(url)
+      const schema = u.searchParams.get('schema') ?? 'public'
+      u.searchParams.delete('schema')
+      u.searchParams.set('options', `-c search_path=${schema},public`)
+      return new PrismaClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
+    },
   },
   destroy: (client) => client.$disconnect(),
 })
@@ -511,7 +549,10 @@ your mode:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { migrateTenants } from '@basaltkit/prisma'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 
 const ids = (await tenants.list()).map((t) => t.id)
 
@@ -525,7 +566,7 @@ const results = await migrateTenants({
 
 // Schema-per-tenant instead: one base URL, and an admin client that can
 // CREATE SCHEMA IF NOT EXISTS before migrating.
-const admin = new PrismaClient()
+const admin = new PrismaClient({ adapter })
 await migrateTenants({
   tenants: ids,
   target: { mode: 'schema', url: process.env.DATABASE_URL!, provision: admin },

@@ -65,8 +65,11 @@ Pass your generated client directly — no cast:
 import { outboxPlugin } from '@basaltkit/events'
 import { prismaOutboxStore } from '@basaltkit/events-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const outbox = prismaOutboxStore(prisma, { claim: true }) // safe with several replicas
 
 outboxPlugin({

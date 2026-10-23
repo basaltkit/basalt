@@ -104,8 +104,11 @@ straight into `subscriptionsPlugin` — pass your client directly, no cast:
 import { subscriptionsPlugin } from '@basaltkit/subscriptions'
 import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const s = prismaSubscriptionsStores(prisma)
 
 createApp({

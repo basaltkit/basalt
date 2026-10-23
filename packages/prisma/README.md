@@ -53,11 +53,14 @@ model Project {
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { createApp } from '@basaltkit/core'
 import { prismaPlugin, tenancyExtension } from '@basaltkit/prisma'
 
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
 // The shared client: every query is filtered by the current context's tenant
-const prisma = new PrismaClient().$extends(tenancyExtension())
+const prisma = new PrismaClient({ adapter }).$extends(tenancyExtension())
 
 const app = await createApp({
   plugins: [
@@ -95,9 +98,12 @@ The extension scopes every model operation it knows, and **refuses** (fails clos
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { tenancyExtension } from '@basaltkit/prisma'
 
-const prisma = new PrismaClient().$extends(
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter }).$extends(
   tenancyExtension({
     tenantField: 'tenantId',      // column name (default: 'tenantId')
     // onMissingTenant defaults to 'error': a query with no tenant in context
@@ -109,8 +115,12 @@ const prisma = new PrismaClient().$extends(
 Central/admin code that must read across tenants should use a **separate, explicitly named** client — never put `'bypass'` on the app's main client:
 
 ```ts
+import { PrismaPg } from '@prisma/adapter-pg'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
 // Only for trusted central code paths (back-office jobs, migrations, …).
-export const adminPrisma = new PrismaClient().$extends(
+export const adminPrisma = new PrismaClient({ adapter }).$extends(
   tenancyExtension({ onMissingTenant: 'bypass' }),
 )
 ```
@@ -125,11 +135,14 @@ Note on `findUnique`/`update`/`delete`: since Prisma 5, the unique `where` accep
 
 ```ts
 import { rlsPolicySql, tenancyExtension, tenantTransaction } from '@basaltkit/prisma'
+import { PrismaPg } from '@prisma/adapter-pg'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 
 // once, in a SQL migration: ENABLE + FORCE RLS and a tenant-isolation policy per table
 rlsPolicySql({ tables: ['invoices', 'invoice_lines'], tenantColumn: 'tenantId' })
 
-const db = new PrismaClient().$extends(tenancyExtension({ rls: true })) // or { rls: { setting: 'app.tenant_id' } }
+const db = new PrismaClient({ adapter }).$extends(tenancyExtension({ rls: true })) // or { rls: { setting: 'app.tenant_id' } }
 
 // interactive transactions: tenantTransaction sets the tenant on the transaction's connection first
 await tenantTransaction(db, async (tx) => {
@@ -257,8 +270,11 @@ await crossTenantSweep({
 
 Each tenant has its own schema (`tenant_acme`, `tenant_globex`, …) in the same database. Each tenant's client connects with `?schema=<name>` in the URL — Prisma is what sets the `search_path` on connection (the reliable way to do this):
 
+> **Prisma 7:** the driver adapter **ignores** `?schema=`. `createClient` must read the schema from the URL and hand it to `PrismaPg` (and to `search_path`, for raw SQL), as below. A factory that only forwards the URL puts every tenant in `public`.
+
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { createApp } from '@basaltkit/core'
 import { prismaPlugin } from '@basaltkit/prisma'
 
@@ -267,7 +283,15 @@ const app = await createApp({
     prismaPlugin({
       schemaPerTenant: {
         url: process.env.DATABASE_URL!, // base URL; the ?schema= parameter is set per tenant
-        createClient: (url) => new PrismaClient({ datasourceUrl: url }),
+        createClient: (url) => {
+          // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
+          // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
+          const u = new URL(url)
+          const schema = u.searchParams.get('schema') ?? 'public'
+          u.searchParams.delete('schema')
+          u.searchParams.set('options', `-c search_path=${schema},public`)
+          return new PrismaClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
+        },
         prefix: 'tenant_',              // default: 'tenant_'
       },
       destroy: (client) => client.$disconnect(), // default: $disconnect() when the client has one
@@ -290,9 +314,12 @@ To create a new tenant's schema:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { provisionTenantSchema, tenantSchema } from '@basaltkit/prisma'
 
-const admin = new PrismaClient() // administrative connection
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const admin = new PrismaClient({ adapter }) // administrative connection
 const schema = tenantSchema('acme')          // 'tenant_acme'
 await provisionTenantSchema(admin, schema)   // CREATE SCHEMA IF NOT EXISTS "tenant_acme"
 ```
@@ -303,6 +330,7 @@ Maximum isolation: you provide a function that creates the client for a tenant i
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { createApp } from '@basaltkit/core'
 import { prismaPlugin } from '@basaltkit/prisma'
 
@@ -310,7 +338,7 @@ const app = await createApp({
   plugins: [
     prismaPlugin({
       forTenant: (tenantId) =>
-        new PrismaClient({ datasourceUrl: databaseUrlFor(tenantId) }),
+        new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrlFor(tenantId) }) }),
       destroy: (client) => client.$disconnect(),
       max: 10, // at most 10 tenant clients open at once
     }),
@@ -369,9 +397,12 @@ A **migration** applies structural changes (new tables, columns…) to the datab
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { migrateTenants } from '@basaltkit/prisma'
 
-const admin = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const admin = new PrismaClient({ adapter })
 
 const results = await migrateTenants({
   tenants: ['acme', 'globex', 'initech'],

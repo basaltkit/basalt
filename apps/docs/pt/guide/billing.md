@@ -802,9 +802,12 @@ Acrescenta as duas colunas e corre `npx prisma db push` (ou gera uma migração)
 import { prismaSubscriptionsStores } from '@basaltkit/subscriptions-prisma'
 import { subscriptionsPlugin } from '@basaltkit/subscriptions'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { plans } from './billing/plans.js'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const s = prismaSubscriptionsStores(prisma)
 
 subscriptionsPlugin({ plans, fallbackPlan: 'free', ...s })

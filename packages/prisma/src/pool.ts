@@ -1,7 +1,7 @@
 import { BasaltError } from '@basaltkit/core'
 
 export interface TenantClientPoolOptions<TClient> {
-  /** Creates the client for a tenant (e.g. new PrismaClient({ datasourceUrl })). */
+  /** Creates the client for a tenant (e.g. new PrismaClient({ adapter: new PrismaPg({ connectionString }) })). */
   create(tenantId: string): TClient | Promise<TClient>
   /**
    * Called when a client is evicted or on destroyAll(). Default: calls
