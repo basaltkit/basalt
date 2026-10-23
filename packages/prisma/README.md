@@ -270,28 +270,23 @@ await crossTenantSweep({
 
 Each tenant has its own schema (`tenant_acme`, `tenant_globex`, …) in the same database. Each tenant's client connects with `?schema=<name>` in the URL — Prisma is what sets the `search_path` on connection (the reliable way to do this):
 
-> **Prisma 7:** the driver adapter **ignores** `?schema=`. `createClient` must read the schema from the URL and hand it to `PrismaPg` (and to `search_path`, for raw SQL), as below. A factory that only forwards the URL puts every tenant in `public`.
+> **Prisma 7 and later:** a driver adapter **ignores** `?schema=`, so a `createClient` that only forwards the URL puts every tenant in `public`. Wrap the factory in `pgSchemaClient`, as below: it sets the tenant's schema on the connection's `search_path` (honoured by every Prisma version and driver, for model queries and raw SQL) and fails closed when the URL has no schema. The function you pass it is the only Prisma-specific part — on a later Prisma, change that function and nothing else.
 
 ```ts
 import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { createApp } from '@basaltkit/core'
-import { prismaPlugin } from '@basaltkit/prisma'
+import { prismaPlugin, pgSchemaClient } from '@basaltkit/prisma'
 
 const app = await createApp({
   plugins: [
     prismaPlugin({
       schemaPerTenant: {
         url: process.env.DATABASE_URL!, // base URL; the ?schema= parameter is set per tenant
-        createClient: (url) => {
-          // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
-          // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
-          const u = new URL(url)
-          const schema = u.searchParams.get('schema') ?? 'public'
-          u.searchParams.delete('schema')
-          u.searchParams.set('options', `-c search_path=${schema},public`)
-          return new PrismaClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
-        },
+        // pgSchemaClient sets the tenant's schema on the connection (search_path):
+        // a Prisma 7 driver adapter ignores the URL's ?schema= on its own.
+        createClient: pgSchemaClient(({ connectionString, schema }) =>
+          new PrismaClient({ adapter: new PrismaPg({ connectionString }, { schema }) })),
         prefix: 'tenant_',              // default: 'tenant_'
       },
       destroy: (client) => client.$disconnect(), // default: $disconnect() when the client has one
@@ -581,6 +576,8 @@ Builds the read-only `basalt db:status` command (register it via `commandsPlugin
 |---|---|---|
 | `tenantSchema` | `tenantSchema(tenantId: string, options?: { prefix?: string }): string` | Derives a safe, injective PostgreSQL schema identifier (`prefix` default `'tenant_'`; canonical ids verbatim, other ids with a `__<hash>` suffix; max 63 characters). Throws `InvalidTenantSchemaError`. |
 | `schemaUrl` | `schemaUrl(baseUrl: string, schema: string): string` | Returns the connection URL with the `?schema=` parameter set. |
+| `pgSchemaClient` | `pgSchemaClient<T>(build: (c: PgSchemaConnection) => T \| Promise<T>, options?: PgSchemaConnectionOptions): (url: string) => T \| Promise<T>` | A `schemaPerTenant.createClient` that sets the tenant's schema on the connection's `search_path`, then calls `build`. Independent of the Prisma version: only `build` is. |
+| `pgSchemaConnection` | `pgSchemaConnection(url: string, options?: { fallback?: string[] }): PgSchemaConnection` | Turns a `?schema=` URL into `{ connectionString, schema, searchPath }`: the URL without `?schema=`, with `options=-c search_path=<schema>,public` (`fallback` default `['public']`). Throws `PgSchemaConnectionError` on a missing or non-identifier schema. |
 | `provisionTenantSchema` | `provisionTenantSchema(client: SchemaProvisioner, schema: string): Promise<void>` | Runs `CREATE SCHEMA IF NOT EXISTS` (name validated before interpolating). |
 | `SchemaProvisioner` | `{ $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number> }` | Interface satisfied by a `PrismaClient`. |
 

@@ -40,6 +40,13 @@ export {
 } from './assert-migrated.js'
 export { readReplica, type ReadReplicaOptions } from './replicas.js'
 export {
+  pgSchemaClient,
+  pgSchemaConnection,
+  PgSchemaConnectionError,
+  type PgSchemaConnection,
+  type PgSchemaConnectionOptions,
+} from './pg-schema.js'
+export {
   ShardRouter,
   fnv1aShard,
   type ShardHash,
@@ -238,10 +245,11 @@ export interface PrismaPluginOptions<TClient = unknown> {
     /** Base connection URL (the `schema` param is set per tenant). */
     url: string
     /**
-     * Builds a client from the tenant's URL. With Prisma 7's driver adapter the
-     * adapter ignores `?schema=`, so read it from the URL and hand it on:
-     * `new PrismaClient({ adapter: new PrismaPg({ connectionString }, { schema }) })`.
-     * A factory that only forwards the URL puts every tenant in `public`.
+     * Builds a client from the tenant's URL (it carries `?schema=<name>`).
+     * A Prisma 7 driver adapter ignores that parameter, so a factory that only
+     * forwards the URL puts every tenant in `public`: wrap the factory in
+     * {@link pgSchemaClient}, which sets the connection's search_path instead —
+     * `pgSchemaClient(({ connectionString, schema }) => new PrismaClient({ adapter: new PrismaPg({ connectionString }, { schema }) }))`.
      */
     createClient: (url: string) => TClient | Promise<TClient>
     /** Schema name prefix. Default: 'tenant_'. */

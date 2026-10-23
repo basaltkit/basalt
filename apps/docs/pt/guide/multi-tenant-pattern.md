@@ -36,7 +36,7 @@ seus roles.
 ## Regra 1 — Um PostgreSQL, um schema por tenant
 
 ```ts
-import { prismaPlugin } from '@basaltkit/prisma'
+import { prismaPlugin, pgSchemaClient } from '@basaltkit/prisma'
 import { PrismaClient as CentralClient } from '../generated/central'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient as TenantClient } from '../generated/tenant'
@@ -49,15 +49,10 @@ prismaPlugin({
   client: central,                                   // o plano central
   schemaPerTenant: {                                 // os planos de tenant
     url: env.DATABASE_URL,
-    createClient: (url) => {
-      // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
-      // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
-      const u = new URL(url)
-      const schema = u.searchParams.get('schema') ?? 'public'
-      u.searchParams.delete('schema')
-      u.searchParams.set('options', `-c search_path=${schema},public`)
-      return new TenantClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
-    },
+    // pgSchemaClient sets the tenant's schema on the connection (search_path):
+    // a Prisma 7 driver adapter ignores the URL's ?schema= on its own.
+    createClient: pgSchemaClient(({ connectionString, schema }) =>
+      new TenantClient({ adapter: new PrismaPg({ connectionString }, { schema }) })),
   },
   destroy: (client) => client.$disconnect(),
   max: 20,

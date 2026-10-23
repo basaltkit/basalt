@@ -948,22 +948,17 @@ limitado (só clients inactivos são despejados; ver [o pool de clientes por ten
 ```ts
 import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
-import { prismaPlugin, provisionTenantSchema, tenantSchema } from '@basaltkit/prisma'
+import { prismaPlugin, provisionTenantSchema, tenantSchema, pgSchemaClient } from '@basaltkit/prisma'
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 
 prismaPlugin({
   schemaPerTenant: {
     url: env.DATABASE_URL,
-    createClient: (url) => {
-      // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
-      // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
-      const u = new URL(url)
-      const schema = u.searchParams.get('schema') ?? 'public'
-      u.searchParams.delete('schema')
-      u.searchParams.set('options', `-c search_path=${schema},public`)
-      return new PrismaClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
-    },
+    // pgSchemaClient sets the tenant's schema on the connection (search_path):
+    // a Prisma 7 driver adapter ignores the URL's ?schema= on its own.
+    createClient: pgSchemaClient(({ connectionString, schema }) =>
+      new PrismaClient({ adapter: new PrismaPg({ connectionString }, { schema }) })),
     prefix: 'tenant_',                          // schema = tenant_<id> (padrão)
   },
   destroy: (client) => client.$disconnect(),    // fecha um client despejado do pool
@@ -975,11 +970,16 @@ const admin = new PrismaClient({ adapter })
 await provisionTenantSchema(admin, tenantSchema('acme')) // CREATE SCHEMA IF NOT EXISTS "tenant_acme"
 ```
 
-::: warning Prisma 7: passa o schema ao adaptador
-O Prisma 7 liga-se através de um driver adapter, e o adaptador **ignora** o
-`?schema=`. O teu `createClient` tem de ler o schema do URL e passá-lo ao
-`PrismaPg` (e ao `search_path`, para SQL raw), como acima. Uma factory que só
-passa o URL põe todos os tenants no `public`.
+::: warning Prisma 7 e seguintes: envolve a factory no `pgSchemaClient`
+Um driver adapter do Prisma 7 **ignora** o `?schema=`, por isso um `createClient`
+que só passa o URL põe todos os tenants no `public`. O `pgSchemaClient` põe o
+schema do tenant no `search_path` da ligação, que todas as versões do Prisma e
+todos os drivers respeitam, tanto nas queries dos modelos como em SQL raw. Falha
+fechado: um URL sem schema lança um erro em vez de se ligar ao `public`.
+
+A função que lhe passas é a única parte específica do Prisma. Numa versão
+posterior (o Prisma 8, ainda em release candidate, constrói o cliente sobre um pool do node-postgres), muda
+essa função e mais nada: o `connectionString` já leva o `search_path`.
 :::
 
 `tenantSchema()` é injetiva: ids canónicos (`acme`, `acme_co`) são usados
