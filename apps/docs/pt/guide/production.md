@@ -115,8 +115,8 @@ domínio (`db().model.findMany()`) é idêntico nas três:
 
 | Estratégia | Ativar com |
 | --- | --- |
-| Base de dados partilhada (nível de linha) | `prismaPlugin({ client: new PrismaClient().$extends(tenancyExtension()) })` |
-| Base de dados por tenant | `prismaPlugin({ forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }) })` |
+| Base de dados partilhada (nível de linha) | `prismaPlugin({ client: new PrismaClient({ adapter }).$extends(tenancyExtension()) })` |
+| Base de dados por tenant | `prismaPlugin({ forTenant: (id) => new PrismaClient({ adapter: new PrismaPg({ connectionString: urlFor(id) }) }) })` |
 | Schema por tenant | `prismaPlugin({ schemaPerTenant: { url, createClient } })` |
 
 Um `TenantClientPool` integrado mantém a contagem de ligações limitada (nunca acima
@@ -155,15 +155,16 @@ não uma dependência:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, readReplica } from '@basaltkit/prisma'
 
 const client = readReplica({
   // aplica a MESMA extensão ao primary E às réplicas — nunca deixes uma réplica sem scoping
   // extend: (c) => c.$extends(tenancyExtension()),
-  primary: new PrismaClient({ datasourceUrl: process.env.DATABASE_URL }),
+  primary: new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) }),
   replicas: [
-    new PrismaClient({ datasourceUrl: process.env.REPLICA_1_URL }),
-    new PrismaClient({ datasourceUrl: process.env.REPLICA_2_URL }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.REPLICA_1_URL }) }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.REPLICA_2_URL }) }),
   ],
 })
 
@@ -196,13 +197,14 @@ mesma base:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, ShardRouter } from '@basaltkit/prisma'
 
 const shards = new ShardRouter({
   shards: [
-    new PrismaClient({ datasourceUrl: process.env.SHARD_0_URL }),
-    new PrismaClient({ datasourceUrl: process.env.SHARD_1_URL }),
-    new PrismaClient({ datasourceUrl: process.env.SHARD_2_URL }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.SHARD_0_URL }) }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.SHARD_1_URL }) }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.SHARD_2_URL }) }),
   ],
 })
 

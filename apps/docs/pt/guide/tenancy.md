@@ -376,13 +376,16 @@ poder encaminhar um pedido.
 ```ts
 // src/app.ts
 import { provisionTenantSchema, tenantSchema, migrateTenants } from '@basaltkit/prisma'
+import { PrismaPg } from '@prisma/adapter-pg'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 
 tenancyPlugin({
   source,
   resolvers: [subdomainResolver({ base: 'example.com' })],
 
   async onProvision(tenant) {
-    const admin = new PrismaClient()
+    const admin = new PrismaClient({ adapter })
     await provisionTenantSchema(admin, tenantSchema(tenant.id))   // CREATE SCHEMA IF NOT EXISTS
     await migrateTenants({
       tenants: [tenant.id],
@@ -907,9 +910,12 @@ contexto de tenant — o código não pode esquecer nem sobrepor:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, tenancyExtension } from '@basaltkit/prisma'
 
-const db = new PrismaClient().$extends(
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const db = new PrismaClient({ adapter }).$extends(
   tenancyExtension({
     tenantField: 'tenantId',   // nome da coluna (padrão 'tenantId')
     // onMissingTenant é 'error' por omissão: sem tenant no contexto → lança
@@ -921,7 +927,7 @@ prismaPlugin({ client: db })
 
 // Leituras entre tenants deliberadas (back-office, jobs) têm o SEU PRÓPRIO
 // client — nunca ponhas 'bypass' no client principal da app.
-export const adminDb = new PrismaClient().$extends(
+export const adminDb = new PrismaClient({ adapter }).$extends(
   tenancyExtension({ onMissingTenant: 'bypass' }),
 )
 ```
@@ -941,12 +947,23 @@ limitado (só clients inactivos são despejados; ver [o pool de clientes por ten
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, provisionTenantSchema, tenantSchema } from '@basaltkit/prisma'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 
 prismaPlugin({
   schemaPerTenant: {
     url: env.DATABASE_URL,
-    createClient: (url) => new PrismaClient({ datasourceUrl: url }),
+    createClient: (url) => {
+      // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
+      // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
+      const u = new URL(url)
+      const schema = u.searchParams.get('schema') ?? 'public'
+      u.searchParams.delete('schema')
+      u.searchParams.set('options', `-c search_path=${schema},public`)
+      return new PrismaClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
+    },
     prefix: 'tenant_',                          // schema = tenant_<id> (padrão)
   },
   destroy: (client) => client.$disconnect(),    // fecha um client despejado do pool
@@ -954,9 +971,16 @@ prismaPlugin({
 })
 
 // Provisiona o schema de um novo tenant (uma ligação admin com $executeRawUnsafe):
-const admin = new PrismaClient()
+const admin = new PrismaClient({ adapter })
 await provisionTenantSchema(admin, tenantSchema('acme')) // CREATE SCHEMA IF NOT EXISTS "tenant_acme"
 ```
+
+::: warning Prisma 7: passa o schema ao adaptador
+O Prisma 7 liga-se através de um driver adapter, e o adaptador **ignora** o
+`?schema=`. O teu `createClient` tem de ler o schema do URL e passá-lo ao
+`PrismaPg` (e ao `search_path`, para SQL raw), como acima. Uma factory que só
+passa o URL põe todos os tenants no `public`.
+:::
 
 `tenantSchema()` é injetiva: ids canónicos (`acme`, `acme_co`) são usados
 tal como estão, e qualquer outro id (`ACME`, `acme-co`, UUIDs) recebe um
@@ -969,8 +993,10 @@ um tenant partilham um único client.
 mesmo pool LRU. Dá-lhe uma factory chaveada por id de tenant:
 
 ```ts
+import { PrismaPg } from '@prisma/adapter-pg'
+
 prismaPlugin({
-  forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }),
+  forTenant: (id) => new PrismaClient({ adapter: new PrismaPg({ connectionString: urlFor(id) }) }),
   destroy: (client) => client.$disconnect(),
   max: 20,
 })

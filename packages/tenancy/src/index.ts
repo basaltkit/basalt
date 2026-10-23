@@ -681,7 +681,7 @@ export interface TenancyPluginOptions {
    * tenancyPlugin({
    *   source, resolvers,
    *   async onProvision(tenant) {
-   *     const admin = new PrismaClient()
+   *     const admin = new PrismaClient({ adapter })
    *     await provisionTenantSchema(admin, tenantSchema(tenant.id))
    *     await migrateTenants({
    *       tenants: [tenant.id],

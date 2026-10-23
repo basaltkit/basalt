@@ -38,15 +38,26 @@ seus roles.
 ```ts
 import { prismaPlugin } from '@basaltkit/prisma'
 import { PrismaClient as CentralClient } from '../generated/central'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient as TenantClient } from '../generated/tenant'
 
-export const central = new CentralClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+export const central = new CentralClient({ adapter })
 
 prismaPlugin({
   client: central,                                   // o plano central
   schemaPerTenant: {                                 // os planos de tenant
     url: env.DATABASE_URL,
-    createClient: (url) => new TenantClient({ datasourceUrl: url }),
+    createClient: (url) => {
+      // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
+      // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
+      const u = new URL(url)
+      const schema = u.searchParams.get('schema') ?? 'public'
+      u.searchParams.delete('schema')
+      u.searchParams.set('options', `-c search_path=${schema},public`)
+      return new TenantClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
+    },
   },
   destroy: (client) => client.$disconnect(),
   max: 20,

@@ -237,7 +237,12 @@ export interface PrismaPluginOptions<TClient = unknown> {
   schemaPerTenant?: {
     /** Base connection URL (the `schema` param is set per tenant). */
     url: string
-    /** Builds a client from a URL, e.g. `(url) => new PrismaClient({ datasourceUrl: url })`. */
+    /**
+     * Builds a client from the tenant's URL. With Prisma 7's driver adapter the
+     * adapter ignores `?schema=`, so read it from the URL and hand it on:
+     * `new PrismaClient({ adapter: new PrismaPg({ connectionString }, { schema }) })`.
+     * A factory that only forwards the URL puts every tenant in `public`.
+     */
     createClient: (url: string) => TClient | Promise<TClient>
     /** Schema name prefix. Default: 'tenant_'. */
     prefix?: string

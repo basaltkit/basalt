@@ -414,9 +414,12 @@ auto-scoped to `ctx().tenant`, reads *and* writes:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, tenancyExtension } from '@basaltkit/prisma'
 
-const prisma = new PrismaClient().$extends(tenancyExtension()) // scopes by tenantId
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter }).$extends(tenancyExtension()) // scopes by tenantId
 
 // in buildApp plugins, before notesPlugin:
 prismaPlugin({ client: prisma })
@@ -451,7 +454,7 @@ one with a `tenantId` column — the domain code is identical:
 
 ```ts
 prismaPlugin({
-  forTenant: (id) => new PrismaClient({ datasourceUrl: `${env.DATABASE_URL}/${id}` }),
+  forTenant: (id) => new PrismaClient({ adapter: new PrismaPg({ connectionString: `${env.DATABASE_URL}/${id}` }) }),
 })
 ```
 

@@ -113,8 +113,8 @@ production, `@basaltkit/prisma` offers three tenancy strategies — the domain c
 
 | Strategy | Enable with |
 | --- | --- |
-| Shared database (row-level) | `prismaPlugin({ client: new PrismaClient().$extends(tenancyExtension()) })` |
-| Database per tenant | `prismaPlugin({ forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }) })` |
+| Shared database (row-level) | `prismaPlugin({ client: new PrismaClient({ adapter }).$extends(tenancyExtension()) })` |
+| Database per tenant | `prismaPlugin({ forTenant: (id) => new PrismaClient({ adapter: new PrismaPg({ connectionString: urlFor(id) }) }) })` |
 | Schema per tenant | `prismaPlugin({ schemaPerTenant: { url, createClient } })` |
 
 A built-in `TenantClientPool` keeps connection counts bounded (never above
@@ -152,15 +152,16 @@ Prisma client and does the routing — it's a `Proxy`, not a dependency:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, readReplica } from '@basaltkit/prisma'
 
 const client = readReplica({
   // apply the SAME extension to primary AND replicas — never leave a replica un-scoped
   // extend: (c) => c.$extends(tenancyExtension()),
-  primary: new PrismaClient({ datasourceUrl: process.env.DATABASE_URL }),
+  primary: new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) }),
   replicas: [
-    new PrismaClient({ datasourceUrl: process.env.REPLICA_1_URL }),
-    new PrismaClient({ datasourceUrl: process.env.REPLICA_2_URL }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.REPLICA_1_URL }) }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.REPLICA_2_URL }) }),
   ],
 })
 
@@ -192,13 +193,14 @@ a stable hash — a tenant's data always lands on the same database:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, ShardRouter } from '@basaltkit/prisma'
 
 const shards = new ShardRouter({
   shards: [
-    new PrismaClient({ datasourceUrl: process.env.SHARD_0_URL }),
-    new PrismaClient({ datasourceUrl: process.env.SHARD_1_URL }),
-    new PrismaClient({ datasourceUrl: process.env.SHARD_2_URL }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.SHARD_0_URL }) }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.SHARD_1_URL }) }),
+    new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.SHARD_2_URL }) }),
   ],
 })
 

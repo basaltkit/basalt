@@ -115,10 +115,13 @@ durável:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaTenantSource } from '@basaltkit/tenancy-prisma'
 import { tenancyPlugin, subdomainResolver, domainResolver } from '@basaltkit/tenancy'
 
-const tenants = prismaTenantSource(new PrismaClient())
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const tenants = prismaTenantSource(new PrismaClient({ adapter }))
 
 tenancyPlugin({
   source: tenants,

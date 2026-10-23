@@ -129,8 +129,11 @@ For PostgreSQL/MySQL. Copy the `Auth*` models from
 import { authPlugin, apiKeysPlugin } from '@basaltkit/auth'
 import { prismaAuthStores } from '@basaltkit/auth-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const s = prismaAuthStores(prisma) // pass the client directly, no cast
 
 authPlugin({

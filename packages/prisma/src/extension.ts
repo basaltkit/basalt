@@ -426,7 +426,7 @@ const defaultTenantId = (): string | undefined => {
 /**
  * Prisma client extension for the shared-database tenancy mode:
  *
- * const db = new PrismaClient().$extends(tenancyExtension())
+ * const db = new PrismaClient({ adapter }).$extends(tenancyExtension())
  *
  * Every query on every model is scoped to ctx().tenant at call time —
  * app code just writes `db.project.findMany()`. Operations it cannot scope
@@ -488,7 +488,7 @@ export type TenancyRlsExtension = <C>(client: C) => C
 /**
  * Prisma client extension for the shared-database tenancy mode:
  *
- * const db = new PrismaClient().$extends(tenancyExtension())
+ * const db = new PrismaClient({ adapter }).$extends(tenancyExtension())
  *
  * Every query on every model is scoped to ctx().tenant at call time —
  * app code just writes `db.project.findMany()`. Operations it cannot scope

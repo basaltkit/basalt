@@ -71,8 +71,11 @@ Pass your generated client directly — no cast:
 import { tenancyPlugin, subdomainResolver } from '@basaltkit/tenancy'
 import { prismaTenantSource } from '@basaltkit/tenancy-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const tenants = prismaTenantSource(prisma)
 
 await tenants.save({ id: 'acme', name: 'Acme Inc', domains: ['app.acme.com'] })

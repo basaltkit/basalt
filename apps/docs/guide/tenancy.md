@@ -371,13 +371,16 @@ storage into existence before anything can route a request to it.
 ```ts
 // src/app.ts
 import { provisionTenantSchema, tenantSchema, migrateTenants } from '@basaltkit/prisma'
+import { PrismaPg } from '@prisma/adapter-pg'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 
 tenancyPlugin({
   source,
   resolvers: [subdomainResolver({ base: 'example.com' })],
 
   async onProvision(tenant) {
-    const admin = new PrismaClient()
+    const admin = new PrismaClient({ adapter })
     await provisionTenantSchema(admin, tenantSchema(tenant.id))   // CREATE SCHEMA IF NOT EXISTS
     await migrateTenants({
       tenants: [tenant.id],
@@ -887,9 +890,12 @@ code can't forget or override it:
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, tenancyExtension } from '@basaltkit/prisma'
 
-const db = new PrismaClient().$extends(
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const db = new PrismaClient({ adapter }).$extends(
   tenancyExtension({
     tenantField: 'tenantId',   // column name (default 'tenantId')
     // onMissingTenant defaults to 'error': no tenant in context → throws
@@ -901,7 +907,7 @@ prismaPlugin({ client: db })
 
 // Deliberate cross-tenant reads (back-office, jobs) get their OWN client —
 // never put 'bypass' on the app's main client.
-export const adminDb = new PrismaClient().$extends(
+export const adminDb = new PrismaClient({ adapter }).$extends(
   tenancyExtension({ onMissingTenant: 'bypass' }),
 )
 ```
@@ -920,12 +926,23 @@ Prisma sets the `search_path` at connect time (reliable, unlike per-request
 
 ```ts
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import { prismaPlugin, provisionTenantSchema, tenantSchema } from '@basaltkit/prisma'
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 
 prismaPlugin({
   schemaPerTenant: {
     url: env.DATABASE_URL,
-    createClient: (url) => new PrismaClient({ datasourceUrl: url }),
+    createClient: (url) => {
+      // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
+      // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
+      const u = new URL(url)
+      const schema = u.searchParams.get('schema') ?? 'public'
+      u.searchParams.delete('schema')
+      u.searchParams.set('options', `-c search_path=${schema},public`)
+      return new PrismaClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
+    },
     prefix: 'tenant_',                          // schema = tenant_<id> (default)
   },
   destroy: (client) => client.$disconnect(),    // close a client evicted from the pool
@@ -933,9 +950,16 @@ prismaPlugin({
 })
 
 // Provision a new tenant's schema (an admin connection with $executeRawUnsafe):
-const admin = new PrismaClient()
+const admin = new PrismaClient({ adapter })
 await provisionTenantSchema(admin, tenantSchema('acme')) // CREATE SCHEMA IF NOT EXISTS "tenant_acme"
 ```
+
+::: warning Prisma 7: pass the schema to the adapter
+Prisma 7 connects through a driver adapter, and the adapter **ignores**
+`?schema=`. Your `createClient` must read the schema from the URL and hand it
+to `PrismaPg` (and to `search_path`, for raw SQL), as above. A factory that only
+forwards the URL puts every tenant in `public`.
+:::
 
 `tenantSchema()` is injective: canonical ids (`acme`, `acme_co`) are used
 as-is, and any other id (`ACME`, `acme-co`, UUIDs) gets a `__<hash>` suffix
@@ -947,8 +971,10 @@ default, and concurrent first requests for a tenant share one client.
 same LRU pool. Give it a factory keyed by tenant id:
 
 ```ts
+import { PrismaPg } from '@prisma/adapter-pg'
+
 prismaPlugin({
-  forTenant: (id) => new PrismaClient({ datasourceUrl: urlFor(id) }),
+  forTenant: (id) => new PrismaClient({ adapter: new PrismaPg({ connectionString: urlFor(id) }) }),
   destroy: (client) => client.$disconnect(),
   max: 20,
 })

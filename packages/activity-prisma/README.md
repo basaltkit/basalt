@@ -49,8 +49,11 @@ Then `prisma migrate dev` and `prisma generate`.
 import { activityPlugin } from '@basaltkit/activity'
 import { prismaActivityStore } from '@basaltkit/activity-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const a = prismaActivityStore(prisma)   // pass your client directly, no cast
 
 createApp({ plugins: [activityPlugin({ store: a.store })] })

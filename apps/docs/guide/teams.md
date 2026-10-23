@@ -76,8 +76,11 @@ For PostgreSQL/MySQL. Copy the `TeamMembership` / `TeamInvitation` models from
 import { teamsPlugin } from '@basaltkit/teams'
 import { prismaTeamsStores } from '@basaltkit/teams-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const t = prismaTeamsStores(new PrismaClient())
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const t = prismaTeamsStores(new PrismaClient({ adapter }))
 teamsPlugin({ memberships: t.memberships, invitations: t.invitations })
 ```
 

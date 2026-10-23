@@ -56,8 +56,11 @@ Pass your generated client directly — no cast:
 import { webhooksPlugin } from '@basaltkit/webhooks'
 import { prismaWebhookStore } from '@basaltkit/webhooks-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const webhooks = prismaWebhookStore(prisma)
 
 webhooksPlugin({ store: webhooks.store, secret: process.env.WEBHOOK_SECRET })

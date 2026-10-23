@@ -104,8 +104,11 @@ change — which is the one thing antivirus rules reliably do.
 import { filesPlugin } from '@basaltkit/files'
 import { prismaFilesStore } from '@basaltkit/files-prisma'
 import { PrismaClient } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const prisma = new PrismaClient()
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
+
+const prisma = new PrismaClient({ adapter })
 const files = prismaFilesStore(prisma)
 
 filesPlugin({ disk, store: files.store })
