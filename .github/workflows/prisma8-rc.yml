@@ -54,6 +54,9 @@ jobs:
             prisma@latest
           pnpm --filter prisma8-integration list prisma @prisma/orm-postgres
 
+      - name: Build the workspace packages the harness imports
+        run: pnpm --filter "prisma8-integration^..." build
+
       - name: Typecheck
         run: pnpm --filter prisma8-integration typecheck
 
