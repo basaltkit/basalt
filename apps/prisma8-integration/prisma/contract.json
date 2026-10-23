@@ -4,6 +4,10 @@
   "target": "postgres",
   "profileHash": "3916f444a8a17ad749191acf9e08dad97d1a327b88c2f1d45d12f240296aa8b2",
   "roots": {
+    "Note": {
+      "model": "Note",
+      "namespace": "public"
+    },
     "Project": {
       "model": "Project",
       "namespace": "public"
@@ -13,6 +17,47 @@
     "namespaces": {
       "public": {
         "models": {
+          "Note": {
+            "fields": {
+              "body": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
+              "id": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
+              "tenantId": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              }
+            },
+            "relations": {},
+            "storage": {
+              "fields": {
+                "body": {
+                  "column": "body"
+                },
+                "id": {
+                  "column": "id"
+                },
+                "tenantId": {
+                  "column": "tenantId"
+                }
+              },
+              "namespaceId": "public",
+              "table": "Note"
+            }
+          },
           "Project": {
             "fields": {
               "createdAt": {
@@ -73,6 +118,42 @@
       "public": {
         "entries": {
           "table": {
+            "Note": {
+              "columns": {
+                "body": {
+                  "codecId": "pg/text@1",
+                  "dataType": "pg/text",
+                  "nullable": false
+                },
+                "id": {
+                  "codecId": "pg/text@1",
+                  "dataType": "pg/text",
+                  "nullable": false
+                },
+                "tenantId": {
+                  "codecId": "pg/text@1",
+                  "dataType": "pg/text",
+                  "nullable": false
+                }
+              },
+              "foreignKeys": [],
+              "indexes": [
+                {
+                  "columns": [
+                    "tenantId"
+                  ],
+                  "name": "Note_tenantId_idx_c93ed4f1",
+                  "prefix": "Note_tenantId_idx",
+                  "unique": false
+                }
+              ],
+              "primaryKey": {
+                "columns": [
+                  "id"
+                ]
+              },
+              "uniques": []
+            },
             "Project": {
               "columns": {
                 "createdAt": {
@@ -124,7 +205,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "12d25a30c4df6145423632842291393bb91dcb861be860014c9200c3a4b23d9a"
+    "storageHash": "1a6c7856535dcf8d53c7cfd68ae90e1773dcf93d0fc8ef007cdc529ea1689a09"
   },
   "capabilities": {
     "postgres": {

@@ -23,7 +23,7 @@ import type {
 } from '@prisma/orm-postgres/contract/types';
 
 export type StorageHash =
-  StorageHashBase<'12d25a30c4df6145423632842291393bb91dcb861be860014c9200c3a4b23d9a'>;
+  StorageHashBase<'1a6c7856535dcf8d53c7cfd68ae90e1773dcf93d0fc8ef007cdc529ea1689a09'>;
 export type ExecutionHash = ExecutionHashBase<string>;
 export type ProfileHash =
   ProfileHashBase<'3916f444a8a17ad749191acf9e08dad97d1a327b88c2f1d45d12f240296aa8b2'>;
@@ -269,6 +269,12 @@ export type StorageColumnInputTypes = ColumnTypesFromStorage<
 >;
 
 export namespace Models {
+  export type public_Note = {
+    body: FieldOutputTypes['public']['Note']['body'];
+    id: FieldOutputTypes['public']['Note']['id'];
+    tenantId: FieldOutputTypes['public']['Note']['tenantId'];
+    readonly [RelationKeys]?: never;
+  };
   export type public_Project = {
     createdAt: FieldOutputTypes['public']['Project']['createdAt'];
     id: FieldOutputTypes['public']['Project']['id'];
@@ -280,6 +286,7 @@ export namespace Models {
 
 export declare const models: {
   public: {
+    Note: Models.public_Note;
     Project: Models.public_Project;
   };
 };
@@ -302,6 +309,39 @@ type ContractBase = Omit<
         readonly kind: 'postgres-schema';
         readonly entries: {
           readonly table: {
+            readonly Note: {
+              columns: {
+                readonly body: {
+                  readonly dataType: 'pg/text';
+                  readonly codecId: 'pg/text@1';
+                  readonly nullable: false;
+                  readonly many: false;
+                };
+                readonly id: {
+                  readonly dataType: 'pg/text';
+                  readonly codecId: 'pg/text@1';
+                  readonly nullable: false;
+                  readonly many: false;
+                };
+                readonly tenantId: {
+                  readonly dataType: 'pg/text';
+                  readonly codecId: 'pg/text@1';
+                  readonly nullable: false;
+                  readonly many: false;
+                };
+              };
+              primaryKey: { readonly columns: readonly ['id'] };
+              uniques: readonly [];
+              indexes: readonly [
+                {
+                  readonly name: 'Note_tenantId_idx_c93ed4f1';
+                  readonly prefix: 'Note_tenantId_idx';
+                  readonly columns: readonly ['tenantId'];
+                  readonly unique: false;
+                },
+              ];
+              foreignKeys: readonly [];
+            };
             readonly Project: {
               columns: {
                 readonly createdAt: {
@@ -353,12 +393,39 @@ type ContractBase = Omit<
   readonly target: 'postgres';
   readonly targetFamily: 'sql';
   readonly roots: {
+    readonly Note: { readonly namespace: 'public' & NamespaceId; readonly model: 'Note' };
     readonly Project: { readonly namespace: 'public' & NamespaceId; readonly model: 'Project' };
   };
   readonly domain: {
     readonly namespaces: {
       readonly public: {
         readonly models: {
+          readonly Note: {
+            readonly fields: {
+              readonly body: {
+                readonly nullable: false;
+                readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/text@1' };
+              };
+              readonly id: {
+                readonly nullable: false;
+                readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/text@1' };
+              };
+              readonly tenantId: {
+                readonly nullable: false;
+                readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/text@1' };
+              };
+            };
+            readonly relations: Record<string, never>;
+            readonly storage: {
+              readonly table: 'Note';
+              readonly namespaceId: 'public';
+              readonly fields: {
+                readonly body: { readonly column: 'body' };
+                readonly id: { readonly column: 'id' };
+                readonly tenantId: { readonly column: 'tenantId' };
+              };
+            };
+          };
           readonly Project: {
             readonly fields: {
               readonly createdAt: {

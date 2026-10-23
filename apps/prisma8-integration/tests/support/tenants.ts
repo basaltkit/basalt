@@ -54,3 +54,47 @@ export async function writeTenantContract(schema: string, extra: string[] = []):
   )
   return config
 }
+
+/**
+ * The connection a tenant's client needs for raw SQL: the tenant's schema on the
+ * search_path (raw SQL names tables unqualified, as Prisma's own examples do),
+ * `public` after it. The ORM ignores it; contractForSchema routes the ORM.
+ */
+export function tenantConnectionString(baseUrl: string, schema: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error(`not a plain identifier: ${schema}`)
+  const url = new URL(baseUrl)
+  url.searchParams.set('options', `-c search_path=${schema},public`)
+  return url.toString()
+}
+
+/**
+ * Creates (or updates) each tenant schema with `prisma db update` on its generated
+ * namespace contract, then updates the central plane last so the single marker is the
+ * central contract's again (a client with marker verification keeps working).
+ */
+export async function provisionTenants(schemas: readonly string[]): Promise<void> {
+  const { prisma } = await import('./db.js')
+  for (const schema of schemas) {
+    const config = await writeTenantContract(schema)
+    const emitted = await prisma(['contract', 'emit'], { config })
+    if (!emitted.ok) throw new Error(`contract emit failed for ${schema}: ${JSON.stringify(emitted)}`)
+    const updated = await prisma(['db', 'update', '--yes'], { config })
+    if (!updated.ok) throw new Error(`db update failed for ${schema}: ${JSON.stringify(updated)}`)
+  }
+  const central = await prisma(['db', 'update', '--yes'])
+  if (!central.ok) throw new Error(`central db update failed: ${JSON.stringify(central)}`)
+}
+
+/** The PostgreSQL SQLSTATE of an error Prisma 8 surfaced, wherever the RC puts it. */
+export function sqlState(error: unknown): string | undefined {
+  const seen = new Set<unknown>()
+  let e: any = error
+  while (e && typeof e === 'object' && !seen.has(e)) {
+    seen.add(e)
+    for (const key of ['sqlState', 'sqlstate']) if (typeof e[key] === 'string') return e[key]
+    if (typeof e.details?.sqlState === 'string') return e.details.sqlState
+    if (typeof e.code === 'string' && /^[0-9A-Z]{5}$/.test(e.code)) return e.code
+    e = e.cause
+  }
+  return undefined
+}

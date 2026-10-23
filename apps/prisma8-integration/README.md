@@ -15,6 +15,16 @@ is private: nothing here is published.
 | evolves one tenant schema | an added field plans exactly `ALTER TABLE "tenant_acme"."Project" ADD COLUMN …`; the other tenants are untouched |
 | restores the central marker | the migration marker (`prisma_contract.marker`) is one per database, and each tenant update overwrites it. Updating the central plane last plans nothing and puts it back |
 
+### Isolation, RLS, middleware, migrations (RFC 0011)
+
+| File | Tests | What it shows |
+|---|---|---|
+| `isolation.test.ts` | 6 | Concurrent writes, model reads, raw SQL, transactions, a `23505` error and concurrent transactions, with one client per tenant schema. Raw SQL reaches the tenant schema only through the connection's `search_path`; a contract-routed client without it silently reads `public` |
+| `rls.test.ts` | 6 | Prisma's documented RLS pattern: a non-owner role, a policy on `current_setting('app.tenant_id')`, and `set_config(…, true)` inside the transaction. Nothing is visible without a tenant, writes for another tenant are refused (`42501`), and nothing leaks to the next query on the same connection, after a failure or under concurrency. A **session**-level `set_config(…, false)` does leak, as the last test shows |
+| `middleware.test.ts` | 3 | `beforeCompile` cannot send a query to a schema the contract does not declare (`RUNTIME.NAMESPACE_UNKNOWN`). It does filter reads, updates and deletes by tenant, but it does not guard inserts, so RLS remains the guarantee |
+| `unbound.test.ts` | 3 | Records prisma/orm#30722: `namespace unbound` emits as `"__unbound__"` and the ORM qualifies with it instead of using the `search_path`. `db update` plans no DDL for an unbound namespace |
+| `migration-files.test.ts` | 4 | `db migrate` per tenant is refused (`MIGRATION.MARKER_MISMATCH`, one marker per database). A Basalt-owned runner applies the planned files' SQL per schema with its own ledger: idempotent, only the evolving tenant changes, and a failing migration rolls back whole. Prisma's marker is never touched |
+
 Two of these lean on details Prisma does not document: the contract's storage namespace
 `id`, and the single marker per database. Watching those details from one RC to the next
 is the reason this harness exists.
