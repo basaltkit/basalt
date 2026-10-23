@@ -162,30 +162,31 @@ switching on a shared pool):
 
 ```ts
 import { PrismaPg } from '@prisma/adapter-pg'
+import { pgSchemaClient } from '@basaltkit/prisma'
 
 prismaPlugin({
   schemaPerTenant: {
     url: process.env.DATABASE_URL!,
-    createClient: (url) => {
-      // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
-      // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
-      const u = new URL(url)
-      const schema = u.searchParams.get('schema') ?? 'public'
-      u.searchParams.delete('schema')
-      u.searchParams.set('options', `-c search_path=${schema},public`)
-      return new PrismaClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
-    },
+    // pgSchemaClient sets the tenant's schema on the connection (search_path):
+    // a Prisma 7 driver adapter ignores the URL's ?schema= on its own.
+    createClient: pgSchemaClient(({ connectionString, schema }) =>
+      new PrismaClient({ adapter: new PrismaPg({ connectionString }, { schema }) })),
     prefix: 'tenant_', // schema name = tenant_<id>
   },
   destroy: (client) => client.$disconnect(),
 })
 ```
 
-::: warning Prisma 7: pass the schema to the adapter
-Prisma 7 connects through a driver adapter, and the adapter **ignores**
-`?schema=`. Your `createClient` must read the schema from the URL and hand it
-to `PrismaPg` (and to `search_path`, for raw SQL), as above. A factory that only
-forwards the URL puts every tenant in `public`.
+::: warning Prisma 7 and later: wrap the factory in `pgSchemaClient`
+A Prisma 7 driver adapter **ignores** `?schema=`, so a `createClient` that only
+forwards the URL puts every tenant in `public`. `pgSchemaClient` sets the
+tenant's schema on the connection's `search_path` instead, which every Prisma
+version and driver honours, for model queries and raw SQL alike. It fails
+closed: a URL without a schema throws instead of connecting to `public`.
+
+The function you pass it is the only Prisma-specific part. On a later Prisma
+(Prisma 8, still a release candidate, builds its client on a node-postgres pool), change that function and
+nothing else: `connectionString` already carries the `search_path`.
 :::
 
 In both cases the plugin attaches the right client to the request context — on
@@ -388,6 +389,7 @@ context has no tenant, and the per-tenant mode when it does.
 
 ```ts
 import { PrismaPg } from '@prisma/adapter-pg'
+import { pgSchemaClient } from '@basaltkit/prisma'
 
 prismaPlugin({
   // No tenant resolved → this client (the central database / `public` schema).
@@ -395,15 +397,10 @@ prismaPlugin({
   // Tenant resolved → a client connected with `?schema=tenant_<id>`.
   schemaPerTenant: {
     url: process.env.DATABASE_URL!,
-    createClient: (url) => {
-      // Prisma 7's driver adapter ignores `?schema=`: hand the schema to the adapter
-      // (and to search_path, for raw SQL). Without this every tenant lands in `public`.
-      const u = new URL(url)
-      const schema = u.searchParams.get('schema') ?? 'public'
-      u.searchParams.delete('schema')
-      u.searchParams.set('options', `-c search_path=${schema},public`)
-      return new PrismaClient({ adapter: new PrismaPg({ connectionString: u.toString() }, { schema }) })
-    },
+    // pgSchemaClient sets the tenant's schema on the connection (search_path):
+    // a Prisma 7 driver adapter ignores the URL's ?schema= on its own.
+    createClient: pgSchemaClient(({ connectionString, schema }) =>
+      new PrismaClient({ adapter: new PrismaPg({ connectionString }, { schema }) })),
   },
   destroy: (client) => client.$disconnect(),
 })
