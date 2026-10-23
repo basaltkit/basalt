@@ -59,7 +59,7 @@ aplicação e de um utilizador para a aplicação. Neste guia, esse utilizador �
 sudo adduser --disabled-password deploy && sudo git clone <repo> /srv/acme
 
 # o root corre a SUA PRÓPRIA cópia, fixada na versão que o lockfile regista:
-cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.5.1 -- \
+cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.9.0 -- \
   basalt-deploy bootstrap --dir=/srv/acme --user=deploy --dry-run
 # lê o que faria e volta a corrê-lo sem --dry-run
 ```
@@ -104,7 +104,7 @@ node node_modules/@basaltkit/deploy/dist/bin.js env           # escreve o .env (
 node node_modules/@basaltkit/deploy/dist/bin.js install-plan  # escreve o plano de instalação (dados) e mostra o comando de root
 
 # uma vez, como administrador: o comando que o install-plan mostrou, por exemplo
-cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.5.1 -- \
+cd / && sudo -H npx --yes --package=@basaltkit/deploy@0.9.0 -- \
   basalt-deploy install --plan=/srv/acme/.basalt/install-plan.json --user=deploy
 ```
 
@@ -312,7 +312,7 @@ consegues chegar com `ssh`.
 Na tua máquina, nunca no servidor:
 
 ```console
-$ npx @basaltkit/deploy-ui@0.1.1
+$ npx @basaltkit/deploy-ui@0.5.0
 basalt-deploy-ui: listening on http://127.0.0.1:53119/ (this machine only)
 basalt-deploy-ui: targets in ~/.config/basalt/deploy-targets.json
 ```
@@ -358,7 +358,7 @@ versão do deploy, o protocolo e o nome do servidor. Por baixo vês que app é
 realmente esse target: o nome da app e de onde vem o seu código
 (`github.com/acme/app (main)`, a partir do `@basaltkit/deploy` 0.9.0):
 
-![A página Targets: três targets (staging, production marcado como protegido, preview) e um aviso verde "staging answers: @basaltkit/deploy 0.5.1, protocol 1, host web-1.example.com"](/guide/deploy/ui-targets.png)
+![A página Targets: três targets (staging, production marcado como protegido, preview) e um aviso verde "staging answers: @basaltkit/deploy 0.9.0, protocol 1, host web-1.example.com" com "app acme · git.example.com/acme/app (main)" por baixo](/guide/deploy/ui-targets.png)
 
 ### Chaves SSH: `~/.ssh/config` {#ssh-config}
 
@@ -424,7 +424,7 @@ O **Status** mostra o que corre agora no servidor: a release atual, o
 processo, o lock e a última execução. Carrega uma vez quando escolhes um target.
 Escolhe **Refresh** para o carregar de novo; a interface não faz polling.
 
-![A página Status do staging: release atual b7e4c19d2a0f (saudável, deploy por alice via ui, migração 20261010_add_invoices), processo pm2 acme-api a correr, lock livre, última execução com saída 0](/guide/deploy/ui-status.png)
+![A página Status do staging, com a origem git.example.com/acme/app (main) na barra de cima: release atual b7e4c19d2a0f (saudável, deploy por alice via ui, migração 20261010_add_invoices), processo pm2 acme-api a correr, lock livre, última execução com saída 0](/guide/deploy/ui-status.png)
 
 A barra no topo mostra sempre onde estás: o target, o seu destino SSH e
 checkout e, depois de o servidor responder, o nome do servidor, a versão do
@@ -458,7 +458,7 @@ bloqueia o deploy até o corrigires no servidor e escolheres **Plan again**:
 Sem erros, a página mostra o plano e o formulário com o que a execução vai
 perguntar:
 
-![Plan & deploy: um aviso C8 sobre a expiração do certificado com a correção "certbot renew", a lista do que uma execução faria (fetch, env, build, validate, backup, migrate, release, health) e o formulário "What the run will ask"](/guide/deploy/ui-plan.png)
+![Plan & deploy: um aviso C8 sobre a expiração do certificado com a correção "certbot renew", os três commits que vão sair (b7e4c19 → e31d0a7), a lista do que uma execução faria (fetch, env, build, validate, backup, migrate, release, health) e o formulário "What the run will ask"](/guide/deploy/ui-plan.png)
 
 **What will go out** lista os commits que a execução faria deploy, do mais
 recente para o mais antigo, com autor e data. Um merge vem marcado, e os
@@ -503,7 +503,7 @@ A página da execução mostra os passos com os respetivos tempos e o log ao viv
 O output do build e das migrações vem marcado com a origem (`[pnpm]`,
 `[prisma]`, `[vite]`):
 
-![Uma execução ao vivo no passo backup: lock, preflight, fetch, env, infra, build e validate concluídos com tempos; o log mostra um aviso C8, o fetch b7e4c19 → e31d0a7, o output do build e o pg_dump para /var/lib/basalt/acme/backups](/guide/deploy/ui-run-live.png)
+![Uma execução ao vivo no passo backup: lock, preflight, fetch, env, infra, build e validate concluídos com tempos; o log mostra o fetch b7e4c19 → e31d0a7, o output do build e o pg_dump para /var/lib/basalt/acme/backups, e um aviso C8 aparece em Findings](/guide/deploy/ui-run-live.png)
 
 No fim, a página mostra a release, o seu URL e as suas migrações:
 
@@ -561,7 +561,7 @@ O deploy, o **Write .env only** e o rollback num target protegido exigem que
 escreva o nome do target no diálogo. O botão fica desativado até o nome
 coincidir:
 
-![O diálogo "Roll back production?" com o selo PROTECTED, "Back to the last healthy release." e o nome escrito só em parte, por isso o botão Roll back continua desativado](/guide/deploy/ui-dialog-rollback-protected.png)
+![O diálogo "Roll back production?" com o selo PROTECTED, "Back to the last healthy release — 9a1f3c7 now.", o commit que sai de produção e o nome escrito só em parte, por isso o botão Roll back continua desativado](/guide/deploy/ui-dialog-rollback-protected.png)
 
 ### Idioma {#language}
 

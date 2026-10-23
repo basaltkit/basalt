@@ -606,7 +606,7 @@ Ou faz o deploy a partir da tua máquina com a interface local, que corre os
 mesmos comandos pelo teu próprio `ssh`:
 
 ```bash
-npx @basaltkit/deploy-ui@latest
+npx @basaltkit/deploy-ui@0.5.0   # fixa uma versão exata
 ```
 
 O guia [Deploy para um servidor](/pt/guide/deploy) explica cada passo a fundo: o
