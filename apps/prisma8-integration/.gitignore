@@ -1,1 +1,3 @@
 .tenants/
+# written by `prisma db init` / `db update` on every run (refs, contract snapshots)
+migrations/
