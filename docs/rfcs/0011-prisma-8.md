@@ -3,7 +3,7 @@
 - **Status:** Draft. It recommends an architecture; nothing is implemented beyond the test harness.
 - **Author:** Marcio Zebedeu
 - **Date:** 2026-10-23
-- **Evidence:** `apps/prisma8-integration`, 27 tests against PostgreSQL 16, on `@prisma/orm-postgres` 8.0.0-rc.20 and the `prisma` CLI 8.0.0-rc.27.
+- **Evidence:** `apps/prisma8-integration`, 28 tests against PostgreSQL 16, on `@prisma/orm-postgres` 8.0.0-rc.20 and the `prisma` CLI 8.0.0-rc.27.
 - **Affects:** `@basaltkit/prisma`, the twelve `@basaltkit/*-prisma` store packages, `create-basalt`, `@basaltkit/generator`, `@basaltkit/deploy` and the docs.
 - **Non-negotiables:**
   - Tenant isolation fails closed.
@@ -33,13 +33,13 @@
 
 ## 1. What was tested
 
-All 27 tests ran twice in a row, green both times, against PostgreSQL 16 (`basalt_prisma8`). CI runs them on every PR (`prisma 8 rc (postgres)`) and nightly against the latest RC.
+All 28 tests ran green against PostgreSQL 16 (`basalt_prisma8`), four times with the file order shuffled. CI runs them on every PR (`prisma 8 rc (postgres)`) and nightly against the latest RC.
 
 | File | Tests | Result | Shows |
 |---|---|---|---|
 | `schema-per-tenant.test.ts` | 5 | 5 ✓ | `db update` per tenant schema; one typed client per tenant via the contract copy; the ORM ignores the `search_path`; the central update restores the marker |
 | `isolation.test.ts` | 6 | 6 ✓ | Concurrent writes of two tenants, model reads, raw SQL, a rolled-back transaction, a `23505` constraint error and concurrent transactions where one fails. No row ever crossed schemas |
-| `rls.test.ts` | 6 | 6 ✓ | Prisma's documented RLS pattern as a non-owner role. Nothing is visible or writable without a tenant (`42501`). A write for another tenant is refused. Nothing leaks to the next query on the same connection, after a failure, or between concurrent tenants. A session-level setting **does** leak, as the test demonstrates |
+| `rls.test.ts` | 7 | 7 ✓ | Prisma's documented RLS pattern as a non-owner role. Nothing is visible or writable without a tenant (`42501`). A write for another tenant is refused. Nothing leaks to the next query on the same connection, after a failure, or between concurrent tenants. A session-level setting **does** leak, as the test demonstrates. `db update`, even for one tenant schema, plans to drop an RLS policy the contract does not declare, and refuses without `--allow` (`CLI.CONSENT_REQUIRED`) |
 | `middleware.test.ts` | 3 | 3 ✓ | `beforeCompile` cannot redirect to an undeclared schema (`RUNTIME.NAMESPACE_UNKNOWN`). It filters reads, updates and deletes, but does not guard inserts |
 | `unbound.test.ts` | 3 | 3 ✓ (record a limitation) | `namespace unbound` is qualified as `"__unbound__"` at runtime (#30722), and `db update` plans no DDL for it |
 | `migration-files.test.ts` | 4 | 4 ✓ | `db migrate` per tenant is refused (`MIGRATION.MARKER_MISMATCH`). A Basalt runner applies the planned files per schema: idempotent, one tenant at a time, a failing migration rolls back whole, and the marker is never touched |
@@ -63,7 +63,7 @@ The labels are:
 | RLS policies (PSL `@@rls`, `policy_*`) and `set_config` per transaction | **Official** | /docs/orm/contract-authoring/psl-syntax#row-level-security, /advanced-postgresql; `rls.test.ts` (policies created in SQL, same semantics) |
 | Transactions pinned to one connection, raw SQL inside them | **Official** | /docs/orm/reference/transactions-and-runtime; `isolation.test.ts`, `rls.test.ts` |
 | Per-schema migrations through the CLI | **Not supported.** One marker per database. ADR 021's per-schema `markerLocator` is not implemented | `migration-files.test.ts`; prisma/orm ADR 021 |
-| `db update` per tenant namespace contract (live diff) | **Ours.** It works, but each run moves the shared marker | `schema-per-tenant.test.ts` |
+| `db update` per tenant namespace contract (live diff) | **Ours.** It works, but each run moves the shared marker. It also diffs objects **outside** the tenant's schema, and plans to drop undeclared RLS policies in `public` (refused without `--allow`) | `schema-per-tenant.test.ts`, `rls.test.ts` |
 | Migration files applied per schema by a Basalt runner | **Ours** | `migration-files.test.ts` |
 | Errors as SQLSTATE (`23505`, `42501`) | Official (the structured error carries the SQLSTATE) | `isolation.test.ts`, `rls.test.ts` |
 | Prepared statements skip middleware | Official (documented) | /docs/orm/reference/transactions-and-runtime; **unvalidated** here |
@@ -100,6 +100,7 @@ These are seen in the tests or in the RC's own types:
 | **Middleware is mistaken for a guarantee.** It does not guard inserts (proven), includes or joins, nor prepared statements (documented) | row-level | Middleware is defence in depth only. RLS (or a schema per tenant) is the guarantee. The Prisma 8 package documents it that way and offers no middleware-only row-level mode |
 | **The app role owns the tables** or is a superuser, so RLS is bypassed | RLS | A boot check in the Prisma 8 package: the connected role is neither superuser nor the table owner, and the tenant tables have `FORCE ROW LEVEL SECURITY` |
 | **A shared marker** makes Prisma think the central database is at a tenant's hash | migrations | Tenants are migrated by the Basalt runner, which never writes the marker. The central plane uses the official `db migrate` |
+| **A schema change drops an RLS policy.** `db update` treats policies the contract does not declare as drift, even when run for one tenant schema (proven). It refuses without `--allow`, but a careless `--allow` removes the isolation | migrations, RLS | RLS policies live in the contract (PSL `@@rls`/`policy_*`), never only in hand-written SQL. Tenant schemas are migrated by the Basalt runner, which applies one package's SQL to one schema and never diffs the database. `--allow` is never automated |
 | **A half-applied tenant migration** | migrations | Each package runs in one transaction with its ledger row (proven). Packages with non-SQL operations are refused |
 | **N clients, N pools** for N tenants | schema-per-tenant | The existing `TenantClientPool` bounds and evicts (unchanged). Pool size per tenant stays small. Load testing is still to do |
 
@@ -203,4 +204,4 @@ The draft is in Appendix A **for review only**. It is not filed.
 > 1. A supported runtime binding: `postgres({ contract, url, namespaces: { public: 'tenant_a' } })`, or `contract.withNamespace('public', 'tenant_a')`. It should keep the generated types (`db.orm.public.*`).
 > 2. `namespace unbound` working end to end: runtime (#30722) and migrations, either with DDL emitted unqualified for the connection's `search_path`, or a marker per schema (ADR 021's locator).
 >
-> We are happy to test patches against our harness: 27 tests covering isolation, RLS and migrations against PostgreSQL.
+> We are happy to test patches against our harness: 28 tests covering isolation, RLS and migrations against PostgreSQL.

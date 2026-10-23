@@ -4,8 +4,8 @@ import postgres from '@prisma/orm-postgres/runtime'
 import { contractFromJson } from '@prisma/orm-postgres/static'
 import type { Contract } from '../prisma/contract.js'
 import contractJson from '../prisma/contract.json' with { type: 'json' }
-import { databaseUrl, serverUrl } from './support/db.js'
-import { sqlState } from './support/tenants.js'
+import { databaseUrl, prisma, serverUrl } from './support/db.js'
+import { sqlState, writeTenantContract } from './support/tenants.js'
 
 // Row-Level Security on Prisma 8 RC, the pattern Prisma documents
 // (contract-authoring/advanced-postgresql): the app connects as a role that is not the
@@ -61,6 +61,11 @@ describe.skipIf(!serverUrl)('Prisma 8 RC: row-level security', () => {
   afterAll(async () => {
     await db?.close()
     await pool?.end()
+    // Leave public."Note" as the contract declares it: other files run `db update`,
+    // which would otherwise plan to drop this undeclared policy (see the last test).
+    await admin?.query(`DROP POLICY IF EXISTS tenant_isolation ON public."Note"`)
+    await admin?.query(`ALTER TABLE public."Note" NO FORCE ROW LEVEL SECURITY`)
+    await admin?.query(`ALTER TABLE public."Note" DISABLE ROW LEVEL SECURITY`)
     await admin?.end()
   })
 
@@ -139,5 +144,19 @@ describe.skipIf(!serverUrl)('Prisma 8 RC: row-level security', () => {
       await db.query(db.raw.sql`SELECT set_config('app.tenant_id', '', false) AS v`.returnsRow({ v: 'pg/text@1' }).build())
     }
     expect(await db.orm.public.Note.all()).toEqual([])
+  })
+
+  it('records a migration risk: db update — even for ONE tenant schema — plans to drop an RLS policy the contract does not declare, and refuses without --allow', async () => {
+    const tenantConfig = await writeTenantContract('tenant_rls_probe')
+    expect((await prisma(['contract', 'emit'], { config: tenantConfig })).ok).toBe(true)
+    for (const config of [tenantConfig, undefined]) {
+      const dry = await prisma(['db', 'update', '--dry-run'], config ? { config } : {})
+      expect(JSON.stringify(dry)).toMatch(/tenant_isolation/)
+      const applied = await prisma(['db', 'update', '--yes'], config ? { config } : {})
+      expect(applied.ok).toBe(false)
+      expect(JSON.stringify(applied)).toContain('CLI.CONSENT_REQUIRED')
+    }
+    // fail closed: the policy is still there
+    expect((await admin.query(`SELECT count(*)::int AS n FROM pg_policies WHERE tablename = 'Note' AND policyname = 'tenant_isolation'`)).rows[0].n).toBe(1)
   })
 })
