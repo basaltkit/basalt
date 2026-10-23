@@ -970,16 +970,20 @@ const admin = new PrismaClient({ adapter })
 await provisionTenantSchema(admin, tenantSchema('acme')) // CREATE SCHEMA IF NOT EXISTS "tenant_acme"
 ```
 
-::: warning Prisma 7 e seguintes: envolve a factory no `pgSchemaClient`
+::: warning Prisma 7: envolve a factory no `pgSchemaClient`
 Um driver adapter do Prisma 7 **ignora** o `?schema=`, por isso um `createClient`
-que só passa o URL põe todos os tenants no `public`. O `pgSchemaClient` põe o
-schema do tenant no `search_path` da ligação, que todas as versões do Prisma e
-todos os drivers respeitam, tanto nas queries dos modelos como em SQL raw. Falha
-fechado: um URL sem schema lança um erro em vez de se ligar ao `public`.
+que só passa o URL põe todos os tenants no `public`. O `pgSchemaClient` dá à
+factory o schema do tenant, para a opção `schema` do adaptador (é o que as
+queries dos modelos usam), e uma ligação cujo `search_path` é esse schema (é
+onde o SQL raw resolve os nomes). Falha fechado: um URL sem schema lança um erro
+em vez de se ligar ao `public`.
 
-A função que lhe passas é a única parte específica do Prisma. Numa versão
-posterior (o Prisma 8, ainda em release candidate, constrói o cliente sobre um pool do node-postgres), muda
-essa função e mais nada: o `connectionString` já leva o `search_path`.
+**O Prisma 8 é diferente.** As queries dele escrevem o schema no próprio SQL
+(`"public"."Project"`), por isso o `search_path` não o escolhe, e o cliente não
+tem opção `schema`. O `pgSchemaClient` não leva o schema-per-tenant para o
+Prisma 8. O Basalt testa o release candidate do Prisma 8 em
+`apps/prisma8-integration` e vai ter um caminho suportado quando o Prisma 8 for
+estável.
 :::
 
 `tenantSchema()` é injetiva: ids canónicos (`acme`, `acme_co`) são usados
