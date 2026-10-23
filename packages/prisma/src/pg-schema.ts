@@ -1,19 +1,23 @@
 import { BasaltError } from '@basaltkit/core'
 
 /**
- * Schema-per-tenant on PostgreSQL, independent of the Prisma version.
+ * Schema-per-tenant on PostgreSQL with Prisma 7's driver adapters.
  *
  * `prismaPlugin({ schemaPerTenant })` hands `createClient` a URL whose
  * `?schema=` names the tenant's schema. Prisma 6 read that parameter itself;
  * a Prisma 7 driver adapter ignores it, and a client built from the bare URL
- * runs every tenant in `public`. A client built straight on a node-postgres
- * pool (the direction Prisma 8 takes) has no `schema` parameter either.
+ * runs every tenant in `public`.
  *
- * So the schema is applied at the PostgreSQL level, where every version and
- * every driver honours it: the connection's `search_path`, set in the libpq
- * `options` parameter that node-postgres reads from the connection string.
- * {@link pgSchemaConnection} computes that connection; the client it becomes
- * is the application's — built with whatever its Prisma version needs.
+ * {@link pgSchemaConnection} turns that URL into what the client needs: the
+ * schema, for the adapter's own `schema` option (Prisma's model queries use
+ * it), and a connection whose `search_path` is that schema (raw SQL resolves
+ * against it), set in the libpq `options` parameter node-postgres reads from
+ * the connection string. The client it becomes is the application's.
+ *
+ * Not a path to Prisma 8. Its ORM names the schema in every statement
+ * (`"public"."Project"`), so a connection's search_path does not move model
+ * queries, and its client has no `schema` option. The Basalt repository tracks
+ * schema-per-tenant on the Prisma 8 release candidate in apps/prisma8-integration.
  */
 
 export class PgSchemaConnectionError extends BasaltError {
@@ -27,8 +31,8 @@ export interface PgSchemaConnection {
   /**
    * The URL without `?schema=`, with `options=-c search_path=<schema>,…`
    * (appended to any `options` the URL already had). Pass it to the driver
-   * as is: `new PrismaPg({ connectionString })` on Prisma 7, a `pg.Pool` on
-   * Prisma 8.
+   * as is: `new PrismaPg({ connectionString }, { schema })`, or a `pg.Pool`
+   * for raw SQL.
    */
   connectionString: string
   /** The schema the URL named — for an adapter that takes it too (`new PrismaPg(…, { schema })`). */
@@ -104,8 +108,9 @@ export function pgSchemaConnection(url: string, options: PgSchemaConnectionOptio
  * })
  * ```
  *
- * Basalt never builds the client itself, so a Prisma upgrade changes `build`
- * and nothing else.
+ * Basalt never builds the client itself: `build` is the only code that knows
+ * Prisma. On Prisma 7 it passes `schema` to the adapter, as above; the
+ * search_path alone does not reach Prisma's model queries on every version.
  */
 export function pgSchemaClient<TClient>(
   build: (connection: PgSchemaConnection) => TClient | Promise<TClient>,

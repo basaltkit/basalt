@@ -177,16 +177,20 @@ prismaPlugin({
 })
 ```
 
-::: warning Prisma 7 and later: wrap the factory in `pgSchemaClient`
+::: warning Prisma 7: wrap the factory in `pgSchemaClient`
 A Prisma 7 driver adapter **ignores** `?schema=`, so a `createClient` that only
-forwards the URL puts every tenant in `public`. `pgSchemaClient` sets the
-tenant's schema on the connection's `search_path` instead, which every Prisma
-version and driver honours, for model queries and raw SQL alike. It fails
-closed: a URL without a schema throws instead of connecting to `public`.
+forwards the URL puts every tenant in `public`. `pgSchemaClient` hands the
+factory the tenant's schema, for the adapter's `schema` option (Prisma's model
+queries use it), and a connection whose `search_path` is that schema (raw SQL
+resolves against it). It fails closed: a URL without a schema throws instead of
+connecting to `public`.
 
-The function you pass it is the only Prisma-specific part. On a later Prisma
-(Prisma 8, still a release candidate, builds its client on a node-postgres pool), change that function and
-nothing else: `connectionString` already carries the `search_path`.
+**Prisma 8 is different.** Its queries name the schema in the SQL itself
+(`"public"."Project"`), so the `search_path` does not choose it, and its client
+has no `schema` option. `pgSchemaClient` does not carry schema-per-tenant over
+to Prisma 8. Basalt tests the Prisma 8 release candidate in
+`apps/prisma8-integration` and will ship a supported path when Prisma 8 is
+stable.
 :::
 
 In both cases the plugin attaches the right client to the request context — on

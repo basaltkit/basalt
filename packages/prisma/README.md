@@ -270,7 +270,9 @@ await crossTenantSweep({
 
 Each tenant has its own schema (`tenant_acme`, `tenant_globex`, …) in the same database. Each tenant's client connects with `?schema=<name>` in the URL — Prisma is what sets the `search_path` on connection (the reliable way to do this):
 
-> **Prisma 7 and later:** a driver adapter **ignores** `?schema=`, so a `createClient` that only forwards the URL puts every tenant in `public`. Wrap the factory in `pgSchemaClient`, as below: it sets the tenant's schema on the connection's `search_path` (honoured by every Prisma version and driver, for model queries and raw SQL) and fails closed when the URL has no schema. The function you pass it is the only Prisma-specific part — on a later Prisma, change that function and nothing else.
+> **Prisma 7:** a driver adapter **ignores** `?schema=`, so a `createClient` that only forwards the URL puts every tenant in `public`. Wrap the factory in `pgSchemaClient`, as below: it hands the factory the tenant's schema, for the adapter's `schema` option, and a connection whose `search_path` is that schema, for raw SQL. It fails closed when the URL has no schema.
+>
+> **Prisma 8 is different:** its queries name the schema in the SQL itself and its client has no `schema` option, so `pgSchemaClient` does not carry schema-per-tenant over to Prisma 8. Basalt tests the Prisma 8 release candidate (`apps/prisma8-integration`) and will ship a supported path when Prisma 8 is stable.
 
 ```ts
 import { PrismaClient } from '@prisma/client'
