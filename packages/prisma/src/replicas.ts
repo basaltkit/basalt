@@ -1,7 +1,8 @@
 /**
- * Read/write splitting for a Prisma client. Reads (`findMany`, `count`,
- * `aggregate`, `$queryRaw`, …) fan out across one or more read replicas;
- * everything else — writes, transactions, `$executeRaw` — stays on the primary.
+ * Read/write splitting for a Prisma client. Model reads (`findMany`, `findUnique`,
+ * `count`, `aggregate`, …) fan out across one or more read replicas; everything
+ * else — writes, transactions, `$executeRaw`, and `$queryRaw` unless
+ * `rawReadsOnReplica` is set — stays on the primary.
  *
  * It's a thin `Proxy`, not a dependency: pass the result straight to
  * `prismaPlugin({ client })`. The escape hatch `db().$primary` forces the
