@@ -110,6 +110,12 @@ overrides:
   # override is the only way to raise it; 6.16 is the same major and the parser's
   # behaviour for well-formed input is unchanged.
   qs: ^6.16.0
+  # GHSA-27r3-jxmh-p828 (high): body-parser 2.0.0–2.3.x accepts trailing bytes
+  # after a compressed request body, a denial of service. Overridden, not
+  # ignored, for the reason qs is: it parses request bodies on the request path
+  # of every application built on @basaltkit/express (and drives' express
+  # endpoint). Express 5 pins a range that admits 2.3.x; 2.4.0 is the same major.
+  body-parser: ^2.4.0
   # GHSA-qhr7-859c-m2p7 and the parseCommaParts advisory (high): brace-expansion
   # below 5.0.11 recurses without bound on nested or comma-heavy brace groups.
   # It reaches us only through eslint's minimatch (dev tooling), but eslint pins
