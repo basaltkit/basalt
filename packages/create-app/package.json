@@ -1,6 +1,6 @@
 {
   "name": "create-basalt",
-  "version": "1.14.2",
+  "version": "1.15.0",
   "engines": {
     "node": ">=22.5.0"
   },
