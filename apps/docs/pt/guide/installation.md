@@ -142,12 +142,12 @@ mudam o que está lá dentro:
 | `src/env.ts` | `defineEnv` sobre `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` com auth), com `{ prefix: 'MY_SAAS' }` — cada variável é lida primeiro como `MY_SAAS_<NOME>`, com recuo para o nome simples (vê [O `--env-file` nunca sobrepõe variáveis exportadas](#o-env-file-nunca-sobrepoe-variaveis-exportadas)) |
 | `src/app.ts` | `buildApp()` — config, logger, eventos, headers de segurança + um rate limit global, depois tenancy/auth/faturação/MCP/CLI conforme escolhido. Com tenancy + auth: `teamsPlugin()` + `tenantMembershipPlugin()` (pedidos autenticados para um tenant de que o utilizador não é membro recebem `403`) e um seed só de dev que adiciona quem se regista ao tenant `demo` |
 | `src/routes.ts` | `GET /` (um índice amigável) e `GET /health` |
-| `src/server.ts` | Arranca, resolve o `FASTIFY`, escuta e encerra em `SIGINT`/`SIGTERM`. O `pnpm start` corre a sua forma compilada (`dist/src/server.js`) em node puro e **não** carrega nenhum `.env` — a configuração de produção vem do ambiente real |
+| `src/server.ts` | Arranca, resolve o `FASTIFY`, escuta e encerra em `SIGINT`/`SIGTERM`. O `pnpm start` corre a sua forma compilada (`dist/src/server.js`) em node puro com `--env-file-if-exists=.env`: o ficheiro preenche o que não está exportado e não define `NODE_ENV`, por isso a produção continua fail-closed |
 | `src/dev.ts` | A entrada do `pnpm dev`: carrega o `.env` quando existe (as variáveis exportadas ganham), define `NODE_ENV=development` se ainda não estiver definido e carrega o `server.ts` |
 | `tests/app.test.ts` | Um smoke test que arranca a app e chama `/` e `/health` |
-| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `build` (`tsc -p tsconfig.build.json`), `start` (`node --enable-source-maps dist/src/server.js` — faz build primeiro; um `NODE_ENV` não definido conta como produção), `start:dev` (`tsx src/server.ts`, o servidor a partir do código-fonte sem build), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` por omissão, `create-basalt --project` com `--no-cli`, para que o `pnpm basalt update` funcione em qualquer app) e, com `--ui`, `dev:web`. O `create-basalt` é uma devDependency. As versões `@basaltkit/*` partem da versão atual de cada pacote (`^<major>.<minor>.<patch>`) |
+| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `build` (`tsc -p tsconfig.build.json`), `start` (`node --env-file-if-exists=.env --enable-source-maps dist/src/server.js` — faz build primeiro; carrega o `.env`, e um `NODE_ENV` não definido conta como produção), `engines.node` `>=22.9.0`, `start:dev` (`tsx src/server.ts`, o servidor a partir do código-fonte sem build), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` por omissão, `create-basalt --project` com `--no-cli`, para que o `pnpm basalt update` funcione em qualquer app) e, com `--ui`, `dev:web`. O `create-basalt` é uma devDependency. As versões `@basaltkit/*` partem da versão atual de cada pacote (`^<major>.<minor>.<patch>`) |
 | `.basalt/project.json` | O manifesto do scaffold: versão do create-basalt, opções e um hash de cada ficheiro gerado — faz commit dele; o [`add`](#acrescentar-funcionalidades-depois) e o [`update`](#atualizar-uma-app) usam-no para distinguir ficheiros do template intactos dos editados |
-| `.env` | Valores locais de desenvolvimento — uma cópia do `.env.example` mais, com auth, um `APP_SECRET` gerado. Ignorado pelo git, modo `0600`, nunca no manifesto; o `pnpm dev` e o `pnpm basalt` carregam-no, o `pnpm start` não |
+| `.env` | Valores locais de desenvolvimento — uma cópia do `.env.example` mais, com auth, um `APP_SECRET` gerado. Ignorado pelo git, modo `0600`, nunca no manifesto; o `pnpm dev`, o `pnpm basalt` e o `pnpm start` carregam-no; não define `NODE_ENV` |
 | `tsconfig.build.json`, `Dockerfile` | O [caminho de produção](/pt/guide/production#build-e-envio): o `pnpm build` compila o `src/` para `dist/` (rootDir `.`, por isso `src/server.ts` → `dist/src/server.js`); o `Dockerfile` multi-stage — o mesmo ficheiro que o `basalt publish dockerfile` escreve — faz o build da app e corre-a em node puro como o utilizador `node` |
 | `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Estrutura do projeto (o `.dockerignore` mantém o `.env` e as chaves fora das camadas da imagem; o `.env.example` usa os nomes com prefixo da app e, com o README, explica a [armadilha de precedência do `--env-file`](#o-env-file-nunca-sobrepoe-variaveis-exportadas); o `pnpm-workspace.yaml` exclui `@basaltkit/*` e `create-basalt` do `minimumReleaseAge` e documenta as [definições do pnpm 11](#pnpm-11-idade-minima-e-verifydepsbeforerun)) |
 | `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | Com `--prisma`: o schema (os modelos de cada domínio Basalt ativo mais os teus), a configuração do Prisma 7 com o URL de ligação, o(s) cliente(s) que a app usa e o seed do tenant `demo` |
@@ -234,9 +234,12 @@ configurada, por isso o `pnpm test` continua verde numa máquina sem PostgreSQL.
 O `src/env.ts` valida o `process.env` e mais nada. **Em desenvolvimento o
 scaffold carrega o `.env` por ti:** o `src/dev.ts` (`pnpm dev`) e o
 `bin/basalt.ts` (`pnpm basalt`, gerado por omissão) chamam `process.loadEnvFile()` sobre
-o `.env` do projeto quando existe, antes de a app ser importada. **O
-`pnpm start` não** — corre o `src/server.ts` compilado, a entrada de produção, e a configuração
-de produção vem do ambiente real (ou arranca-o tu com `node --env-file=…`). Uma
+o `.env` do projeto quando existe, antes de a app ser importada, e definem
+`NODE_ENV=development`. **O `pnpm start` também o carrega** —
+`node --env-file-if-exists=.env` (Node 22.9+) sobre o `src/server.ts` compilado —
+mas não define `NODE_ENV`: sem ele, conta como produção, por isso os segredos são
+obrigatórios. O que a plataforma exporta (Docker, systemd,
+[`@basaltkit/deploy`](/pt/guide/deploy#env-file)) ganha sempre. Uma
 app nova já traz um `.env`: os valores do `.env.example` e, com auth, um
 `APP_SECRET` gerado — ignorado pelo git, por isso o segredo nunca chega ao
 repositório.
@@ -271,7 +274,8 @@ export const env = defineEnv(
 MY_SAAS_PORT=3000
 MY_SAAS_HOST=0.0.0.0
 MY_SAAS_LOG_LEVEL=info
-NODE_ENV=development            # nunca leva prefixo — convenção do Node
+# NODE_ENV nunca leva prefixo, e não se define aqui: dev e basalt usam development,
+# o start (que também carrega este ficheiro) fica em produção
 # MY_SAAS_APP_SECRET=           # com auth
 ```
 

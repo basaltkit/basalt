@@ -11,9 +11,9 @@ import { DOCKERFILE as CLI_DOCKERFILE, PUBLISHABLES } from '@basaltkit/cli'
 import { createProject } from '../src/index.js'
 import { loadProject } from '../src/project/context.js'
 import { runDoctor } from '../src/project/doctor.js'
-import { LEGACY_PRISMA_OUTPUT, planProductionPath, RUNS_TSX } from '../src/project/production.js'
+import { LEGACY_PRISMA_OUTPUT, MANUAL_NODE_ENV_SNIPPET, planProductionPath, RUNS_TSX } from '../src/project/production.js'
 import { DOCKERFILE, DOCKERIGNORE, PRODUCTION_ENTRY } from '../src/stubs.js'
-import { BUILD_SCRIPT, envPrefix, START_SCRIPT } from '../src/templates.js'
+import { BUILD_SCRIPT, envPrefix, PREVIOUS_START_SCRIPT, START_SCRIPT } from '../src/templates.js'
 import { read, write } from './helpers/project.js'
 
 /**
@@ -154,6 +154,26 @@ describe('update offers the production path to an older app', () => {
     expect(plan.manual.join('\n')).toContain("import { PrismaClient } from '#db/client.js'")
   })
 
+  it('an untouched start from create-basalt ≤ 1.14 is offered the .env loading; a customised one is kept', async () => {
+    const dir = await legacyApp('prevstart')
+    const pkg = JSON.parse(await read(dir, 'package.json'))
+    pkg.scripts.start = PREVIOUS_START_SCRIPT
+    const plan = await planProductionPath(dir, `${JSON.stringify(pkg, null, 2)}\n`)
+    expect(JSON.parse(plan.packageJsonText).scripts.start).toBe(START_SCRIPT)
+    expect(plan.notes.join('\n')).toContain('"start" loads .env when it exists')
+    pkg.scripts.start = `${PREVIOUS_START_SCRIPT} --trace-warnings`
+    const custom = `${JSON.stringify(pkg, null, 2)}\n`
+    expect(JSON.parse((await planProductionPath(dir, custom)).packageJsonText).scripts.start).toBe(pkg.scripts.start)
+  })
+
+  it('a NODE_ENV=development left in .env (create-basalt ≤ 1.14) is a manual step: start would boot in development', async () => {
+    const dir = await legacyApp('nodeenv')
+    await write(dir, '.env', 'NODEENV_PORT=3000\nNODE_ENV=development\n')
+    expect((await planProductionPath(dir, await read(dir, 'package.json'))).manual).toContain(MANUAL_NODE_ENV_SNIPPET)
+    await write(dir, '.env', 'NODEENV_PORT=3000\n')
+    expect((await planProductionPath(dir, await read(dir, 'package.json'))).manual).not.toContain(MANUAL_NODE_ENV_SNIPPET)
+  })
+
   it('offers the (pnpm) Dockerfile to pnpm apps only', async () => {
     const dir = await legacyApp('npmapp')
     const plan = await planProductionPath(dir, await read(dir, 'package.json'), 'npm')
@@ -180,6 +200,20 @@ describe('doctor checks the production path statically', () => {
     expect(messages.some((m) => m.startsWith('warn No `build` script'))).toBe(true)
     expect(messages.some((m) => m.includes('generated under src/'))).toBe(true)
     expect(messages.some((m) => m.includes('@prisma/client-runtime-utils'))).toBe(true)
+  })
+
+  it('notes a start from create-basalt ≤ 1.14 that loads no .env, and warns on NODE_ENV=development once start loads it', async () => {
+    const dir = join(root, 'prevdoc')
+    await createProject({ name: 'prevdoc', dir })
+    await write(dir, 'pnpm-lock.yaml', 'lockfileVersion: 9.0\n')
+    const pkg = JSON.parse(await read(dir, 'package.json'))
+    pkg.scripts.start = PREVIOUS_START_SCRIPT
+    await write(dir, 'package.json', `${JSON.stringify(pkg, null, 2)}\n`)
+    expect((await findings(dir)).map((f) => `${f.level} ${f.message}`)).toEqual([expect.stringMatching(/^info `start` loads no \.env/)])
+    pkg.scripts.start = START_SCRIPT
+    await write(dir, 'package.json', `${JSON.stringify(pkg, null, 2)}\n`)
+    await write(dir, '.env', `${await read(dir, '.env')}NODE_ENV=development\n`)
+    expect((await findings(dir)).map((f) => `${f.level} ${f.message}`)).toEqual([expect.stringMatching(/^warn \.env sets NODE_ENV=development/)])
   })
 
   it('notes a dist/ older than src/', async () => {
@@ -260,9 +294,14 @@ interface Server {
 /** Starts `node dist/src/server.js` and waits until /health answers, the process exits, or 30s pass. */
 async function startServer(dir: string, env: NodeJS.ProcessEnv): Promise<Server> {
   const port = await freePort()
-  const child = spawn(process.execPath, ['--enable-source-maps', PRODUCTION_ENTRY], {
+  // Exactly what `pnpm start` runs: node plus the script's own flags (--env-file-if-exists).
+  const [, ...args] = START_SCRIPT.split(' ')
+  // The app-prefixed names win over the bare ones (src/env.ts), and `start` now
+  // loads the scaffold's .env, which sets <PREFIX>_PORT/_HOST: export those.
+  const prefix = envPrefix(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).name)
+  const child = spawn(process.execPath, args, {
     cwd: dir,
-    env: { ...env, PORT: String(port) },
+    env: { ...env, PORT: String(port), [`${prefix}_PORT`]: String(port), [`${prefix}_HOST`]: '127.0.0.1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let log = ''
@@ -326,6 +365,21 @@ describe('a scaffold builds and runs on plain node (no tsx)', () => {
     const result = await bootAndProbe(dir, prodEnv({}))
     expect(result.status, result.log).toBe(200)
     expect(result.body).toMatchObject({ ok: true })
+  }, 90_000)
+
+  it('`start` loads the app\'s .env (nothing exported but PATH), and with no NODE_ENV in it runs as production', async () => {
+    const dir = freshDir('dotenv')
+    await createProject({ name: 'prod-dotenv', dir, auth: true })
+    expect(build(dir)).toBe('')
+    expect(await read(dir, '.env')).toMatch(/^PROD_DOTENV_APP_SECRET=.{32,}$/m)
+    // Only PATH: the secret comes from .env, and NODE_ENV stays unset (production).
+    expect((await bootAndProbe(dir, { PATH: process.env['PATH'] })).status).toBe(200)
+    // Without the generated secret, production refuses to boot (fail-closed).
+    const env = await read(dir, '.env')
+    await write(dir, '.env', env.replace(/^PROD_DOTENV_APP_SECRET=.*$/m, ''))
+    const refused = await bootAndProbe(dir, { PATH: process.env['PATH'] })
+    expect(refused.status).toBeUndefined()
+    expect(refused.log).toMatch(/APP_SECRET/)
   }, 90_000)
 
   it('full preset (billing + cli + mcp): the dev-only packages are not needed to start', async () => {

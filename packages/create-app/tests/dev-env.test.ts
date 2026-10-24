@@ -237,7 +237,7 @@ throw error
 })
 
 describe('src/dev.ts', () => {
-  it('loads .env without overriding exported variables; server.ts alone loads nothing', async () => {
+  it('loads .env without overriding exported variables; server.ts alone loads nothing (start does, with --env-file-if-exists)', async () => {
     const dir = await scaffold('devts')
     const printer = `console.log(JSON.stringify({ url: process.env.DEVTS_DATABASE_URL ?? null, port: process.env.DEVTS_PORT ?? null, nodeEnv: process.env.NODE_ENV ?? null }))\n`
     await write(dir, 'src/server.js', printer)
@@ -245,10 +245,13 @@ describe('src/dev.ts', () => {
     const dev = run(dir, 'src/dev.ts', [], { DEVTS_PORT: '4000' })
     expect(dev.stderr).toBe('')
     expect(JSON.parse(dev.stdout)).toEqual({ url: 'postgres://from-dotenv/devts', port: '4000', nodeEnv: 'development' })
-    // `pnpm start` runs the compiled server.ts: production configuration comes from the environment only.
+    // server.ts loads nothing itself; `pnpm start` loads .env through node's own flag
+    // (an exported variable still wins) and never opts into development.
     expect(await read(dir, 'src/server.ts')).not.toMatch(/loadEnvFile|\.env/)
-    const scripts = JSON.parse(await read(dir, 'package.json')).scripts
-    expect(scripts.start).toBe('node --enable-source-maps dist/src/server.js')
+    const pkg = JSON.parse(await read(dir, 'package.json'))
+    const scripts = pkg.scripts
+    expect(scripts.start).toBe('node --env-file-if-exists=.env --enable-source-maps dist/src/server.js')
+    expect(pkg.engines).toEqual({ node: '>=22.9.0' })
     expect(scripts['start:dev']).toBe('tsx src/server.ts')
   })
 

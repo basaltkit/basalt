@@ -412,7 +412,7 @@ devDependency e nunca é enviado. Três scripts tratam disso:
 
 ```bash
 pnpm build       # tsc -p tsconfig.build.json → dist/ (só o src/; rootDir ".")
-pnpm start       # node --enable-source-maps dist/src/server.js
+pnpm start       # node --env-file-if-exists=.env --enable-source-maps dist/src/server.js
 pnpm start:dev   # tsx src/server.ts — o servidor a partir do código-fonte, sem build
 ```
 

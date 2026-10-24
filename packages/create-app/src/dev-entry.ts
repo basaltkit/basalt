@@ -1,5 +1,5 @@
 import { hashContent } from './project/manifest.js'
-import { devTs, ENV_EXAMPLE_LEAD, LEGACY_ENV_EXAMPLE_LEAD } from './templates.js'
+import { devTs, ENV_EXAMPLE_LEAD, LEGACY_ENV_EXAMPLE_LEAD, PREVIOUS_ENV_EXAMPLE_LEAD } from './templates.js'
 
 /**
  * `src/dev.ts` (the `pnpm dev` entrypoint) and the `.env.example` header across
@@ -44,12 +44,14 @@ if (existsSync(envFile)) process.loadEnvFile(envFile)
 `
 
 /**
- * `.env.example` with the old "nothing loads this file" lead swapped for the
- * current one; undefined when the file does not start with the old lead (a
+ * `.env.example` with an earlier lead ("nothing loads this file", or "`pnpm
+ * start` does NOT") swapped for the current one; undefined when the file does
+ * not start with one of them (a
  * newer or hand-written file is left alone — it is only comments).
  */
 export function patchEnvExample(content: string): string | undefined {
   const normalized = content.replace(/\r\n/g, '\n')
-  if (!normalized.startsWith(`${LEGACY_ENV_EXAMPLE_LEAD}\n`)) return undefined
-  return `${ENV_EXAMPLE_LEAD}${normalized.slice(LEGACY_ENV_EXAMPLE_LEAD.length)}`
+  const lead = [LEGACY_ENV_EXAMPLE_LEAD, PREVIOUS_ENV_EXAMPLE_LEAD].find((old) => normalized.startsWith(`${old}\n`))
+  if (lead === undefined) return undefined
+  return `${ENV_EXAMPLE_LEAD}${normalized.slice(lead.length)}`
 }

@@ -362,9 +362,11 @@ describe('environment precedence (BK-018)', () => {
     expect(example).toMatch(/^MY_SAAS_PORT=3000$/m)
     expect(example).toMatch(/^MY_SAAS_HOST=/m)
     expect(example).toMatch(/^MY_SAAS_LOG_LEVEL=/m)
-    // …except NODE_ENV, which is a Node-wide convention and never prefixed.
-    expect(example).toMatch(/^NODE_ENV=development$/m)
+    // NODE_ENV is never prefixed, and never set here: `pnpm start` loads this
+    // file, and NODE_ENV=development would boot it with the dev secret defaults.
+    expect(example).not.toMatch(/^NODE_ENV=/m)
     expect(example).not.toMatch(/^MY_SAAS_NODE_ENV=/m)
+    expect(await read(result.dir, '.env')).not.toMatch(/^NODE_ENV=/m)
     // Every live line is still KEY=value (the file stays loadable).
     for (const line of example.split('\n').filter((l) => l && !l.startsWith('#'))) {
       expect(line).toMatch(/^[A-Z][A-Z0-9_]*=/)

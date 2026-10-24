@@ -138,12 +138,12 @@ inside it:
 | `src/env.ts` | `defineEnv` over `PORT`, `HOST`, `LOG_LEVEL`, `NODE_ENV` (+ `APP_SECRET` via `secret({ minLength: 32 })` with auth), with `{ prefix: 'MY_SAAS' }` — every variable is read as `MY_SAAS_<NAME>` first, falling back to the bare name (see [`--env-file` never overrides exported variables](#env-file-never-overrides-exported-variables)) |
 | `src/app.ts` | `buildApp()` — config, logger, events, security headers + a global rate limit, then tenancy/auth/billing/MCP/CLI as selected. With tenancy + auth: `teamsPlugin()` + `tenantMembershipPlugin()` (authenticated requests for a tenant the user is not a member of get `403`) and a dev-only seed adding registrants to the `demo` tenant |
 | `src/routes.ts` | `GET /` (a friendly index) and `GET /health` |
-| `src/server.ts` | Boots, resolves `FASTIFY`, listens, and shuts down on `SIGINT`/`SIGTERM`. `pnpm start` runs its compiled form (`dist/src/server.js`) on plain node and loads **no** `.env` — production configuration comes from the real environment |
+| `src/server.ts` | Boots, resolves `FASTIFY`, listens, and shuts down on `SIGINT`/`SIGTERM`. `pnpm start` runs its compiled form (`dist/src/server.js`) on plain node with `--env-file-if-exists=.env`: the file fills in what is not exported, and sets no `NODE_ENV`, so production stays fail-closed |
 | `src/dev.ts` | The `pnpm dev` entry: loads `.env` when present (exported variables win), sets `NODE_ENV=development` unless already set, then loads `server.ts` |
 | `tests/app.test.ts` | A smoke test that boots the app and hits `/` and `/health` |
-| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `build` (`tsc -p tsconfig.build.json`), `start` (`node --enable-source-maps dist/src/server.js` — build first; an unset `NODE_ENV` counts as production), `start:dev` (`tsx src/server.ts`, the server from source without a build), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` by default, `create-basalt --project` with `--no-cli`, so `pnpm basalt update` works in every app) and, with `--ui`, `dev:web`. `create-basalt` is a devDependency. `@basaltkit/*` ranges are floored at each package's current version (`^<major>.<minor>.<patch>`) |
+| `package.json` | Scripts `dev` (`tsx watch src/dev.ts`), `build` (`tsc -p tsconfig.build.json`), `start` (`node --env-file-if-exists=.env --enable-source-maps dist/src/server.js` — build first; loads `.env`, and an unset `NODE_ENV` counts as production), `engines.node` `>=22.9.0`, `start:dev` (`tsx src/server.ts`, the server from source without a build), `test`, `typecheck`, `basalt` (`tsx bin/basalt.ts` by default, `create-basalt --project` with `--no-cli`, so `pnpm basalt update` works in every app) and, with `--ui`, `dev:web`. `create-basalt` is a devDependency. `@basaltkit/*` ranges are floored at each package's current version (`^<major>.<minor>.<patch>`) |
 | `.basalt/project.json` | The scaffold manifest: create-basalt version, options and a hash of every generated file — commit it; [`add`](#adding-features-later) and [`update`](#updating-an-app) use it to tell untouched template files from edited ones |
-| `.env` | Local development values — a copy of `.env.example` plus, with auth, a generated `APP_SECRET`. Git-ignored, mode `0600`, never in the manifest; `pnpm dev` and `pnpm basalt` load it, `pnpm start` does not |
+| `.env` | Local development values — a copy of `.env.example` plus, with auth, a generated `APP_SECRET`. Git-ignored, mode `0600`, never in the manifest; `pnpm dev`, `pnpm basalt` and `pnpm start` load it; it sets no `NODE_ENV` |
 | `tsconfig.build.json`, `Dockerfile` | The [production path](/guide/production#build-ship): `pnpm build` compiles `src/` to `dist/` (rootDir `.`, so `src/server.ts` → `dist/src/server.js`); the multi-stage `Dockerfile` — the same file `basalt publish dockerfile` writes — builds the app and runs it on plain node as the `node` user |
 | `.env.example`, `.gitignore`, `.dockerignore`, `README.md`, `tsconfig.json`, `pnpm-workspace.yaml` | Project scaffolding (`.dockerignore` keeps `.env` and keys out of image layers; `.env.example` uses the app-prefixed names and, with the README, explains the [`--env-file` precedence pitfall](#env-file-never-overrides-exported-variables); `pnpm-workspace.yaml` excludes `@basaltkit/*` and `create-basalt` from `minimumReleaseAge` and documents the [pnpm 11 settings](#pnpm-11-release-age-and-verifydepsbeforerun)) |
 | `prisma/schema.prisma`, `prisma.config.ts`, `src/db.ts`, `prisma/seed.ts` | With `--prisma`: the schema (the models of every enabled Basalt domain plus your own), the Prisma 7 config carrying the connection URL, the client(s) the app uses, and the `demo` tenant seed |
@@ -230,9 +230,11 @@ The generated `tests/app.test.ts` skips itself when no database is configured, s
 `src/env.ts` validates `process.env` and nothing else. **In development the
 scaffold loads `.env` for you:** `src/dev.ts` (`pnpm dev`) and `bin/basalt.ts`
 (`pnpm basalt`, scaffolded by default) call `process.loadEnvFile()` on the project's
-`.env` when it exists, before the app is imported. **`pnpm start` does not** —
-it runs the compiled `src/server.ts`, the production entry, and production configuration comes from
-the real environment (or launch it yourself with `node --env-file=…`). A new app
+`.env` when it exists, before the app is imported, and set `NODE_ENV=development`.
+**`pnpm start` loads it too** — `node --env-file-if-exists=.env` (Node 22.9+) on
+the compiled `src/server.ts` — but sets no `NODE_ENV`: unset, it counts as
+production, so the secrets are required. What the platform exports (Docker,
+systemd, [`@basaltkit/deploy`](/guide/deploy#env-file)) always wins. A new app
 already has a `.env`: the values of `.env.example` and, with auth, a generated
 `APP_SECRET` — git-ignored, so the secret never reaches the repository.
 
@@ -266,7 +268,8 @@ export const env = defineEnv(
 MY_SAAS_PORT=3000
 MY_SAAS_HOST=0.0.0.0
 MY_SAAS_LOG_LEVEL=info
-NODE_ENV=development            # never prefixed — a Node-wide convention
+# NODE_ENV is never prefixed, and never set here: dev and basalt set development,
+# start (which also loads this file) stays production
 # MY_SAAS_APP_SECRET=           # with auth
 ```
 

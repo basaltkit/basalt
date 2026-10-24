@@ -198,6 +198,34 @@ jobs:
       - name: Schema per tenant on Prisma 8 (real PostgreSQL)
         run: pnpm --filter prisma8-integration test:integration
 
+  # @basaltkit/deploy's pm2 runtime against REAL pm2: the app gets its env.file
+  # through the preload while the pm2 daemon and `pm2 save`'s dump never hold a
+  # value (start, restart --update-env, kill + resurrect). BASALT_PM2_IT=1 turns
+  # a missing pm2 into a FAILURE here, so this job can never go green by
+  # skipping. Elsewhere the suite skips. pm2 is pinned: it runs in CI only.
+  deploy-pm2:
+    name: deploy pm2 (real pm2)
+    runs-on: ubuntu-latest
+    env:
+      BASALT_PM2_IT: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install pm2
+        run: npm install -g pm2@7.1.1
+
+      - name: env.file preload and pm2 (real pm2)
+        run: pnpm --filter @basaltkit/deploy exec vitest run tests/pm2-real.test.ts tests/pm2-preload.test.ts
+
   # `create-basalt --prisma` end to end against a real PostgreSQL server:
   # scaffold → .env/prisma.config.ts → prisma generate → build → assertMigrated
   # refusal → db:migrate (--create-only) → db:deploy → db:seed → node

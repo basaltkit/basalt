@@ -505,7 +505,7 @@ Outside an interactive terminal (no TTY) the questions are skipped. Always pass 
 Automatic installation failed (network, Node version, etc.). Go into the folder and run `pnpm install` (or the indicated manager) to see the real error.
 
 **I started the app and `GET /auth/login` gives a secret error.**
-With auth on, `src/env.ts` requires `APP_SECRET` — read as `MY_SAAS_APP_SECRET`, with at least 32 characters (`secret()` supplies a development default only when `NODE_ENV` is explicitly `development`/`test`). For development the scaffold's `.env` carries a generated one; in production export your own (`openssl rand -base64 48`) — `pnpm start` does not read `.env`.
+With auth on, `src/env.ts` requires `APP_SECRET` — read as `MY_SAAS_APP_SECRET`, with at least 32 characters (`secret()` supplies a development default only when `NODE_ENV` is explicitly `development`/`test`). For development the scaffold's `.env` carries a generated one; in production export your own (`openssl rand -base64 48`) or put it in the server's `.env` — `pnpm start` loads `.env` (an exported variable wins) and, with `NODE_ENV` unset, runs as production.
 
 **`The app cannot start — the database did not answer`.**
 PostgreSQL is not running, or `MY_SAAS_DATABASE_URL` points at the wrong host/port (the message shows which, without credentials). Start it (`docker compose up -d`, or your local service) or fix the URL in `.env`; on a fresh database, `pnpm db:migrate`. `pnpm dev` still prints the raw error (the explainer lives in `bin/basalt.ts` only, so `src/dev.ts` stays a few lines); `pnpm basalt routes` gives the explained version.
