@@ -457,6 +457,13 @@ export interface Pm2Runtime {
   port: number | 'auto'
   /** Ports never picked by `auto` (e.g. a port the proxy itself listens on). */
   avoid: number[]
+  /**
+   * Give the app its `env.file`: the process gets the file's path and a preload
+   * that loads it inside the app's own processes only, so the values never reach
+   * pm2's environment or `pm2 save`'s dump. Default true; `false` for an app that
+   * loads its environment itself (and then gets only NODE_ENV, PORT and HOST).
+   */
+  loadEnv?: boolean
 }
 
 export type ProxyConfig = ApacheProxy | CaddyProxy | NoProxy
@@ -567,12 +574,13 @@ export const ask = {
   }),
 }
 
-export const pm2 = (options: { name?: string; script?: string; port?: number | 'auto'; avoid?: number[] } = {}): Pm2Runtime => ({
+export const pm2 = (options: { name?: string; script?: string; port?: number | 'auto'; avoid?: number[]; loadEnv?: boolean } = {}): Pm2Runtime => ({
   kind: 'pm2',
   ...(options.name === undefined ? {} : { name: options.name }),
   script: options.script ?? 'start',
   port: options.port ?? 'auto',
   avoid: options.avoid ?? [],
+  ...(options.loadEnv === undefined ? {} : { loadEnv: options.loadEnv }),
 })
 
 export const caddy = (options: { webRoot?: string; apiPrefix?: string; onDemandTls?: { ask: `/${string}` }; extra?: string; managed?: boolean; root?: string } = {}): CaddyProxy => ({
@@ -723,6 +731,8 @@ export function validateConfig<E extends object = EnvShape>(typed: DeployConfig<
     const name = processName(config)
     if (!name.startsWith(`${config.app}-`)) problems.push(`runtime.name "${name}" must start with "${config.app}-" — the deploy only touches what the app owns`)
     if (!/^[a-z0-9-]+$/.test(name)) problems.push(`runtime.name "${name}" may only use a-z, 0-9 and -`)
+    const loadEnv = (config.runtime as { loadEnv?: unknown }).loadEnv
+    if (loadEnv !== undefined && typeof loadEnv !== 'boolean') problems.push('runtime.loadEnv must be true or false')
   } else {
     const rt = config.runtime
     if (rt.images.length === 0) problems.push('runtime.images: at least one image')

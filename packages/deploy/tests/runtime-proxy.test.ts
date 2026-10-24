@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { apacheInstall, apachePreflight, proxiedPorts, renderVhost } from '../src/apache.js'
 import { covers, tlsFindings } from '../src/checks.js'
-import { pm2Preflight, pm2Release } from '../src/pm2.js'
-import { context, DIR, FakeHost, fail, jlist, ok, ss } from './fake-host.js'
+import { ENV_PRELOAD, pm2Preflight, pm2Release } from '../src/pm2.js'
+import { pm2 } from '../src/config.js'
+import { acmeConfig, context, DIR, FakeHost, fail, jlist, ok, ss } from './fake-host.js'
 
 const AVAILABLE = '/etc/apache2/sites-available/acme.conf'
 const ENABLED = '/etc/apache2/sites-enabled/acme.conf'
@@ -33,8 +34,41 @@ describe('pm2', () => {
     const restart = host.calls.find((c) => c.args[0] === 'restart')
     expect(restart?.args).toEqual(['restart', 'acme-api', '--update-env'])
     expect(restart?.options).toMatchObject({ inheritEnv: false, env: { NODE_ENV: 'production', PORT: '3002' } })
-    expect(Object.keys(restart?.options.env ?? {})).toEqual(['NODE_ENV', 'PORT'])
+    expect(Object.keys(restart?.options.env ?? {})).toEqual(['NODE_ENV', 'PORT', 'BASALT_ENV_FILE', 'NODE_OPTIONS'])
+    // The values reach the app through the preload: pm2 (and its dump) holds only the path.
+    for (const call of host.calls.filter((c) => c.command === 'pm2')) {
+      expect(JSON.stringify(call.options.env ?? {})).not.toMatch(/never-in-pm2|u:p@h/)
+    }
     expect(host.commands('pm2').join('\n')).not.toMatch(/\b(api|all)$/m)
+  })
+
+  it('gives the app its env.file: the absolute path and the preload, the values never (the larconnect boot with no .env)', async () => {
+    const host = new FakeHost()
+      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist()) : undefined))
+      .on(({ command }) => (command === 'pm2' ? ok() : undefined))
+    await pm2Release(context(host), new Map([['NODE_ENV', 'production'], ['PORT', '3002'], ['APP_SECRET', 'never-in-pm2']]))
+    const start = host.calls.find((c) => c.args[0] === 'start')
+    expect(start?.options.env).toMatchObject({ BASALT_ENV_FILE: `${DIR}/.env`, NODE_OPTIONS: ENV_PRELOAD })
+    expect(ENV_PRELOAD).not.toMatch(/\s/) // NODE_OPTIONS splits on spaces
+  })
+
+  it('honours a custom env.file, and passes the NODE_OPTIONS the file sets on, before the preload', async () => {
+    const host = new FakeHost()
+      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist()) : undefined))
+      .on(({ command }) => (command === 'pm2' ? ok() : undefined))
+    const config = acmeConfig({ env: { ...acmeConfig().env, file: '/etc/acme/api.env' } })
+    await pm2Release(context(host, config), new Map([['PORT', '3002'], ['NODE_OPTIONS', '--max-old-space-size=512']]))
+    const start = host.calls.find((c) => c.args[0] === 'start')
+    expect(start?.options.env).toMatchObject({ BASALT_ENV_FILE: '/etc/acme/api.env', NODE_OPTIONS: `--max-old-space-size=512 ${ENV_PRELOAD}` })
+  })
+
+  it('loadEnv: false keeps the minimal environment: the app reads its environment itself', async () => {
+    const host = new FakeHost()
+      .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist()) : undefined))
+      .on(({ command }) => (command === 'pm2' ? ok() : undefined))
+    await pm2Release(context(host, acmeConfig({ runtime: pm2({ port: 3002, loadEnv: false }) })), new Map([['NODE_ENV', 'production'], ['PORT', '3002']]))
+    const start = host.calls.find((c) => c.args[0] === 'start')
+    expect(Object.keys(start?.options.env ?? {})).toEqual(['NODE_ENV', 'PORT'])
   })
 
   it('C1: refuses a port a foreign process listens on — and accepts our own old process', async () => {
@@ -46,6 +80,18 @@ describe('pm2', () => {
     expect((await pm2Preflight(ctx, 3002)).filter((f) => f.id === 'C1')).toEqual([])
     // Apache (root) on :3000: no pid visible to us, so not ours.
     expect((await pm2Preflight(ctx, 3000)).filter((f) => f.id === 'C1')).toEqual([expect.objectContaining({ level: 'error' })])
+  })
+
+  it('loadEnv: false with a start script that loads nothing: a warning before the app boots without its secrets', async () => {
+    const preflight = async (start: string) => {
+      const host = new FakeHost()
+        .on(({ command, args }) => (command === 'pm2' && args[0] === 'jlist' ? ok(jlist()) : undefined))
+        .on(({ command }) => (command === 'ss' ? ok('') : undefined))
+      host.put(`${DIR}/package.json`, JSON.stringify({ scripts: { start } }))
+      return (await pm2Preflight(context(host, acmeConfig({ runtime: pm2({ port: 3002, loadEnv: false }) })), 3002)).filter((f) => f.id === 'env')
+    }
+    expect(await preflight('node --enable-source-maps dist/src/server.js')).toEqual([expect.objectContaining({ level: 'warning' })])
+    expect(await preflight('node --env-file-if-exists=.env dist/src/server.js')).toEqual([])
   })
 
   it('reports pm2 missing instead of failing later', async () => {

@@ -128,6 +128,38 @@ pnpm, and the deploy refuses a modified tree. Wrap the command in a two-line
 `deploy.sh` if you like.
 :::
 
+### How the app gets its `.env` {#env-file}
+
+With `pm2()`, the deploy gives the app the `env.file` it validated (`.env` by
+default, or an absolute path such as `/etc/acme/api.env`). pm2 never holds the
+values: it records the environment it is given, in its daemon and, on
+`pm2 save`, in `~/.pm2/dump.pm2`. So the process gets only `NODE_ENV`, `PORT`,
+`HOST`, the file's path (`BASALT_ENV_FILE`) and a small preload in
+`NODE_OPTIONS`. Node runs the preload before the app's first module. It loads
+the file only in the processes pm2 manages (where pm2 sets `pm_id`), never in
+the pm2 CLI or its daemon.
+
+- **Precedence** is the same as `node --env-file`: what is already exported
+  wins, so `NODE_ENV`, `PORT` and `HOST` from the deploy beat the file. An
+  app's own `--env-file` or `dotenv` still works; loading twice changes nothing.
+- **Children** (`pnpm run` → `node`, workers) inherit the values like any
+  environment.
+- **A file that cannot be read** stops the app with one line,
+  `[basalt-deploy] env.file … is not readable (ENOENT)`, never a boot without
+  its secrets.
+- **`NODE_OPTIONS` set in the file** is passed on before the preload: it would
+  come too late for node otherwise.
+- **Rotating a secret**: edit the file, then `run` (or
+  `pm2 restart <app>-api --update-env`). After a reboot, `pm2 resurrect` reads
+  the file again.
+- **Opt out** with `pm2({ loadEnv: false })` when the app loads its environment
+  itself. It then gets `NODE_ENV`, `PORT` and `HOST` only, and preflight warns
+  when the `start` script shows no loader.
+
+Before `@basaltkit/deploy` 0.10, the process got `NODE_ENV`, `PORT` and `HOST`
+only. `validate` read the file and passed, then the app booted without its
+secrets: `EnvValidationError` and a failed health check.
+
 ## Everyday deploys from the terminal {#terminal}
 
 Everything below runs as the app user, in the checkout. The output shown is

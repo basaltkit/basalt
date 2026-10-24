@@ -117,17 +117,21 @@ O `pnpm dev` corre o `src/dev.ts`, que carrega o `.env` e define
 mesmo com um ambiente vazio. O
 `APP_SECRET` usa `secret({ minLength: 32 })`: recai num valor descartável
 **apenas** com `NODE_ENV=development`/`test`. O `pnpm start` corre o
-`src/server.ts` compilado (`dist/src/server.js`, depois do `pnpm build`), onde um `NODE_ENV` não definido conta como
+`src/server.ts` compilado (`dist/src/server.js`, depois do `pnpm build`). Também
+carrega o `.env`, mas o ficheiro não define `NODE_ENV`: sem ele, conta como
 produção, por isso **recusa arrancar** enquanto não definires um
 `MY_SAAS_APP_SECRET` a sério com pelo menos 32 caracteres
 (`openssl rand -base64 48`).
 
-::: tip Dica: o `.env` é carregado em desenvolvimento, não em produção
+::: tip Dica: quem carrega o `.env`
 O `defineEnv` lê o `process.env` e mais nada. As entradas de desenvolvimento do
 scaffold — `pnpm dev` (`src/dev.ts`) e `pnpm basalt` (`bin/basalt.ts`) —
-carregam o `.env` para lá antes de a app ser importada. O `pnpm start`
-(`dist/src/server.js`) **não**: em produção, exporta as variáveis, deixa o teu gestor
-de processos injetá-las, ou arranca com `node --env-file=…`. Vê
+carregam o `.env` para lá antes de a app ser importada, e definem
+`NODE_ENV=development`. O `pnpm start` carrega-o com
+`node --env-file-if-exists=.env` (Node 22.9+) e não define nada: produção
+continua a ser produção. Em produção, quem exporta as variáveis costuma ser a
+plataforma (Docker, systemd, [`@basaltkit/deploy`](/pt/guide/deploy#env-file)),
+e uma variável exportada ganha sempre ao ficheiro. Vê
 [Configuração](/pt/guide/config). Carregar o `.env` nunca sobrepõe
 uma variável já exportada na tua shell — e é exatamente por isso que o scaffold
 usa nomes com prefixo; vê

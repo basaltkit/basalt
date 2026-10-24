@@ -1,16 +1,19 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DOCKERFILE, DOCKERIGNORE, PRODUCTION_ENTRY } from '../stubs.js'
-import { BUILD_SCRIPT, PRISMA_IMPORTS, START_DEV_SCRIPT, START_SCRIPT, tsconfigBuildJson } from '../templates.js'
+import { BUILD_SCRIPT, ENGINES_NODE, PREVIOUS_START_SCRIPT, PRISMA_IMPORTS, START_DEV_SCRIPT, START_SCRIPT, tsconfigBuildJson } from '../templates.js'
 import { mergePackageJson, type PackageJson } from './package-json.js'
 
 /**
  * The production path (BK-026) for an app scaffolded before create-basalt
  * shipped one: `create-basalt update` OFFERS what is missing — it is part of
  * the printed plan, applied only on confirmation — and never rewrites what the
- * app already has. In particular an existing `start` script is never changed:
+ * app already has. In particular a customised `start` script is never changed:
  * switching it from tsx to the compiled server changes how the app is
- * deployed, so that is printed as a manual step.
+ * deployed, so that is printed as a manual step. Only the exact `start` an
+ * earlier create-basalt wrote ({@link PREVIOUS_START_SCRIPT}) is offered the
+ * `.env` loading — under @basaltkit/deploy's pm2 runtime before 0.10 it booted
+ * without its secrets.
  */
 
 export interface ProductionPathPlan {
@@ -43,6 +46,10 @@ const exists = async (path: string): Promise<boolean> => (await readOptional(pat
 export const MANUAL_START_SNIPPET = `In package.json, run the compiled server in production (build first: \`pnpm build\`):
   "start": "${START_SCRIPT}",
   "start:dev": "${START_DEV_SCRIPT}"`
+
+export const MANUAL_NODE_ENV_SNIPPET = `Remove NODE_ENV=development from .env: \`pnpm dev\` and \`pnpm basalt\` already set it, and
+\`pnpm start\` now loads .env — with that line it would boot in development, accepting the dev secret
+defaults instead of requiring the real ones.`
 
 export const MANUAL_PRISMA_LAYOUT_SNIPPET = `The Prisma client is generated under src/, where \`tsc\` does not copy its .js files — \`node ${PRODUCTION_ENTRY}\` cannot load it. Move it out of src/:
   prisma/schema.prisma   output = "../generated/prisma"
@@ -77,17 +84,25 @@ export async function planProductionPath(
   const prismaClient = pkg.dependencies?.['@prisma/client']
   const merged = mergePackageJson(packageJsonText, {
     scripts: { build: BUILD_SCRIPT },
+    replaceScripts: pkg.scripts?.['start'] === PREVIOUS_START_SCRIPT ? { start: { from: PREVIOUS_START_SCRIPT, to: START_SCRIPT } } : {},
     ...(schema !== undefined && prismaClient !== undefined
       ? { dependencies: { '@prisma/client-runtime-utils': prismaClient } }
       : {}),
   })
   for (const change of merged.changes) {
-    if (change.startsWith('scripts:')) notes.push(`package.json: a "build" script (${BUILD_SCRIPT})`)
+    if (change.startsWith('scripts: start:')) notes.push(`package.json: "start" loads .env when it exists (${START_SCRIPT}); needs Node ${ENGINES_NODE}`)
+    else if (change.startsWith('scripts:')) notes.push(`package.json: a "build" script (${BUILD_SCRIPT})`)
     else notes.push(`package.json: @prisma/client-runtime-utils ${prismaClient} — the generated client requires it by name; plain node cannot reach it as a transitive dependency`)
   }
 
   const start = pkg.scripts?.['start']
   if (start !== undefined && RUNS_TSX.test(start)) manual.push(MANUAL_START_SNIPPET)
+  // `start` now loads .env: a NODE_ENV=development left there (create-basalt ≤ 1.14
+  // wrote one) would boot `pnpm start` in development, with the dev secret defaults.
+  const dotEnv = await readOptional(join(dir, '.env'))
+  if (dotEnv !== undefined && /^\s*NODE_ENV\s*=\s*["']?development["']?\s*$/m.test(dotEnv)) {
+    manual.push(MANUAL_NODE_ENV_SNIPPET)
+  }
 
   const legacyPrisma = schema !== undefined && LEGACY_PRISMA_OUTPUT.test(schema)
   if (legacyPrisma) manual.push(MANUAL_PRISMA_LAYOUT_SNIPPET)

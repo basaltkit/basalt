@@ -6,7 +6,7 @@ import { binStatus } from '../bin-template.js'
 import { devEntryStatus } from '../dev-entry.js'
 import { alwaysLatest, lookupLatestVersions, type ResolveLatestOptions } from '../latest-versions.js'
 import { PRODUCTION_ENTRY } from '../stubs.js'
-import { envPrefix } from '../templates.js'
+import { envPrefix, PREVIOUS_START_SCRIPT, START_SCRIPT } from '../templates.js'
 import { allDependencies, type ProjectContext } from './context.js'
 import { ownVersion } from './manifest.js'
 import type { PackageJson } from './package-json.js'
@@ -413,6 +413,12 @@ export async function runDoctor(ctx: ProjectContext, options: DoctorOptions = {}
   const tsxIsDevOnly = ctx.packageJson.dependencies?.['tsx'] === undefined && ctx.packageJson.devDependencies?.['tsx'] !== undefined
   if (start !== undefined && RUNS_TSX.test(start) && tsxIsDevOnly) {
     push('warn', 'build', `\`start\` runs tsx ("${start}"), but tsx is only a devDependency — a production install (--prod) has no tsx. Build and run the compiled server: \`npx create-basalt@latest update\` prints the scripts.`)
+  }
+  if (start === PREVIOUS_START_SCRIPT) {
+    push('info', 'build', `\`start\` loads no .env ("${start}") — fine where the platform exports the environment; \`npx create-basalt@latest update\` switches it to \`${START_SCRIPT}\`.`)
+  }
+  if (start !== undefined && /--env-file/.test(start) && /^\s*NODE_ENV\s*=\s*["']?development["']?\s*$/m.test((await readText(join(dir, '.env'))) ?? '')) {
+    push('warn', 'build', '.env sets NODE_ENV=development and `start` loads .env: a production start boots in development, with the dev secret defaults. Remove the line — `dev` and `basalt` set it themselves.')
   }
   if (scripts['build'] === undefined) {
     push('warn', 'build', `No \`build\` script — there is no tested way to run the app on plain node. \`npx create-basalt@latest update\` adds tsconfig.build.json and \`build\`.`)

@@ -133,6 +133,39 @@ recusa uma árvore modificada. Se quiseres, embrulha o comando num `deploy.sh` d
 duas linhas.
 :::
 
+### Como a app recebe o `.env` {#env-file}
+
+Com `pm2()`, o deploy entrega à app o `env.file` que validou (`.env` por
+omissão, ou um caminho absoluto como `/etc/acme/api.env`). O pm2 nunca guarda
+os valores: regista o ambiente que recebe, no daemon e, com `pm2 save`, no
+`~/.pm2/dump.pm2`. Por isso o processo recebe só `NODE_ENV`, `PORT`, `HOST`, o
+caminho do ficheiro (`BASALT_ENV_FILE`) e um pequeno preload no `NODE_OPTIONS`.
+O Node corre o preload antes do primeiro módulo da app. Só carrega o ficheiro
+nos processos que o pm2 gere (onde o pm2 define `pm_id`), nunca no CLI do pm2
+nem no seu daemon.
+
+- **Precedência** igual à do `node --env-file`: o que já está exportado ganha,
+  por isso o `NODE_ENV`, o `PORT` e o `HOST` do deploy vencem o ficheiro. O
+  `--env-file` ou o `dotenv` da própria app continuam a funcionar; carregar duas
+  vezes não muda nada.
+- **Processos filhos** (`pnpm run` → `node`, workers) herdam os valores como
+  qualquer ambiente.
+- **Um ficheiro que não se consegue ler** para a app com uma linha,
+  `[basalt-deploy] env.file … is not readable (ENOENT)`, nunca um arranque sem
+  os segredos.
+- **Um `NODE_OPTIONS` definido no ficheiro** é passado antes do preload: de
+  outra forma chegaria tarde demais para o node.
+- **Mudar um segredo**: edita o ficheiro e corre o `run` (ou
+  `pm2 restart <app>-api --update-env`). Depois de um reboot, o `pm2 resurrect`
+  volta a ler o ficheiro.
+- **Desligar** com `pm2({ loadEnv: false })` quando a app carrega o ambiente ela
+  própria. Recebe então só `NODE_ENV`, `PORT` e `HOST`, e o preflight avisa
+  quando o script `start` não mostra nenhum carregador.
+
+Antes do `@basaltkit/deploy` 0.10, o processo recebia só `NODE_ENV`, `PORT` e
+`HOST`. O `validate` lia o ficheiro e passava, e depois a app arrancava sem os
+segredos: `EnvValidationError` e o health check a falhar.
+
 ## Deploys do dia a dia no terminal {#terminal}
 
 Tudo o que se segue corre como utilizador da aplicação, no checkout. O output

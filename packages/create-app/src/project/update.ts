@@ -351,7 +351,7 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
     if (example !== undefined && exampleAfter !== undefined) {
       files['.env.example'] = { before: example, after: exampleAfter }
       patched['.env.example'] = exampleAfter
-      toolingNotes.push('.env.example: header now says dev/CLI load .env automatically and `start` does not')
+      toolingNotes.push('.env.example: header now says `dev`, `basalt` and `start` load .env (an exported variable wins)')
     }
 
     // The production path (BK-026): tsconfig.build.json, a `build` script, the

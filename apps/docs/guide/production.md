@@ -408,7 +408,7 @@ devDependency and never ships. Three scripts carry it:
 
 ```bash
 pnpm build       # tsc -p tsconfig.build.json → dist/ (src/ only; rootDir ".")
-pnpm start       # node --enable-source-maps dist/src/server.js
+pnpm start       # node --env-file-if-exists=.env --enable-source-maps dist/src/server.js
 pnpm start:dev   # tsx src/server.ts — the server from source, no build
 ```
 

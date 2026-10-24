@@ -59,10 +59,17 @@ export default defineDeploy({
   }),
   build: { prisma: ['prisma.config.ts', 'prisma/tenants/prisma.config.ts'], web: 'web' },
   migrate: { central: true, tenants: true },
-  runtime: pm2({ avoid: [3000, 3001] }),   // runs the package.json "start" script
+  runtime: pm2({ avoid: [3000, 3001] }),   // runs the package.json "start" script, with the .env loaded
   proxy: apache(),                         // web/dist at /, /api/ → the app
 })
 ```
+
+`pm2()` gives the app its `env.file` without handing the values to pm2: the
+process gets the file's path and a preload that loads it inside the app's own
+processes only, so neither the pm2 daemon nor `pm2 save`'s dump ever holds a
+secret. An exported `NODE_ENV`/`PORT`/`HOST` still wins over the file.
+`pm2({ loadEnv: false })` turns it off for an app that loads its environment
+itself.
 
 What is true of one server only (a port taken there, another branch) goes in
 `/etc/basalt/<app>.json`: `{ "port": 3002, "infra": { "postgres": { "port": 5434 } } }`.

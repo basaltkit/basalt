@@ -379,7 +379,7 @@ describe('update — project tooling', () => {
     expect(await runProjectCommand(['update', '--dry'], dry.deps)).toBe(0)
     expect(dry.output()).toContain('bin/basalt.ts: unmodified template')
     expect(dry.output()).toContain('src/dev.ts: unmodified template from an earlier release — `dev` loads .env')
-    expect(dry.output()).toContain('.env.example: header now says dev/CLI load .env automatically')
+    expect(dry.output()).toContain('.env.example: header now says `dev`, `basalt` and `start` load .env')
     expect(await read(dir, 'src/dev.ts')).toBe(oldDev)
 
     const h = harness(dir, { fetch: await registryFor(dir) })
