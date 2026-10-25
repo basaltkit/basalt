@@ -326,16 +326,17 @@ describe('update — project tooling', () => {
   const legacy = async (name: string) =>
     readFile(join(import.meta.dirname, 'fixtures', 'legacy-bins', `${name}.ts.txt`), 'utf8')
 
-  it('the latest legacy bins (1.9 to 1.14) patch to exactly the current template', async () => {
+  it('the latest legacy bins (1.9 to 1.15) patch to exactly the current template', async () => {
     expect(patchBasaltBin(await legacy('2026-09-19'))).toBe(basaltBin())
     expect(patchBasaltBin(await legacy('2026-10-01'))).toBe(basaltBin())
     expect(patchBasaltBin(await legacy('2026-10-08'))).toBe(basaltBin())
+    expect(patchBasaltBin(await legacy('2026-10-25'))).toBe(basaltBin())
     // Patching is idempotent and CRLF-insensitive.
     expect(patchBasaltBin(basaltBin())).toBe(basaltBin())
     expect(patchBasaltBin((await legacy('2026-10-01')).replace(/\n/g, '\r\n'))).toBe(basaltBin())
   })
 
-  for (const version of ['2026-08-09', '2026-08-13', '2026-08-22', '2026-09-19', '2026-10-01', '2026-10-01b', '2026-10-08']) {
+  for (const version of ['2026-08-09', '2026-08-13', '2026-08-22', '2026-09-19', '2026-10-01', '2026-10-01b', '2026-10-08', '2026-10-25']) {
     it(`patches an unmodified bin/basalt.ts from ${version}`, async () => {
       const dir = await scaffold(`bin-${version}`, { cli: true })
       const old = await legacy(version)
@@ -354,13 +355,15 @@ describe('update — project tooling', () => {
         'process.loadEnvFile(envFile)',
         'function explainBootFailure',
         "if (process.argv[2]?.startsWith('make:'))",
+        "if (process.argv[2] === 'dev')",
       ]) {
         expect(bin.indexOf(needle), needle).toBeGreaterThan(0)
         expect(bin.indexOf(needle), needle).toBeLessThan(appImport)
       }
       expect(h.output()).toContain('bin/basalt.ts: unmodified template')
       if (!old.includes('process.loadEnvFile(envFile)')) expect(h.output()).toContain('loads .env for development')
-      expect(h.output()).toContain('runs make:* without booting the app')
+      if (!old.includes("process.argv[2]?.startsWith('make:')")) expect(h.output()).toContain('runs make:* without booting the app')
+      expect(h.output()).toContain('starts `basalt dev` even while the app cannot boot')
     })
   }
 

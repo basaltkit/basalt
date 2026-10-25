@@ -243,7 +243,7 @@ describe('doctor', () => {
     await write(dir, 'bin/basalt.ts', await fixture('legacy-bins/2026-10-01.ts.txt'))
     await write(dir, 'src/dev.ts', await fixture('legacy-dev/2026-09-19.ts.txt'))
     result = await doctor(dir, [], { env: { NO_COLOR: '1', REDIS_URL: 'redis://x' } })
-    expect(result.out).toContain('bin/basalt.ts is an older template (it lacks some of: .env loading, pre-boot project commands, make:* without booting the app)')
+    expect(result.out).toContain('bin/basalt.ts is an older template (it lacks some of: .env loading, pre-boot project commands, make:* and dev without booting the app)')
     expect(result.out).toContain('src/dev.ts does not load .env (older template)')
     await write(dir, 'src/dev.ts', '// mine\n')
     result = await doctor(dir, [], { env: { NO_COLOR: '1', REDIS_URL: 'redis://x' } })
