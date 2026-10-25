@@ -203,4 +203,26 @@ describe('the command', () => {
     expect(await init(host, DIR, flags({}), new Set())).toBe(0)
     expect(host.file(`${DIR}/deploy.config.ts`)).toContain(`tenants: 'subdomain'`)
   })
+
+  it('asks a choice again instead of aborting, with one ": " and the tenant subdomain spelled out', async () => {
+    const host = scaffold()
+    host.interactive = () => true
+    const asked: string[] = []
+    const answers = ['notes.aipro.ao', 'notes', 'none', 'nginx', 'apache', '']
+    host.prompt = async (question: string) => { asked.push(question); return answers.shift() }
+    expect(await init(host, DIR, flags({}), new Set())).toBe(0)
+    expect(asked.every((q) => !q.endsWith(':') && !q.endsWith(': '))).toBe(true) // host.prompt adds it
+    expect(asked[1]).toBe('Multi-tenant, each tenant on its own subdomain (<tenant>.notes.aipro.ao)? subdomain | none [none]')
+    expect(asked[2]).toBe(asked[1]) // "notes" was asked again, not fatal
+    expect(host.file(`${DIR}/deploy.config.ts`)).not.toContain(`tenants: 'subdomain'`)
+    expect(host.file(`${DIR}/deploy.config.ts`)).toContain(`domain: 'notes.aipro.ao'`)
+  })
+
+  it('gives up after three answers outside the choices', async () => {
+    const host = scaffold()
+    host.interactive = () => true
+    const answers = ['notes.aipro.ao', 'a', 'b', 'c']
+    host.prompt = async () => answers.shift()
+    expect(await init(host, DIR, flags({}), new Set())).toBe(1)
+  })
 })
