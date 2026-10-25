@@ -24,6 +24,23 @@ pnpm add @basaltkit/cli
 
 > Note: the package depends on `@basaltkit/core` (the heart of the framework, where `createApp` and the dependency container live). If you created the project with `create-basalt --cli`, both are already installed.
 
+### The global `basalt` launcher
+
+Inside an app, `basalt` is a `package.json` script: `pnpm basalt <command>`.
+Install the launcher once to type `basalt <command>` instead:
+
+```bash
+npm i -g @basaltkit/cli
+basalt routes        # anywhere inside the app = pnpm basalt routes, in the app's root
+```
+
+It finds the nearest `package.json` with a `basalt` script, from the current
+directory up, and runs that script with the app's package manager
+(`packageManager`, else the lockfile). So the code that runs is always the
+app's, at its pinned versions. Arguments and the exit code pass through
+unchanged. Outside an app it says so and exits 1. The launcher loads nothing of
+the framework, only Node built-ins.
+
 ## Get started in 5 minutes
 
 1. Create a `bin/basalt.ts` file at the root of the project — this will be the entry point for the `basalt` command:

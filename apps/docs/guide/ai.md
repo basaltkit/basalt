@@ -105,6 +105,10 @@ non-streaming response; the retry usually clears it.
 
 ## Commands
 
+Run them as `pnpm basalt ai:…` in the app, or as `basalt ai:…` once the
+[global launcher](/guide/installation#launcher) is installed
+(`npm i -g @basaltkit/cli`): the same command, with the app's versions.
+
 | Command | What it does | Needs a model? | Writes? | Exit code |
 | --- | --- | --- | --- | --- |
 | `basalt ai` | Overview: detected stack + available commands | no | no | always `0` |

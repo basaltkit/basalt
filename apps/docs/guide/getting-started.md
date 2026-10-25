@@ -89,6 +89,12 @@ you skipped, and `pnpm basalt update` moves the app to the latest versions —
 see [Adding features later](/guide/installation#adding-features-later) and
 [Updating an app](/guide/installation#updating-an-app).
 
+::: tip `basalt` instead of `pnpm basalt`
+`npm i -g @basaltkit/cli` installs a launcher: `basalt <command>`, anywhere in
+the app, runs `pnpm basalt <command>` there with the app's own versions. See
+[the global launcher](/guide/installation#launcher).
+:::
+
 ### 2. Install and configure
 
 ```bash
