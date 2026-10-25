@@ -25,7 +25,7 @@ deploys do dia a dia: primeiro no terminal, depois na interface.
   o teu lockfile fixa.
 - **A configuração é versionada.** O `deploy.config.ts` na raiz da aplicação
   não contém segredos. O `basalt-deploy init --domain=<host>` escreve-o a partir
-  do projeto. O [README do pacote](https://github.com/basaltkit/basalt/tree/main/packages/deploy#the-config)
+  do projeto. A [referência do `deploy.config.ts`](/pt/guide/deploy-config)
   documenta todas as opções.
 - **O root fica à parte.** O root corre apenas a sua própria cópia fixada da
   ferramenta, fora do checkout, e apenas para `bootstrap` e `install`. Nunca
@@ -710,9 +710,10 @@ utilizador). Os comandos do utilizador da aplicação recusam correr como root.
   [Build e envio](/pt/guide/production#build-e-envio) para o caminho do Dockerfile.
 - [Backups PostgreSQL](/pt/guide/backup): backups agendados para além do dump
   anterior à migração.
-- Os READMEs do `@basaltkit/deploy` e do `@basaltkit/deploy-ui`: todas as
-  opções do `deploy.config.ts`, aplicações Docker Compose, infraestrutura
-  externa e hooks.
+- [Referência do `deploy.config.ts`](/pt/guide/deploy-config): todas as
+  opções, o valor por omissão de cada uma e um exemplo.
+- Os READMEs do `@basaltkit/deploy` e do `@basaltkit/deploy-ui`: aplicações
+  Docker Compose, infraestrutura externa e hooks em detalhe.
 - RFCs [0006](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0006-basalt-deploy.md)
   (o pipeline), [0008](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0008-deploy-machine-protocol.md)
   (modo máquina), [0009](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0009-deploy-local-ui.md)
