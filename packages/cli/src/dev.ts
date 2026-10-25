@@ -1,8 +1,12 @@
 import { ensureMetadata } from '@basaltkit/core'
 import { defineCommand, type CommandDefinition } from './command.js'
 
-/** Default entry files probed in order when `--entry` is not given. */
-export const DEV_ENTRY_CANDIDATES = ['src/main.ts', 'src/server.ts', 'src/index.ts', 'src/main.js', 'src/index.js']
+/**
+ * Default entry files probed in order when `--entry` is not given. A
+ * create-basalt app's `src/dev.ts` comes first: it is what `pnpm dev` runs
+ * (it loads `.env` and opts into NODE_ENV=development before the server).
+ */
+export const DEV_ENTRY_CANDIDATES = ['src/dev.ts', 'src/main.ts', 'src/server.ts', 'src/index.ts', 'src/main.js', 'src/index.js']
 
 /**
  * Picks the first candidate that exists. Pure — `exists` is injected so the
@@ -68,11 +72,15 @@ export function devRouteRows(routes: DevRoute[]): { method: string; url: string;
  * runs the server with watch/restart — and, with `--worker`, also starts a
  * watched queue worker alongside it (server + worker in one command, the real
  * producer/worker topology).
+ *
+ * The CLI's own boot exists only to read the route table: it is shut down
+ * before the server starts, so a dev session holds one app (one database
+ * pool, one set of connections), not two.
  */
 export const devCommand: CommandDefinition = defineCommand({
   name: 'dev',
   description: 'Run the app with watch + restart, print the route table, and (--worker) an embedded queue worker',
-  async handle({ container, io, flags }) {
+  async handle({ app, container, io, flags }) {
     const { existsSync } = await import('node:fs')
     const entry =
       typeof flags['entry'] === 'string'
@@ -94,6 +102,10 @@ export const devCommand: CommandDefinition = defineCommand({
         io.table(devRouteRows(routes))
       }
     }
+
+    // Done with the CLI's boot: the server below is the app from here on.
+    // runCli's own shutdown afterwards is a no-op.
+    await app.shutdown()
 
     const tsx = await canResolve('tsx')
     const server = resolveDevRunner(entry, { tsx })
