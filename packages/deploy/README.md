@@ -34,6 +34,10 @@ It asks the domain, the tenancy and the branch (or takes `--domain`,
 `--tenants`, `--branch`, `--proxy`), never overwrites a config (`--force`),
 and runs `check` on what it wrote.
 
+Every option, its default and an example: the
+[`deploy.config.ts` reference](https://basaltkit-docs.pages.dev/guide/deploy-config)
+([Português](https://basaltkit-docs.pages.dev/pt/guide/deploy-config)).
+
 ```ts
 import { apache, ask, defineDeploy, dockerInfra, pm2, secret } from '@basaltkit/deploy'
 

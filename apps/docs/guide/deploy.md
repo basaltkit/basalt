@@ -24,8 +24,8 @@ first from the terminal, then from the UI.
   the one your lockfile pins.
 - **The config is committed.** `deploy.config.ts` at the app root holds no secret.
   `basalt-deploy init --domain=<host>` writes it from the project. The
-  [package README](https://github.com/basaltkit/basalt/tree/main/packages/deploy#the-config)
-  documents every option.
+  [`deploy.config.ts` reference](/guide/deploy-config) documents every
+  option.
 - **Root is kept apart.** Root runs only its own pinned copy of the tool, from
   outside the checkout, and only for `bootstrap` and `install`. It never loads
   `deploy.config.ts` or the checkout's `node_modules`, and it reads the app
@@ -686,8 +686,10 @@ per-user Node). The app user's commands refuse to run as root.
 - [Going to Production](/guide/production): the checklist, and
   [Build & ship](/guide/production#build-ship) for the Dockerfile route.
 - [PostgreSQL backups](/guide/backup): scheduled backups beyond the pre-migration dump.
-- `@basaltkit/deploy` and `@basaltkit/deploy-ui` READMEs: every option of
-  `deploy.config.ts`, Docker Compose apps, external infra and hooks.
+- [`deploy.config.ts` reference](/guide/deploy-config): every option, its
+  default and an example.
+- `@basaltkit/deploy` and `@basaltkit/deploy-ui` READMEs: Docker Compose apps,
+  external infra and hooks in depth.
 - RFCs [0006](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0006-basalt-deploy.md)
   (the pipeline), [0008](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0008-deploy-machine-protocol.md)
   (machine mode), [0009](https://github.com/basaltkit/basalt/blob/main/docs/rfcs/0009-deploy-local-ui.md)
