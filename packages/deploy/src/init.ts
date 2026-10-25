@@ -450,25 +450,32 @@ export async function init(host: Host, dir: string, flags: Map<string, string>, 
     host.out.error(`${file} already exists — init never overwrites it (--force to replace it)`)
     return 1
   }
-  const answer = async (key: string, question: string, fallback?: string): Promise<string | undefined> => {
+  // host.prompt adds the ": " itself. With `choices`, a terminal answer outside
+  // them is asked again (a typo must not abort init); a flag is never re-asked.
+  const answer = async (key: string, question: string, fallback?: string, choices?: readonly string[]): Promise<string | undefined> => {
     const given = flags.get(key)
     if (given !== undefined) return given
     if (!host.interactive()) return fallback
-    const typed = (await host.prompt(`${question}${fallback ? ` [${fallback}]` : ''}: `, { secret: false }))?.trim()
-    return typed || fallback
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const typed = (await host.prompt(`${question}${fallback ? ` [${fallback}]` : ''}`, { secret: false }))?.trim()
+      const value = typed || fallback
+      if (!choices || value === undefined || choices.includes(value)) return value
+      host.out.warn(`"${value}" is not one of: ${choices.join(', ')}`)
+    }
+    return undefined
   }
   const domain = await answer('domain', 'Domain the app answers on (e.g. acme.example.ao)')
   if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
     host.out.error(`--domain=<host> is required${domain ? `: "${domain}" is not a host name` : ''}`)
     return 1
   }
-  const tenants = await answer('tenants', 'Tenants on subdomains (<id>.domain)? subdomain | none', 'none')
+  const tenants = await answer('tenants', `Multi-tenant, each tenant on its own subdomain (<tenant>.${domain})? subdomain | none`, 'none', ['subdomain', 'none'])
   if (tenants !== 'subdomain' && tenants !== 'none') {
     host.out.error('--tenants is subdomain or none')
     return 1
   }
   const branch = (await answer('branch', 'Branch deployed', 'main')) ?? 'main'
-  const proxy = (await answer('proxy', 'Proxy on this server: apache | caddy | none', 'apache')) ?? 'apache'
+  const proxy = (await answer('proxy', 'Proxy on this server: apache | caddy | none', 'apache', ['apache', 'caddy', 'none'])) ?? 'apache'
   if (proxy !== 'apache' && proxy !== 'caddy' && proxy !== 'none') {
     host.out.error('--proxy is apache, caddy or none')
     return 1
