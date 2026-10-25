@@ -14,6 +14,9 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "basalt": "./dist/bin.js"
+  },
   "files": [
     "dist"
   ],

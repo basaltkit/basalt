@@ -651,6 +651,32 @@ Registering `queuePlugin` adds `queue:work`, `queue:stats`, `queue:retry` and
 `queue:jobs` —
 see [Queues & jobs](/guide/queues).
 
+### `basalt` without `pnpm`: the global launcher {#launcher}
+
+`basalt` is a script in the app's `package.json`, so the shell only finds it
+through the package manager: `pnpm basalt <command>`. Install the launcher once
+and type `basalt <command>` instead:
+
+```bash
+npm i -g @basaltkit/cli
+
+cd my-saas/src/modules     # anywhere inside the app
+basalt ai:make "an invoices module per tenant"
+basalt routes
+```
+
+The launcher runs no command itself. It finds the nearest `package.json` with
+a `basalt` script, from the current directory up, and runs that script with the
+app's own package manager: `pnpm basalt …`, `npm run basalt -- …`, `yarn
+basalt …` or `bun run basalt …`. The package manager comes from
+`packageManager`, else the lockfile; inside a workspace, the workspace's.
+
+What runs is always the app's code, at the versions its lockfile pins. The
+global install only has to be there; its version never matters. The arguments
+and the exit code pass through unchanged, so `pnpm basalt …` and `basalt …` are
+the same command, in scripts and CI too. Outside an app, `basalt` says so and
+exits 1; `basalt --version` there prints the launcher's version.
+
 ## Failure modes & troubleshooting
 
 | Error | Exit code | When |

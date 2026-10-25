@@ -105,6 +105,10 @@ tamponar uma resposta longa sem streaming; a repetição costuma resolver.
 
 ## Comandos
 
+Corre-os como `pnpm basalt ai:…` na app, ou como `basalt ai:…` depois de
+instalares o [lançador global](/pt/guide/installation#launcher)
+(`npm i -g @basaltkit/cli`): é o mesmo comando, com as versões da app.
+
 | Comando | O que faz | Precisa de modelo? | Escreve? | Código de saída |
 | --- | --- | --- | --- | --- |
 | `basalt ai` | Visão geral: stack detetado + comandos disponíveis | não | não | sempre `0` |

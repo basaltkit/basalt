@@ -92,6 +92,12 @@ funcionalidade que saltaste, e o `pnpm basalt update` leva a app às versões ma
 recentes — vê [Acrescentar funcionalidades depois](/pt/guide/installation#acrescentar-funcionalidades-depois)
 e [Atualizar uma app](/pt/guide/installation#atualizar-uma-app).
 
+::: tip `basalt` em vez de `pnpm basalt`
+O `npm i -g @basaltkit/cli` instala um lançador: `basalt <comando>`, em qualquer
+pasta da app, corre lá `pnpm basalt <comando>` com as versões da própria app.
+Vê [o lançador global](/pt/guide/installation#launcher).
+:::
+
 ### 2. Instalar e configurar
 
 ```bash
