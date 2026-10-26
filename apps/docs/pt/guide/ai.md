@@ -152,12 +152,18 @@ pipeline). O conjunto completo de regras:
 | --- | --- | --- | --- |
 | `insecure-app-secret` | error | security | O `APP_SECRET` tem um valor predefinido de placeholder no `src/env.ts` |
 | `missing-tenant-membership` | error | tenancy | O tenant é resolvido do pedido mas nenhum guard de membership o impõe |
+| `schema-not-migrated` | error | database | Um model não tem nenhuma migração que crie a tabela (só existe por `db push`), por isso o `prisma migrate deploy` deixa-a de fora em produção |
+| `context-at-module-scope` | error | tenancy | Um `const` de topo em `src/` chama `ctx()`, `tryCtx()` ou `db()`, que corre na importação, fora de qualquer pedido |
 | `prisma-lazy-boot` | warning | observability | A ligação à base de dados não é validada no arranque |
 | `fastify-logger-off` | warning | observability | O `fastifyPlugin` está registado sem configuração de `logger` |
 | `missing-security-plugin` | warning | security | Não há `securityPlugin` — as respostas seguem sem headers seguros |
 | `tenant-scoping-missing` | warning | tenancy | Uma app tenant-scoped tem models Prisma sem `tenantId` (os models dos próprios `-prisma` do framework, como o `AuthUser`, são globais por desenho e ficam de fora) |
 | `platform-route-accepts-tenant` | warning | tenancy | Uma rota junta `tenant: false` a `can: 'platform:…'`, por isso continua a correr em hosts de tenant — declara `tenant: 'never'` |
 | `in-memory-security-store` | warning | security | O estado de segurança é guardado num store em memória |
+| `framework-schema-drift` | warning | database | Um model do framework no `schema.prisma` não tem colunas que o schema do pacote `-prisma` instalado tem (correção: `basalt prisma:sync`) |
+| `plugin-default-memory-store` | warning | durability | A app tem base de dados mas um plugin (`commentsPlugin`, `auditPlugin`, `teamsPlugin`, …) ficou com o store em memória |
+| `detached-hook-bus` | warning | config | `new HookBus()` em `src/`: um bus à parte, onde os eventos da app nunca chegam |
+| `zod-v3-import` | warning | config | Um ficheiro importa de `zod/v3`; as rotas convertem os schemas em OpenAPI e input MCP com o Zod 4 |
 | `memory-sources-in-use` | info | durability | Estão ligadas fontes `Memory*` não-duráveis |
 | `redis-localhost-default` | info | config | O `REDIS_URL` aponta por predefinição para localhost |
 

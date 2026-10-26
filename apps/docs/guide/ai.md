@@ -152,12 +152,18 @@ The complete rule set:
 | --- | --- | --- | --- |
 | `insecure-app-secret` | error | security | `APP_SECRET` has a placeholder default in `src/env.ts` |
 | `missing-tenant-membership` | error | tenancy | A tenant is resolved from the request but no membership guard enforces it |
+| `schema-not-migrated` | error | database | A model has no migration that creates its table (it exists only through `db push`), so `prisma migrate deploy` leaves it out of production |
+| `context-at-module-scope` | error | tenancy | A top-level `const` in `src/` calls `ctx()`, `tryCtx()` or `db()`, which runs at import time, outside any request |
 | `prisma-lazy-boot` | warning | observability | The database connection isn't validated at boot |
 | `fastify-logger-off` | warning | observability | `fastifyPlugin` is registered with no `logger` config |
 | `missing-security-plugin` | warning | security | No `securityPlugin` — responses ship without secure headers |
 | `tenant-scoping-missing` | warning | tenancy | A tenant-scoped app has Prisma models without a `tenantId` (the framework's own `-prisma` models, such as `AuthUser`, are global by design and skipped) |
 | `platform-route-accepts-tenant` | warning | tenancy | A route pairs `tenant: false` with `can: 'platform:…'`, so it still runs on tenant hosts — declare `tenant: 'never'` |
 | `in-memory-security-store` | warning | security | Security state is kept in an in-memory store |
+| `framework-schema-drift` | warning | database | A framework model in `schema.prisma` lacks columns the installed `-prisma` package's schema has (fix: `basalt prisma:sync`) |
+| `plugin-default-memory-store` | warning | durability | The app has a database but a plugin (`commentsPlugin`, `auditPlugin`, `teamsPlugin`, …) is left on its in-memory store |
+| `detached-hook-bus` | warning | config | `new HookBus()` in `src/`: a bus of its own, which the app's events never reach |
+| `zod-v3-import` | warning | config | A file imports from `zod/v3`; routes turn schemas into OpenAPI and MCP input with Zod 4 |
 | `memory-sources-in-use` | info | durability | Non-durable `Memory*` sources are wired |
 | `redis-localhost-default` | info | config | `REDIS_URL` defaults to localhost |
 

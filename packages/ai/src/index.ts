@@ -43,13 +43,18 @@ export {
   memoryReader,
   type AppFileInfo,
   type CentralPlatformRouteHint,
+  type DefaultMemoryStore,
   type DetectedStack,
   type EnvFileInfo,
+  type FrameworkSchema,
+  type MigrationsInfo,
   type PrismaInfo,
   type PrismaModel,
   type ProjectContext,
   type ProjectReader,
   type ServerFileInfo,
+  type SourceHint,
+  type SourceHints,
 } from './context/project.js'
 
 // Diagnostics engine (spec §6, Doctor).
