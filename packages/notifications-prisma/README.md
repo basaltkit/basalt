@@ -113,7 +113,7 @@ See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.de
   changed anything.
 - `data` is stored as JSON text and round-trips unchanged.
 - For **database-per-tenant**, route the store through the active tenant's client
-  — see the [Database-per-tenant guide](https://basalt-docs.pages.dev/guide/database-per-tenant).
+  — see the [Database-per-tenant guide](https://basaltkit-docs.pages.dev/guide/database-per-tenant).
 - `PrismaNotificationsClient` types delegate **arguments** as `any` (returns stay
   precise) so a real `PrismaClient` is assignable and passes directly.
 
