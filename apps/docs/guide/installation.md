@@ -36,6 +36,8 @@ npm create basalt my-saas
 yarn create basalt my-saas
 # or
 bun create basalt my-saas
+# or, with the global launcher (npm i -g @basaltkit/cli)
+basalt new my-saas
 ```
 
 Run it **with no name** in a terminal and you get the interactive wizard
@@ -676,6 +678,11 @@ global install only has to be there; its version never matters. The arguments
 and the exit code pass through unchanged, so `pnpm basalt …` and `basalt …` are
 the same command, in scripts and CI too. Outside an app, `basalt` says so and
 exits 1; `basalt --version` there prints the launcher's version.
+
+One command is the launcher's own, inside an app too: `basalt new <name>
+[flags]` scaffolds an app. It runs `create-basalt@latest` with the same name and
+flags (`pnpm dlx`, else `npx`; `--pm=` picks the manager), so you always get
+the latest scaffolder, whatever version the launcher is.
 
 ## Failure modes & troubleshooting
 

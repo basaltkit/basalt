@@ -7,9 +7,13 @@
  * app's own package manager — so the code that runs is always the app's, at
  * the versions its lockfile pins, never the launcher's. Node built-ins only:
  * nothing of the framework is loaded.
+ *
+ * One command is the launcher's own: `basalt new <name> [flags]` scaffolds an
+ * app through `create-basalt@latest` (`pnpm dlx`, else `npx`) — the latest
+ * scaffolder, whatever version the launcher is.
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
@@ -117,11 +121,29 @@ export interface RunLauncherOptions {
   /** Where the launcher's own lines go (never the app's output). */
   error?: (line: string) => void
   log?: (line: string) => void
+  /** Whether pnpm is installed — what `basalt new` runs create-basalt with. Default: `pnpm --version` answers. */
+  hasPnpm?: () => boolean
 }
+
+/**
+ * How `basalt new` runs `create-basalt@latest`: through the manager `--pm=`
+ * names, else pnpm when it is installed, else npx. create-basalt reads the
+ * manager it was started with, so the new app uses the same one.
+ */
+export function scaffoldCommand(args: readonly string[], hasPnpm: () => boolean): { command: string; args: string[] } {
+  const pm = args.find((arg) => arg.startsWith('--pm='))?.slice('--pm='.length)
+  const pkg = 'create-basalt@latest'
+  if (pm === 'pnpm' || (pm === undefined && hasPnpm())) return { command: 'pnpm', args: ['--silent', 'dlx', pkg, ...args] }
+  if (pm === 'bun') return { command: 'bunx', args: [pkg, ...args] }
+  return { command: 'npx', args: ['--yes', pkg, ...args] } // npm, and yarn (create-basalt honours --pm=yarn)
+}
+
+const pnpmInstalled = (): boolean =>
+  spawnSync('pnpm', ['--version'], { stdio: 'ignore', shell: process.platform === 'win32' }).status === 0
 
 const NOT_AN_APP = [
   'basalt: no Basalt app here — no package.json with a "basalt" script in this directory or above it.',
-  '  Start one:   npm create basalt@latest my-app',
+  '  Start one:   basalt new my-app',
   '  Or cd into an app first; `basalt <command>` then runs `<pm> basalt <command>` there.',
 ]
 
@@ -131,6 +153,12 @@ export async function runLauncher(argv: readonly string[], options: RunLauncherO
   const env = options.env ?? process.env
   const error = options.error ?? ((line: string) => process.stderr.write(`${line}\n`))
   const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`))
+
+  // The launcher's own command, inside an app too: a new app is never the current one's business.
+  if (argv[0] === 'new') {
+    const scaffold = scaffoldCommand(argv.slice(1), options.hasPnpm ?? pnpmInstalled)
+    return spawnAndWait(scaffold.command, scaffold.args, { cwd, env, error, what: 'create a new app' })
+  }
 
   const project = findProject(cwd)
   if (!project) {
@@ -148,14 +176,29 @@ export async function runLauncher(argv: readonly string[], options: RunLauncherO
   }
 
   const { command, args } = launchCommand(project.pm, argv)
+  return spawnAndWait(command, args, {
+    cwd: project.root,
+    env: { ...env, [LAUNCHER_ENV]: project.root },
+    error,
+    what: `run this app's basalt script (${project.root})`,
+  })
+}
+
+/** Runs one command with the terminal attached; resolves to its exit code. */
+function spawnAndWait(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; error: (line: string) => void; what: string },
+): Promise<number> {
+  const { error } = options
   return new Promise<number>((done) => {
     const child = spawn(command, args, {
-      cwd: project.root,
-      env: { ...env, [LAUNCHER_ENV]: project.root },
+      cwd: options.cwd,
+      env: options.env,
       stdio: 'inherit',
       shell: process.platform === 'win32',
     })
-    // Ctrl-C reaches the whole foreground group: the app handles it; the
+    // Ctrl-C reaches the whole foreground group: the child handles it; the
     // launcher only waits for it to finish and reports its code.
     const ignore = () => {}
     const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
@@ -166,7 +209,7 @@ export async function runLauncher(argv: readonly string[], options: RunLauncherO
     }
     child.on('error', (cause: NodeJS.ErrnoException) => {
       error(cause.code === 'ENOENT'
-        ? `basalt: ${command} is not installed, and this app uses it (${project.root}).`
+        ? `basalt: ${command} is not installed, and it is needed to ${options.what}.`
         : `basalt: could not start ${command}: ${cause.message}`)
       settle(1)
     })
