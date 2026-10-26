@@ -698,9 +698,9 @@ o código de saída passam sem alterações, por isso `pnpm basalt …` e `basal
 são o mesmo comando, também em scripts e no CI. Fora de uma app, o `basalt` diz
 isso e sai com 1; aí, o `basalt --version` mostra a versão do lançador.
 
-Há um comando que é do próprio lançador, também dentro de uma app: o `basalt new
-<nome> [flags]` cria uma app. Corre o `create-basalt@latest` com o mesmo nome e
-as mesmas flags (`pnpm dlx`, senão `npx`; o `--pm=` escolhe o gestor), por isso
+Há um comando que é do próprio lançador, também dentro de uma app:
+`basalt new <nome> [flags]` cria uma app. Corre o `create-basalt@latest` com o
+mesmo nome e as mesmas flags (`pnpm dlx`, senão `npx`; o `--pm=` escolhe o gestor), por isso
 recebes sempre o scaffolder mais recente, seja qual for a versão do lançador.
 
 ## Modos de falha e resolução de problemas
