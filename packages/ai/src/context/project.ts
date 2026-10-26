@@ -64,7 +64,8 @@ function trimTrailingSlashes(path: string): string {
 export function memoryReader(files: Record<string, string>): ProjectReader {
   return {
     read: (relPath) => files[relPath] ?? null,
-    exists: (relPath) => relPath in files,
+    // A folder exists when a file sits under it, as on disk.
+    exists: (relPath) => relPath in files || Object.keys(files).some((path) => path.startsWith(`${relPath}/`)),
     list: (relDir) => {
       const prefix = `${trimTrailingSlashes(relDir)}/`
       return Object.keys(files).filter((path) => path.startsWith(prefix))
@@ -116,6 +117,8 @@ export interface AppFileInfo {
   memorySources: string[]
   /** Every `<name>Plugin(` factory call in the app file (unfiltered by capability). */
   pluginCalls: string[]
+  /** Plugins called without the option that takes a durable store. */
+  defaultMemoryStores: DefaultMemoryStore[]
 }
 
 export interface ServerFileInfo {
@@ -145,6 +148,48 @@ export interface CentralPlatformRouteHint {
   line: number
 }
 
+/** A spot in a source file a rule points at. */
+export interface SourceHint {
+  path: string
+  /** 1-based line. */
+  line: number
+}
+
+/** Findings from scanning the app's own source files under `src/`. */
+export interface SourceHints {
+  /** `ctx()`, `tryCtx()` or `db()` called while a module loads, outside any function. */
+  moduleScopeContext: SourceHint[]
+  /** `new HookBus()`: a bus of its own, which the app's events never reach. */
+  detachedHookBus: SourceHint[]
+  /** Imports from `zod/v3`. */
+  zodV3Imports: SourceHint[]
+}
+
+/** What the project's Prisma migrations create. */
+export interface MigrationsInfo {
+  /** The migrations folder, relative to the root. */
+  path: string
+  /** `migration.sql` files found. */
+  files: number
+  /** Tables those files create (or rename to), lower-cased, schema prefix dropped. */
+  tables: string[]
+}
+
+/** The reference schema an installed `@basaltkit/*-prisma` package ships. */
+export interface FrameworkSchema {
+  package: string
+  models: PrismaModel[]
+}
+
+/** A plugin left on the in-memory store it falls back to. */
+export interface DefaultMemoryStore {
+  plugin: string
+  /** The option that takes the durable store. */
+  option: string
+  /** The package that provides one. */
+  durable: string
+}
+
 export interface ProjectContext {
   root: string
   /**
@@ -159,6 +204,16 @@ export interface ProjectContext {
   app: AppFileInfo | null
   server: ServerFileInfo | null
   env: EnvFileInfo | null
+  /**
+   * The Prisma migrations: null when there is no migrations folder (the
+   * project uses `db push`, or has no Prisma). Absent when the reader cannot
+   * list files.
+   */
+  migrations?: MigrationsInfo | null
+  /** Reference schemas of the installed `@basaltkit/*-prisma` packages. */
+  frameworkSchemas?: FrameworkSchema[]
+  /** Scan of the app's own source files. Absent when the reader cannot list files. */
+  sourceHints?: SourceHints
 }
 
 const APP_CANDIDATES = ['src/app.ts', 'src/app.js', 'app.ts']
@@ -202,6 +257,8 @@ export function detectProject(root: string, reader: ProjectReader = nodeReader(r
   const prisma = detectPrisma(reader)
   const stack = buildStack(installed, app, prisma)
   const centralPlatformRoutes = detectCentralPlatformRoutes(reader)
+  const migrations = detectMigrations(reader)
+  const sourceHints = detectSourceHints(reader)
   return {
     root,
     installed,
@@ -210,8 +267,127 @@ export function detectProject(root: string, reader: ProjectReader = nodeReader(r
     app,
     server,
     env,
+    frameworkSchemas: detectFrameworkSchemas(reader, installed, prisma?.provider ?? null),
     ...(centralPlatformRoutes ? { centralPlatformRoutes } : {}),
+    ...(migrations !== undefined ? { migrations } : {}),
+    ...(sourceHints ? { sourceHints } : {}),
   }
+}
+
+/** The app's own source files: `src/**` scripts, without tests and declarations. */
+function sourceFiles(reader: ProjectReader): string[] | undefined {
+  if (!reader.list) return undefined
+  return reader
+    .list('src')
+    .filter((path) => /\.[cm]?[jt]s$/.test(path) && !/\.d\.ts$|\.(test|spec)\.[cm]?[jt]s$/.test(path))
+    .slice(0, MAX_SCANNED_FILES)
+}
+
+const MIGRATIONS_DIR = 'prisma/migrations'
+
+/**
+ * Tables the migrations create. Reads `CREATE TABLE` (and `RENAME TO`) from
+ * every `migration.sql`: what `prisma migrate deploy` builds in production.
+ */
+function detectMigrations(reader: ProjectReader): MigrationsInfo | null | undefined {
+  if (!reader.list) return undefined
+  if (!reader.exists(MIGRATIONS_DIR)) return null
+  const files = reader.list(MIGRATIONS_DIR).filter((path) => path.endsWith('/migration.sql'))
+  const tables = new Set<string>()
+  const name = String.raw`(?:[\x60"\[]?\w+[\x60"\]]?\s*\.\s*)?[\x60"\[]?(\w+)[\x60"\]]?`
+  const create = new RegExp(String.raw`\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?` + name, 'gi')
+  const rename = new RegExp(String.raw`\bRENAME\s+TO\s+` + name, 'gi')
+  for (const path of files) {
+    const sql = reader.read(path) ?? ''
+    for (const match of sql.matchAll(create)) if (match[1]) tables.add(match[1].toLowerCase())
+    for (const match of sql.matchAll(rename)) if (match[1]) tables.add(match[1].toLowerCase())
+  }
+  return { path: MIGRATIONS_DIR, files: files.length, tables: [...tables].sort() }
+}
+
+/** The reference schema of every installed `@basaltkit/*-prisma` package, in the app's dialect. */
+function detectFrameworkSchemas(
+  reader: ProjectReader,
+  installed: string[],
+  provider: DetectedStack['database'],
+): FrameworkSchema[] {
+  const schemas: FrameworkSchema[] = []
+  for (const pkg of installed.filter((name) => name.endsWith('-prisma'))) {
+    const dir = `node_modules/${pkg}/prisma`
+    const schema =
+      (provider === 'mysql' ? reader.read(`${dir}/schema.mysql.prisma`) : null) ?? reader.read(`${dir}/schema.prisma`)
+    if (schema) schemas.push({ package: pkg, models: parseModels(schema) })
+  }
+  return schemas
+}
+
+/** The local names under which a module imports `wanted` from `source` (`{ db as getDb }` → getDb). */
+function localNames(content: string, source: string, wanted: string[]): string[] {
+  const names: string[] = []
+  const from = new RegExp(String.raw`import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"]${source.replace('/', '\\/')}['"]`, 'g')
+  for (const match of content.matchAll(from)) {
+    for (const part of (match[1] ?? '').split(',')) {
+      const [imported, local] = part.trim().split(/\s+as\s+/).map((name) => name.trim())
+      if (imported && wanted.includes(imported)) names.push(local ?? imported)
+    }
+  }
+  return names
+}
+
+/**
+ * Scans `src/` for three mistakes a regex can see without false alarms:
+ * a request-context call in a module's top-level `const`, a HookBus of its
+ * own, and zod/v3 imports. Matches must start in code (comments and string
+ * text are blanked), as for the route scan.
+ */
+function detectSourceHints(reader: ProjectReader): SourceHints | undefined {
+  const files = sourceFiles(reader)
+  if (!files) return undefined
+  const hints: SourceHints = { moduleScopeContext: [], detachedHookBus: [], zodV3Imports: [] }
+  for (const path of files) {
+    const content = reader.read(path)
+    if (!content) continue
+    const code = codeOnly(content)
+    const lineOf = (index: number): number => content.slice(0, index).split('\n').length
+
+    const callees = [
+      ...localNames(content, '@basaltkit/core', ['ctx', 'tryCtx']),
+      ...localNames(content, '@basaltkit/prisma', ['db']),
+    ]
+    if (callees.length > 0) {
+      const call = new RegExp(String.raw`\b(?:` + callees.join('|') + String.raw`)\s*(?:<[^<>()]*>)?\s*\(\s*\)`)
+      let depth = 0
+      let offset = 0
+      for (const line of code.split('\n')) {
+        // A top-level `const x = …` whose initializer, on that line, calls
+        // the context before any function begins: it runs at import time.
+        const declaration = depth === 0
+          ? /^(?:export\s+)?(?:const|let|var)\s+[\w$]+(?:\s*:[^=]+)?\s*=(?![=>])(.*)$/.exec(line)
+          : null
+        if (declaration) {
+          const initializer = declaration[1] ?? ''
+          const at = initializer.search(call)
+          const fn = initializer.search(/=>|\bfunction\b/)
+          if (at !== -1 && (fn === -1 || at < fn)) hints.moduleScopeContext.push({ path, line: lineOf(offset) })
+        }
+        for (const ch of line) {
+          if (ch === '{') depth++
+          else if (ch === '}') depth = Math.max(0, depth - 1)
+        }
+        offset += line.length + 1
+      }
+    }
+
+    for (const match of code.matchAll(/\bnew\s+HookBus\s*\(/g)) {
+      hints.detachedHookBus.push({ path, line: lineOf(match.index ?? 0) })
+    }
+    for (const match of content.matchAll(/\b(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"]zod\/v3['"]/g)) {
+      const index = match.index ?? 0
+      if (!/^(from|import|require)/.test(code.slice(index, index + 7))) continue
+      hints.zodV3Imports.push({ path, line: lineOf(index) })
+    }
+  }
+  return hints
 }
 
 /**
@@ -296,7 +472,52 @@ function detectAppFile(reader: ProjectReader): AppFileInfo | null {
   const pluginCalls = [
     ...new Set(Array.from(found.content.matchAll(/\b([A-Za-z][A-Za-z0-9]*Plugin)\s*\(/g), (m) => m[1] as string)),
   ]
-  return { path: found.path, plugins, fastifyLoggerConfigured, memorySources, pluginCalls }
+  const defaultMemoryStores = MEMORY_DEFAULT_PLUGINS.filter((spec) =>
+    pluginCallArguments(found.content, spec.plugin).some((args) => !takesOption(args, spec.option)),
+  )
+  return { path: found.path, plugins, fastifyLoggerConfigured, memorySources, pluginCalls, defaultMemoryStores }
+}
+
+/**
+ * Plugins that fall back to an in-memory store when the option is left out:
+ * fine in a test, lost on every restart and not shared between instances.
+ */
+const MEMORY_DEFAULT_PLUGINS: DefaultMemoryStore[] = [
+  { plugin: 'commentsPlugin', option: 'store', durable: '@basaltkit/comments-prisma' },
+  { plugin: 'activityPlugin', option: 'store', durable: '@basaltkit/activity-prisma' },
+  { plugin: 'auditPlugin', option: 'store', durable: '@basaltkit/audit-prisma' },
+  { plugin: 'filesPlugin', option: 'store', durable: '@basaltkit/files-prisma' },
+  { plugin: 'notificationsPlugin', option: 'inApp', durable: '@basaltkit/notifications-prisma' },
+  { plugin: 'teamsPlugin', option: 'memberships', durable: '@basaltkit/teams-prisma' },
+  { plugin: 'webhooksPlugin', option: 'store', durable: '@basaltkit/webhooks-prisma' },
+  { plugin: 'outboxPlugin', option: 'store', durable: '@basaltkit/events-prisma' },
+]
+
+/** The argument text of every `<plugin>(…)` call in code, parentheses balanced. */
+function pluginCallArguments(code: string, plugin: string): string[] {
+  const out: string[] = []
+  for (const match of code.matchAll(new RegExp(String.raw`\b${plugin}\s*\(`, 'g'))) {
+    let depth = 1
+    let i = (match.index ?? 0) + match[0].length
+    const start = i
+    for (; i < code.length && depth > 0; i++) {
+      if (code[i] === '(') depth++
+      else if (code[i] === ')') depth--
+    }
+    out.push(code.slice(start, i - 1).trim())
+  }
+  return out
+}
+
+/**
+ * Whether the arguments pass `option`. Anything that is not an inline object
+ * (a variable, a spread) may carry it, so it counts as passed: the rule only
+ * speaks when it can see the option is missing.
+ */
+function takesOption(args: string, option: string): boolean {
+  if (args === '') return false
+  if (!args.startsWith('{') || args.includes('...')) return true
+  return new RegExp(String.raw`[{,\s]${option}\s*[:,}]|[{,\s]${option}\s*$`).test(args)
 }
 
 /**
