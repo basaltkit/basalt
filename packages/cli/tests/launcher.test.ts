@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { detectPackageManager, findProject, LAUNCHER_ENV, launchCommand, runLauncher } from '../src/launcher.js'
+import { detectPackageManager, findProject, LAUNCHER_ENV, launchCommand, runLauncher, scaffoldCommand } from '../src/launcher.js'
 
 const base = mkdtempSync(join(tmpdir(), 'basalt-launcher-'))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -80,7 +80,7 @@ describe('runLauncher', () => {
     const error = lines()
     expect(await runLauncher(['ai:make', 'x'], { cwd: project({}), error: error.push })).toBe(1)
     expect(error.out[0]).toContain('no Basalt app here')
-    expect(error.out.join('\n')).toContain('npm create basalt@latest')
+    expect(error.out.join('\n')).toContain('basalt new my-app')
   })
 
   it('outside an app, --version prints the launcher version', async () => {
@@ -130,4 +130,42 @@ describe('runLauncher', () => {
     expect(exit).toBe(0)
     expect(seen.argv).toEqual(['ai:make', 'an invoices module', '--dry-run', '--', 'x'])
   }, 30_000)
+})
+
+describe('basalt new', () => {
+  it('runs create-basalt@latest with pnpm when it is installed, else npx — or the manager --pm= names', () => {
+    const args = ['my-app', '--prisma']
+    expect(scaffoldCommand(args, () => true)).toEqual({ command: 'pnpm', args: ['--silent', 'dlx', 'create-basalt@latest', ...args] })
+    expect(scaffoldCommand(args, () => false)).toEqual({ command: 'npx', args: ['--yes', 'create-basalt@latest', ...args] })
+    expect(scaffoldCommand(['my-app', '--pm=npm'], () => true).command).toBe('npx')
+    expect(scaffoldCommand(['my-app', '--pm=bun'], () => true)).toEqual({ command: 'bunx', args: ['create-basalt@latest', 'my-app', '--pm=bun'] })
+    expect(scaffoldCommand(['my-app', '--pm=pnpm'], () => false).command).toBe('pnpm')
+    expect(scaffoldCommand(['my-app', '--pm=yarn'], () => true).command).toBe('npx')
+  })
+
+  // A stand-in `pnpm` on PATH records what the launcher ran, and where.
+  function fakePnpm(): { bin: string; seen: string } {
+    const bin = project({})
+    const seen = join(bin, 'seen.json')
+    const script = join(bin, 'pnpm')
+    writeFileSync(script, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), root: process.env.${LAUNCHER_ENV} ?? null }))\nprocess.exit(4)\n`, { mode: 0o755 })
+    return { bin, seen }
+  }
+
+  it.skipIf(process.platform === 'win32')('scaffolds from anywhere — inside an app too, where it never runs the app\'s script — and keeps the exit code', async () => {
+    const { bin, seen } = fakePnpm()
+    const app = project({ 'package.json': { scripts: { basalt: 'node never.js' } } })
+    const env = { ...process.env, PATH: `${bin}:${process.env['PATH'] ?? ''}` }
+    expect(await runLauncher(['new', 'my-app', '--prisma'], { cwd: app, env, hasPnpm: () => true })).toBe(4)
+    const run = JSON.parse(readFileSync(seen, 'utf8')) as { argv: string[]; cwd: string; root: string | null }
+    expect(run.argv).toEqual(['--silent', 'dlx', 'create-basalt@latest', 'my-app', '--prisma'])
+    expect(run.root).toBeNull()
+  })
+
+  it('says which tool is missing when the scaffold runner is not installed', async () => {
+    const error = lines()
+    const env = { ...process.env, PATH: project({}) }
+    expect(await runLauncher(['new', 'x'], { cwd: project({}), env, hasPnpm: () => false, error: error.push })).toBe(1)
+    expect(error.out[0]).toBe('basalt: npx is not installed, and it is needed to create a new app.')
+  })
 })

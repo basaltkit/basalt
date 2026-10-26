@@ -41,6 +41,10 @@ app's, at its pinned versions. Arguments and the exit code pass through
 unchanged. Outside an app it says so and exits 1. The launcher loads nothing of
 the framework, only Node built-ins.
 
+`basalt new <name> [flags]` is the launcher's own command: it scaffolds an app
+with `create-basalt@latest` (through `pnpm dlx`, else `npx`; `--pm=` picks the
+manager), so it always gets the latest scaffolder.
+
 ## Get started in 5 minutes
 
 1. Create a `bin/basalt.ts` file at the root of the project — this will be the entry point for the `basalt` command:
