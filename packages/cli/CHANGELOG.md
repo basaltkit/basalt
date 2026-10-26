@@ -1,5 +1,11 @@
 # @basaltkit/cli
 
+## 1.7.0
+
+### Minor Changes
+
+- 1c1f608: `basalt new <name> [flags]`: the global launcher scaffolds an app. It runs `create-basalt@latest` with the same arguments (`pnpm dlx` when pnpm is installed, else `npx`; `--pm=` picks the manager), so it always gets the latest scaffolder whatever the launcher's version, and keeps the exit code. Outside an app, `basalt` now suggests `basalt new my-app`.
+
 ## 1.6.0
 
 ### Minor Changes
