@@ -243,7 +243,7 @@ See the [MySQL section of the persistence guide](https://basaltkit-docs.pages.de
   `TypeError` instead, as does a `limit` that is not a non-negative safe integer.
 - The `payload` is stored as JSON text and round-trips unchanged.
 - For **database-per-tenant**, route the store through the active tenant's client
-  — see the [Database-per-tenant guide](https://basalt-docs.pages.dev/guide/database-per-tenant).
+  — see the [Database-per-tenant guide](https://basaltkit-docs.pages.dev/guide/database-per-tenant).
 - `PrismaAuditClient` types delegate **arguments** as `any` (returns stay precise)
   so a real `PrismaClient` is assignable and passes directly.
 - **Query pushdown.** Every exact filter — tenant, actor, `since`, and an event name with **no** wildcard — plus the `limit` go into the database (`take` / `LIMIT`). Only a wildcard pattern still needs matching in code, and then rows are read in bounded 500-row pages that stop as soon as the limit is satisfied, so a `limit: 50` query never materialises the whole trail. A pattern containing `.` is deliberately not pushed down: `patternMatches` treats `.` and `:` as interchangeable separators, so an equality would miss `a:b` for `a.b`.
