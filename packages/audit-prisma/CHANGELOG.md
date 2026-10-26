@@ -1,5 +1,11 @@
 # @basaltkit/audit-prisma
 
+## 2.1.1
+
+### Patch Changes
+
+- ccda6cd: README: the database-per-tenant link points at basaltkit-docs.pages.dev (it pointed at basalt-docs.pages.dev, which is not the Basalt docs).
+
 ## 2.1.0
 
 ### Minor Changes
