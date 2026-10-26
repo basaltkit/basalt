@@ -97,6 +97,8 @@ export interface PrismaModel {
   fields: string[]
   /** True when the model carries a `tenantId` column (tenant-scoped). */
   tenantScoped: boolean
+  /** The `@@map("…")` table name, when the model declares one. */
+  table?: string
 }
 
 export interface PrismaInfo {
@@ -426,8 +428,11 @@ function normalizeProvider(raw: string | undefined): DetectedStack['database'] {
 function parseModels(schema: string): PrismaModel[] {
   const models: PrismaModel[] = []
   const modelRegex = /model\s+(\w+)\s*\{([^}]*)\}/gs
+  // Comments go first: a `}` in one (`// { id, ...anything }`) would end the
+  // model there, losing every field and the @@map after it.
+  const source = stripComments(schema)
   let match: RegExpExecArray | null
-  while ((match = modelRegex.exec(schema)) !== null) {
+  while ((match = modelRegex.exec(source)) !== null) {
     const name = match[1]
     const body = match[2]
     if (!name || body === undefined) continue
@@ -435,9 +440,15 @@ function parseModels(schema: string): PrismaModel[] {
       .split('\n')
       .map((line) => line.trim().split(/\s+/)[0])
       .filter((token): token is string => !!token && !token.startsWith('@') && !token.startsWith('//'))
-    models.push({ name, fields, tenantScoped: fields.includes('tenantId') })
+    const table = /@@map\(\s*"([^"]+)"\s*\)/.exec(body)?.[1]
+    models.push({ name, fields, tenantScoped: fields.includes('tenantId'), ...(table ? { table } : {}) })
   }
   return models
+}
+
+/** Drops `//` comments — only at a line start or after whitespace, so `"postgres://…"` survives. */
+function stripComments(schema: string): string {
+  return schema.replace(/(^|\s)\/\/.*$/gm, '$1')
 }
 
 function buildStack(installed: string[], app: AppFileInfo | null, prisma: PrismaInfo | null): DetectedStack {

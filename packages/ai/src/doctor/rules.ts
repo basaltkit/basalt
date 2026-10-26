@@ -166,7 +166,7 @@ export const DEFAULT_RULES: DoctorRule[] = [
     check(ctx) {
       if (!ctx.stack.tenancy || !ctx.prisma) return null
       const unscoped = ctx.prisma.models.filter(
-        (model) => !model.tenantScoped && !GLOBAL_MODELS.has(model.name),
+        (model) => !model.tenantScoped && !GLOBAL_MODELS.has(model.name) && !isFrameworkGlobalModel(model),
       )
       if (unscoped.length === 0) return null
       const names = unscoped.map((m) => m.name).join(', ')
@@ -260,3 +260,40 @@ export const DEFAULT_RULES: DoctorRule[] = [
 
 /** Models that legitimately have no tenantId (platform-global tables). */
 const GLOBAL_MODELS = new Set(['Tenant', 'User', 'Plan', 'WebhookEvent', 'Migration'])
+
+/**
+ * Models the framework's `-prisma` packages ship without a tenantId, by design:
+ * identity is central (one AuthUser across tenants, membership checked by
+ * tenantMembershipPlugin), and the others are scoped by their package. Keyed by
+ * model name → its `@@map` table, and matched on both, so an app's own
+ * `Payment` or `Subscription` is still checked. A test keeps this in sync with
+ * the reference schemas.
+ */
+export const FRAMEWORK_GLOBAL_MODELS: Readonly<Record<string, string>> = {
+  AuthUser: 'auth_users',
+  AuthSession: 'auth_sessions',
+  AuthRefreshToken: 'auth_refresh_tokens',
+  AuthToken: 'auth_tokens',
+  AuthMfa: 'auth_mfa',
+  AuthTokenVersion: 'auth_token_versions',
+  AuthAccountLink: 'auth_account_links',
+  AuthPasskey: 'auth_passkeys',
+  InAppNotification: 'in_app_notifications',
+  NotificationPreference: 'notification_preferences',
+  PermUserRole: 'perm_user_roles',
+  PermUserPermission: 'perm_user_permissions',
+  PermRolePermission: 'perm_role_permissions',
+  PermTemporaryGrant: 'perm_temporary_grants',
+  PermDelegation: 'perm_delegations',
+  Subscription: 'subscriptions',
+  UsageCounter: 'usage_counters',
+  WebhookEvent: 'webhook_events',
+  Payment: 'payments',
+  RecurringSubscription: 'recurring_subscriptions',
+  Tenant: 'tenants',
+}
+
+function isFrameworkGlobalModel(model: { name: string; table?: string }): boolean {
+  const table = Object.hasOwn(FRAMEWORK_GLOBAL_MODELS, model.name) ? FRAMEWORK_GLOBAL_MODELS[model.name] : undefined
+  return table !== undefined && table === model.table
+}

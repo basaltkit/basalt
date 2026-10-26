@@ -155,7 +155,7 @@ The complete rule set:
 | `prisma-lazy-boot` | warning | observability | The database connection isn't validated at boot |
 | `fastify-logger-off` | warning | observability | `fastifyPlugin` is registered with no `logger` config |
 | `missing-security-plugin` | warning | security | No `securityPlugin` — responses ship without secure headers |
-| `tenant-scoping-missing` | warning | tenancy | A tenant-scoped app has Prisma models without a `tenantId` |
+| `tenant-scoping-missing` | warning | tenancy | A tenant-scoped app has Prisma models without a `tenantId` (the framework's own `-prisma` models, such as `AuthUser`, are global by design and skipped) |
 | `platform-route-accepts-tenant` | warning | tenancy | A route pairs `tenant: false` with `can: 'platform:…'`, so it still runs on tenant hosts — declare `tenant: 'never'` |
 | `in-memory-security-store` | warning | security | Security state is kept in an in-memory store |
 | `memory-sources-in-use` | info | durability | Non-durable `Memory*` sources are wired |
