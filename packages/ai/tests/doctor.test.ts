@@ -48,6 +48,32 @@ describe('runDoctor', () => {
     expect(tenancy?.detected).not.toContain('Tenant')
   })
 
+  it("skips the framework's own untenanted models, but not an app model of the same name", () => {
+    const schema = `
+      datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+      model AuthUser { id String @id email String @unique @@map("auth_users") }
+      model AuthSession { id String @id userId String @@map("auth_sessions") }
+      model Payment { id String @id amount Int }
+    `
+    const scoped = runDoctor(detectProject('/proj', memoryReader({ ...brokenFiles, 'prisma/schema.prisma': schema })))
+      .find((d) => d.id === 'tenant-scoping-missing')
+    expect(scoped?.detected).toBe('models without a tenantId column: Payment')
+  })
+
+  it('reads a model past a closing brace inside a comment', () => {
+    const schema = `
+      datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+      model Invoice {
+        id       String @id
+        // the open record ({ id, ...anything })
+        tenantId String
+      }
+    `
+    const scoped = runDoctor(detectProject('/proj', memoryReader({ ...brokenFiles, 'prisma/schema.prisma': schema })))
+      .find((d) => d.id === 'tenant-scoping-missing')
+    expect(scoped).toBeUndefined()
+  })
+
   it('flags in-memory sources', () => {
     expect(ids).toContain('memory-sources-in-use')
   })
