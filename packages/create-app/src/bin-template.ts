@@ -201,6 +201,24 @@ if (process.argv[2]?.startsWith('make:')) {
 }
 `
 
+/**
+ * The DEV SERVER PRELUDE, after the generators prelude and still before
+ * anything of the app is imported: `basalt dev` must start while the app
+ * cannot boot (a variable missing, the database down, code mid-edit) — that
+ * is when a watcher is needed. `runDev` boots the app only for the route
+ * table, prints why when it does not, and starts the watcher either way.
+ */
+const DEV_SERVER_PRELUDE = `// \`dev\` starts the watcher even while the app cannot boot (database down, a
+// variable missing, code mid-edit): the route table is printed when it boots.
+if (process.argv[2] === 'dev') {
+  const { runDev } = await import('@basaltkit/cli')
+  process.env['NODE_ENV'] ??= 'development'
+  process.exit(await runDev({
+    loadApp: async () => (await import('../src/app.js')).buildApp({ logLevel: 'silent' }),
+  }))
+}
+`
+
 /** Marker proving a bin/basalt.ts already delegates the project commands. */
 export const PROJECT_COMMANDS_MARKER = "['update', 'add', 'doctor', 'info'].includes(process.argv[2]"
 
@@ -209,6 +227,9 @@ export const DEV_PRELUDE_MARKER = 'process.loadEnvFile(envFile)'
 
 /** Marker proving a bin/basalt.ts already runs the generators without booting the app. */
 export const GENERATORS_PRELUDE_MARKER = "process.argv[2]?.startsWith('make:')"
+
+/** Marker proving a bin/basalt.ts already starts `dev` without booting the app. */
+export const DEV_SERVER_PRELUDE_MARKER = "if (process.argv[2] === 'dev')"
 
 const APP_IMPORT = "await import('../src/app.js')"
 const APP_IMPORT_EXPLAINED = `${APP_IMPORT}.catch(explainBootFailure)`
@@ -219,6 +240,7 @@ export function basaltBin(): string {
 ${PRELUDE}
 ${DEV_PRELUDE}
 ${GENERATORS_PRELUDE}
+${DEV_SERVER_PRELUDE}
 // The dev tools are imported dynamically, after the project commands above.
 const { runCli } = await import('@basaltkit/cli')
 const { generatorCommands } = await import('@basaltkit/generator')
@@ -268,11 +290,15 @@ export const LEGACY_BIN_HASHES: ReadonlySet<string> = new Set([
   'sha256-bd0b6c9c40089a18c2c2f1a70953044d6a74a329d38a72903b494b1f2265a114',
   // 2026-10-08: database diagnoses in explainBootFailure — make:* still booted.
   'sha256-abea8cbfdb41a302cabad7929617f7fc2fe822345aa8db6ff777e923eb0fc96b',
+  // 2026-10-25 (create-basalt ≤ 1.15): make:* without a boot — but `dev`
+  // booted the app first, so it did not start while the app could not boot.
+  'sha256-5c2cf3f431399b961de890af457c7be5f9a0cb810cd96d6bdf080ac942e33f1b',
 ])
 
 export const hasProjectCommands = (content: string): boolean => content.includes(PROJECT_COMMANDS_MARKER)
 export const hasDevPrelude = (content: string): boolean => content.includes(DEV_PRELUDE_MARKER)
 export const hasGeneratorsPrelude = (content: string): boolean => content.includes(GENERATORS_PRELUDE_MARKER)
+export const hasDevServerPrelude = (content: string): boolean => content.includes(DEV_SERVER_PRELUDE_MARKER)
 
 /**
  * Upgrades a template-generated bin/basalt.ts to the current template, step by
@@ -281,8 +307,9 @@ export const hasGeneratorsPrelude = (content: string): boolean => content.includ
  * longer run before it); (2) without the dev prelude, inserts it right after
  * the project commands and routes the app import through `explainBootFailure`;
  * (3) without the generators prelude, inserts it right before the dev tools
- * are imported for the booted CLI.
- * Deterministic for the known templates — for the latest ones (1.9 to 1.14) the
+ * are imported for the booted CLI; (4) without the dev server prelude, inserts
+ * it at the same place, after the generators prelude.
+ * Deterministic for the known templates — for the latest ones (1.9 to 1.15) the
  * result is exactly {@link basaltBin}.
  */
 export function patchBasaltBin(content: string): string {
@@ -290,6 +317,7 @@ export function patchBasaltBin(content: string): string {
   if (!hasProjectCommands(text)) text = addProjectCommands(text)
   if (!hasDevPrelude(text)) text = addDevPrelude(text)
   if (!hasGeneratorsPrelude(text)) text = addGeneratorsPrelude(text)
+  if (!hasDevServerPrelude(text)) text = addDevServerPrelude(text)
   return text
 }
 
@@ -327,12 +355,20 @@ function addGeneratorsPrelude(content: string): string {
   return `${content.slice(0, anchor.index)}${GENERATORS_PRELUDE}\n${content.slice(anchor.index)}`
 }
 
+/** Inserts the dev server prelude right before the dev tools are imported for the booted CLI (after the generators prelude). */
+function addDevServerPrelude(content: string): string {
+  const anchor = /^(?:\/\/ The dev tools are imported dynamically[^\n]*\n)?const \{ runCli \} = await import\('@basaltkit\/cli'\)$/m.exec(content)
+  // Without the template's dynamic CLI import, the file is not ours to rearrange.
+  if (!anchor || !hasGeneratorsPrelude(content)) return content
+  return `${content.slice(0, anchor.index)}${DEV_SERVER_PRELUDE}\n${content.slice(anchor.index)}`
+}
+
 export type BinStatus = 'current' | 'patchable' | 'modified' | 'absent'
 
 /** Where a bin/basalt.ts stands: already current, an untouched old template, or user code. */
 export function binStatus(content: string | undefined, manifestHash?: string): BinStatus {
   if (content === undefined) return 'absent'
-  if (hasProjectCommands(content) && hasDevPrelude(content) && hasGeneratorsPrelude(content)) return 'current'
+  if (hasProjectCommands(content) && hasDevPrelude(content) && hasGeneratorsPrelude(content) && hasDevServerPrelude(content)) return 'current'
   const hash = hashContent(content)
   return LEGACY_BIN_HASHES.has(hash) || hash === manifestHash ? 'patchable' : 'modified'
 }
@@ -362,6 +398,13 @@ booted CLI) — it runs the make:* generators without booting the app, so they
 work before the database is up or migrated:
 
 ${GENERATORS_PRELUDE}`)
+  }
+  if (!hasDevServerPrelude(content)) {
+    steps.push(`${steps.length > 0 ? 'Then paste' : 'Paste'} this after the generators prelude (before the dev tools are imported for
+the booted CLI) — \`basalt dev\` then starts its watcher even while the app cannot
+boot (database down, a variable missing):
+
+${DEV_SERVER_PRELUDE}`)
   }
   return steps.join('\n')
 }

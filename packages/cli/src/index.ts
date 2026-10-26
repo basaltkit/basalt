@@ -14,6 +14,9 @@ export {
 } from './builtins.js'
 export {
   devCommand,
+  runDev,
+  bootFailureLines,
+  type RunDevOptions,
   resolveDevEntry,
   resolveDevRunner,
   devRouteRows,

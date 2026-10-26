@@ -661,7 +661,7 @@ O `runCli` oferece sempre estes, além do que qualquer plugin registe:
 | `list` (ou sem comando) | Imprime todos os comandos disponíveis |
 | `routes` | As rotas HTTP registadas com as guardas que cada uma declara (`auth`, `can`, `rateLimit`, `tenant`, …), lidas do bucket de metadados `http:routes`. `--json` para saída legível por máquina; `--unguarded --require=auth,can [--allow=<glob,…>]` termina com 1 se houver rotas sem essas guardas — só o meta das rotas, vê [Revisão de segurança das rotas](/pt/guide/security#revisao-de-seguranca-das-rotas-—-basalt-routes) |
 | `schedule:list` | Tarefas agendadas com as suas expressões cron e fusos horários |
-| `dev` | Imprime a tabela de rotas e corre a app com watch/restart. `--entry=<file>`, `--worker` (`-w`) para arrancar um worker de fila ao lado, `--queue=<name>` |
+| `dev` | Imprime a tabela de rotas e corre a app com watch/restart: o `src/dev.ts` quando existe (o que o `pnpm dev` corre), senão `src/main.ts`, `src/server.ts`, …. O arranque do próprio CLI, que lê as rotas, é desligado antes de o servidor arrancar, por isso uma sessão tem uma só app. Arranca mesmo quando a app não arranca (uma variável em falta, a base de dados em baixo): diz porquê, salta a tabela de rotas e reinicia o servidor a cada gravação. `--entry=<file>`, `--worker` (`-w`) para arrancar um worker de fila ao lado, `--queue=<name>`, `--no-routes` |
 | `upgrade` | Aplica os codemods de atualização da framework. `--dry` para pré-visualizar, `--only=<id>`, `--dir=<path>` |
 | `update`, `add`, `doctor`, `info` | Não são comandos do `runCli`: o `bin/basalt.ts` reencaminha-os para o create-basalt antes de arrancar a app — vê [Atualizar uma app](#atualizar-uma-app) |
 | `publish` | Copia um grupo de stubs para a app (`dockerfile` — o build multi-stage + imagem em node puro que o scaffold traz, com um `.dockerignore` que mantém o `.env` e as chaves fora da imagem —, `ci` — install, typecheck, build, test —, `editorconfig`). Corre sem id para listar; `--force` para sobrescrever |
@@ -704,7 +704,7 @@ isso e sai com 1; aí, o `basalt --version` mostra a versão do lançador.
 | `Cancelled.` (`WizardCancelledError`) | 130 | Ctrl+C, ou responder que não a "Create project?". Nada é escrito |
 | `FileExistsError` — "Refusing to overwrite existing files" | 1 | Um alvo de `make:*` já existe. Repete com `--force` |
 | `Unknown command "…". Run "basalt list" to see what is available.` | 1 | Gralha, ou o plugin que regista o comando não está no `buildApp` |
-| `No entry file found. Looked for src/main.ts, src/server.ts, …` | 1 | `basalt dev` num projeto com outro ponto de entrada — passa `--entry=<file>` |
+| `No entry file found. Looked for src/dev.ts, src/main.ts, …` | 1 | `basalt dev` num projeto com outro ponto de entrada — passa `--entry=<file>` |
 | `Unknown command "update"` (+ uma dica do create-basalt) | 1 | O `bin/basalt.ts` é anterior aos comandos de projeto — corre `npx create-basalt@latest update` uma vez; corrige um ficheiro não modificado |
 | `No package.json in …` / `… does not look like a Basalt app` | 1 | Um comando de projeto fora de uma app — entra na pasta ou passa `--cwd=<dir>`. Para criar um projeto chamado `update`: `npm create basalt -- --name=update` |
 | `Not a terminal — nothing written. Re-run with --yes` | 1 | `update`/`add` sem `--yes` em CI ou num pipe |

@@ -124,14 +124,16 @@ describe('scaffold manifest', () => {
     expect(binStatus(undefined)).toBe('absent')
     const projectCommands = "if (['update', 'add', 'doctor', 'info'].includes(process.argv[2] ?? '')) {}\n"
     const devPrelude = 'if (existsSync(envFile)) process.loadEnvFile(envFile)\n'
-    expect(binStatus(`${projectCommands}${devPrelude}if (process.argv[2]?.startsWith('make:')) {}\n`)).toBe('current')
+    expect(binStatus(`${projectCommands}${devPrelude}if (process.argv[2]?.startsWith('make:')) {}\nif (process.argv[2] === 'dev') {}\n`)).toBe('current')
+    // Without the dev server prelude it is behind too.
+    expect(binStatus(`${projectCommands}${devPrelude}if (process.argv[2]?.startsWith('make:')) {}\n`)).toBe('modified')
     // Without the generators prelude it is behind, and customised unless its hash is known.
     expect(binStatus(`${projectCommands}${devPrelude}`)).toBe('modified')
     // Project commands alone (a customised 1.10 bin) are no longer current: .env loading is missing.
     expect(binStatus(projectCommands)).toBe('modified')
     expect(binStatus('// custom\n')).toBe('modified')
     expect(binStatus('// custom\n', hashContent('// custom\n'))).toBe('patchable')
-    expect(LEGACY_BIN_HASHES.size).toBe(7)
+    expect(LEGACY_BIN_HASHES.size).toBe(8)
   })
 })
 
