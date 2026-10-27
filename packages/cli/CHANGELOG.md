@@ -1,5 +1,11 @@
 # @basaltkit/cli
 
+## 1.7.1
+
+### Patch Changes
+
+- 97aa634: `basalt upgrade` with nothing to change now says "No codemods to apply. To update the dependencies: basalt update" instead of "everything is up to date", which read as if the dependencies had been checked. The command's description says the same.
+
 ## 1.7.0
 
 ### Minor Changes
