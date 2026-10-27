@@ -70,3 +70,19 @@ describe('upgrade — rename-machize-scope', () => {
     }
   })
 })
+
+describe('basalt upgrade with nothing to change', () => {
+  it('says no codemod applies and points at basalt update for the dependencies', async () => {
+    const { createApp } = await import('@basaltkit/core')
+    const { memoryIo, runCli } = await import('../src/index.js')
+    const dir = await mkdtemp(join(tmpdir(), 'basalt-upgrade-none-'))
+    try {
+      await writeFile(join(dir, 'package.json'), JSON.stringify({ dependencies: { '@basaltkit/core': '^1.0.0' } }))
+      const io = memoryIo()
+      expect(await runCli({ app: createApp(), argv: ['upgrade', `--dir=${dir}`], io })).toBe(0)
+      expect(io.lines).toEqual(['No codemods to apply. To update the dependencies: basalt update'])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})

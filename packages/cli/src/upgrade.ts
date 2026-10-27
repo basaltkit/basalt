@@ -123,7 +123,7 @@ export function nodeUpgradeFs(baseDir?: string): UpgradeFs {
 /** `basalt upgrade [--dir=<path>] [--dry] [--only=<migration-id>]` */
 export const upgradeCommand: CommandDefinition = defineCommand({
   name: 'upgrade',
-  description: 'Apply framework upgrade codemods (--dry to preview, --only=<id>)',
+  description: 'Apply framework upgrade codemods (--dry to preview, --only=<id>); dependencies: basalt update',
   async handle({ io, flags }) {
     const { resolve } = await import('node:path')
     const dir = resolve(typeof flags['dir'] === 'string' ? flags['dir'] : process.cwd())
@@ -145,7 +145,9 @@ export const upgradeCommand: CommandDefinition = defineCommand({
       io.log(`${dry ? '[dry] ' : ''}${report.migration}: ${report.changed.length} file(s)`)
       for (const path of report.changed) io.log(`  ${path}`)
     }
-    if (total === 0) io.log('Nothing to upgrade — everything is up to date.')
+    // Codemods only: the dependencies are `basalt update`'s job, and saying
+    // "up to date" here read as if they had been checked.
+    if (total === 0) io.log('No codemods to apply. To update the dependencies: basalt update')
     else if (dry) io.log(`\n${total} file(s) would change. Re-run without --dry to apply.`)
     else io.log(`\nApplied ${total} change(s).`)
     return 0
