@@ -201,7 +201,9 @@ audit events. Sampling is deterministic by default (`temperature: 0`,
 
 **Ecosystem first.** The prompt also carries the catalog of official packages
 (`@basaltkit/comments`, `-files`, `-notifications`, `-teams`, `-subscriptions`,
-`-webhooks`…) and the ones your project already has installed. A capability a
+`-webhooks`…), each with its wiring as the package README shows it (plugin
+options, the Prisma store variant, the DI token to resolve it), and the ones your
+project already has installed. A capability a
 package covers becomes a `package` step (the `pnpm add` command, or none when it
 is installed, plus how to wire its plugin and routes) instead of a generated
 model; only what no package provides goes into `entities`. So "posts with

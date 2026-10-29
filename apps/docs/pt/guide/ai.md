@@ -201,7 +201,9 @@ audit. A amostragem é determinística por predefinição (`temperature: 0`,
 
 **Ecossistema primeiro.** O prompt leva também o catálogo dos pacotes oficiais
 (`@basaltkit/comments`, `-files`, `-notifications`, `-teams`, `-subscriptions`,
-`-webhooks`…) e os que o teu projeto já tem instalados. Uma capacidade coberta
+`-webhooks`…), cada um com a ligação tal como o README do pacote a mostra (opções
+do plugin, a variante com store Prisma, o token de DI para o resolver), e os que
+o teu projeto já tem instalados. Uma capacidade coberta
 por um pacote vira um passo `package` (o comando `pnpm add`, ou nenhum quando já
 está instalado, e como ligar o plugin e as rotas) em vez de um modelo gerado; só
 o que nenhum pacote oferece entra em `entities`. Assim, "posts com comentários"

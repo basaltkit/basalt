@@ -52,10 +52,39 @@ describe('ecosystem catalog', () => {
     if (pkg.prisma) expect(packageDir(pkg.prisma), `${pkg.prisma} is not a package`).toBeDefined()
   })
 
+  it('wiring examples only call functions the monorepo exports', () => {
+    const exported = new Set<string>()
+    for (const dir of readdirSync(PACKAGES_DIR)) {
+      if (!existsSync(join(PACKAGES_DIR, dir, 'src'))) continue
+      const source = sourceOf(join(PACKAGES_DIR, dir))
+      for (const m of source.matchAll(/export (?:async )?(?:function|const|class|let) (\w+)/g)) exported.add(m[1]!)
+      for (const m of source.matchAll(/export (?:type )?\{([^}]*)\}/g)) {
+        for (const part of m[1]!.split(',')) exported.add(part.trim().split(/\s+as\s+/).pop()!.replace(/^type\s+/, ''))
+      }
+    }
+    const missing: string[] = []
+    for (const pkg of ECOSYSTEM_PACKAGES) {
+      for (const snippet of [pkg.example, pkg.prismaExample].filter((e): e is string => e !== undefined)) {
+        const code = snippet.replace(/\/\/.*$/, '').replace(/'[^']*'/g, "''")
+        for (const m of code.matchAll(/(?<![.\w])(?:new\s+)?([A-Za-z_]\w*)\s*\(/g)) {
+          const name = m[1]!
+          if (name === 'async' || exported.has(name)) continue
+          missing.push(`${pkg.name}: ${name}`)
+        }
+      }
+      if (pkg.token) {
+        expect(sourceOf(packageDir(pkg.name)!), `${pkg.name} does not export ${pkg.token}`).toMatch(new RegExp(`\\b${pkg.token}\\b`))
+      }
+    }
+    expect(missing).toEqual([])
+  })
+
   it('reaches the planner prompt with the ecosystem-first rule', () => {
     expect(BASALT_KNOWLEDGE).toContain('ECOSYSTEM FIRST')
     expect(BASALT_KNOWLEDGE).toContain('- @basaltkit/comments — ')
-    expect(BASALT_KNOWLEDGE).toContain('commentsPlugin + commentRoutes()')
+    expect(BASALT_KNOWLEDGE).toContain('    wire: commentsPlugin() + fastifyPlugin({ routes: [...commentRoutes()] })')
+    expect(BASALT_KNOWLEDGE).toContain('    with Prisma (@basaltkit/comments-prisma): commentsPlugin({ store: prismaCommentsStore(prisma).store })')
+    expect(BASALT_KNOWLEDGE).toContain('    use: ctx().container.get(COMMENTS)')
     expect(BASALT_KNOWLEDGE).toContain('"kind": "package"|')
   })
 })
