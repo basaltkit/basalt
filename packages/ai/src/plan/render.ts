@@ -1,8 +1,13 @@
 import type { LineWriter } from '../render.js'
 import type { ArchitecturePlan } from './types.js'
 
+export interface RenderPlanOptions {
+  /** Print the "what next" footer (default `true`); ai:make, which acts next itself, turns it off. */
+  footer?: boolean
+}
+
 /** Render an {@link ArchitecturePlan} in the spec's `ARCHITECTURE PLAN` style. */
-export function renderPlan(plan: ArchitecturePlan, io: LineWriter): void {
+export function renderPlan(plan: ArchitecturePlan, io: LineWriter, options: RenderPlanOptions = {}): void {
   io.log('ARCHITECTURE PLAN')
   io.log('')
   io.log(`Request: "${plan.request}"`)
@@ -52,7 +57,14 @@ export function renderPlan(plan: ArchitecturePlan, io: LineWriter): void {
     for (const warning of plan.warnings) io.log(`  - ${warning}`)
   }
 
+  if (options.footer === false) return
   io.log('')
   io.log('This is a plan only — nothing was changed.')
-  io.log(`Next: basalt ai:make "${plan.request}" implements it.`)
+  // ai:make only scaffolds entities: suggesting it for a plan without any
+  // would end in "nothing to generate" after a confirmation prompt.
+  io.log(
+    plan.entities.length > 0
+      ? `Next: basalt ai:make "${plan.request}" implements it.`
+      : 'Nothing for ai:make to generate — the steps above are applied by hand.',
+  )
 }

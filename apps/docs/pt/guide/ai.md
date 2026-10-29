@@ -217,8 +217,9 @@ MCP, é o cliente que o transporta entre as duas ferramentas.
 
 Planeia primeiro, mostra-te o plano, pede confirmação e depois gera um vertical de
 backend completo, on-convention. Nunca instala dependências: os passos `package`
-do plano aparecem primeiro nos follow-ups, e um plano só com passos `package`
-termina com "Nothing to scaffold" (exit `0`).
+do plano aparecem primeiro nos follow-ups, e um plano sem entidades (um pacote a
+instalar ou ligar, configuração) termina com "Nothing to scaffold" antes do
+pedido de confirmação (exit `0`).
 
 ```bash
 basalt ai:make "um módulo de faturas por tenant: número, valor, data de emissão e estado (pago/pendente), ligado a um cliente"
