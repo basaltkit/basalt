@@ -331,7 +331,7 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
           hasDevPrelude(bin) ? '' : 'loads .env for development, runs \`upgrade\` without booting the app, explains env errors; '
         }${
           hasGeneratorsPrelude(bin) ? '' : 'runs make:* without booting the app (no database needed to generate code); '
-        }starts \`basalt dev\` even while the app cannot boot (the route table when it does)`,
+        }starts \`basalt dev\` even while the app cannot boot`,
       )
     } else if (status === 'modified' && bin !== undefined) {
       manual.push(`bin/basalt.ts was customised, so it was not patched. To bring it up to date:\n${manualBinSnippet(bin)}`)

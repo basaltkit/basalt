@@ -205,11 +205,11 @@ if (process.argv[2]?.startsWith('make:')) {
  * The DEV SERVER PRELUDE, after the generators prelude and still before
  * anything of the app is imported: `basalt dev` must start while the app
  * cannot boot (a variable missing, the database down, code mid-edit) — that
- * is when a watcher is needed. `runDev` boots the app only for the route
- * table, prints why when it does not, and starts the watcher either way.
+ * is when a watcher is needed. `runDev` starts the watcher without booting
+ * the app; only `--routes` boots it first, for the route table.
  */
 const DEV_SERVER_PRELUDE = `// \`dev\` starts the watcher even while the app cannot boot (database down, a
-// variable missing, code mid-edit): the route table is printed when it boots.
+// variable missing, code mid-edit); \`basalt routes\` lists the routes.
 if (process.argv[2] === 'dev') {
   const { runDev } = await import('@basaltkit/cli')
   process.env['NODE_ENV'] ??= 'development'
@@ -255,7 +255,7 @@ const { buildApp } = ${APP_IMPORT_EXPLAINED}
 // The dev tools (@basaltkit/generator; add @basaltkit/ai for ai:*) are imported
 // ONLY here — the runtime server (src/server.ts) never loads them, so the SaaS
 // runs without the codegen/AI layer.
-//   pnpm basalt dev                     — dev server: route table + watch (--worker for a queue worker)
+//   pnpm basalt dev                     — dev server with watch (--worker for a queue worker)
 //   pnpm basalt list                    — show available commands
 //   pnpm basalt routes                  — list registered HTTP routes
 //   pnpm basalt make:resource Project   — generate a full resource vertical
@@ -318,8 +318,25 @@ export function patchBasaltBin(content: string): string {
   if (!hasDevPrelude(text)) text = addDevPrelude(text)
   if (!hasGeneratorsPrelude(text)) text = addGeneratorsPrelude(text)
   if (!hasDevServerPrelude(text)) text = addDevServerPrelude(text)
+  for (const [stale, current] of STALE_COMMENTS) text = text.replace(stale, current)
   return text
 }
+
+/**
+ * Template comments a release rewrote: an untouched bin gets the current
+ * wording too, so a patched file still equals the template. `basalt dev`
+ * stopped printing the route table by default (cli 1.8).
+ */
+const STALE_COMMENTS: ReadonlyArray<readonly [string, string]> = [
+  [
+    '// variable missing, code mid-edit): the route table is printed when it boots.',
+    '// variable missing, code mid-edit); `basalt routes` lists the routes.',
+  ],
+  [
+    '//   pnpm basalt dev                     — dev server: route table + watch (--worker for a queue worker)',
+    '//   pnpm basalt dev                     — dev server with watch (--worker for a queue worker)',
+  ],
+]
 
 function addProjectCommands(content: string): string {
   const lines = content.split('\n')
