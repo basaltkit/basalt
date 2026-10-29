@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { unifiedDiff } from './diff.js'
 import { domainFields, injectPrismaFields, injectZodFields } from './fields.js'
 import { assertSafePlan } from '../plan/identifiers.js'
+import { withGeneratorEntities } from '../plan/plan.js'
 import {
   externalRelationTargets,
   injectPrismaRelations,
@@ -57,9 +58,11 @@ import type {
  */
 export async function runMake(
   ctx: ProjectContext,
-  plan: ArchitecturePlan,
+  planned: ArchitecturePlan,
   options: MakeOptions = {},
 ): Promise<MakeResult> {
+  // Generator steps whose entity the model left out still get built.
+  const plan = withGeneratorEntities(planned, ctx)
   // The plan is untrusted (LLM / MCP client): refuse any name that could
   // inject code into the generated sources before generating anything.
   assertSafePlan(plan)

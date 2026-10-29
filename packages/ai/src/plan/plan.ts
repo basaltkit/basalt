@@ -183,3 +183,40 @@ function normalizeKind(value: unknown): PlanStepKind {
     ? (value as PlanStepKind)
     : 'other'
 }
+
+/** Resource names a `basalt make:resource <Name>` generator step scaffolds. */
+export function generatorTargets(plan: ArchitecturePlan): string[] {
+  const names: string[] = []
+  for (const step of plan.steps) {
+    if (step.kind !== 'generator' || !step.command) continue
+    const name = /make:resource\s+(\w+)/.exec(step.command)?.[1]
+    if (name && !names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name)
+  }
+  return names
+}
+
+const PRISMA_SCALARS = new Set(['String', 'Int', 'BigInt', 'Float', 'Decimal', 'Boolean', 'DateTime', 'Json', 'Bytes'])
+
+/**
+ * The plan with an entity for every generator step. Models sometimes leave
+ * `entities` empty when the Prisma models already exist and only list
+ * `make:resource` steps — ai:make then had nothing to build. A missing entity is
+ * taken from the existing model (scalar and enum columns; relations and lists
+ * are left to the schema), or created bare when there is none.
+ */
+export function withGeneratorEntities(plan: ArchitecturePlan, ctx: ProjectContext): ArchitecturePlan {
+  const known = new Set(plan.entities.map((e) => e.name.toLowerCase()))
+  const missing = generatorTargets(plan).filter((name) => !known.has(name.toLowerCase()))
+  if (missing.length === 0) return plan
+  const models = ctx.prisma?.models ?? []
+  const modelNames = new Set(models.map((m) => m.name))
+  const added: PlanEntity[] = missing.map((name) => {
+    const model = models.find((m) => m.name.toLowerCase() === name.toLowerCase())
+    if (!model) return { name, fields: [], tenantScoped: ctx.stack.tenancy }
+    const fields = (model.columns ?? [])
+      .filter((c) => !c.list && !modelNames.has(c.type))
+      .map((c) => ({ name: c.name, type: PRISMA_SCALARS.has(c.type) ? c.type : 'String' }))
+    return { name: model.name, fields, tenantScoped: model.tenantScoped }
+  })
+  return { ...plan, entities: [...plan.entities, ...added] }
+}

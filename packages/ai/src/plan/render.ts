@@ -1,4 +1,5 @@
 import type { LineWriter } from '../render.js'
+import { generatorTargets } from './plan.js'
 import type { ArchitecturePlan } from './types.js'
 
 export interface RenderPlanOptions {
@@ -63,7 +64,7 @@ export function renderPlan(plan: ArchitecturePlan, io: LineWriter, options: Rend
   // ai:make only scaffolds entities: suggesting it for a plan without any
   // would end in "nothing to generate" after a confirmation prompt.
   io.log(
-    plan.entities.length > 0
+    plan.entities.length > 0 || generatorTargets(plan).length > 0
       ? `Next: basalt ai:make "${plan.request}" implements it.`
       : 'Nothing for ai:make to generate — the steps above are applied by hand.',
   )

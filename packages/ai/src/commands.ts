@@ -4,7 +4,7 @@ import { detectProject, nodeReader } from './context/project.js'
 import { hasErrors, runDoctor } from './doctor/run.js'
 import { applyFixEdits, fixableIds, planFix, renderFixes, type FixOutcome } from './doctor/fixes.js'
 import { createProvider, providerEnvFromProcess } from './provider/factory.js'
-import { createPlan } from './plan/plan.js'
+import { createPlan, withGeneratorEntities } from './plan/plan.js'
 import { renderPlan } from './plan/render.js'
 import { packageSteps, runMake } from './make/make.js'
 import { renderMakeResult } from './make/render.js'
@@ -152,7 +152,7 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         io.log('Planning...')
         io.log('')
         try {
-          const plan = await createPlan(provider, ctx, request)
+          const plan = withGeneratorEntities(await createPlan(provider, ctx, request), ctx)
           renderPlan(plan, io)
           return 0
         } catch (error) {
@@ -186,7 +186,8 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         io.log('')
         let plan
         try {
-          plan = await createPlan(provider, ctx, request)
+          // Shown and built with an entity for every generator step.
+          plan = withGeneratorEntities(await createPlan(provider, ctx, request), ctx)
         } catch (error) {
           io.error((error as Error).message)
           return 1

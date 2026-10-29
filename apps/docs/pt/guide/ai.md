@@ -221,7 +221,9 @@ Planeia primeiro, mostra-te o plano, pede confirmação e depois gera um vertica
 backend completo, on-convention. Nunca instala dependências: os passos `package`
 do plano aparecem primeiro nos follow-ups, e um plano sem entidades (um pacote a
 instalar ou ligar, configuração) termina com "Nothing to scaffold" antes do
-pedido de confirmação (exit `0`).
+pedido de confirmação (exit `0`). Um recurso que só aparece num passo
+`make:resource` é gerado na mesma — tipicamente um cujo modelo Prisma já existe:
+os campos vêm desse modelo, e o modelo fica como está.
 
 ```bash
 basalt ai:make "um módulo de faturas por tenant: número, valor, data de emissão e estado (pago/pendente), ligado a um cliente"
