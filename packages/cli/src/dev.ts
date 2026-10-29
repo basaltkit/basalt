@@ -67,15 +67,15 @@ export function devRouteRows(routes: DevRoute[]): { method: string; url: string;
 }
 
 /**
- * `basalt dev [--entry=<file>] [--worker] [--queue=<name>] [--no-routes]`
+ * `basalt dev [--entry=<file>] [--worker] [--queue=<name>] [--routes]`
  *
- * A richer dev loop than a bare `tsx watch`: prints the app's **route table** on
- * boot (the app is already booted by the CLI runner, so routes are known), then
- * runs the server with watch/restart — and, with `--worker`, also starts a
- * watched queue worker alongside it (server + worker in one command, the real
- * producer/worker topology).
+ * A richer dev loop than a bare `tsx watch`: runs the server with
+ * watch/restart — and, with `--worker`, also starts a watched queue worker
+ * alongside it (server + worker in one command, the real producer/worker
+ * topology). `--routes` prints the route table first; `basalt routes` is the
+ * command for it, so the dev loop no longer does by default.
  *
- * The CLI's own boot exists only to read the route table: it is shut down
+ * The CLI's own boot is shut down
  * before the server starts, so a dev session holds one app (one database
  * pool, one set of connections), not two. A create-basalt `bin/basalt.ts`
  * sends `dev` to {@link runDev} before booting anything, so the session also
@@ -84,11 +84,11 @@ export function devRouteRows(routes: DevRoute[]): { method: string; url: string;
  */
 export const devCommand: CommandDefinition = defineCommand({
   name: 'dev',
-  description: 'Run the app with watch + restart, print the route table, and (--worker) an embedded queue worker',
+  description: 'Run the app with watch + restart, and (--worker) an embedded queue worker; --routes prints the route table',
   async handle({ app, container, io, flags }) {
     const entry = await devEntry(flags, io)
     if (!entry) return 1
-    if (flags['routes'] !== false) printRoutes(container, io)
+    if (flags['routes'] === true) printRoutes(container, io)
     // Done with the CLI's boot: the server below is the app from here on.
     // runCli's own shutdown afterwards is a no-op.
     await app.shutdown()
@@ -107,18 +107,23 @@ export interface RunDevOptions {
 }
 
 /**
- * `basalt dev` without depending on the app booting. The app is loaded and
- * booted once, only to print the route table, then shut down. When that fails
- * — a variable missing, the database down, code mid-edit — the reason is
- * printed and the watcher starts anyway: it restarts the server on every save,
- * as `pnpm dev` does, so you fix the problem and the session carries on.
+ * `basalt dev` without depending on the app booting: the watcher starts
+ * whatever state the app is in and restarts the server on every save, as
+ * `pnpm dev` does. Only with `--routes` is the app loaded and booted once
+ * first, to print the route table, then shut down; when that boot fails — a
+ * variable missing, the database down, code mid-edit — the reason is printed
+ * and the watcher starts anyway.
+ *
+ * The table used to be the default. It cost a second boot of the app (database
+ * connections included) before every dev session, up to `bootTimeoutMs`, for
+ * output `basalt routes` gives on demand.
  */
 export async function runDev(options: RunDevOptions): Promise<number> {
   const io = options.io ?? consoleIo()
   const { flags } = parseArgv(options.argv ?? process.argv.slice(2))
   const entry = await devEntry(flags, io)
   if (!entry) return 1
-  if (flags['routes'] !== false) await routesIfItBoots(options, io)
+  if (flags['routes'] === true) await routesIfItBoots(options, io)
   return startDevProcesses(entry, flags, io)
 }
 

@@ -31,7 +31,7 @@ describe('basalt dev', () => {
       ],
     })
     const io = memoryIo()
-    const code = await runCli({ app, argv: ['dev', '--entry=src/dev.ts'], io })
+    const code = await runCli({ app, argv: ['dev', '--entry=src/dev.ts', '--routes'], io })
 
     expect(code).toBe(0)
     expect(io.lines.join('\n')).toContain('/health')
@@ -65,10 +65,10 @@ describe('runDev (bin/basalt.ts sends `dev` here before booting anything)', () =
       shutdown: () => { events.push('shutdown') },
     })
 
-  it('boots once for the route table, shuts it down, then starts the server', async () => {
+  it('--routes boots once for the route table, shuts it down, then starts the server', async () => {
     events.length = 0
     const io = memoryIo()
-    const code = await runDev({ argv: ['dev', '--entry=src/dev.ts'], io, loadApp: () => createApp({ plugins: [dbPlugin(() => {})] }) })
+    const code = await runDev({ argv: ['dev', '--entry=src/dev.ts', '--routes'], io, loadApp: () => createApp({ plugins: [dbPlugin(() => {})] }) })
     expect(code).toBe(0)
     expect(io.lines.join('\n')).toContain('/health')
     expect(events.slice(0, 2)).toEqual(['boot', 'shutdown'])
@@ -79,7 +79,7 @@ describe('runDev (bin/basalt.ts sends `dev` here before booting anything)', () =
     events.length = 0
     const io = memoryIo()
     const invalid = Object.assign(new Error('Invalid environment'), { code: 'ENV_INVALID', report: ['DATABASE_URL: Required'] })
-    const code = await runDev({ argv: ['dev', '--entry=src/dev.ts'], io, loadApp: () => { throw invalid } })
+    const code = await runDev({ argv: ['dev', '--entry=src/dev.ts', '--routes'], io, loadApp: () => { throw invalid } })
     expect(code).toBe(0)
     expect(io.errors[0]).toContain('does not boot yet')
     expect(io.errors.join('\n')).toContain('- DATABASE_URL: Required')
@@ -92,7 +92,7 @@ describe('runDev (bin/basalt.ts sends `dev` here before booting anything)', () =
     const io = memoryIo()
     const down = Object.assign(new Error("Can't reach database server at localhost:5432\n  more"), { code: 'P1001' })
     const code = await runDev({
-      argv: ['dev', '--entry=src/dev.ts'], io,
+      argv: ['dev', '--entry=src/dev.ts', '--routes'], io,
       loadApp: () => createApp({ plugins: [definePlugin({ name: 'app:ok', shutdown: () => { events.push('shutdown') } }), dbPlugin(() => { throw down })] }),
     })
     expect(code).toBe(0)
@@ -106,7 +106,7 @@ describe('runDev (bin/basalt.ts sends `dev` here before booting anything)', () =
     events.length = 0
     const io = memoryIo()
     const code = await runDev({
-      argv: ['dev', '--entry=src/dev.ts'], io, bootTimeoutMs: 20,
+      argv: ['dev', '--entry=src/dev.ts', '--routes'], io, bootTimeoutMs: 20,
       loadApp: () => createApp({ plugins: [dbPlugin(() => new Promise(() => {}))] }),
     })
     expect(code).toBe(0)
@@ -114,7 +114,17 @@ describe('runDev (bin/basalt.ts sends `dev` here before booting anything)', () =
     expect(events[0]).toMatch(/^spawn /)
   })
 
-  it('--no-routes never loads the app', async () => {
+  it('without --routes never loads the app (basalt routes lists them)', async () => {
+    events.length = 0
+    const loadApp = vi.fn()
+    const io = memoryIo()
+    expect(await runDev({ argv: ['dev', '--entry=src/dev.ts'], io, loadApp })).toBe(0)
+    expect(loadApp).not.toHaveBeenCalled()
+    expect(io.lines.join('\n')).not.toContain('Routes (')
+    expect(events[0]).toMatch(/^spawn /)
+  })
+
+  it('--no-routes, the old opt-out, still never loads the app', async () => {
     events.length = 0
     const loadApp = vi.fn()
     expect(await runDev({ argv: ['dev', '--entry=src/dev.ts', '--no-routes'], io: memoryIo(), loadApp })).toBe(0)
