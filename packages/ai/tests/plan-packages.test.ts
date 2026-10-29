@@ -1,8 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
+  aiCommands,
   BASALT_KNOWLEDGE,
   buildPlanContext,
   detectProject,
@@ -120,5 +121,51 @@ describe('renderPlan', () => {
     const lines: string[] = []
     renderPlan(tagsPlan, { log: (line: string) => lines.push(line) })
     expect(lines.at(-1)).toBe('Next: basalt ai:make "tags on posts, with comments" implements it.')
+  })
+})
+
+describe('plans without entities', () => {
+  const wiringOnly: ArchitecturePlan = {
+    request: 'crie um modulo de email',
+    summary: '@basaltkit/mailer is installed; only wire it',
+    entities: [],
+    steps: [{ order: 1, title: 'Register mailerPlugin', kind: 'other', detail: 'in src/app.ts' }],
+    permissions: [],
+    auditEvents: [],
+    tenantScoped: false,
+    warnings: [],
+  }
+
+  it('renderPlan does not send them to ai:make', () => {
+    const lines: string[] = []
+    renderPlan(wiringOnly, { log: (line: string) => lines.push(line) })
+    expect(lines.at(-1)).toBe('Nothing for ai:make to generate — the steps above are applied by hand.')
+  })
+
+  it('ai:make stops before the confirmation prompt, exit 0', async () => {
+    vi.stubEnv('AI_PROVIDER', 'openai')
+    vi.stubEnv('AI_API_KEY', 'test')
+    vi.stubEnv('AI_BASE_URL', 'http://gateway.test/v1')
+    vi.stubEnv('AI_STREAM', 'false')
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(wiringOnly) } }] })))
+    try {
+      const make = aiCommands({ cwd: '/nonexistent' }).find((c) => c.name === 'ai:make')!
+      const logs: string[] = []
+      let asked = false
+      const io = {
+        log: (line: string) => logs.push(line),
+        error: (line: string) => logs.push(`ERR ${line}`),
+        table: () => {},
+        confirm: async () => ((asked = true), true),
+      }
+      const code = await make.handle({ app: {} as never, container: {} as never, io, args: [wiringOnly.request], flags: {} })
+      expect(code).toBe(0)
+      expect(asked).toBe(false)
+      expect(logs).toContain('Nothing to scaffold — the steps above are applied by hand.')
+      expect(logs.join('\n')).not.toMatch(/Next: basalt ai:make/)
+    } finally {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
   })
 })

@@ -217,8 +217,9 @@ client carries it between the two tools.
 
 Plans first, shows you the plan, asks for confirmation, then generates a complete
 backend vertical on-convention. It never installs dependencies: the plan's
-`package` steps come first in its follow-ups, and a plan made only of package
-steps stops with "Nothing to scaffold" (exit `0`).
+`package` steps come first in its follow-ups, and a plan with no entity (a
+package to install or wire, configuration) stops with "Nothing to scaffold"
+before the confirmation prompt (exit `0`).
 
 ```bash
 basalt ai:make "an invoices module per tenant: number, amount, issue date and status (paid/pending), linked to a client"

@@ -191,13 +191,18 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
           io.error((error as Error).message)
           return 1
         }
-        renderPlan(plan, io)
+        renderPlan(plan, io, { footer: false })
         io.log('')
 
-        // A plan that only reuses packages has nothing to scaffold — ai:make does
-        // not install dependencies, so the package steps above are the whole job.
-        if (plan.entities.length === 0 && packageSteps(plan).length > 0) {
-          io.log('Nothing to scaffold — this plan reuses ecosystem packages. Run the package steps above.')
+        // ai:make only scaffolds entities. A plan without any (a package to
+        // install or wire, config, docs) is complete as shown — say so before
+        // the confirmation prompt instead of failing after it.
+        if (plan.entities.length === 0) {
+          io.log(
+            packageSteps(plan).length > 0
+              ? 'Nothing to scaffold — this plan reuses ecosystem packages. Run the package steps above.'
+              : 'Nothing to scaffold — the steps above are applied by hand.',
+          )
           return 0
         }
 

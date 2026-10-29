@@ -87,7 +87,7 @@ export { createPlan, parsePlan, type CreatePlanOptions } from './plan/plan.js'
 export { buildPlanContext } from './plan/context.js'
 export { BASALT_KNOWLEDGE } from './plan/knowledge.js'
 export { ECOSYSTEM_PACKAGES, renderEcosystemCatalog, type EcosystemPackage } from './plan/packages.js'
-export { renderPlan } from './plan/render.js'
+export { renderPlan, type RenderPlanOptions } from './plan/render.js'
 export type {
   ArchitecturePlan,
   PlanEntity,
