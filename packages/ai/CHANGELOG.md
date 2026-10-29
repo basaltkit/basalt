@@ -1,5 +1,12 @@
 # @basaltkit/ai
 
+## 1.6.1
+
+### Patch Changes
+
+- 6fc85c3: The `ai:plan` package catalog now carries each package's wiring as its README shows it — plugin options, the Prisma store variant and the DI token — so plans name the real API instead of guessing it (e.g. `mailerPlugin({ driver, from })` and `container.get(MAILER)`, not `app.register(mailerPlugin, { provider: 'smtp' })`). A test fails if an example calls a function the monorepo does not export.
+- 8b66351: `ai:make` no longer asks for confirmation and then fails with "the plan has no entity to generate" when the plan has nothing to scaffold (e.g. wiring an installed package): it stops before the prompt with "Nothing to scaffold" (exit 0), and `ai:plan` no longer suggests `ai:make` for such a plan.
+
 ## 1.6.0
 
 ### Minor Changes
