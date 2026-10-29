@@ -49,6 +49,7 @@ export {
   type FrameworkSchema,
   type MigrationsInfo,
   type PrismaInfo,
+  type PrismaColumn,
   type PrismaModel,
   type ProjectContext,
   type ProjectReader,
@@ -83,7 +84,7 @@ export {
 export { analyze, type AnalysisReport } from './analyze/run.js'
 
 // Planning (spec §3, Plan mode) — natural language → architecture plan.
-export { createPlan, parsePlan, type CreatePlanOptions } from './plan/plan.js'
+export { createPlan, generatorTargets, parsePlan, withGeneratorEntities, type CreatePlanOptions } from './plan/plan.js'
 export { buildPlanContext } from './plan/context.js'
 export { BASALT_KNOWLEDGE } from './plan/knowledge.js'
 export { ECOSYSTEM_PACKAGES, renderEcosystemCatalog, type EcosystemPackage } from './plan/packages.js'

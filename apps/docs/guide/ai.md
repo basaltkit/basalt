@@ -221,7 +221,9 @@ Plans first, shows you the plan, asks for confirmation, then generates a complet
 backend vertical on-convention. It never installs dependencies: the plan's
 `package` steps come first in its follow-ups, and a plan with no entity (a
 package to install or wire, configuration) stops with "Nothing to scaffold"
-before the confirmation prompt (exit `0`).
+before the confirmation prompt (exit `0`). A resource named only in a
+`make:resource` step is still built — typically one whose Prisma model already
+exists: its fields come from that model, and the model itself is left as is.
 
 ```bash
 basalt ai:make "an invoices module per tenant: number, amount, issue date and status (paid/pending), linked to a client"

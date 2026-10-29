@@ -93,9 +93,19 @@ export interface DetectedStack {
   ai: boolean
 }
 
+/** A model column as declared: `type` keeps Prisma's spelling minus `?`/`[]`. */
+export interface PrismaColumn {
+  name: string
+  type: string
+  optional: boolean
+  list: boolean
+}
+
 export interface PrismaModel {
   name: string
   fields: string[]
+  /** The same fields with their types, so a resource can be generated for an existing model. */
+  columns?: PrismaColumn[]
   /** True when the model carries a `tenantId` column (tenant-scoped). */
   tenantScoped: boolean
   /** The `@@map("…")` table name, when the model declares one. */
@@ -657,12 +667,16 @@ function parseModels(schema: string): PrismaModel[] {
     const name = match[1]
     const body = match[2]
     if (!name || body === undefined) continue
-    const fields = body
-      .split('\n')
-      .map((line) => line.trim().split(/\s+/)[0])
-      .filter((token): token is string => !!token && !token.startsWith('@') && !token.startsWith('//'))
+    const columns: PrismaColumn[] = []
+    for (const line of body.split('\n')) {
+      const [field, rawType] = line.trim().split(/\s+/)
+      if (!field || field.startsWith('@') || field.startsWith('//')) continue
+      const type = (rawType ?? '').replace(/[?[\]]/g, '')
+      columns.push({ name: field, type, optional: rawType?.endsWith('?') === true, list: rawType?.endsWith('[]') === true })
+    }
+    const fields = columns.map((c) => c.name)
     const table = /@@map\(\s*"([^"]+)"\s*\)/.exec(body)?.[1]
-    models.push({ name, fields, tenantScoped: fields.includes('tenantId'), ...(table ? { table } : {}) })
+    models.push({ name, fields, columns, tenantScoped: fields.includes('tenantId'), ...(table ? { table } : {}) })
   }
   return models
 }

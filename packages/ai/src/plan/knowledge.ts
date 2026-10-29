@@ -54,4 +54,6 @@ For generator steps, put the exact command in "command" (e.g. "basalt make:resou
 
 ENUMS: a field with a fixed set of values (a status/state) MUST set "enum" to those values — e.g. "estado (pago/pendente)" → { "name": "estado", "type": "String", "enum": ["pago", "pendente"] }. It becomes a validated z.enum([...]) (stored as a String column), never a free z.string().
 
+ENTITIES vs GENERATOR STEPS: every resource a "generator" step scaffolds MUST also be listed in "entities" with its fields — including when its Prisma model already exists (copy the existing fields). ai:make builds from "entities".
+
 RELATIONS: express a belongs-to as an entry in "relations" (e.g. an Appointment belongs to a Patient → { "name": "patient", "model": "Patient" }). Do NOT also add the "<name>Id" field to "fields" — the FK column, the @relation and the inverse field are generated. Prefer generating both sides of a relation in the same plan.`

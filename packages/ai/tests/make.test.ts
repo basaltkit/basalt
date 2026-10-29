@@ -139,8 +139,8 @@ describe('runMake (dry-run)', () => {
     expect(repo).not.toMatch(/private readonly items = new Map/)
   })
 
-  it('throws when the plan has no entity', async () => {
-    const empty = { ...plan, entities: [] }
+  it('throws when the plan has no entity and no generator step', async () => {
+    const empty = { ...plan, entities: [], steps: plan.steps.filter((s) => s.kind !== 'generator') }
     await expect(runMake(tenantCtx, empty, { dryRun: true })).rejects.toThrow(/no entity/)
   })
 })
