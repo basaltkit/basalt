@@ -199,6 +199,15 @@ blocks: the `make:resource` generator, `tenantId` scoping, RBAC permissions and
 audit events. Sampling is deterministic by default (`temperature: 0`,
 `maxTokens: 4096`).
 
+**Ecosystem first.** The prompt also carries the catalog of official packages
+(`@basaltkit/comments`, `-files`, `-notifications`, `-teams`, `-subscriptions`,
+`-webhooks`…) and the ones your project already has installed. A capability a
+package covers becomes a `package` step (the `pnpm add` command, or none when it
+is installed, plus how to wire its plugin and routes) instead of a generated
+model; only what no package provides goes into `entities`. So "posts with
+comments" plans a `Post` resource and reuses `@basaltkit/comments`, not a
+`Comment` model.
+
 The result is an `ArchitecturePlan`: a `summary`, `entities` (with fields and
 relations), ordered `steps`, `permissions`, `auditEvents`, `warnings`, and a
 `schemaVersion`. That object is the hand-off to `ai:make` — and, over MCP, the
@@ -207,7 +216,9 @@ client carries it between the two tools.
 ### `ai:make` — implement
 
 Plans first, shows you the plan, asks for confirmation, then generates a complete
-backend vertical on-convention:
+backend vertical on-convention. It never installs dependencies: the plan's
+`package` steps come first in its follow-ups, and a plan made only of package
+steps stops with "Nothing to scaffold" (exit `0`).
 
 ```bash
 basalt ai:make "an invoices module per tenant: number, amount, issue date and status (paid/pending), linked to a client"
@@ -367,6 +378,7 @@ read exactly the same set.
 | `ai:plan — the model did not return valid JSON. Got: …` | `parsePlan` | `1` | The model wrapped or mangled the plan JSON |
 | `ai review — the model did not return valid JSON. Got: …` | `parseReview` | *not fatal* | Surfaces as `Review inconclusive — …`; the build continues |
 | `ai:make — the plan has no entity to generate.` | `runMake` | `1` | The plan came back with an empty `entities` array — rephrase the request |
+| `ai:make — nothing to generate: the plan reuses ecosystem packages. …` | `runMake` | `1` | Programmatic/MCP only (the CLI stops earlier with exit `0`): every capability is covered by a package — run the listed `package` steps |
 | `Refusing to overwrite existing files (use force to replace): …` | `FileExistsError` (`@basaltkit/generator`) | `1` | A generated path already exists — re-run with `--force` |
 | `✗ prisma db push failed: …` | `runPrismaPush` | `1` | `DATABASE_URL` unreachable, or the merged model doesn't validate |
 | `Usage: basalt ai:plan "<what you want to build>"` | `commands.ts` | `1` | The request argument was empty |

@@ -1,10 +1,11 @@
 import type { ProjectContext } from '../context/project.js'
+import { ECOSYSTEM_PACKAGES } from './packages.js'
 
 /**
  * Compact, relevant-only project summary for the planner (spec §18 Context
  * Engineering — never ship the whole project to the model). Surfaces exactly what
- * the Architect needs to ground a plan: enabled capabilities, existing models and
- * the generator's flags.
+ * the Architect needs to ground a plan: enabled capabilities, existing models,
+ * the ecosystem packages already installed and the generator's flags.
  */
 export function buildPlanContext(ctx: ProjectContext): string {
   const s = ctx.stack
@@ -30,11 +31,18 @@ export function buildPlanContext(ctx: ProjectContext): string {
       ? ctx.prisma.models.map((m) => `${m.name}${m.tenantScoped ? ' (tenantId)' : ''}`).join(', ')
       : '(none)'
 
+  // Catalog packages only: the store/driver packages (-prisma, -s3…) are
+  // implementation detail the planner reaches through the catalog entry.
+  const catalog = new Set(ECOSYSTEM_PACKAGES.map((p) => p.name))
+  const installed = ctx.installed.filter((name) => catalog.has(name))
+
   const lines = [
     'PROJECT STACK:',
     ...caps.map((c) => `- ${c}`),
     '',
     `EXISTING PRISMA MODELS: ${models}`,
+    '',
+    `INSTALLED ECOSYSTEM PACKAGES: ${installed.join(', ') || '(none)'} — use these as they are; any other catalog package needs a "package" install step.`,
     '',
     'GENERATOR: `basalt make:resource <Name>` — flags: --prisma, --soft-delete, --no-register, --dir, --force.',
   ]

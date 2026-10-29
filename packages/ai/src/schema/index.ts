@@ -144,6 +144,7 @@ export const PlanEntitySchema = z.object({
 })
 
 export const PlanStepKindSchema = z.enum([
+  'package',
   'generator',
   'schema',
   'migration',

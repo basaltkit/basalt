@@ -199,6 +199,15 @@ o gerador `make:resource`, scoping por `tenantId`, permissões RBAC e eventos de
 audit. A amostragem é determinística por predefinição (`temperature: 0`,
 `maxTokens: 4096`).
 
+**Ecossistema primeiro.** O prompt leva também o catálogo dos pacotes oficiais
+(`@basaltkit/comments`, `-files`, `-notifications`, `-teams`, `-subscriptions`,
+`-webhooks`…) e os que o teu projeto já tem instalados. Uma capacidade coberta
+por um pacote vira um passo `package` (o comando `pnpm add`, ou nenhum quando já
+está instalado, e como ligar o plugin e as rotas) em vez de um modelo gerado; só
+o que nenhum pacote oferece entra em `entities`. Assim, "posts com comentários"
+planeia um recurso `Post` e reutiliza o `@basaltkit/comments`, não um modelo
+`Comment`.
+
 O resultado é um `ArchitecturePlan`: um `summary`, `entities` (com campos e
 relações), `steps` ordenados, `permissions`, `auditEvents`, `warnings` e um
 `schemaVersion`. Esse objeto é a passagem de testemunho para o `ai:make` — e, por
@@ -207,7 +216,9 @@ MCP, é o cliente que o transporta entre as duas ferramentas.
 ### `ai:make` — implementar
 
 Planeia primeiro, mostra-te o plano, pede confirmação e depois gera um vertical de
-backend completo, on-convention:
+backend completo, on-convention. Nunca instala dependências: os passos `package`
+do plano aparecem primeiro nos follow-ups, e um plano só com passos `package`
+termina com "Nothing to scaffold" (exit `0`).
 
 ```bash
 basalt ai:make "um módulo de faturas por tenant: número, valor, data de emissão e estado (pago/pendente), ligado a um cliente"
@@ -369,6 +380,7 @@ exatamente o mesmo conjunto.
 | `ai:plan — the model did not return valid JSON. Got: …` | `parsePlan` | `1` | O modelo embrulhou ou estragou o JSON do plano |
 | `ai review — the model did not return valid JSON. Got: …` | `parseReview` | *não fatal* | Aparece como `Review inconclusive — …`; o build continua |
 | `ai:make — the plan has no entity to generate.` | `runMake` | `1` | O plano voltou com um array `entities` vazio — reformula o pedido |
+| `ai:make — nothing to generate: the plan reuses ecosystem packages. …` | `runMake` | `1` | Só programático/MCP (a CLI pára antes, com exit `0`): todas as capacidades são cobertas por pacotes — corre os passos `package` listados |
 | `Refusing to overwrite existing files (use force to replace): …` | `FileExistsError` (`@basaltkit/generator`) | `1` | Um caminho gerado já existe — corre outra vez com `--force` |
 | `✗ prisma db push failed: …` | `runPrismaPush` | `1` | `DATABASE_URL` inacessível, ou o model fundido não valida |
 | `Usage: basalt ai:plan "<what you want to build>"` | `commands.ts` | `1` | O argumento do pedido estava vazio |

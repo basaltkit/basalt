@@ -16,6 +16,7 @@ export interface CreatePlanOptions {
 }
 
 const STEP_KINDS: PlanStepKind[] = [
+  'package',
   'generator',
   'schema',
   'migration',

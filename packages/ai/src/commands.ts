@@ -6,7 +6,7 @@ import { applyFixEdits, fixableIds, planFix, renderFixes, type FixOutcome } from
 import { createProvider, providerEnvFromProcess } from './provider/factory.js'
 import { createPlan } from './plan/plan.js'
 import { renderPlan } from './plan/render.js'
-import { runMake } from './make/make.js'
+import { packageSteps, runMake } from './make/make.js'
 import { renderMakeResult } from './make/render.js'
 import { runPrismaPush } from './make/schema.js'
 import { verifyProject } from './make/verify.js'
@@ -47,7 +47,7 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         io.log('')
         if (args.length > 0) {
           io.log(`You asked: "${args.join(' ')}"`)
-          io.log('Natural-language planning & scaffolding (ai:plan / ai:make) land in the next phase.')
+          io.log(`Plan it with: basalt ai:plan "${args.join(' ')}"`)
           io.log('')
         }
         io.log('Available now:')
@@ -193,6 +193,13 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
         }
         renderPlan(plan, io)
         io.log('')
+
+        // A plan that only reuses packages has nothing to scaffold — ai:make does
+        // not install dependencies, so the package steps above are the whole job.
+        if (plan.entities.length === 0 && packageSteps(plan).length > 0) {
+          io.log('Nothing to scaffold — this plan reuses ecosystem packages. Run the package steps above.')
+          return 0
+        }
 
         // Agent review over the generated code — read-only, uses the same provider.
         const agentReview = async (result: Awaited<ReturnType<typeof runMake>>): Promise<boolean> => {
