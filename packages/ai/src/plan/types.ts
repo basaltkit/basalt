@@ -1,4 +1,6 @@
 export type PlanStepKind =
+  /** Install and/or wire an official `@basaltkit/*` package instead of generating code. */
+  | 'package'
   | 'generator'
   | 'schema'
   | 'migration'

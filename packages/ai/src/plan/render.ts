@@ -54,5 +54,5 @@ export function renderPlan(plan: ArchitecturePlan, io: LineWriter): void {
 
   io.log('')
   io.log('This is a plan only — nothing was changed.')
-  io.log('Next: `basalt ai:make` will execute it (arrives in the next phase).')
+  io.log(`Next: basalt ai:make "${plan.request}" implements it.`)
 }

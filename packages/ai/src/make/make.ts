@@ -65,7 +65,12 @@ export async function runMake(
   assertSafePlan(plan)
   const entities = plan.entities.filter((e) => e.name.trim() !== '')
   if (entities.length === 0) {
-    throw new Error('ai:make — the plan has no entity to generate.')
+    const packages = packageSteps(plan)
+    throw new Error(
+      packages.length > 0
+        ? `ai:make — nothing to generate: the plan reuses ecosystem packages. ${packages.join(' ')}`
+        : 'ai:make — the plan has no entity to generate.',
+    )
   }
   throwIfAborted(options.signal)
   const baseDir = options.baseDir ?? process.cwd()
@@ -298,7 +303,8 @@ function buildFollowUps(
   schema: SchemaMerge | undefined,
   migration: Migration | undefined,
 ): string[] {
-  const followUps: string[] = []
+  // Packages first: the generated code may depend on them being wired.
+  const followUps: string[] = packageSteps(plan)
   const prismaResources = resources.filter((r) => r.prisma)
   if (prismaResources.length > 0) {
     if (!schema?.found) {
@@ -337,6 +343,13 @@ function buildFollowUps(
     followUps.push(`Emit audit events (${plan.auditEvents.join(', ')}) on create/update/delete.`)
   }
   return followUps
+}
+
+/** The plan's `package` steps as instructions — ai:make never installs dependencies itself. */
+export function packageSteps(plan: ArchitecturePlan): string[] {
+  return plan.steps
+    .filter((step) => step.kind === 'package')
+    .map((step) => `${step.title}${step.command ? ` — \`${step.command}\`` : ''}${step.detail ? `: ${step.detail}` : ''}`)
 }
 
 function reviewBuild(
