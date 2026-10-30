@@ -295,10 +295,20 @@ export const LEGACY_BIN_HASHES: ReadonlySet<string> = new Set([
   'sha256-5c2cf3f431399b961de890af457c7be5f9a0cb810cd96d6bdf080ac942e33f1b',
 ])
 
-export const hasProjectCommands = (content: string): boolean => content.includes(PROJECT_COMMANDS_MARKER)
-export const hasDevPrelude = (content: string): boolean => content.includes(DEV_PRELUDE_MARKER)
-export const hasGeneratorsPrelude = (content: string): boolean => content.includes(GENERATORS_PRELUDE_MARKER)
-export const hasDevServerPrelude = (content: string): boolean => content.includes(DEV_SERVER_PRELUDE_MARKER)
+/**
+ * Code shape without formatting: every quote as `'`, no whitespace, no
+ * trailing commas. A bin run through Prettier (`["update", "add", …]`, an
+ * array broken over lines with a trailing comma) still holds the block, and
+ * must not be told to paste it again.
+ */
+const codeShape = (text: string): string =>
+  text.replace(/["`]/g, "'").replace(/\s+/g, '').replace(/,([\])}])/g, '$1')
+const holds = (content: string, marker: string): boolean => codeShape(content).includes(codeShape(marker))
+
+export const hasProjectCommands = (content: string): boolean => holds(content, PROJECT_COMMANDS_MARKER)
+export const hasDevPrelude = (content: string): boolean => holds(content, DEV_PRELUDE_MARKER)
+export const hasGeneratorsPrelude = (content: string): boolean => holds(content, GENERATORS_PRELUDE_MARKER)
+export const hasDevServerPrelude = (content: string): boolean => holds(content, DEV_SERVER_PRELUDE_MARKER)
 
 /**
  * Upgrades a template-generated bin/basalt.ts to the current template, step by
