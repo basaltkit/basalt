@@ -107,7 +107,7 @@ export function renderPrismaRepository(name: string, fields: PlanField[], option
 // A missing tenant is a client error (400) — never a silent 500.
 const currentTenantId = (): string => {
   const id = (tryCtx()?.['tenant'] as { id?: string } | undefined)?.id
-  if (!id) throw new HttpError(400, 'TENANT_REQUIRED', 'No tenant in context — send the x-tenant-id header (or resolve a tenant first).')
+  if (!id) throw new HttpError(400, 'TENANT_REQUIRED', 'No tenant in context — reach this route the way tenancyPlugin resolves tenants (subdomain, domain, route or x-tenant-id header).')
   return id
 }
 `
