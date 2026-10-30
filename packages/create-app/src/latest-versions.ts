@@ -69,6 +69,8 @@ const CONCURRENCY = 8
 
 /** A stable `x.y.z` release (pre-releases and build metadata are refused). */
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+/** A semver pre-release (`8.0.0-rc.29`) — what `latest` sometimes points at. */
+const PRERELEASE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$/
 const CARET_RANGE = /^\^(0|[1-9]\d*)\.\d+\.\d+$/
 
 /** Packages whose latest is always taken, regardless of major. */
@@ -108,6 +110,8 @@ export interface VersionResolution {
   failed: string[]
   /** Third-party packages whose latest is a new major — fallback kept. */
   heldBack: HeldBackVersion[]
+  /** Packages whose `latest` dist-tag is a pre-release — fallback kept. */
+  prerelease: HeldBackVersion[]
   /**
    * Third-party packages whose latest may be younger than the release-age
    * window (pnpm `minimumReleaseAge`) — fallback kept so installs stay possible.
@@ -211,9 +215,14 @@ async function probeAge(
   }
 }
 
-/** Outcome of one registry lookup: a version, a definitive miss, or a transient failure. */
+/**
+ * Outcome of one registry lookup: a version, a `latest` dist-tag that points at
+ * a pre-release (the registry answered, but there is no stable latest to take),
+ * a definitive miss, or a transient failure.
+ */
 type Found = { version: string; peers: Record<string, string>; optionalPeers: string[] }
-type Lookup = Found | 'miss' | 'transient'
+type Prerelease = { prerelease: string }
+type Lookup = Found | Prerelease | 'miss' | 'transient'
 
 /** The `peerDependencies` of a `/latest` document (string values only). */
 function peersOf(body: { peerDependencies?: unknown } | null): Record<string, string> {
@@ -251,9 +260,9 @@ async function lookupLatest(
     if (!response.ok) return 'miss'
     const body = (await response.json()) as { version?: unknown; peerDependencies?: unknown; peerDependenciesMeta?: unknown } | null
     const version = body?.version
-    return typeof version === 'string' && STABLE_SEMVER.test(version)
-      ? { version, peers: peersOf(body), optionalPeers: optionalPeersOf(body) }
-      : 'miss'
+    if (typeof version !== 'string') return 'miss'
+    if (STABLE_SEMVER.test(version)) return { version, peers: peersOf(body), optionalPeers: optionalPeersOf(body) }
+    return PRERELEASE_SEMVER.test(version) ? { prerelease: version } : 'miss'
   } catch {
     // Network error, per-request timeout, or malformed JSON.
     return 'transient'
@@ -261,7 +270,8 @@ async function lookupLatest(
 }
 
 /**
- * The latest stable version of `name`, or undefined. A transient failure
+ * The latest stable version of `name` (or the pre-release `latest` points at),
+ * or undefined. A transient failure
  * (network error, timeout, 5xx/429) is retried once — on slow links the first
  * wave of cold TLS handshakes is the part that times out, and the retry rides
  * a warm keep-alive connection. The overall signal bounds both attempts.
@@ -272,7 +282,7 @@ async function fetchLatest(
   name: string,
   timeoutMs: number,
   overall: AbortSignal,
-): Promise<Found | undefined> {
+): Promise<Found | Prerelease | undefined> {
   for (let attempt = 0; attempt < 2 && !overall.aborted; attempt++) {
     const result = await lookupLatest(
       fetchImpl,
@@ -290,6 +300,11 @@ async function fetchLatest(
 export interface LatestInfo {
   /** The `latest` dist-tag (stable releases only), or undefined when the lookup failed. */
   latest?: string
+  /**
+   * The version `latest` points at when it is a pre-release (e.g. `8.0.0-rc.29`):
+   * the registry answered, but there is no stable latest — not a failure.
+   */
+  prerelease?: string
   /** `peerDependencies` declared by that latest version. */
   peers: Record<string, string>
   /** The peers its `peerDependenciesMeta` marks optional (absent: none). */
@@ -307,7 +322,7 @@ export interface LatestInfo {
  * requests (one retry on transient failures, a global time cap) and, when
  * `shouldProbe(name, latest)` says the version would actually be used, probes
  * its release age against the window. Never throws — a package the registry
- * cannot answer for comes back without `latest`.
+ * cannot answer for comes back without `latest` (and without `prerelease`).
  */
 export async function lookupLatestVersions(
   names: readonly string[],
@@ -334,6 +349,10 @@ export async function lookupLatestVersions(
         const found = await fetchLatest(fetchImpl, registry, name, timeoutMs, overall.signal)
         if (found === undefined) {
           results.set(name, { peers: {}, age: 'mature' })
+          continue
+        }
+        if ('prerelease' in found) {
+          results.set(name, { prerelease: found.prerelease, peers: {}, age: 'mature' })
           continue
         }
         const age =
@@ -371,6 +390,7 @@ export async function resolveLatestVersions(
   const resolved: string[] = []
   const failed: string[] = []
   const heldBack: HeldBackVersion[] = []
+  const prerelease: HeldBackVersion[] = []
   const tooFresh: FreshVersion[] = []
   const names = Object.keys(fallbacks).sort()
 
@@ -392,6 +412,10 @@ export async function resolveLatestVersions(
     const info = results.get(name)
     const version = info?.latest
     const fallback = fallbacks[name] as string
+    if (info?.prerelease !== undefined) {
+      prerelease.push({ name, latest: info.prerelease, range: fallback })
+      continue
+    }
     if (info === undefined || version === undefined) {
       failed.push(name)
       continue
@@ -407,7 +431,7 @@ export async function resolveLatestVersions(
     versions[name] = `^${version}`
     resolved.push(name)
   }
-  return { versions, resolved, failed, heldBack, tooFresh, registry }
+  return { versions, resolved, failed, heldBack, prerelease, tooFresh, registry }
 }
 
 /**
@@ -474,6 +498,9 @@ export function describeResolution(resolution: VersionResolution): string[] {
     lines.push(
       `Note: ${fresh.name} ${fresh.latest} was published inside pnpm's minimumReleaseAge window — kept ${fresh.range} (pnpm installs the newest mature version).`,
     )
+  }
+  for (const pre of resolution.prerelease) {
+    lines.push(`Note: the latest tag of ${pre.name} is a pre-release (${pre.latest}) — kept ${pre.range}.`)
   }
   if (unknown.length > 0) {
     lines.push(

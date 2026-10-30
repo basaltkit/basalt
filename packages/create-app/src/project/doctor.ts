@@ -271,7 +271,7 @@ export async function runDoctor(ctx: ProjectContext, options: DoctorOptions = {}
       () => false,
       options.registry ?? {},
     )
-    if (framework.length > 0 && framework.every(([name]) => results.get(name)?.latest === undefined)) {
+    if (framework.length > 0 && framework.every(([name]) => results.get(name)?.latest === undefined && results.get(name)?.prerelease === undefined)) {
       push('info', 'updates', 'Registry unreachable — skipped the "behind latest" check.')
     } else {
       const behind = framework.filter(([name, range]) => {

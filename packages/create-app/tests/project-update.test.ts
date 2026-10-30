@@ -228,6 +228,16 @@ describe('update — writes', () => {
 })
 
 describe('update — release age, majors gating, peers', () => {
+  it('names a pre-release latest tag instead of blaming the registry', async () => {
+    const dir = await scaffold('prerelease-app')
+    const zod = floorOf(JSON.parse(await read(dir, 'package.json')).dependencies.zod)
+    const h = harness(dir, { fetch: await registryFor(dir, { zod: { version: `${bump(zod, 'major')}-rc.29` } }) })
+    expect(await runProjectCommand(['update', '--yes', '--no-install'], h.deps)).toBe(0)
+    expect(JSON.parse(await read(dir, 'package.json')).dependencies.zod).toBe(`^${zod}`)
+    expect(h.output()).toContain(`The latest tag of zod is a pre-release (${bump(zod, 'major')}-rc.29) — left unchanged.`)
+    expect(h.output()).not.toContain('did not answer')
+  })
+
   it('keeps a third-party version published inside the release-age window', async () => {
     const dir = await scaffold('fresh-app')
     const zod = floorOf(JSON.parse(await read(dir, 'package.json')).dependencies.zod)

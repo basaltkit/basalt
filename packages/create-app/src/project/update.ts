@@ -61,6 +61,8 @@ export type EntryStatus =
   | 'too-fresh'
   /** The registry did not answer. */
   | 'failed'
+  /** The registry's `latest` dist-tag points at a pre-release — nothing stable to take. */
+  | 'prerelease'
   /** A range `update` does not rewrite (workspace:, tags, git, >=, …). */
   | 'unmanaged'
   /** The app is already ahead of `latest` (a pre-release, a local build). */
@@ -225,7 +227,8 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
       !exempt(name) && (majorsOf.get(name) === undefined || [...(majorsOf.get(name) ?? [])].some((major) => acceptsMajor(name, major, latest))),
     { ...options.registry, minimumReleaseAge: window },
   )
-  if (names.length > 0 && names.every((name) => results.get(name)?.latest === undefined)) {
+  const answered = (name: string): boolean => results.get(name)?.latest !== undefined || results.get(name)?.prerelease !== undefined
+  if (names.length > 0 && !names.some(answered)) {
     throw new RegistryUnavailableError(registry)
   }
 
@@ -233,6 +236,11 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
     const info = results.get(entry.name) as LatestInfo
     const range = parseSimpleRange(entry.current)
     if (!range) continue
+    if (info.prerelease !== undefined) {
+      entry.status = 'prerelease'
+      entry.latest = info.prerelease
+      continue
+    }
     if (info.latest === undefined) {
       entry.status = 'failed'
       continue
@@ -449,6 +457,10 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
 
   const failed = entries.filter((entry) => entry.status === 'failed').map((entry) => entry.name)
   if (failed.length > 0) warnings.push(`The registry did not answer for ${[...new Set(failed)].join(', ')} — left unchanged.`)
+  const prereleases = new Map(entries.filter((entry) => entry.status === 'prerelease').map((entry) => [entry.name, entry.latest]))
+  for (const [name, version] of prereleases) {
+    warnings.push(`The latest tag of ${name} is a pre-release (${version}) — left unchanged.`)
+  }
 
   const majors = updates
     .filter((entry) => entry.framework && entry.kind === 'major')

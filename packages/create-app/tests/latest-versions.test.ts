@@ -118,12 +118,25 @@ describe('resolveLatestVersions', () => {
       },
     )
     expect(result.resolved).toEqual([])
-    expect(result.failed.sort()).toEqual(['@basaltkit/auth', '@basaltkit/core', 'react', 'tsx', 'vite', 'vitest', 'zod'])
+    expect(result.failed.sort()).toEqual(['@basaltkit/auth', '@basaltkit/core', 'react', 'tsx', 'vite', 'zod'])
     expect(result.versions['@basaltkit/core']).toBe('^1.3.0')
     expect(result.versions.zod).toBe('^4.6.5')
     const warning = describeResolution(result)
-    expect(warning).toHaveLength(1)
-    expect(warning[0]).toMatch(/^Warning: .*fallback ranges/)
+    expect(warning).toHaveLength(2)
+    expect(warning.at(-1)).toMatch(/^Warning: .*fallback ranges/)
+  })
+
+  it('keeps the fallback when latest is a pre-release, and says so instead of blaming the registry', async () => {
+    const result = await resolveLatestVersions(
+      { prisma: '^7.10.0', zod: '^4.6.5' },
+      { fetch: fakeFetch({ prisma: { version: '8.0.0-rc.29' }, zod: { version: '4.9.1' } }) },
+    )
+    expect(result.versions).toEqual({ prisma: '^7.10.0', zod: '^4.9.1' })
+    expect(result.failed).toEqual([])
+    expect(result.prerelease).toEqual([{ name: 'prisma', latest: '8.0.0-rc.29', range: '^7.10.0' }])
+    const lines = describeResolution(result)
+    expect(lines).toContain('Note: the latest tag of prisma is a pre-release (8.0.0-rc.29) — kept ^7.10.0.')
+    expect(lines.join('\n')).not.toMatch(/could not reach/)
   })
 
   it('aborts a hanging request after the per-request timeout', async () => {
