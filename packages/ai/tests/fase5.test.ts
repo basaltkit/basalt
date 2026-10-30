@@ -46,6 +46,8 @@ describe('renderPrismaRepository', () => {
     // a missing tenant is a clear 400, not a silent 500
     expect(src).toContain("import { HttpError } from '@basaltkit/fastify'")
     expect(src).toContain("throw new HttpError(400, 'TENANT_REQUIRED'")
+    // The app picks its resolvers — the message must not promise the header works.
+    expect(src).toContain('the way tenancyPlugin resolves tenants')
     expect(src).toContain('data: { ...input, tenantId: currentTenantId() }')
     expect(src).toContain('findMany({ where: { tenantId: currentTenantId(), deletedAt: null } })')
     expect(src).toContain('updateMany({ where: { id, tenantId: currentTenantId(), deletedAt: null }')
