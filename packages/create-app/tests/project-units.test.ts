@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseArgs } from '../src/args.js'
-import { binStatus, LEGACY_BIN_HASHES } from '../src/bin-template.js'
+import { basaltBin, binStatus, LEGACY_BIN_HASHES, manualBinSnippet } from '../src/bin-template.js'
 import { createProject } from '../src/index.js'
 import { detectProjectPackageManager } from '../src/project/context.js'
 import { hashContent, MANIFEST_PATH, ownVersion } from '../src/project/manifest.js'
@@ -134,6 +134,30 @@ describe('scaffold manifest', () => {
     expect(binStatus('// custom\n')).toBe('modified')
     expect(binStatus('// custom\n', hashContent('// custom\n'))).toBe('patchable')
     expect(LEGACY_BIN_HASHES.size).toBe(8)
+  })
+
+  it('recognises the blocks in a bin Prettier reformatted (double quotes, broken lines)', () => {
+    const prettier = basaltBin().replace(/'/g, '"')
+    expect(binStatus(prettier)).toBe('current')
+    const broken = prettier.replace(
+      '["update", "add", "doctor", "info"].includes(process.argv[2] ?? "")',
+      '[\n  "update",\n  "add",\n  "doctor",\n  "info",\n].includes(process.argv[2] ?? "")',
+    )
+    expect(broken).not.toBe(prettier)
+    expect(binStatus(broken)).toBe('current')
+    // A real change still counts: another command list is not the template's block.
+    expect(binStatus(prettier.replace('"doctor", "info"', '"info"'))).toBe('modified')
+  })
+
+  it('asks to paste only the blocks a reformatted bin really lacks', () => {
+    const withoutDevServer = basaltBin()
+      .replace(/'/g, '"')
+      .replace(/\/\/ `dev` starts the watcher[\s\S]*?\n}\n/, '')
+    expect(binStatus(withoutDevServer)).toBe('modified')
+    const snippet = manualBinSnippet(withoutDevServer)
+    expect(snippet).not.toContain('right after the shebang line')
+    expect(snippet).not.toContain('make:* generators without booting')
+    expect(snippet).toContain("if (process.argv[2] === 'dev')")
   })
 })
 
