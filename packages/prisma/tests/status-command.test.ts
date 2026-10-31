@@ -89,6 +89,30 @@ describe('db:status (BK-041)', () => {
     expect(report.planes.map((p) => `${p.plane}:${p.state}`)).toEqual(['central:up-to-date', 'tenant:up-to-date'])
   })
 
+  it('checks every shard, which `migrate dev` never migrates, and says how to bring one along', async () => {
+    calls.length = 0
+    const { io, lines } = ioCapture()
+    const command = dbStatusCommand({
+      shards: { urls: ['postgresql://shard0/app', 'postgresql://shard1/app'] },
+      run: runner({ 'postgresql://shard1/app': PENDING }),
+    })
+    expect(await command.handle({ io, args: [], flags: {} })).toBe(1)
+    expect(calls.map((call) => call.env['DATABASE_URL'])).toEqual([undefined, 'postgresql://shard0/app', 'postgresql://shard1/app'])
+    const out = lines.join('\n')
+    expect(out).toContain('ok   central')
+    expect(out).toContain('ok   shard 0')
+    expect(out).toContain('FAIL shard 1: 2 pending — 20240101_a, 20240102_b')
+    expect(out).toContain("fix: Run `prisma migrate deploy` with DATABASE_URL set to shard 1's URL.")
+    expect(out).not.toContain('shard1/app')
+  })
+
+  it('--json names each shard by its router position', async () => {
+    const { io, lines } = ioCapture()
+    const command = dbStatusCommand({ central: false, shards: { urls: ['postgresql://s0/app'] }, run: runner({}) })
+    expect(await command.handle({ io, args: [], flags: { json: true } })).toBe(0)
+    expect(JSON.parse(lines[0]!).planes).toEqual([{ plane: 'shard', shard: 0, state: 'up-to-date' }])
+  })
+
   it('reports an unreachable plane with its fix, not a crash', async () => {
     const { io, lines } = ioCapture()
     const command = dbStatusCommand({

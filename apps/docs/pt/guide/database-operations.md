@@ -50,7 +50,7 @@ mantém o código `PRISMA_NOT_MIGRATED`; `error.details.diagnosis` traz
 ## `db:status` — em que estado está cada plano
 
 `dbStatusCommand()` constrói um `basalt db:status` **só de leitura**: corre
-`prisma migrate status` para o plano central e para cada tenant, imprime uma
+`prisma migrate status` para o plano central, cada shard e cada tenant, imprime uma
 linha por plano com a correcção para o que estiver mal, e **sai com 1** quando
 alguma coisa está pendente, falhada, divergente ou inacessível.
 
@@ -79,7 +79,38 @@ FAIL tenant globex (tenant_globex): 2 pending — 20260901_invoices, 20260915_ta
 Not up to date. Tenants: 1 up to date, 1 not.
 ```
 
-`--json` imprime `{ ok, planes: [{ plane, tenantId?, schema?, state, pending?, detail?, fix? }] }`.
+### Shards
+
+O `prisma migrate dev` e o `prisma migrate status` só vêem o `DATABASE_URL`, por
+isso os shards de um [`ShardRouter`](./production#fazer-sharding-da-base-de-dados) ficam para trás sem
+aviso: a base central está em dia enquanto o pedido de um tenant falha no seu
+shard com `P2021` (a tabela não existe). Passa os URLs dos shards, pela ordem do
+router:
+
+```ts
+dbStatusCommand({
+  shards: { urls: env.DATABASE_SHARDS_URLS }, // a mesma lista que o ShardRouter recebe
+})
+```
+
+```sh
+$ pnpm basalt db:status
+ok   central: up to date
+FAIL shard 0: 3 pending — 20261027_add_missing_tables, …
+       fix: Run `prisma migrate deploy` with DATABASE_URL set to shard 0's URL.
+Not up to date.
+```
+
+Para os migrar, corre `prisma migrate deploy` uma vez por shard depois do
+`migrate dev`:
+
+```sh
+echo "$DATABASE_SHARDS_URLS" | tr ',' '\n' | while read -r url; do
+  DATABASE_URL="$url" npx prisma migrate deploy
+done
+```
+
+`--json` imprime `{ ok, planes: [{ plane, shard?, tenantId?, schema?, state, pending?, detail?, fix? }] }`.
 Corre-o na CI depois do passo de deploy — ou antes, para recusar um deploy sobre
 uma base divergente. Nunca aplica, provisiona, faz baseline nem concede nada.
 

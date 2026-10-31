@@ -543,7 +543,7 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 
 ### `dbStatusCommand(config?)`
 
-Builds the read-only `basalt db:status` command (register it via `commandsPlugin()`): runs `prisma migrate status` for the central plane (`central: { configPath?, schemaPath? } | false`) and for every tenant (`tenants: { list, target, configPath?, schemaPath?, concurrency? }`, the same `target` as `tenantMigrateCommand`), prints one line per plane with the fix for what is wrong, and exits 1 when anything is pending, failed, drifted, unmanaged or unreachable. `--json` prints `{ ok, planes }`. `run` overrides how the Prisma CLI is invoked. Helpers: `parseMigrateStatus(output, exitCode)`, `prismaStatusArgs(target)`.
+Builds the read-only `basalt db:status` command (register it via `commandsPlugin()`): runs `prisma migrate status` for the central plane (`central: { configPath?, schemaPath? } | false`) and for every tenant (`tenants: { list, target, configPath?, schemaPath?, concurrency? }`, the same `target` as `tenantMigrateCommand`) — plus every shard of a `ShardRouter` with `shards: { urls, configPath?, schemaPath? }` (`prisma migrate dev` never migrates them) — prints one line per plane with the fix for what is wrong, and exits 1 when anything is pending, failed, drifted, unmanaged or unreachable. `--json` prints `{ ok, planes }`. `run` overrides how the Prisma CLI is invoked. Helpers: `parseMigrateStatus(output, exitCode)`, `prismaStatusArgs(target)`.
 
 ### `applyTenantScope(operation, args, tenantId, field)` (Advanced)
 
