@@ -28,12 +28,12 @@
   },
   "peerDependencies": {
     "@basaltkit/auth": "workspace:^",
-    "@node-saml/node-saml": "^5.1.0"
+    "@node-saml/node-saml": "^5.2.0"
   },
   "devDependencies": {
     "@basaltkit/auth": "workspace:^",
     "@basaltkit/tsconfig": "workspace:^",
-    "@node-saml/node-saml": "^5.1.0",
+    "@node-saml/node-saml": "^5.2.0",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5",
