@@ -1,6 +1,14 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { binStatus, hasDevPrelude, hasGeneratorsPrelude, hasProjectCommands, manualBinSnippet, patchBasaltBin } from '../bin-template.js'
+import {
+  binStatus,
+  hasDevPrelude,
+  hasDevServerPrelude,
+  hasGeneratorsPrelude,
+  hasProjectCommands,
+  manualBinSnippet,
+  patchBasaltBin,
+} from '../bin-template.js'
 import { devEntryStatus, MANUAL_DEV_SNIPPET, patchDevEntry, patchEnvExample } from '../dev-entry.js'
 import {
   alwaysLatest,
@@ -339,7 +347,9 @@ export async function planUpdate(ctx: ProjectContext, options: UpdateOptions = {
           hasDevPrelude(bin) ? '' : 'loads .env for development, runs \`upgrade\` without booting the app, explains env errors; '
         }${
           hasGeneratorsPrelude(bin) ? '' : 'runs make:* without booting the app (no database needed to generate code); '
-        }starts \`basalt dev\` even while the app cannot boot`,
+        }${
+          hasDevServerPrelude(bin) ? '' : 'starts \`basalt dev\` even while the app cannot boot; '
+        }gains \`basalt db:status\` (migration status, without booting the app)`,
       )
     } else if (status === 'modified' && bin !== undefined) {
       manual.push(`bin/basalt.ts was customised, so it was not patched. To bring it up to date:\n${manualBinSnippet(bin)}`)

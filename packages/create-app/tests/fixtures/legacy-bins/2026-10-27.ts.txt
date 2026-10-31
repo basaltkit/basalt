@@ -1,0 +1,198 @@
+#!/usr/bin/env node
+import { spawnSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Project commands run BEFORE anything of the app is imported, so they keep
+// working while the app is broken mid-upgrade. create-basalt provides them —
+// the project's devDependency when installed, else its latest release:
+//   pnpm basalt update                  — update dependencies to the latest versions (--dry to preview)
+//   pnpm basalt add ui                  — add a feature later (ui, cli, mcp)
+//   pnpm basalt doctor                  — check the project's health
+//   pnpm basalt info                    — versions summary for bug reports
+const root = fileURLToPath(new URL('..', import.meta.url))
+if (['update', 'add', 'doctor', 'info'].includes(process.argv[2] ?? '')) {
+  process.exit(createBasalt(process.argv.slice(2)))
+}
+
+/** Runs create-basalt: the installed devDependency, else `<pm> dlx create-basalt@latest`. */
+function createBasalt(args: string[]): number {
+  const local = join(root, 'node_modules', 'create-basalt', 'dist', 'cli.js')
+  if (existsSync(local)) {
+    return spawnSync(process.execPath, [local, ...args], { cwd: root, stdio: 'inherit' }).status ?? 1
+  }
+  let declared = ''
+  try {
+    declared = String(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).packageManager ?? '')
+  } catch {
+    // No readable package.json: the lockfiles decide.
+  }
+  const uses = (pm: string, ...lockfiles: string[]): boolean =>
+    declared.startsWith(`${pm}@`) || lockfiles.some((file) => existsSync(join(root, file)))
+  const [command, prefix]: [string, string[]] = uses('pnpm', 'pnpm-lock.yaml')
+    ? ['pnpm', ['dlx']]
+    : uses('bun', 'bun.lock', 'bun.lockb')
+      ? ['bunx', []]
+      : ['npx', ['--yes']]
+  const result = spawnSync(command, [...prefix, 'create-basalt@latest', ...args], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  })
+  return result.status ?? 1
+}
+
+// `upgrade` (framework codemods) only rewrites source files: it runs without
+// booting the app, so it works even while the app cannot start.
+if (process.argv[2] === 'upgrade') {
+  const { consoleIo, parseArgv, upgradeCommand } = await import('@basaltkit/cli')
+  const { args, flags } = parseArgv(process.argv.slice(2))
+  // upgradeCommand reads only io/args/flags — there is no app to hand it.
+  const context = { io: consoleIo(), args, flags } as unknown as Parameters<typeof upgradeCommand.handle>[0]
+  process.exit((await upgradeCommand.handle(context)) ?? 0)
+}
+
+// Development loads .env (when present) like `node --env-file=.env`: a variable
+// already exported in your shell still wins, the file only fills in what is
+// missing. `pnpm start` (production) never loads it — there the configuration
+// comes from the real environment.
+const envFile = join(root, '.env')
+if (existsSync(envFile)) process.loadEnvFile(envFile)
+
+/**
+ * A boot failure as a fix instead of a stack trace (stack: BASALT_DEBUG=1 or --debug):
+ * invalid environment variables, a database that does not answer, one that is not
+ * migrated. Anything else is rethrown untouched.
+ */
+async function explainBootFailure(error: unknown): Promise<never> {
+  const failure = (error ?? {}) as {
+    code?: unknown; report?: unknown; message?: unknown; cause?: unknown; errors?: unknown; details?: unknown
+  }
+  // @basaltkit/prisma's describeDbError diagnosis (assertMigrated attaches it): the cause and its one-line fix.
+  const diagnosis = (failure.details as { diagnosis?: { code?: unknown; cause?: unknown; fix?: unknown } } | undefined)?.diagnosis
+  const message = String(failure.message ?? '')
+  const codes = [failure, failure.cause, ...(Array.isArray(failure.errors) ? failure.errors : [])].map((item) =>
+    String((item as { code?: unknown } | null | undefined)?.code ?? ''),
+  )
+  const unreachable =
+    codes.some((code) => /^(ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|EAI_AGAIN|P1001|P1002)$/.test(code)) ||
+    /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|Can't reach database server/.test(message) ||
+    // assertMigrated could not even query the database (down, wrong host/port or credentials).
+    (failure.code === 'PRISMA_NOT_MIGRATED' && message.startsWith('Could not verify'))
+  const debugHint = 'BASALT_DEBUG=1 shows the stack trace.'
+  let explanation: string | undefined
+  if (failure.code === 'ENV_INVALID' && Array.isArray(failure.report)) {
+    const hasEnvFile = existsSync(envFile)
+    explanation = [
+      'The app cannot start — invalid environment variables:',
+      ...failure.report.map((line) => '  - ' + String(line)),
+      '',
+      "Read from: your shell's environment" +
+        (hasEnvFile ? ' and ' + envFile + ' (exported variables win).' : ' only — there is no ' + envFile + '.'),
+      'Fix: ' + (hasEnvFile ? 'set them in .env' : 'cp .env.example .env, then fill them in') + ' (or export them)' +
+        (existsSync(join(root, 'prisma')) ? ' — for DATABASE_URL, start PostgreSQL and point the URL at it' : '') +
+        '. `pnpm basalt doctor` checks the environment; ' + debugHint,
+    ].join('\n')
+  } else if (diagnosis && (diagnosis.code === 'DB_PERMISSION_DENIED' || diagnosis.code === 'DB_NOT_EMPTY_BASELINE')) {
+    const database = await databaseInUse()
+    explanation = [
+      diagnosis.code === 'DB_PERMISSION_DENIED'
+        ? 'The app cannot start — the database refused the app database role (permission denied):'
+        : 'The app cannot start — the database has tables but no migration history:',
+      '  ' + String(diagnosis.cause),
+      'Database: ' + database.target + ' (from ' + database.name + '; credentials never shown).',
+      'Fix: ' + String(diagnosis.fix) + ' ' + debugHint,
+    ].join('\n')
+  } else if (unreachable || failure.code === 'PRISMA_NOT_MIGRATED') {
+    const database = await databaseInUse()
+    const where = 'Database: ' + database.target + ' (from ' + database.name + '; credentials never shown).'
+    explanation = unreachable
+      ? [
+          'The app cannot start — the database did not answer.',
+          where,
+          'Fix: start PostgreSQL (e.g. `docker compose up -d`, or your local service) and check that ' +
+            database.name + ' in .env points at it (host, port, user, password); on a new database, then run `pnpm db:migrate`. ' + debugHint,
+        ].join('\n')
+      : [
+          'The app cannot start — the database is not migrated:',
+          '  ' + message,
+          where,
+          'Fix: run `pnpm db:migrate` (development; `pnpm db:deploy` in production) — or, if this is not the database you meant, check ' +
+            database.name + ' (a shell may have exported another project\'s). ' + debugHint,
+        ].join('\n')
+  }
+  if (explanation === undefined || process.env['BASALT_DEBUG'] === '1' || process.argv.includes('--debug')) throw error
+  console.error(explanation)
+  process.exit(1)
+}
+
+/** The database URL the app booted with — protocol, host, port and database only, never the credentials. */
+async function databaseInUse(): Promise<{ name: string; target: string }> {
+  let url: unknown
+  try {
+    url = ((await import('../src/env.js')).env as unknown as Record<string, unknown>)['DATABASE_URL']
+  } catch {
+    // env.ts itself failed: there is no URL to show.
+  }
+  // The variable it came from: the app-prefixed name first (it wins in src/env.ts).
+  const name =
+    Object.keys(process.env)
+      .filter((key) => key.endsWith('DATABASE_URL') && process.env[key] === url)
+      .sort((a, b) => b.length - a.length)[0] ?? 'DATABASE_URL'
+  try {
+    const parsed = new URL(String(url))
+    return { name, target: parsed.protocol + '//' + parsed.hostname + ':' + (parsed.port || '5432') + parsed.pathname }
+  } catch {
+    return { name, target: '(no valid URL)' }
+  }
+}
+
+// The generators (make:*) only write source files: like `upgrade`, they run
+// without booting the app, so they work before the database is up or migrated.
+if (process.argv[2]?.startsWith('make:')) {
+  const { consoleIo, parseArgv } = await import('@basaltkit/cli')
+  const { generatorCommands } = await import('@basaltkit/generator')
+  const { command, args, flags } = parseArgv(process.argv.slice(2))
+  const make = generatorCommands().find((candidate) => candidate.name === command)
+  if (make) {
+    // The generators read only io/args/flags — there is no app to hand them.
+    const context = { io: consoleIo(), args, flags } as unknown as Parameters<typeof make.handle>[0]
+    process.exit((await make.handle(context)) ?? 0)
+  }
+}
+
+// `dev` starts the watcher even while the app cannot boot (database down, a
+// variable missing, code mid-edit); `basalt routes` lists the routes.
+if (process.argv[2] === 'dev') {
+  const { runDev } = await import('@basaltkit/cli')
+  process.env['NODE_ENV'] ??= 'development'
+  process.exit(await runDev({
+    loadApp: async () => (await import('../src/app.js')).buildApp({ logLevel: 'silent' }),
+  }))
+}
+
+// The dev tools are imported dynamically, after the project commands above.
+const { runCli } = await import('@basaltkit/cli')
+const { generatorCommands } = await import('@basaltkit/generator')
+const { prismaSyncCommand } = await import('@basaltkit/prisma')
+
+// Dev tooling: opt into development defaults unless NODE_ENV is already set
+// (imported dynamically below so env.ts is evaluated after this line).
+process.env['NODE_ENV'] ??= 'development'
+const { buildApp } = await import('../src/app.js').catch(explainBootFailure)
+
+// The 'basalt' CLI: boots the app WITH the dev/CLI commands, runs one, shuts down.
+// The dev tools (@basaltkit/generator; add @basaltkit/ai for ai:*) are imported
+// ONLY here — the runtime server (src/server.ts) never loads them, so the SaaS
+// runs without the codegen/AI layer.
+//   pnpm basalt dev                     — dev server with watch (--worker for a queue worker)
+//   pnpm basalt list                    — show available commands
+//   pnpm basalt routes                  — list registered HTTP routes
+//   pnpm basalt make:resource Project   — generate a full resource vertical
+//   pnpm basalt make:service Project    — generate a single artifact (schema/service/…)
+const app = buildApp({
+  logLevel: 'silent',
+  commands: [...generatorCommands(), prismaSyncCommand()],
+})
+process.exit(await runCli({ app }).catch(explainBootFailure))

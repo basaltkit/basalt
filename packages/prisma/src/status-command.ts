@@ -151,7 +151,7 @@ interface Row extends MigrationStatus {
 }
 
 const label = (state: MigrationStatus): string =>
-  state.state === 'pending' ? `${state.pending} pending` : state.state.replace('-', ' ')
+  state.state === 'pending' ? `${state.pending} pending` : state.state.replaceAll('-', ' ')
 
 /**
  * Builds `basalt db:status` — register it via `commandsPlugin()`.

@@ -100,7 +100,7 @@ describe('db:status (BK-041)', () => {
     expect(calls.map((call) => call.env['DATABASE_URL'])).toEqual([undefined, 'postgresql://shard0/app', 'postgresql://shard1/app'])
     const out = lines.join('\n')
     expect(out).toContain('ok   central')
-    expect(out).toContain('ok   shard 0')
+    expect(out).toContain('ok   shard 0: up to date')
     expect(out).toContain('FAIL shard 1: 2 pending — 20240101_a, 20240102_b')
     expect(out).toContain("fix: Run `prisma migrate deploy` with DATABASE_URL set to shard 1's URL.")
     expect(out).not.toContain('shard1/app')

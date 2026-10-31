@@ -219,6 +219,21 @@ if (process.argv[2] === 'dev') {
 }
 `
 
+const DB_STATUS_PRELUDE = `// \`db:status\` reads where the migrations stand (read-only; exits 1 when one is
+// pending): like make:*, it runs without booting the app, which refuses to start
+// on an unmigrated database. Shards or per-tenant databases? Pass them:
+// dbStatusCommand({ shards: { urls }, tenants: { list, target } }).
+if (process.argv[2] === 'db:status') {
+  const { consoleIo, parseArgv } = await import('@basaltkit/cli')
+  const { dbStatusCommand } = await import('@basaltkit/prisma')
+  const { args, flags } = parseArgv(process.argv.slice(2))
+  const status = dbStatusCommand()
+  // It reads only io/args/flags — there is no app to hand it.
+  const context = { io: consoleIo(), args, flags } as unknown as Parameters<typeof status.handle>[0]
+  process.exit((await status.handle(context)) ?? 0)
+}
+`
+
 /** Marker proving a bin/basalt.ts already delegates the project commands. */
 export const PROJECT_COMMANDS_MARKER = "['update', 'add', 'doctor', 'info'].includes(process.argv[2]"
 
@@ -231,6 +246,9 @@ export const GENERATORS_PRELUDE_MARKER = "process.argv[2]?.startsWith('make:')"
 /** Marker proving a bin/basalt.ts already starts `dev` without booting the app. */
 export const DEV_SERVER_PRELUDE_MARKER = "if (process.argv[2] === 'dev')"
 
+/** Marker proving a bin/basalt.ts already runs `db:status` without booting the app. */
+export const DB_STATUS_PRELUDE_MARKER = "if (process.argv[2] === 'db:status')"
+
 const APP_IMPORT = "await import('../src/app.js')"
 const APP_IMPORT_EXPLAINED = `${APP_IMPORT}.catch(explainBootFailure)`
 const RUN_CLI = 'process.exit(await runCli({ app })'
@@ -241,6 +259,7 @@ ${PRELUDE}
 ${DEV_PRELUDE}
 ${GENERATORS_PRELUDE}
 ${DEV_SERVER_PRELUDE}
+${DB_STATUS_PRELUDE}
 // The dev tools are imported dynamically, after the project commands above.
 const { runCli } = await import('@basaltkit/cli')
 const { generatorCommands } = await import('@basaltkit/generator')
@@ -293,6 +312,8 @@ export const LEGACY_BIN_HASHES: ReadonlySet<string> = new Set([
   // 2026-10-25 (create-basalt ≤ 1.15): make:* without a boot — but `dev`
   // booted the app first, so it did not start while the app could not boot.
   'sha256-5c2cf3f431399b961de890af457c7be5f9a0cb810cd96d6bdf080ac942e33f1b',
+  // 2026-10-27 (create-basalt 1.16): `dev` without a boot — but no `db:status`.
+  'sha256-3f92702a4e1ec504c42d49d0a92bfce1de02ed517477a665d33bd9292233d60d',
 ])
 
 /**
@@ -309,6 +330,7 @@ export const hasProjectCommands = (content: string): boolean => holds(content, P
 export const hasDevPrelude = (content: string): boolean => holds(content, DEV_PRELUDE_MARKER)
 export const hasGeneratorsPrelude = (content: string): boolean => holds(content, GENERATORS_PRELUDE_MARKER)
 export const hasDevServerPrelude = (content: string): boolean => holds(content, DEV_SERVER_PRELUDE_MARKER)
+export const hasDbStatusPrelude = (content: string): boolean => holds(content, DB_STATUS_PRELUDE_MARKER)
 
 /**
  * Upgrades a template-generated bin/basalt.ts to the current template, step by
@@ -318,8 +340,9 @@ export const hasDevServerPrelude = (content: string): boolean => holds(content, 
  * the project commands and routes the app import through `explainBootFailure`;
  * (3) without the generators prelude, inserts it right before the dev tools
  * are imported for the booted CLI; (4) without the dev server prelude, inserts
- * it at the same place, after the generators prelude.
- * Deterministic for the known templates — for the latest ones (1.9 to 1.15) the
+ * it at the same place, after the generators prelude; (5) likewise the
+ * `db:status` prelude, after the dev server prelude.
+ * Deterministic for the known templates — for the latest ones (1.9 to 1.16) the
  * result is exactly {@link basaltBin}.
  */
 export function patchBasaltBin(content: string): string {
@@ -328,6 +351,7 @@ export function patchBasaltBin(content: string): string {
   if (!hasDevPrelude(text)) text = addDevPrelude(text)
   if (!hasGeneratorsPrelude(text)) text = addGeneratorsPrelude(text)
   if (!hasDevServerPrelude(text)) text = addDevServerPrelude(text)
+  if (!hasDbStatusPrelude(text)) text = addDbStatusPrelude(text)
   for (const [stale, current] of STALE_COMMENTS) text = text.replace(stale, current)
   return text
 }
@@ -390,12 +414,22 @@ function addDevServerPrelude(content: string): string {
   return `${content.slice(0, anchor.index)}${DEV_SERVER_PRELUDE}\n${content.slice(anchor.index)}`
 }
 
+/** Inserts the `db:status` prelude right before the dev tools are imported for the booted CLI (after the dev server prelude). */
+function addDbStatusPrelude(content: string): string {
+  const anchor = /^(?:\/\/ The dev tools are imported dynamically[^\n]*\n)?const \{ runCli \} = await import\('@basaltkit\/cli'\)$/m.exec(content)
+  // Without the template's dynamic CLI import, the file is not ours to rearrange.
+  if (!anchor || !hasDevServerPrelude(content)) return content
+  return `${content.slice(0, anchor.index)}${DB_STATUS_PRELUDE}\n${content.slice(anchor.index)}`
+}
+
 export type BinStatus = 'current' | 'patchable' | 'modified' | 'absent'
 
 /** Where a bin/basalt.ts stands: already current, an untouched old template, or user code. */
 export function binStatus(content: string | undefined, manifestHash?: string): BinStatus {
   if (content === undefined) return 'absent'
-  if (hasProjectCommands(content) && hasDevPrelude(content) && hasGeneratorsPrelude(content) && hasDevServerPrelude(content)) return 'current'
+  if (hasProjectCommands(content) && hasDevPrelude(content) && hasGeneratorsPrelude(content) && hasDevServerPrelude(content) && hasDbStatusPrelude(content)) {
+    return 'current'
+  }
   const hash = hashContent(content)
   return LEGACY_BIN_HASHES.has(hash) || hash === manifestHash ? 'patchable' : 'modified'
 }
@@ -432,6 +466,13 @@ the booted CLI) — \`basalt dev\` then starts its watcher even while the app ca
 boot (database down, a variable missing):
 
 ${DEV_SERVER_PRELUDE}`)
+  }
+  if (!hasDbStatusPrelude(content)) {
+    steps.push(`${steps.length > 0 ? 'Then paste' : 'Paste'} this after the dev server prelude (before the dev tools are imported
+for the booted CLI) — \`basalt db:status\` then reports where every database's
+migrations stand, even while the app cannot boot on an unmigrated one:
+
+${DB_STATUS_PRELUDE}`)
   }
   return steps.join('\n')
 }

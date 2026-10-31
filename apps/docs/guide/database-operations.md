@@ -53,6 +53,13 @@ with the `GRANT`, not as a database to migrate. The error keeps its code
 line per plane with the fix for whatever is wrong, and **exits 1** when anything
 is pending, failed, drifted or unreachable.
 
+A create-basalt app already has it: `bin/basalt.ts` runs `dbStatusCommand()`
+**without booting the app** (like `make:*`), so it answers even while the app
+refuses to start on an unmigrated database — `pnpm basalt db:status`. That
+default checks the central database; give it the shards and tenants below in
+`bin/basalt.ts`. An app from an earlier release gets the block from
+`basalt update`.
+
 ```ts
 import { commandsPlugin } from '@basaltkit/cli'
 import { dbStatusCommand, tenantMigrateCommand } from '@basaltkit/prisma'
