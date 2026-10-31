@@ -10,13 +10,13 @@
   },
   "dependencies": {
     "@prisma/orm-postgres": "8.0.0-rc.20",
-    "pg": "8.22.0"
+    "pg": "8.23.1"
   },
   "devDependencies": {
     "@basaltkit/tsconfig": "workspace:*",
     "@prisma/cli-engine": "0.9.0",
     "@types/node": "^26.6.5",
-    "@types/pg": "8.20.4",
+    "@types/pg": "8.23.1",
     "prisma": "8.0.0-rc.27",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
