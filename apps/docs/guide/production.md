@@ -396,6 +396,10 @@ migration, a platform-wide report — fan out over `shards.all()`:
 await Promise.all(shards.all().map((db) => db.$executeRawUnsafe(migrationSql)))
 ```
 
+`prisma migrate dev` only migrates `DATABASE_URL`, never the shards: check them
+with [`db:status`](./database-operations#shards) and run `prisma migrate deploy`
+per shard.
+
 Sharding is for **scale-out**, not isolation — for one-database-per-tenant use
 `prismaPlugin({ forTenant })` instead. Changing `shards.length` re-maps keys, so
 plan a migration before you resize; pass a custom `hash` if you need consistent

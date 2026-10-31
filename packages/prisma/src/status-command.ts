@@ -129,12 +129,23 @@ export interface DbStatusCommandConfig {
     /** Tenants checked in parallel. Default: 5. */
     concurrency?: number
   }
+  /**
+   * The shards of a `ShardRouter`: every shard database, in router order.
+   * `prisma migrate dev`/`status` only see `DATABASE_URL`, so a shard silently
+   * falls behind the central database unless it is checked too.
+   */
+  shards?: PrismaStatusTarget & {
+    /** One connection URL per shard, in the order the router was given them. */
+    urls: readonly string[]
+  }
   /** Override how the Prisma CLI is run (tests, a custom binary). Default: `npx prisma`. */
   run?: PrismaCliRunner
 }
 
 interface Row extends MigrationStatus {
-  plane: 'central' | 'tenant'
+  plane: 'central' | 'shard' | 'tenant'
+  /** Position in the shard router (`shard` only). */
+  shard?: number
   tenantId?: string
   schema?: string
 }
@@ -145,8 +156,8 @@ const label = (state: MigrationStatus): string =>
 /**
  * Builds `basalt db:status` — register it via `commandsPlugin()`.
  *
- * Read-only: runs `prisma migrate status` for the central plane and for every
- * tenant (it never applies, provisions, baselines or grants anything), prints
+ * Read-only: runs `prisma migrate status` for the central plane, every shard
+ * and every tenant (it never applies, provisions, baselines or grants anything), prints
  * one line per plane/tenant with the fix for whatever is wrong, and exits 1
  * when anything is not up to date — so it can gate a deploy in CI. `--json`
  * prints the report as JSON.
@@ -154,7 +165,7 @@ const label = (state: MigrationStatus): string =>
 export function dbStatusCommand(config: DbStatusCommandConfig = {}): CommandDefinition {
   return {
     name: 'db:status',
-    description: 'Report migration status of the central database and every tenant (read-only; exits 1 on drift)',
+    description: 'Report migration status of the central database, every shard and every tenant (read-only; exits 1 on drift)',
     async handle({ io, flags }) {
       const run = config.run ?? npxPrismaRunner
       const rows: Row[] = []
@@ -174,6 +185,19 @@ export function dbStatusCommand(config: DbStatusCommandConfig = {}): CommandDefi
 
       if (config.central !== false) {
         rows.push({ plane: 'central', ...(await check(config.central ?? {}, {})) })
+      }
+
+      const shards = config.shards
+      if (shards) {
+        for (const [shard, url] of shards.urls.entries()) {
+          const status = await check(shards, { DATABASE_URL: url })
+          // `migrate dev` only migrates DATABASE_URL: say how to bring this shard along.
+          const fix =
+            status.state === 'pending'
+              ? `Run \`prisma migrate deploy\` with DATABASE_URL set to shard ${shard}'s URL.`
+              : status.fix
+          rows.push({ plane: 'shard', shard, ...status, ...(fix ? { fix } : {}) })
+        }
       }
 
       const tenants = config.tenants
@@ -203,12 +227,16 @@ export function dbStatusCommand(config: DbStatusCommandConfig = {}): CommandDefi
         return ok ? 0 : 1
       }
       if (rows.length === 0) {
-        io.log('Nothing to check: no central plane and no tenants configured.')
+        io.log('Nothing to check: no central plane, shards or tenants configured.')
         return 0
       }
       for (const row of rows) {
         const name =
-          row.plane === 'central' ? 'central' : `tenant ${row.tenantId}${row.schema ? ` (${row.schema})` : ''}`
+          row.plane === 'central'
+            ? 'central'
+            : row.plane === 'shard'
+              ? `shard ${row.shard}`
+              : `tenant ${row.tenantId}${row.schema ? ` (${row.schema})` : ''}`
         io.log(`${row.state === 'up-to-date' ? 'ok  ' : 'FAIL'} ${name}: ${label(row)}${row.detail && row.state !== 'up-to-date' ? ` — ${row.detail}` : ''}`)
         if (row.fix && row.state !== 'up-to-date') io.log(`       fix: ${row.fix}`)
       }

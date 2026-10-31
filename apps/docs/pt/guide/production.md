@@ -400,6 +400,10 @@ cross-shard — uma migração, um relatório global — faz fan-out sobre `shar
 await Promise.all(shards.all().map((db) => db.$executeRawUnsafe(migrationSql)))
 ```
 
+O `prisma migrate dev` só migra o `DATABASE_URL`, nunca os shards: verifica-os
+com o [`db:status`](./database-operations#shards) e corre `prisma migrate deploy`
+em cada shard.
+
 O sharding é para **scale-out**, não isolamento — para uma-base-por-tenant usa
 antes `prismaPlugin({ forTenant })`. Mudar `shards.length` re-mapeia as chaves,
 por isso planeia uma migração antes de redimensionar; passa um `hash` próprio se

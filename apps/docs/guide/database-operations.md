@@ -49,7 +49,7 @@ with the `GRANT`, not as a database to migrate. The error keeps its code
 ## `db:status` — where every plane stands
 
 `dbStatusCommand()` builds a **read-only** `basalt db:status`: it runs
-`prisma migrate status` for the central plane and for every tenant, prints one
+`prisma migrate status` for the central plane, every shard and every tenant, prints one
 line per plane with the fix for whatever is wrong, and **exits 1** when anything
 is pending, failed, drifted or unreachable.
 
@@ -78,7 +78,36 @@ FAIL tenant globex (tenant_globex): 2 pending — 20260901_invoices, 20260915_ta
 Not up to date. Tenants: 1 up to date, 1 not.
 ```
 
-`--json` prints `{ ok, planes: [{ plane, tenantId?, schema?, state, pending?, detail?, fix? }] }`.
+### Shards
+
+`prisma migrate dev` and `prisma migrate status` only see `DATABASE_URL`, so the
+shards of a [`ShardRouter`](./production#sharding-the-database) fall behind without a word:
+the central database is up to date while a tenant's request fails on its shard
+with `P2021` (the table does not exist). Pass the shard URLs, in router order:
+
+```ts
+dbStatusCommand({
+  shards: { urls: env.DATABASE_SHARDS_URLS }, // the same list the ShardRouter gets
+})
+```
+
+```sh
+$ pnpm basalt db:status
+ok   central: up to date
+FAIL shard 0: 3 pending — 20261027_add_missing_tables, …
+       fix: Run `prisma migrate deploy` with DATABASE_URL set to shard 0's URL.
+Not up to date.
+```
+
+To migrate them, run `prisma migrate deploy` once per shard after `migrate dev`:
+
+```sh
+echo "$DATABASE_SHARDS_URLS" | tr ',' '\n' | while read -r url; do
+  DATABASE_URL="$url" npx prisma migrate deploy
+done
+```
+
+`--json` prints `{ ok, planes: [{ plane, shard?, tenantId?, schema?, state, pending?, detail?, fix? }] }`.
 Run it in CI after the deploy step — or before, to refuse a deploy onto a drifted
 database. It never applies, provisions, baselines or grants anything.
 
