@@ -1,5 +1,15 @@
 # @basaltkit/prisma
 
+## 4.2.0
+
+### Minor Changes
+
+- 9a9aa77: `dbStatusCommand({ shards: { urls } })` checks every shard of a `ShardRouter` too. `prisma migrate dev`/`status` only see `DATABASE_URL`, so a shard could fall behind while the central database reported "up to date", and a tenant's request failed on its shard with `P2021`. Each shard gets its own line (`shard 0`, `shard 1`, … — URLs never printed) and a pending one says to run `prisma migrate deploy` with `DATABASE_URL` set to it; `--json` rows carry `plane: 'shard'` and `shard`.
+
+### Patch Changes
+
+- 6dcc3c8: `bin/basalt.ts` gains `basalt db:status`: it runs `dbStatusCommand()` without booting the app (like `make:*`), so it reports where the migrations stand even while the app refuses to start on an unmigrated database. `basalt update` patches an untouched bin (now including the 1.16 template) and prints just this block for a customised one; `doctor` lists it among the pre-boot commands. `db:status` now prints "up to date" (it printed "up to-date").
+
 ## 4.1.1
 
 ### Patch Changes
