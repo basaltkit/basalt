@@ -656,7 +656,9 @@ Wire it as a CLI command with `tenantMigrateCommand(...)` so `deploy` can run
 `basalt tenant:migrate` after shipping new store models (the `Auth*`, `Perm*`,
 `Comment` … models from each `*-prisma` package's reference schema). It prints a
 per-tenant `ok`/`FAIL` report and exits non-zero if any tenant failed — ideal
-for CI/CD:
+for CI/CD. With `tenancyPlugin` in the app, its own `tenant:migrate` takes the
+name — migrate from `onMigrate` instead (see
+[Migrations per tenant](./tenancy#migrations-per-tenant)):
 
 ```ts
 import { tenantMigrateCommand } from '@basaltkit/prisma'

@@ -105,6 +105,47 @@ describe('runCli', () => {
     expect(output).toContain('db:seed')
   })
 
+  it('warns when a same-named command is shadowed, and runs the first', async () => {
+    const ran: string[] = []
+    const app = createApp({
+      plugins: [
+        // Like tenancyPlugin: a plugin that registers its own command.
+        definePlugin({
+          name: 'fake-tenancy',
+          register({ container }) {
+            ensureMetadata(container).add(
+              'commands',
+              defineCommand({ name: 'tenant:migrate', description: 'Run the per-tenant hook', handle: () => void ran.push('hook') }),
+            )
+          },
+        }),
+        commandsPlugin([defineCommand({ name: 'tenant:migrate', description: 'Migrate every tenant schema', handle: () => void ran.push('prisma') })]),
+      ],
+    })
+    const io = memoryIo()
+    expect(await runCli({ app, argv: ['tenant:migrate'], io })).toBe(0)
+    expect(ran).toEqual(['hook'])
+    expect(io.errors).toEqual([
+      '"tenant:migrate" is registered 2 times: the first, "Run the per-tenant hook", runs; ignored: "Migrate every tenant schema". Drop or rename the duplicate.',
+    ])
+  })
+
+  it('list shows a duplicated name once and warns about it', async () => {
+    const app = createApp({
+      plugins: [commandsPlugin([defineCommand({ name: 'seed', description: 'A', handle: () => {} }), defineCommand({ name: 'seed', handle: () => {} })])],
+    })
+    const io = memoryIo()
+    expect(await runCli({ app, argv: ['list'], io })).toBe(0)
+    expect(io.lines.join('\n').match(/^seed /gm)).toHaveLength(1)
+    expect(io.errors).toEqual(['"seed" is registered 2 times: the first, "A", runs; ignored: (no description). Drop or rename the duplicate.'])
+  })
+
+  it('stays quiet without duplicates', async () => {
+    const io = memoryIo()
+    await runCli({ app: createApp(), argv: ['list'], io })
+    expect(io.errors).toEqual([])
+  })
+
   it('routes command renders the http:routes metadata bucket', async () => {
     const io = memoryIo()
     const producer = definePlugin({

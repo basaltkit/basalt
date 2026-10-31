@@ -30,12 +30,16 @@ export async function runCli(options: RunCliOptions): Promise<number> {
   try {
     const registered = ensureMetadata(app.container).get<CommandDefinition>('commands')
     const commands = [...builtinCommands(), ...registered]
+    const shadowed = shadowedCommands(commands)
 
     if (command === undefined || command === 'list') {
       io.log('Available commands:')
       io.table(
-        commands.map(({ name, description }) => ({ command: name, description: description ?? '' })),
+        commands
+          .filter((candidate) => !shadowed.includes(candidate))
+          .map(({ name, description }) => ({ command: name, description: description ?? '' })),
       )
+      for (const name of new Set(shadowed.map((candidate) => candidate.name))) warnShadowed(io, commands, name)
       return 0
     }
 
@@ -50,9 +54,36 @@ export async function runCli(options: RunCliOptions): Promise<number> {
       return 1
     }
 
+    if (shadowed.some((candidate) => candidate.name === command)) warnShadowed(io, commands, command)
+
     const code = await found.handle({ app, container: app.container, io, args, flags })
     return code ?? 0
   } finally {
     await app.shutdown()
   }
+}
+
+/** Every command that a same-named, earlier-registered command hides. */
+function shadowedCommands(commands: CommandDefinition[]): CommandDefinition[] {
+  const seen = new Set<string>()
+  return commands.filter((candidate) => {
+    if (seen.has(candidate.name)) return true
+    seen.add(candidate.name)
+    return false
+  })
+}
+
+/**
+ * The first registration of a name wins and the others never run. Said out
+ * loud, because a silently ignored command reads as a broken one — e.g.
+ * tenancyPlugin's own `tenant:migrate` hiding @basaltkit/prisma's
+ * tenantMigrateCommand passed in bin/basalt.ts.
+ */
+function warnShadowed(io: CommandIo, commands: CommandDefinition[], name: string): void {
+  const [winner, ...hidden] = commands.filter((candidate) => candidate.name === name)
+  const describe = (candidate: CommandDefinition): string => (candidate.description ? `"${candidate.description}"` : '(no description)')
+  io.error(
+    `"${name}" is registered ${hidden.length + 1} times: the first, ${describe(winner!)}, runs; ` +
+      `ignored: ${hidden.map(describe).join(', ')}. Drop or rename the duplicate.`,
+  )
 }

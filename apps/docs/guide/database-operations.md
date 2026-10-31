@@ -58,7 +58,9 @@ A create-basalt app already has it: `bin/basalt.ts` runs `dbStatusCommand()`
 refuses to start on an unmigrated database — `pnpm basalt db:status`. That
 default checks the central database; give it the shards and tenants below in
 `bin/basalt.ts`. An app from an earlier release gets the block from
-`basalt update`.
+`basalt update`. With `tenancyPlugin` in the app, leave `tenantMigrateCommand`
+out — its own `tenant:migrate` takes the name; migrate from `onMigrate` (see
+[Migrations per tenant](./tenancy#migrations-per-tenant)).
 
 ```ts
 import { commandsPlugin } from '@basaltkit/cli'
