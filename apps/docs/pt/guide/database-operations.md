@@ -54,6 +54,13 @@ mantém o código `PRISMA_NOT_MIGRATED`; `error.details.diagnosis` traz
 linha por plano com a correcção para o que estiver mal, e **sai com 1** quando
 alguma coisa está pendente, falhada, divergente ou inacessível.
 
+Uma app create-basalt já o traz: o `bin/basalt.ts` corre o `dbStatusCommand()`
+**sem arrancar a app** (como os `make:*`), por isso responde mesmo enquanto a app
+se recusa a arrancar com a base por migrar — `pnpm basalt db:status`. Esse
+padrão verifica a base central; dá-lhe os shards e os tenants abaixo no
+`bin/basalt.ts`. Uma app de uma versão anterior recebe o bloco com o
+`basalt update`.
+
 ```ts
 import { commandsPlugin } from '@basaltkit/cli'
 import { dbStatusCommand, tenantMigrateCommand } from '@basaltkit/prisma'

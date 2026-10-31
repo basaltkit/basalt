@@ -124,7 +124,10 @@ describe('scaffold manifest', () => {
     expect(binStatus(undefined)).toBe('absent')
     const projectCommands = "if (['update', 'add', 'doctor', 'info'].includes(process.argv[2] ?? '')) {}\n"
     const devPrelude = 'if (existsSync(envFile)) process.loadEnvFile(envFile)\n'
-    expect(binStatus(`${projectCommands}${devPrelude}if (process.argv[2]?.startsWith('make:')) {}\nif (process.argv[2] === 'dev') {}\n`)).toBe('current')
+    const devServer = "if (process.argv[2] === 'dev') {}\n"
+    expect(binStatus(`${projectCommands}${devPrelude}if (process.argv[2]?.startsWith('make:')) {}\n${devServer}if (process.argv[2] === 'db:status') {}\n`)).toBe('current')
+    // Without the db:status prelude (an edited 1.16 bin) it is behind.
+    expect(binStatus(`${projectCommands}${devPrelude}if (process.argv[2]?.startsWith('make:')) {}\n${devServer}`)).toBe('modified')
     // Without the dev server prelude it is behind too.
     expect(binStatus(`${projectCommands}${devPrelude}if (process.argv[2]?.startsWith('make:')) {}\n`)).toBe('modified')
     // Without the generators prelude it is behind, and customised unless its hash is known.
@@ -133,7 +136,7 @@ describe('scaffold manifest', () => {
     expect(binStatus(projectCommands)).toBe('modified')
     expect(binStatus('// custom\n')).toBe('modified')
     expect(binStatus('// custom\n', hashContent('// custom\n'))).toBe('patchable')
-    expect(LEGACY_BIN_HASHES.size).toBe(8)
+    expect(LEGACY_BIN_HASHES.size).toBe(9)
   })
 
   it('recognises the blocks in a bin Prettier reformatted (double quotes, broken lines)', () => {
@@ -158,6 +161,15 @@ describe('scaffold manifest', () => {
     expect(snippet).not.toContain('right after the shebang line')
     expect(snippet).not.toContain('make:* generators without booting')
     expect(snippet).toContain("if (process.argv[2] === 'dev')")
+    expect(snippet).not.toContain("if (process.argv[2] === 'db:status')")
+  })
+
+  it('a customised 1.16 bin is asked for the db:status block alone', () => {
+    const edited = basaltBin().replace(/\/\/ `db:status` reads where[\s\S]*?\n}\n/, '').replace('//   pnpm basalt list', '//   pnpm basalt list (ours)')
+    expect(binStatus(edited)).toBe('modified')
+    const snippet = manualBinSnippet(edited)
+    expect(snippet.startsWith('Paste this after the dev server prelude')).toBe(true)
+    expect(snippet).toContain("dbStatusCommand({ shards: { urls }, tenants: { list, target } })")
   })
 })
 
