@@ -159,6 +159,27 @@ export async function provisionTenantSchema(
   await client.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schema}"`)
 }
 
+/**
+ * Drops the tenant's schema and everything in it — the mirror of
+ * {@link provisionTenantSchema}, for `tenancyPlugin({ onDeprovision })`.
+ * Idempotent (`IF EXISTS`), so a `tenant:destroy` that failed halfway can be
+ * re-run. The name is validated like `provisionTenantSchema`'s, and the shared
+ * schemas (`public`, `information_schema`, `pg_*`) are refused outright: a
+ * tenant id never maps to one of them, so being asked to drop one is a bug.
+ */
+export async function dropTenantSchema(
+  client: SchemaProvisioner,
+  schema: string,
+): Promise<void> {
+  if (!SAFE_IDENTIFIER.test(schema)) {
+    throw new InvalidTenantSchemaError(schema, 'unsafe schema name')
+  }
+  if (schema === 'public' || schema === 'information_schema' || schema.startsWith('pg_')) {
+    throw new InvalidTenantSchemaError(schema, 'a shared schema, not a tenant\'s')
+  }
+  await client.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+}
+
 /** The Prisma connectors we can tell apart from a connection URL. */
 export type DatabaseProvider = 'postgresql' | 'mysql' | 'sqlite' | 'sqlserver' | 'mongodb' | 'unknown'
 

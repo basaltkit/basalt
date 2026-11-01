@@ -1028,7 +1028,7 @@ call `migrateTenants` from its hooks instead of registering
 throwing, so throw yourself, or the command reports success:
 
 ```ts
-import { migrateTenants } from '@basaltkit/prisma'
+import { dropTenantSchema, migrateTenants, tenantSchema } from '@basaltkit/prisma'
 
 const target = { mode: 'schema', url: env.DATABASE_URL, provision: db } as const
 
@@ -1041,6 +1041,7 @@ tenancyPlugin({
   source: tenants,
   onProvision: (tenant) => migrateTenant(tenant.id), // basalt tenant:create
   onMigrate: (tenant) => migrateTenant(tenant.id), // basalt tenant:migrate [--tenant=<id>]
+  onDeprovision: (tenant) => dropTenantSchema(db, tenantSchema(tenant.id)), // basalt tenant:destroy
 })
 ```
 :::
@@ -1061,7 +1062,7 @@ scoped connection URL; pass `migrate` to override it.
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:migrate`, run inside each tenant's context |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:seed`, run inside each tenant's context |
 | `onProvision` | `(tenant) => void \| Promise<void>` | — | Brings a NEW tenant's storage into existence, inside its context, from `tenancy.create()` and `basalt tenant:create`. Without it a tenant is routable before its schema exists |
-| `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Tears that storage down, inside the tenant's context, from `tenancy.destroy()`. Without it the record goes and the schema stays |
+| `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Tears that storage down, inside the tenant's context, from `tenancy.destroy()`. Without it the record goes and the schema stays — schema-per-tenant: `dropTenantSchema(db, tenantSchema(tenant.id))` |
 | `canonicalDomain` | `(tenant) => string \| undefined` | — | The address a new tenant is reachable at, added to `tenant.domains` by `tenancy.create()` before the record is persisted. Without it the domain table stays empty and nothing owns the address |
 | `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — `create()` waits, so the tenant is usable when it returns. `'deferred'` — `create()` returns immediately with status `provisioning` and the resolver answers 503 until `tenancy.provision(id)` runs |
 | `validateTenantId` | `(id: string) => boolean` | `isValidTenantId` | The id grammar `tenancy.create()` and `tenancy.run()` enforce (`/^[a-z0-9][a-z0-9_-]{0,62}$/`, minus `global`); a rejected id throws `InvalidTenantIdError` before anything is written, and a resolver ref carrying one resolves to no tenant |
