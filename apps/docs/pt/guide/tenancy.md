@@ -1041,6 +1041,32 @@ basalt tenant:migrate
 #  Done: 1 migrated, 1 failed.
 ```
 
+::: warning Com o `tenancyPlugin`, migra a partir do `onMigrate`
+O `tenancyPlugin` regista o seu próprio `basalt tenant:migrate`, que corre o hook
+`onMigrate`. Dois comandos não podem ter o mesmo nome: corre o primeiro registado,
+e o `basalt` avisa que o outro é ignorado. Numa app com `tenancyPlugin`, chama o
+`migrateTenants` a partir dos hooks em vez de registar o `tenantMigrateCommand`.
+Ele reporta uma falha como `ok: false` em vez de lançar um erro, por isso lança-o
+tu, senão o comando reporta sucesso:
+
+```ts
+import { migrateTenants } from '@basaltkit/prisma'
+
+const target = { mode: 'schema', url: env.DATABASE_URL, provision: db } as const
+
+async function migrateTenant(id: string): Promise<void> {
+  const [result] = await migrateTenants({ tenants: [id], target })
+  if (!result?.ok) throw new Error(`Tenant ${id}: ${result?.error ?? 'not migrated'}`)
+}
+
+tenancyPlugin({
+  source: tenants,
+  onProvision: (tenant) => migrateTenant(tenant.id), // basalt tenant:create
+  onMigrate: (tenant) => migrateTenant(tenant.id), // basalt tenant:migrate [--tenant=<id>]
+})
+```
+:::
+
 O migrator padrão delega para `prisma migrate deploy` com o URL de ligação com âmbito
 de cada tenant; passa `migrate` para o sobrepor.
 

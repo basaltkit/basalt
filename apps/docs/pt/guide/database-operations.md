@@ -59,7 +59,9 @@ Uma app create-basalt já o traz: o `bin/basalt.ts` corre o `dbStatusCommand()`
 se recusa a arrancar com a base por migrar — `pnpm basalt db:status`. Esse
 padrão verifica a base central; dá-lhe os shards e os tenants abaixo no
 `bin/basalt.ts`. Uma app de uma versão anterior recebe o bloco com o
-`basalt update`.
+`basalt update`. Com o `tenancyPlugin` na app, deixa o `tenantMigrateCommand` de
+fora — o seu próprio `tenant:migrate` fica com o nome; migra a partir do
+`onMigrate` (ver [Migrações por tenant](./tenancy#migracoes-por-tenant)).
 
 ```ts
 import { commandsPlugin } from '@basaltkit/cli'

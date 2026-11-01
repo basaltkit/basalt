@@ -103,6 +103,8 @@ pnpm basalt list          # lists all available commands
 pnpm basalt greet Maria   # prints: Hello, Maria!
 ```
 
+Command names are unique: when two registrations share a name (say, a plugin's own `tenant:migrate` and one you pass to `commandsPlugin`), the first registered runs and `basalt` warns on stderr that the other is ignored — `basalt list` shows the name once, with the same warning.
+
 ## Usage guide
 
 ### Built-in commands
