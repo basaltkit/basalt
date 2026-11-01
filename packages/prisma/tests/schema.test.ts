@@ -5,6 +5,7 @@ import {
   InvalidTenantSchemaError,
   prismaPlugin,
   provisionTenantSchema,
+  dropTenantSchema,
   schemaUrl,
   tenantSchema,
 } from '../src/index.js'
@@ -89,6 +90,27 @@ describe('provisionTenantSchema', () => {
     await expect(provisionTenantSchema(client, 'evil"; DROP SCHEMA public; --')).rejects.toBeInstanceOf(
       InvalidTenantSchemaError,
     )
+  })
+})
+
+describe('dropTenantSchema', () => {
+  it('issues DROP SCHEMA IF EXISTS … CASCADE with the quoted name', async () => {
+    const executed: string[] = []
+    const client = {
+      async $executeRawUnsafe(query: string) {
+        executed.push(query)
+        return 0
+      },
+    }
+    await dropTenantSchema(client, tenantSchema('acme'))
+    expect(executed).toEqual(['DROP SCHEMA IF EXISTS "tenant_acme" CASCADE'])
+  })
+
+  it.each(['evil"; DROP SCHEMA public; --', 'public', 'information_schema', 'pg_catalog'])('refuses %s', async (schema) => {
+    const executed: string[] = []
+    const client = { async $executeRawUnsafe(query: string) { executed.push(query); return 0 } }
+    await expect(dropTenantSchema(client, schema)).rejects.toBeInstanceOf(InvalidTenantSchemaError)
+    expect(executed).toEqual([])
   })
 })
 

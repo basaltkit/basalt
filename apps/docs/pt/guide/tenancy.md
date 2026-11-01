@@ -869,7 +869,7 @@ que o `@basaltkit/cli` está presente — sem ligação extra:
 | `basalt tenant:migrate [--tenant=<id>]` | `onMigrate` | Corre o teu hook de migração por tenant dentro do contexto de cada um |
 | `basalt tenant:seed [--tenant=<id>]` | `onSeed` | Corre o teu hook de seed por tenant dentro do contexto de cada um |
 | `onProvision` | `(tenant) => void \| Promise<void>` | — | Traz o storage de um tenant NOVO à existência, dentro do contexto dele, a partir do `tenancy.create()` e do `basalt tenant:create`. Sem isto o tenant é encaminhável antes de o schema existir |
-| `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Desfaz esse storage, dentro do contexto do tenant, a partir do `tenancy.destroy()`. Sem isto o registo sai e o schema fica |
+| `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Desfaz esse storage, dentro do contexto do tenant, a partir do `tenancy.destroy()`. Sem isto o registo sai e o schema fica — schema-per-tenant: `dropTenantSchema(db, tenantSchema(tenant.id))` |
 | `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — o `create()` espera, portanto o tenant está utilizável quando retorna. `'deferred'` — o `create()` retorna já, com estado `provisioning`, e o resolver responde 503 até correr o `tenancy.provision(id)` |
 | `basalt tenant:run <id> <command> [args…]` | — | Corre qualquer outro comando registado dentro do contexto de um tenant |
 
@@ -1050,7 +1050,7 @@ Ele reporta uma falha como `ok: false` em vez de lançar um erro, por isso lanç
 tu, senão o comando reporta sucesso:
 
 ```ts
-import { migrateTenants } from '@basaltkit/prisma'
+import { dropTenantSchema, migrateTenants, tenantSchema } from '@basaltkit/prisma'
 
 const target = { mode: 'schema', url: env.DATABASE_URL, provision: db } as const
 
@@ -1063,6 +1063,7 @@ tenancyPlugin({
   source: tenants,
   onProvision: (tenant) => migrateTenant(tenant.id), // basalt tenant:create
   onMigrate: (tenant) => migrateTenant(tenant.id), // basalt tenant:migrate [--tenant=<id>]
+  onDeprovision: (tenant) => dropTenantSchema(db, tenantSchema(tenant.id)), // basalt tenant:destroy
 })
 ```
 :::
@@ -1083,7 +1084,7 @@ de cada tenant; passa `migrate` para o sobrepor.
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:migrate`, corrido dentro do contexto de cada tenant |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:seed`, corrido dentro do contexto de cada tenant |
 | `onProvision` | `(tenant) => void \| Promise<void>` | — | Traz o storage de um tenant NOVO à existência, dentro do contexto dele, a partir do `tenancy.create()` e do `basalt tenant:create`. Sem isto um tenant é roteável antes de o schema existir |
-| `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Desfaz esse storage, dentro do contexto do tenant, a partir do `tenancy.destroy()`. Sem isto o registo sai e o schema fica |
+| `onDeprovision` | `(tenant) => void \| Promise<void>` | — | Desfaz esse storage, dentro do contexto do tenant, a partir do `tenancy.destroy()`. Sem isto o registo sai e o schema fica — schema-per-tenant: `dropTenantSchema(db, tenantSchema(tenant.id))` |
 | `provision` | `'inline' \| 'deferred'` | `'inline'` | `'inline'` — o `create()` espera, por isso o tenant está utilizável quando ele retorna. `'deferred'` — o `create()` retorna já com estado `provisioning` e o resolver responde 503 até correr `tenancy.provision(id)` |
 | `canonicalDomain` | `(tenant) => string \| undefined` | — | O endereço em que um tenant novo é alcançável, acrescentado a `tenant.domains` pelo `tenancy.create()` antes de o registo ser persistido. Sem isto a tabela de domínios fica vazia e ninguém é dono do endereço |
 | `validateTenantId` | `(id: string) => boolean` | `isValidTenantId` | A gramática de ids que o `tenancy.create()` e o `tenancy.run()` impõem (`/^[a-z0-9][a-z0-9_-]{0,62}$/`, menos `global`); um id rejeitado lança `InvalidTenantIdError` antes de algo ser escrito, e uma referência de resolver com um desses ids resolve para nenhum tenant |

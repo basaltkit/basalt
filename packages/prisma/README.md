@@ -321,6 +321,14 @@ const schema = tenantSchema('acme')          // 'tenant_acme'
 await provisionTenantSchema(admin, schema)   // CREATE SCHEMA IF NOT EXISTS "tenant_acme"
 ```
 
+And to remove it (the schema and every table in it) — e.g. from `tenancyPlugin({ onDeprovision })`, so `basalt tenant:destroy` takes the data with the record:
+
+```ts
+import { dropTenantSchema } from '@basaltkit/prisma'
+
+await dropTenantSchema(admin, tenantSchema('acme')) // DROP SCHEMA IF EXISTS "tenant_acme" CASCADE
+```
+
 ### Mode 3 — Database per tenant (`forTenant`)
 
 Maximum isolation: you provide a function that creates the client for a tenant id, and the module manages the pool:
@@ -581,6 +589,7 @@ Builds the read-only `basalt db:status` command (register it via `commandsPlugin
 | `pgSchemaClient` | `pgSchemaClient<T>(build: (c: PgSchemaConnection) => T \| Promise<T>, options?: PgSchemaConnectionOptions): (url: string) => T \| Promise<T>` | A `schemaPerTenant.createClient` that sets the tenant's schema on the connection's `search_path`, then calls `build`. Independent of the Prisma version: only `build` is. |
 | `pgSchemaConnection` | `pgSchemaConnection(url: string, options?: { fallback?: string[] }): PgSchemaConnection` | Turns a `?schema=` URL into `{ connectionString, schema, searchPath }`: the URL without `?schema=`, with `options=-c search_path=<schema>,public` (`fallback` default `['public']`). Throws `PgSchemaConnectionError` on a missing or non-identifier schema. |
 | `provisionTenantSchema` | `provisionTenantSchema(client: SchemaProvisioner, schema: string): Promise<void>` | Runs `CREATE SCHEMA IF NOT EXISTS` (name validated before interpolating). |
+| `dropTenantSchema` | `dropTenantSchema(client: SchemaProvisioner, schema: string): Promise<void>` | Runs `DROP SCHEMA IF EXISTS … CASCADE` (name validated; `public`, `information_schema` and `pg_*` refused). |
 | `SchemaProvisioner` | `{ $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number> }` | Interface satisfied by a `PrismaClient`. |
 
 ### `migrateTenants(options: MigrateTenantsOptions)`

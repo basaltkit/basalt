@@ -90,6 +90,7 @@ export {
   tenantSchema,
   schemaUrl,
   provisionTenantSchema,
+  dropTenantSchema,
   countTenantTables,
   canInspect,
   providerOf,
