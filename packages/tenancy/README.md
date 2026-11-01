@@ -212,11 +212,13 @@ app.hooks.on('tenancy:switched', ({ tenant }) => {
 
 ### CLI commands (`basalt tenant:*`)
 
-Registering `tenancyPlugin` wires five CLI commands (run via the `@basaltkit/cli` runner):
+Registering `tenancyPlugin` wires seven CLI commands (run via the `@basaltkit/cli` runner):
 
 ```bash
 basalt tenant:list                          # every tenant (needs source.list)
 basalt tenant:create acme --name=Acme       # needs source.create or save; refuses an existing id
+basalt tenant:provision acme                # finish/retry a provisioning or failed tenant (onProvision)
+basalt tenant:destroy acme --yes            # onDeprovision, then delete the record (needs source.delete)
 basalt tenant:migrate                       # run onMigrate for every tenant…
 basalt tenant:migrate --tenant=acme         # …or just one
 basalt tenant:seed --tenant=acme            # run onSeed inside the tenant context

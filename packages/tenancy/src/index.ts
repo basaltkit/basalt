@@ -18,6 +18,7 @@ import {
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
+  TenantNotProvisionableError,
   TenantCreateUnsupportedError,
   TenantDeleteUnsupportedError,
   TenantResolutionConflictError,
@@ -41,6 +42,7 @@ export {
   TenancyNotResolvedError,
   TenantNotFoundError,
   TenantAlreadyExistsError,
+  TenantNotProvisionableError,
   TenantCreateUnsupportedError,
   TenantDeleteUnsupportedError,
   TenantNotReadyError,
@@ -313,6 +315,8 @@ export class Tenancy {
     const tenant =
       typeof tenantOrId === 'string' ? await this.source.find(tenantOrId) : tenantOrId
     if (!tenant) throw new TenantNotFoundError(tenantOrId as string)
+    const status = tenant['status'] as TenantStatus | undefined
+    if (status === 'suspended' || status === 'deleting') throw new TenantNotProvisionableError(tenant.id, status)
     if (!this.onProvision) return tenant
 
     try {
@@ -951,11 +955,55 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
         }
         throw error
       }
-      io.log(
-        options.onProvision
-          ? `Created and provisioned tenant "${tenant.id}".`
-          : `Created tenant "${tenant.id}". No onProvision hook configured — its storage was NOT created.`,
-      )
+      if (!options.onProvision) {
+        io.log(`Created tenant "${tenant.id}". No onProvision hook configured — its storage was NOT created.`)
+      } else if (tenant['status'] === 'provisioning') {
+        // provision: 'deferred' — create() returned before onProvision ran, and
+        // nothing here dispatches it: that is the app's job.
+        io.log(
+          `Created tenant "${tenant.id}" — provisioning is deferred, so it answers 503 until it runs. ` +
+            `Dispatch your provisioning job, or run \`basalt tenant:provision ${tenant.id}\`.`,
+        )
+      } else {
+        io.log(`Created and provisioned tenant "${tenant.id}".`)
+      }
+    },
+  })
+
+  add({
+    name: 'tenant:provision',
+    description: 'Finish or retry a tenant\'s provisioning (onProvision): tenant:provision <id>',
+    async handle({ io, args }) {
+      const id = args[0]
+      if (!id) {
+        io.error('Usage: basalt tenant:provision <id>')
+        return 1
+      }
+      if (!options.onProvision) {
+        io.error('No provision hook configured. Pass tenancyPlugin({ onProvision: … }).')
+        return 1
+      }
+      try {
+        // Through the service: it runs onProvision in the tenant's context,
+        // writes `ready` (or `failed`) and emits `tenancy:created`.
+        await tenancy().provision(id)
+      } catch (error) {
+        if (
+          error instanceof TenantNotFoundError ||
+          error instanceof TenantNotProvisionableError ||
+          error instanceof InvalidTenantIdError
+        ) {
+          io.error(error.message)
+          return 1
+        }
+        // onProvision threw: provision() already marked the tenant `failed`.
+        io.error(
+          `Provisioning tenant "${id}" failed, and it is marked "failed": ` +
+            `${error instanceof Error ? error.message : String(error)}. Fix the cause and re-run this command.`,
+        )
+        return 1
+      }
+      io.log(`Provisioned tenant "${id}".`)
     },
   })
 
