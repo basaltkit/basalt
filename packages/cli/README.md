@@ -66,8 +66,11 @@ import { defineCommand } from '@basaltkit/cli'
 export const greetCommand = defineCommand({
   name: 'greet',
   description: 'Greets someone',
-  handle({ args, io }) {
-    io.log(`Hello, ${args[0] ?? 'world'}!`)
+  usage: '[<name>] [--loud]', // shown by `basalt help greet`
+  flags: { '--loud': 'Shout it' },
+  handle({ args, flags, io }) {
+    const line = `Hello, ${args[0] ?? 'world'}!`
+    io.log(flags['loud'] === true ? line.toUpperCase() : line)
   },
 })
 ```
@@ -101,6 +104,7 @@ export function buildApp() {
 ```bash
 pnpm basalt list          # lists all available commands, grouped
 pnpm basalt greet Maria   # prints: Hello, Maria!
+pnpm basalt help greet    # Usage: basalt greet [<name>] [--loud], the description and the flags
 ```
 
 `basalt list` groups commands by the prefix before the first `:` — `tenant:create` and `tenant:migrate` under `tenant`, `ai:plan` under `ai` — with the ungrouped ones (`dev`, `routes`, `greet`) on top. The prefix is the whole taxonomy: name a command `report:monthly` and it gets a `report` group. `basalt list tenant` (or just `basalt tenant`) shows one group; a mistyped name gets a suggestion (`Did you mean tenant:migrate?`).
@@ -116,6 +120,7 @@ Without registering anything, `runCli` always provides:
 | Command | What it does |
 | --- | --- |
 | `basalt list [<group>]` (or `basalt` with no arguments, or `basalt <group>`) | Lists the available commands with their descriptions, grouped by the prefix before `:` (ungrouped first, groups alphabetical); with a group, only that one. An unknown group exits `1` naming the groups there are |
+| `basalt help <command>` (or `basalt <command> --help`) | Prints the command's usage line, description and flags, without running it. `basalt help` alone lists; `basalt help <group>` shows a group. An app command named `help` keeps the name (`--help` still works) |
 | `basalt routes [--json] [--unguarded --require=auth,can [--allow=<glob,…>]]` | Lists the HTTP routes registered by the application with the guards each declares in `meta` — columns `auth`, `can`, `rateLimit`, `tenant` and `guards` (`mfa`, `teamRole`, `scopes`, `subscribed`, `feature`). `--json` prints one JSON array of route rows. `--unguarded` lists the routes that do not declare the `--require`d guards and exits `1` when there is any (see [Route security review](#route-security-review)). Read from the `http:routes` metadata bucket, populated by every HTTP adapter |
 | `basalt schedule:list` | Lists scheduled tasks and their cron expressions (read from the `schedule:entries` bucket, populated by `@basaltkit/scheduler`) |
 | `basalt dev [--entry] [--worker] [--queue] [--routes]` | Runs the app with watch + restart, and with `--worker` also starts a watched `queue:work` alongside it (server + worker in one command). Delegates watching to `tsx watch` / `node --watch`. Runs `src/dev.ts` when present (else `src/main.ts`, `src/server.ts`, …). A create-basalt `bin/basalt.ts` routes `dev` to `runDev({ loadApp })` before booting anything, so it starts even while the app cannot boot. `--routes` boots the app once first to print the route table (shut down before the server starts: one app per session); without it nothing boots before the server — list routes with `basalt routes`. |
@@ -205,7 +210,9 @@ A typed identity function — returns the definition as-is, it just ensures the 
 | Field | Type | Required? | Default | Description |
 | --- | --- | --- | --- | --- |
 | `name` | `string` | Yes | — | Command name; convention `noun:verb` |
-| `description` | `string` | No | — | Description shown in `basalt list` |
+| `description` | `string` | No | — | One line shown in `basalt list`. Keep the arguments out of it — they go in `usage` |
+| `usage` | `string` | No | — | What follows the name on the command line, for `basalt help <name>`: `'<id> [--force]'` prints `Usage: basalt tenant:destroy <id> [--force]` |
+| `flags` | `Record<string, string>` | No | — | Flag → what it does, listed by `basalt help <name>`: `{ '--force': 'Overwrite existing files' }` |
 | `handle` | `(context) => void \| number \| Promise<void \| number>` | Yes | — | The function that runs; returns the exit code (omit = 0) |
 
 `CommandContext` (the object received by `handle`):

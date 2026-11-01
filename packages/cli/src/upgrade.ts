@@ -123,7 +123,13 @@ export function nodeUpgradeFs(baseDir?: string): UpgradeFs {
 /** `basalt upgrade [--dir=<path>] [--dry] [--only=<migration-id>]` */
 export const upgradeCommand: CommandDefinition = defineCommand({
   name: 'upgrade',
-  description: 'Apply framework upgrade codemods (--dry to preview, --only=<id>); dependencies: basalt update',
+  description: 'Apply framework upgrade codemods (dependencies: basalt update)',
+  usage: '[--dry] [--only=<id>] [--dir=<path>]',
+  flags: {
+    '--dry': 'Show the files that would change, write nothing',
+    '--only=<id>': 'Run one migration',
+    '--dir=<path>': 'Project to upgrade (default: the current directory)',
+  },
   async handle({ io, flags }) {
     const { resolve } = await import('node:path')
     const dir = resolve(typeof flags['dir'] === 'string' ? flags['dir'] : process.cwd())

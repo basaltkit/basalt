@@ -366,7 +366,9 @@ export function openapiPlugin(options: OpenApiPluginOptions) {
 function registerDocsCommand(container: Container, options: OpenApiPluginOptions): void {
   ensureMetadata(container).add('commands', {
     name: 'generate:docs',
-    description: 'Write the OpenAPI 3.0 document (--out=<file> | --stdout)',
+    description: 'Write the OpenAPI 3.0 document',
+    usage: '[--out=<file> | --stdout]',
+    flags: { '--out=<file>': 'Where to write it (default: openapi.json)', '--stdout': 'Print it instead of writing a file' },
     async handle({
       io,
       flags,

@@ -261,6 +261,8 @@ function registerQueueCommands(container: Container): void {
   ensureMetadata(container).add('commands', {
     name: 'queue:work',
     description: 'Run a worker that processes jobs for a queue (Ctrl+C to stop)',
+    usage: '[--queue=<name>] [--concurrency=<n>]',
+    flags: { '--queue=<name>': 'Queue to process (default: default)', '--concurrency=<n>': 'Jobs processed in parallel' },
     async handle({ io, flags }: { io: { log(m: string): void }; flags: Record<string, string | boolean> }) {
       const queue = typeof flags['queue'] === 'string' ? flags['queue'] : 'default'
       const concurrency = typeof flags['concurrency'] === 'string' ? Number(flags['concurrency']) : undefined
@@ -273,6 +275,8 @@ function registerQueueCommands(container: Container): void {
   ensureMetadata(container).add('commands', {
     name: 'queue:stats',
     description: 'Show job counts (waiting/active/completed/failed/delayed) for a queue',
+    usage: '[--queue=<name>]',
+    flags: { '--queue=<name>': 'Queue to inspect (default: default)' },
     async handle({
       io,
       flags,
@@ -293,6 +297,8 @@ function registerQueueCommands(container: Container): void {
   ensureMetadata(container).add('commands', {
     name: 'queue:retry',
     description: 'Re-enqueue failed jobs on a queue',
+    usage: '[--queue=<name>] [--limit=<n>]',
+    flags: { '--queue=<name>': 'Queue (default: default)', '--limit=<n>': 'Retry at most n jobs' },
     async handle({
       io,
       flags,
@@ -313,8 +319,14 @@ function registerQueueCommands(container: Container): void {
 
   ensureMetadata(container).add('commands', {
     name: 'queue:jobs',
-    description:
-      'List individual jobs on a queue (id/name/state/attempts); --payload also prints their data',
+    description: 'List individual jobs on a queue (id/name/state/attempts)',
+    usage: '[--queue=<name>] [--states=<s,…>] [--limit=<n>] [--payload]',
+    flags: {
+      '--queue=<name>': 'Queue (default: default)',
+      '--states=<s,…>': 'Only these states, comma-separated',
+      '--limit=<n>': 'At most n jobs',
+      '--payload': 'Also print each job\'s data',
+    },
     async handle({
       io,
       flags,

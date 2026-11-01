@@ -86,7 +86,12 @@ export function nodePublishFs(dir: string): PublishFs {
 /** `basalt publish [<id>] [--dir=<path>] [--force]` — list, or copy a stub group. */
 export const publishCommand: CommandDefinition = defineCommand({
   name: 'publish',
-  description: 'Copy a publishable stub group into the app (run with no id to list)',
+  description: 'Copy a publishable stub group into the app (no id lists them)',
+  usage: '[<id>] [--dir=<path>] [--force]',
+  flags: {
+    '--dir=<path>': 'Where to copy (default: the current directory)',
+    '--force': 'Overwrite files that already exist',
+  },
   async handle({ io, args, flags }) {
     const id = args[0]
     if (!id) {

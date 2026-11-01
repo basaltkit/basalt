@@ -82,7 +82,14 @@ function tableRows(rows: readonly RouteRow[]): Record<string, string>[] {
  */
 export const routesCommand = defineCommand({
   name: 'routes',
-  description: 'List HTTP routes with their declared guards (--json, --unguarded --require=auth,can)',
+  description: 'List HTTP routes with their declared guards',
+  usage: '[--json] [--unguarded --require=auth,can [--allow=<glob,…>]]',
+  flags: {
+    '--json': 'Print the route rows as one JSON array',
+    '--unguarded': 'List the routes missing the --require-d guards; exit 1 if any',
+    '--require=<guards>': 'Guards --unguarded checks for, comma-separated (auth, can, …)',
+    '--allow=<globs>': 'URL globs --unguarded skips (public routes)',
+  },
   handle({ container, io, flags }) {
     const routes = container.has(METADATA)
       ? container.get(METADATA).get<RouteMetadata>('http:routes')

@@ -256,6 +256,8 @@ function registerPreviewCommand(
   ensureMetadata(container).add('commands', {
     name: 'mail:preview',
     description: 'Serve a browser preview of the app\'s mails',
+    usage: '[--port=<n>]',
+    flags: { '--port=<n>': 'Port to serve on (default: 3737)' },
     async handle({ io, flags }: { io: { log(m: string): void }; flags: Record<string, string | boolean> }) {
       const port = typeof flags['port'] === 'string' ? Number(flags['port']) : 3737
       const server = createMailPreviewServer(previews, {

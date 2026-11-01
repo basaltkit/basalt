@@ -247,6 +247,14 @@ export function prismaSyncCommand(options: PrismaSyncCommandOptions = {}): Comma
   return {
     name: 'prisma:sync',
     description: 'Merge @basaltkit/*-prisma models into your prisma/schema.prisma',
+    usage: '[--only=<domains>] [--schema=<path>] [--yes | --all] [--migrate | --push]',
+    flags: {
+      '--only=<domains>': 'Only these domains, comma-separated',
+      '--schema=<path>': 'Schema to merge into (default: prisma/schema.prisma)',
+      '--yes, --all': 'Add every missing model without asking',
+      '--migrate': 'Then run prisma migrate dev',
+      '--push': 'Then run prisma db push',
+    },
     async handle({ io, flags }) {
       const targets = options.targets
 

@@ -903,7 +903,13 @@ type CmdCtx = { container: Container; io: Io; args: string[]; flags: Record<stri
  */
 function registerTenantCommands(container: Container, options: TenancyPluginOptions): void {
   const tenancy = () => container.get(TENANCY)
-  const add = (command: { name: string; description: string; handle: (ctx: CmdCtx) => unknown }) =>
+  const add = (command: {
+    name: string
+    description: string
+    usage?: string
+    flags?: Record<string, string>
+    handle: (ctx: CmdCtx) => unknown
+  }) =>
     ensureMetadata(container).add('commands', command)
 
   add({
@@ -925,7 +931,9 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
 
   add({
     name: 'tenant:create',
-    description: 'Create a tenant: tenant:create <id> [--name=… --domain=…]',
+    description: 'Create a tenant (and provision it, unless provisioning is deferred)',
+    usage: '<id> [--name=…] [--<field>=…]',
+    flags: { '--<field>=<value>': 'Any field of the tenant record, e.g. --name=Acme' },
     async handle({ io, args, flags }) {
       const id = args[0]
       if (!id) {
@@ -972,7 +980,8 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
 
   add({
     name: 'tenant:provision',
-    description: 'Finish or retry a tenant\'s provisioning (onProvision): tenant:provision <id>',
+    description: 'Finish or retry a tenant\'s provisioning (onProvision)',
+    usage: '<id>',
     async handle({ io, args }) {
       const id = args[0]
       if (!id) {
@@ -1009,7 +1018,12 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
 
   add({
     name: 'tenant:destroy',
-    description: 'Remove a tenant and its storage: tenant:destroy <id> [--force] [--yes]',
+    description: 'Remove a tenant and its storage (onDeprovision)',
+    usage: '<id> [--force] [--yes]',
+    flags: {
+      '--yes': 'Skip the confirmation',
+      '--force': 'Remove the record even if onDeprovision failed',
+    },
     async handle({ io, args, flags }) {
       const id = args[0]
       if (!id) {
@@ -1077,21 +1091,26 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
 
   add({
     name: 'tenant:migrate',
-    description: 'Run the per-tenant migration hook (all tenants, or --tenant=<id>)',
+    description: 'Run the per-tenant migration hook (onMigrate)',
+    usage: '[--tenant=<id>]',
+    flags: { '--tenant=<id>': 'Only this tenant (default: every tenant)' },
     handle: ({ io, flags }) =>
       runHook(io, typeof flags['tenant'] === 'string' ? flags['tenant'] : undefined, options.onMigrate, 'migrate'),
   })
 
   add({
     name: 'tenant:seed',
-    description: 'Run the per-tenant seed hook (all tenants, or --tenant=<id>)',
+    description: 'Run the per-tenant seed hook (onSeed)',
+    usage: '[--tenant=<id>]',
+    flags: { '--tenant=<id>': 'Only this tenant (default: every tenant)' },
     handle: ({ io, flags }) =>
       runHook(io, typeof flags['tenant'] === 'string' ? flags['tenant'] : undefined, options.onSeed, 'seed'),
   })
 
   add({
     name: 'tenant:run',
-    description: "Run another command inside a tenant's context: tenant:run <id> <command> [args]",
+    description: "Run another command inside a tenant's context",
+    usage: '<id> <command> [args] [--flags]',
     async handle({ container: c, io, args, flags }) {
       const [id, sub, ...rest] = args
       if (!id || !sub) {

@@ -472,7 +472,9 @@ export function schedulerPlugin(options: SchedulerPluginOptions = {}) {
 function registerScheduleRunCommand(container: Container): void {
   ensureMetadata(container).add('commands', {
     name: 'schedule:run',
-    description: 'Run a scheduled task on demand (by name), or --due for all due now',
+    description: 'Run a scheduled task on demand, ignoring its cron',
+    usage: '<name> | --due',
+    flags: { '--due': 'Run every task that is due now instead of one by name' },
     async handle({
       io,
       args,

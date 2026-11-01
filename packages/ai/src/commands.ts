@@ -84,7 +84,13 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
 
     defineCommand({
       name: 'ai:fix',
-      description: 'Apply a doctor fix (or all auto-fixable issues). --dry-run to preview, --yes to skip confirm',
+      description: 'Apply a doctor fix, or every auto-fixable issue',
+      usage: '[<diagnostic-id>] [--dry-run] [--yes] [--dir=<path>]',
+      flags: {
+        '--dry-run': 'Show the edits, write nothing',
+        '--yes': 'Skip the confirmation',
+        '--dir=<path>': 'Project root (default: the current directory)',
+      },
       async handle({ args, flags, io }) {
         const root = rootOf(flags)
         const ctx = detectProject(root)
@@ -134,6 +140,7 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
     defineCommand({
       name: 'ai:plan',
       description: 'Turn a natural-language request into an architecture plan (read-only)',
+      usage: '"<what you want to build>" [--dir=<path>]',
       async handle({ args, flags, io }) {
         const request = args.join(' ').trim()
         if (!request) {
@@ -165,6 +172,16 @@ export function aiCommands(options: AiCommandsOptions = {}): CommandDefinition[]
     defineCommand({
       name: 'ai:make',
       description: 'Plan then implement a feature: scaffold + domain fields, with a review gate',
+      usage: '"<what to build>" [--dry-run] [--yes] [--force] [--migrate | --no-migrate] [--review] [--verify]',
+      flags: {
+        '--dry-run': 'Show what would be generated, write nothing',
+        '--yes': 'Skip the confirmation (also runs the migration)',
+        '--force': 'Overwrite files that already exist',
+        '--migrate': 'Run prisma db push for the new models',
+        '--no-migrate': 'Never offer the migration',
+        '--review': 'Agent review of the generated code',
+        '--verify': 'Typecheck the project afterwards',
+      },
       async handle({ args, flags, io }) {
         const request = args.join(' ').trim()
         if (!request) {

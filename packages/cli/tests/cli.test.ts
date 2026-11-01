@@ -200,6 +200,64 @@ describe('runCli', () => {
     expect(io.errors[0]).toBe('Unknown command "zzzzzz". Run "basalt list" to see what is available.')
   })
 
+  const documented = () =>
+    createApp({
+      plugins: [
+        commandsPlugin([
+          defineCommand({
+            name: 'tenant:destroy',
+            description: 'Remove a tenant and its storage',
+            usage: '<id> [--force] [--yes]',
+            flags: { '--force': 'Remove the record even if teardown failed', '--yes': 'Skip the confirmation' },
+            handle: () => 7,
+          }),
+          defineCommand({ name: 'tenant:list', description: 'List all tenants', handle: () => {} }),
+        ]),
+      ],
+    })
+
+  it('help <command> and <command> --help print usage, description and flags, without running it', async () => {
+    const expected = [
+      'Usage: basalt tenant:destroy <id> [--force] [--yes]',
+      '',
+      'Remove a tenant and its storage',
+      '',
+      'Flags:',
+      '  --force  Remove the record even if teardown failed',
+      '  --yes    Skip the confirmation',
+    ]
+    for (const argv of [['help', 'tenant:destroy'], ['tenant:destroy', '--help']]) {
+      const io = memoryIo()
+      expect(await runCli({ app: documented(), argv, io })).toBe(0)
+      expect(io.lines).toEqual(expected)
+    }
+  })
+
+  it('help for a command without usage or flags prints what it has', async () => {
+    const io = memoryIo()
+    await runCli({ app: documented(), argv: ['help', 'tenant:list'], io })
+    expect(io.lines).toEqual(['Usage: basalt tenant:list', '', 'List all tenants'])
+  })
+
+  it('help alone lists, help <group> shows the group, help <typo> suggests', async () => {
+    let io = memoryIo()
+    expect(await runCli({ app: documented(), argv: ['help'], io })).toBe(0)
+    expect(io.lines[0]).toMatch(/^Usage: basalt <command>/)
+    io = memoryIo()
+    expect(await runCli({ app: documented(), argv: ['help', 'tenant'], io })).toBe(0)
+    expect(io.lines).toContain('  tenant:destroy  Remove a tenant and its storage')
+    io = memoryIo()
+    expect(await runCli({ app: documented(), argv: ['help', 'tenant:destory'], io })).toBe(1)
+    expect(io.errors[0]).toContain('Did you mean tenant:destroy?')
+  })
+
+  it('an app command named help keeps the name', async () => {
+    const app = createApp({ plugins: [commandsPlugin([defineCommand({ name: 'help', handle: ({ io }) => io.log('mine') })])] })
+    const io = memoryIo()
+    await runCli({ app, argv: ['help'], io })
+    expect(io.lines).toEqual(['mine'])
+  })
+
   it('routes command renders the http:routes metadata bucket', async () => {
     const io = memoryIo()
     const producer = definePlugin({

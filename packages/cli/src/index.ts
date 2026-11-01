@@ -3,7 +3,7 @@ export { runCli, type RunCliOptions } from './runner.js'
 export { commandsPlugin } from './plugin.js'
 export { consoleIo, memoryIo, renderTable } from './io.js'
 export { parseArgv, type ParsedArgv } from './parse.js'
-export { commandGroup, commandGroups, renderCommandList, suggestCommands } from './list.js'
+export { commandGroup, commandGroups, renderCommandHelp, renderCommandList, suggestCommands } from './list.js'
 export {
   builtinCommands,
   routesCommand,
