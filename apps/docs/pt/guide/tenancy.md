@@ -549,11 +549,13 @@ await ctx().container.get(QUEUE).dispatch(ProvisionTenant, { id })
 O `provision(id)` corre o `onProvision`, muda o estado para `ready` e emite o
 `tenancy:created` — a mesma meta que o caminho inline atravessa. Mantém-no
 idempotente: depois de uma falha o estado fica `failed`, e uma nova tentativa
-tem de conseguir terminar o trabalho.
+tem de conseguir terminar o trabalho. Recusa um tenant `suspended` ou
+`deleting` (`TenantNotProvisionableError`): escrever `ready` aí levantaria uma
+suspensão ou ressuscitaria um tenant a meio do `destroy()`.
 
 Este desenho mantém o `@basaltkit/queue` completamente fora do
 `@basaltkit/tenancy`. O dispatch é da app, portanto qualquer agendador serve —
-uma fila, um cron, um `basalt tenant:run` à mão.
+uma fila, um cron, ou à mão, `basalt tenant:provision <id>`.
 
 ### O estado, e porquê 503
 
@@ -864,7 +866,8 @@ que o `@basaltkit/cli` está presente — sem ligação extra:
 | Comando | Precisa de | O que faz |
 | --- | --- | --- |
 | `basalt tenant:list` | `source.list()` | Tabula todos os tenants (apenas campos escalares) |
-| `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` ou `save()` | Persiste um novo tenant; cada flag torna-se um campo. Um id existente é recusado (código de saída 1) |
+| `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` ou `save()` | Persiste um novo tenant; cada flag torna-se um campo. Um id existente é recusado (código de saída 1). Com `provision: 'deferred'` diz que o tenant ainda está em `provisioning` |
+| `basalt tenant:provision <id>` | `onProvision` | Termina ou repete o provisionamento de um tenant `provisioning`/`failed` (`tenancy.provision(id)`): corre o hook, escreve `ready` e emite `tenancy:created`. Código de saída 1 quando o hook lança um erro (o tenant fica `failed`); recusa um tenant `suspended` ou `deleting` |
 | `basalt tenant:destroy <id> [--force] [--yes]` | `source.delete()` | Marca o tenant como `deleting`, corre o `onDeprovision` no contexto dele e remove o registo. Pergunta primeiro; `--yes` salta a pergunta, `--force` remove o registo mesmo que a limpeza falhe |
 | `basalt tenant:migrate [--tenant=<id>]` | `onMigrate` | Corre o teu hook de migração por tenant dentro do contexto de cada um |
 | `basalt tenant:seed [--tenant=<id>]` | `onSeed` | Corre o teu hook de seed por tenant dentro do contexto de cada um |
@@ -1164,6 +1167,7 @@ consulta falhar — o claim mantém-se e o `add()` lança `DOMAIN_TAKEN`.
 | `TenantStatusUnknownError` | `TENANT_STATUS_UNKNOWN` | 500 | Um pedido resolveu para um tenant com um estado que o tenancy não reconhece (`active`, um erro de escrita). Guarda `ready` ou nenhum estado para um tenant a servir |
 | `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` numa source que não implementa nem `create()` nem `save()` — por exemplo uma baseada num ficheiro de configuração estático |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (ou o `create()` de uma source) para um id que já existe. Nada é escrito. Um tenant `failed`/`provisioning` retoma-se com `tenancy.provision(id)`; uma atualização intencional é `source.save()` |
+| `TenantNotProvisionableError` | `TENANT_NOT_PROVISIONABLE` | 409 | `tenancy.provision()` (ou `basalt tenant:provision`) para um tenant `suspended` ou `deleting`. Nada corre e o estado mantém-se |
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` para um domínio que outro tenant registou — verificado (e com o registo TXT ainda publicado, ou sem um registo de `challenge()` teu), ou não verificado e mais recente que `claimTtlMs` |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | `verify` / `instructions` / `remove` para um domínio que não está registado |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | Um tenant agiu sobre um domínio pertencente a um tenant **diferente** |

@@ -64,6 +64,78 @@ describe('tenant CLI commands', () => {
     expect(await src.find('acme')).toMatchObject({ name: 'Acme' })
   })
 
+  it('tenant:create in deferred mode says it is not provisioned yet', async () => {
+    const src = source()
+    const { run } = await boot({ source: src, resolvers: [], onProvision: () => {}, provision: 'deferred' })
+    const io = fakeIo()
+    await run('tenant:create', { io, args: ['initech'] })
+    expect(io.logs[0]).toContain('provisioning is deferred')
+    expect(io.logs[0]).toContain('basalt tenant:provision initech')
+    expect(io.logs[0]).not.toContain('Created and provisioned')
+    expect((await src.find('initech'))?.['status']).toBe('provisioning')
+  })
+
+  it('tenant:provision finishes a deferred tenant and emits tenancy:created', async () => {
+    const src = source()
+    const provisioned: string[] = []
+    const { app, run } = await boot({
+      source: src,
+      resolvers: [],
+      onProvision: (t: Tenant) => void provisioned.push(t.id),
+      provision: 'deferred',
+    })
+    const announced: string[] = []
+    app.hooks.on('tenancy:created', ({ tenant }: { tenant: Tenant }) => void announced.push(tenant.id))
+    await run('tenant:create', { io: fakeIo(), args: ['initech'] })
+    const io = fakeIo()
+    expect(await run('tenant:provision', { io, args: ['initech'] })).toBeUndefined()
+    expect(io.logs).toEqual(['Provisioned tenant "initech".'])
+    expect(provisioned).toEqual(['initech'])
+    expect(announced).toEqual(['initech'])
+    expect((await src.find('initech'))?.['status']).toBe('ready')
+  })
+
+  it('tenant:provision reports a failing hook and leaves the tenant failed', async () => {
+    const src = source()
+    const { run } = await boot({
+      source: src,
+      resolvers: [],
+      onProvision: () => {
+        throw new Error('CREATE SCHEMA denied')
+      },
+    })
+    const io = fakeIo()
+    expect(await run('tenant:provision', { io, args: ['acme'] })).toBe(1)
+    expect(io.errors[0]).toMatch(/Provisioning tenant "acme" failed, and it is marked "failed": CREATE SCHEMA denied/)
+    expect((await src.find('acme'))?.['status']).toBe('failed')
+  })
+
+  it('tenant:provision refuses a missing id, an unknown tenant and a missing hook', async () => {
+    const withHook = await boot({ source: source(), resolvers: [], onProvision: () => {} })
+    let io = fakeIo()
+    expect(await withHook.run('tenant:provision', { io })).toBe(1)
+    expect(io.errors[0]).toBe('Usage: basalt tenant:provision <id>')
+    io = fakeIo()
+    expect(await withHook.run('tenant:provision', { io, args: ['nope'] })).toBe(1)
+    expect(io.errors[0]).toMatch(/nope/)
+    const without = await boot({ source: source(), resolvers: [] })
+    io = fakeIo()
+    expect(await without.run('tenant:provision', { io, args: ['acme'] })).toBe(1)
+    expect(io.errors[0]).toMatch(/No provision hook configured/)
+  })
+
+  it.each(['suspended', 'deleting'] as const)('tenant:provision refuses a %s tenant and leaves it so', async (status) => {
+    const src = new MemoryTenantSource()
+    src.add({ id: 'acme', status })
+    let ran = false
+    const { run } = await boot({ source: src, resolvers: [], onProvision: () => void (ran = true) })
+    const io = fakeIo()
+    expect(await run('tenant:provision', { io, args: ['acme'] })).toBe(1)
+    expect(io.errors[0]).toContain(status === 'deleting' ? 'is being deleted' : 'is suspended')
+    expect(ran).toBe(false)
+    expect((await src.find('acme'))?.['status']).toBe(status)
+  })
+
   it('tenant:migrate runs the hook for all tenants, or one with --tenant', async () => {
     const seen: string[] = []
     const { run } = await boot({ source: source(), resolvers: [], onMigrate: (t: Tenant) => void seen.push(t.id) })

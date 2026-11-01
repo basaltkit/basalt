@@ -393,6 +393,26 @@ export class TenantCreateUnsupportedError extends BasaltError {
 }
 
 /**
+ * `tenancy.provision()` (or `basalt tenant:provision`) for a tenant that is
+ * `suspended` or `deleting`. Provisioning ends by writing `ready`, so running it
+ * there would quietly lift a suspension your app wrote, or bring back a tenant
+ * halfway through `destroy()`. 409: the record's state conflicts with the call.
+ */
+export class TenantNotProvisionableError extends BasaltError {
+  readonly status = 409
+  constructor(id: string, existingStatus: TenantStatus) {
+    super(
+      'TENANT_NOT_PROVISIONABLE',
+      existingStatus === 'deleting'
+        ? `Tenant "${id}" is being deleted; provisioning it would mark it ready again. Finish the ` +
+            `deletion with tenancy.destroy("${id}") (basalt tenant:destroy ${id}).`
+        : `Tenant "${id}" is suspended; provisioning it would mark it ready and lift the suspension. ` +
+            'Change its status in your app first if that is what you mean.',
+    )
+  }
+}
+
+/**
  * `tenancy.create()` (or `basalt tenant:create`, or a source's `create()`) for an
  * id that already exists. 409: the request conflicts with a record that is
  * there, and repeating it will not change that.

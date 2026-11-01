@@ -538,11 +538,13 @@ await ctx().container.get(QUEUE).dispatch(ProvisionTenant, { id })
 `provision(id)` runs `onProvision`, flips the status to `ready` and emits
 `tenancy:created` — the same finish line the inline path crosses. Keep it
 idempotent: after a failure the status is `failed`, and a retry has to be able to
-complete the job.
+complete the job. It refuses a `suspended` or `deleting` tenant
+(`TenantNotProvisionableError`): writing `ready` there would lift a suspension
+or revive a tenant halfway through `destroy()`.
 
 That design keeps `@basaltkit/queue` out of `@basaltkit/tenancy` entirely. The
-app owns the dispatch, so any scheduler works — a queue, a cron, a manual
-`basalt tenant:run`.
+app owns the dispatch, so any scheduler works — a queue, a cron, or by hand,
+`basalt tenant:provision <id>`.
 
 ### The status, and why 503
 
@@ -847,7 +849,8 @@ soon as `@basaltkit/cli` is present — no extra wiring:
 | Command | Needs | What it does |
 | --- | --- | --- |
 | `basalt tenant:list` | `source.list()` | Tabulates every tenant (scalar fields only) |
-| `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` or `save()` | Persists a new tenant; every flag becomes a field. An existing id is refused (exit code 1) |
+| `basalt tenant:create <id> [--name=… --anyField=…]` | `source.create()` or `save()` | Persists a new tenant; every flag becomes a field. An existing id is refused (exit code 1). With `provision: 'deferred'` it says the tenant is still `provisioning` |
+| `basalt tenant:provision <id>` | `onProvision` | Finishes or retries a `provisioning`/`failed` tenant (`tenancy.provision(id)`): runs the hook, writes `ready` and emits `tenancy:created`. Exit code 1 when the hook throws (the tenant stays `failed`); refuses a `suspended` or `deleting` tenant |
 | `basalt tenant:destroy <id> [--force] [--yes]` | `source.delete()` | Marks the tenant `deleting`, runs `onDeprovision` in its context, then removes the record. Asks first; `--yes` skips the question, `--force` removes the record even if teardown failed |
 | `basalt tenant:migrate [--tenant=<id>]` | `onMigrate` | Runs your per-tenant migration hook inside each tenant's context |
 | `basalt tenant:seed [--tenant=<id>]` | `onSeed` | Runs your per-tenant seed hook inside each tenant's context |
@@ -1141,6 +1144,7 @@ the lookup fails — the claim stands and `add()` throws `DOMAIN_TAKEN`.
 | `TenantStatusUnknownError` | `TENANT_STATUS_UNKNOWN` | 500 | A request resolved to a tenant whose status tenancy does not recognise (`active`, a typo). Store `ready` or no status for a serving tenant |
 | `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` on a source implementing neither `create()` nor `save()` — e.g. one backed by a static config file |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (or a source's `create()`) for an id that already exists. Nothing is written. A `failed`/`provisioning` tenant is retried with `tenancy.provision(id)`; an intentional update is `source.save()` |
+| `TenantNotProvisionableError` | `TENANT_NOT_PROVISIONABLE` | 409 | `tenancy.provision()` (or `basalt tenant:provision`) for a `suspended` or `deleting` tenant. Nothing runs and the status is kept |
 | `DomainTakenError` | `DOMAIN_TAKEN` | 409 | `domains.add()` for a domain another tenant registered — verified (and its TXT record still published, or no `challenge()` record of yours), or unverified and younger than `claimTtlMs` |
 | `DomainNotFoundError` | `DOMAIN_NOT_FOUND` | 404 | `verify` / `instructions` / `remove` for a domain that isn't registered |
 | `DomainForbiddenError` | `DOMAIN_FORBIDDEN` | 403 | A tenant acted on a domain belonging to a **different** tenant |
