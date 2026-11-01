@@ -33,6 +33,21 @@ export function renderCommandList(commands: CommandDefinition[], group?: string)
   return lines
 }
 
+/**
+ * `basalt help <command>` as lines: the usage line, the description, and the
+ * flags when the command declares them.
+ */
+export function renderCommandHelp(command: CommandDefinition): string[] {
+  const lines = [`Usage: basalt ${command.name}${command.usage ? ` ${command.usage}` : ''}`]
+  if (command.description) lines.push('', command.description)
+  const flags = Object.entries(command.flags ?? {})
+  if (flags.length > 0) {
+    const width = Math.max(...flags.map(([flag]) => flag.length))
+    lines.push('', 'Flags:', ...flags.map(([flag, text]) => `  ${flag.padEnd(width)}  ${text}`))
+  }
+  return lines
+}
+
 /** Every group name, sorted. */
 export function commandGroups(commands: CommandDefinition[]): string[] {
   return [...new Set(commands.map((c) => commandGroup(c.name)).filter((g): g is string => g !== undefined))].sort()

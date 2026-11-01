@@ -36,5 +36,9 @@ export interface CommandDefinition {
   /** Command name, by convention `noun:verb` (e.g. `tenant:migrate`). */
   name: string
   description?: string
+  /** What follows the name on the command line, for `basalt help <name>`. */
+  usage?: string
+  /** Flag → what it does, for `basalt help <name>`. */
+  flags?: Record<string, string>
   handle(context: CommandContext): void | number | Promise<void | number>
 }

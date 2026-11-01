@@ -165,7 +165,9 @@ const label = (state: MigrationStatus): string =>
 export function dbStatusCommand(config: DbStatusCommandConfig = {}): CommandDefinition {
   return {
     name: 'db:status',
-    description: 'Report migration status of the central database, every shard and every tenant (read-only; exits 1 on drift)',
+    description: 'Migration status of the central database, every shard and every tenant (read-only; exit 1 when behind)',
+    usage: '[--json]',
+    flags: { '--json': 'Print { ok, planes } as JSON' },
     async handle({ io, flags }) {
       const run = config.run ?? npxPrismaRunner
       const rows: Row[] = []

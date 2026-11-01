@@ -84,7 +84,14 @@ export function devRouteRows(routes: DevRoute[]): { method: string; url: string;
  */
 export const devCommand: CommandDefinition = defineCommand({
   name: 'dev',
-  description: 'Run the app with watch + restart, and (--worker) an embedded queue worker; --routes prints the route table',
+  description: 'Run the app with watch + restart (and a queue worker with --worker)',
+  usage: '[--entry=<file>] [--worker [--queue=<name>]] [--routes]',
+  flags: {
+    '--entry=<file>': 'Entry file (default: src/dev.ts, else src/main.ts, src/server.ts, …)',
+    '--worker, -w': 'Also run a watched queue:work next to the server',
+    '--queue=<name>': 'The queue that worker processes',
+    '--routes': 'Print the route table before the server starts',
+  },
   async handle({ app, container, io, flags }) {
     const entry = await devEntry(flags, io)
     if (!entry) return 1

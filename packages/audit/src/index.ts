@@ -2365,8 +2365,15 @@ export function createAuditVerifyCommand(getAudit: () => Audit) {
   }
   return {
     name: 'audit:verify',
-    description:
-      'Verify the audit trail hash chain (--tenant=<id> | --all, --from/--to=<seq>, --expected-head=<seq>:<hash>, --legacy-until=<ms>)',
+    description: 'Verify the audit trail hash chain',
+    usage: '[--tenant=<id> | --all] [--from=<seq>] [--to=<seq>] [--expected-head=<seq>:<hash>] [--legacy-until=<ms>]',
+    flags: {
+      '--tenant=<id>': "Verify that tenant's chain",
+      '--all': 'Verify every chain (not with --tenant/--from/--to/--expected-head)',
+      '--from=<seq>, --to=<seq>': 'Verify only that range of the chain',
+      '--expected-head=<seq>:<hash>': 'Fail unless the chain still ends at a head a previous run printed',
+      '--legacy-until=<ms>': 'Accept unhashed entries written before this epoch-ms',
+    },
     async handle({ flags, io }: AuditVerifyCommandContext): Promise<number> {
       const all = bool(flags['all'], 'all')
       if (flags['tenant'] !== undefined && (typeof flags['tenant'] !== 'string' || flags['tenant'] === '')) {

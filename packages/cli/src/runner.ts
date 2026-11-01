@@ -2,7 +2,7 @@ import { ensureMetadata, type BasaltApp } from '@basaltkit/core'
 import { builtinCommands } from './builtins.js'
 import type { CommandDefinition, CommandIo } from './command.js'
 import { consoleIo } from './io.js'
-import { commandGroups, renderCommandList, suggestCommands } from './list.js'
+import { commandGroups, renderCommandHelp, renderCommandList, suggestCommands } from './list.js'
 import { parseArgv } from './parse.js'
 
 /** Commands create-basalt serves (bin/basalt.ts forwards them before booting the app). */
@@ -36,7 +36,7 @@ export async function runCli(options: RunCliOptions): Promise<number> {
     const listed = commands.filter((candidate) => !shadowed.includes(candidate))
     const groups = commandGroups(listed)
     const showList = (group?: string): number => {
-      io.log('Usage: basalt <command> [args] [--flags]   (basalt list <group> for one group)')
+      io.log('Usage: basalt <command> [args] [--flags] — basalt help <command> for its usage, basalt list <group> for one group')
       io.log('')
       for (const line of renderCommandList(listed, group)) io.log(line)
       for (const name of new Set(shadowed.map((candidate) => candidate.name))) warnShadowed(io, commands, name)
@@ -52,23 +52,41 @@ export async function runCli(options: RunCliOptions): Promise<number> {
       return showList(group)
     }
 
-    const found = commands.find((candidate) => candidate.name === command)
-    // `basalt tenant` — a group, not a command: show what is in it.
-    if (!found && groups.includes(command)) return showList(command)
-    if (!found) {
-      const close = suggestCommands(command, listed.map((candidate) => candidate.name))
+    const unknown = (name: string): number => {
+      const close = suggestCommands(name, listed.map((candidate) => candidate.name))
       io.error(
-        `Unknown command "${command}". ` +
+        `Unknown command "${name}". ` +
           (close.length > 0 ? `Did you mean ${close.join(', ')}? ` : '') +
           'Run "basalt list" to see what is available.',
       )
-      if (PROJECT_COMMANDS.includes(command)) {
+      if (PROJECT_COMMANDS.includes(name)) {
         // A bin/basalt.ts generated before the project commands existed: they
         // live in create-basalt, which also patches this file.
-        io.error(`"${command}" is a project command of create-basalt: run \`npx create-basalt@latest ${command}\` (its \`update\` also teaches this bin/basalt.ts to forward it).`)
+        io.error(`"${name}" is a project command of create-basalt: run \`npx create-basalt@latest ${name}\` (its \`update\` also teaches this bin/basalt.ts to forward it).`)
       }
       return 1
     }
+
+    // `basalt help <command>`, or `<command> --help`, before anything runs.
+    // An app command named `help` keeps the name; `--help` still works then.
+    const helpCommand = command === 'help' && !listed.some((candidate) => candidate.name === 'help')
+    if (helpCommand && args[0] === undefined) return showList()
+    const helpFor = helpCommand ? args[0] : flags['help'] === true ? command : undefined
+    if (helpFor !== undefined) {
+      const target = listed.find((candidate) => candidate.name === helpFor)
+      if (target) {
+        for (const line of renderCommandHelp(target)) io.log(line)
+        if (shadowed.some((candidate) => candidate.name === helpFor)) warnShadowed(io, commands, helpFor)
+        return 0
+      }
+      if (groups.includes(helpFor)) return showList(helpFor)
+      return unknown(helpFor)
+    }
+
+    const found = commands.find((candidate) => candidate.name === command)
+    // `basalt tenant` — a group, not a command: show what is in it.
+    if (!found && groups.includes(command)) return showList(command)
+    if (!found) return unknown(command)
 
     if (shadowed.some((candidate) => candidate.name === command)) warnShadowed(io, commands, command)
 
