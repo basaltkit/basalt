@@ -1,5 +1,17 @@
 # @basaltkit/cli
 
+## 1.10.0
+
+### Minor Changes
+
+- cd77392: `basalt list` groups commands by the prefix before the first `:` (ungrouped ones like `dev` and `routes` on top, then `ai`, `db`, `queue`, `tenant`, … alphabetically, registration order inside). `basalt list <group>` — or just `basalt <group>`, e.g. `basalt tenant` — shows one group, and an unknown group names the ones there are. A mistyped command gets a suggestion: `Unknown command "tenant:migrat". Did you mean tenant:migrate?` (also for the bare action: `migrate` → `tenant:migrate`). No command was renamed. New exports: `renderCommandList`, `commandGroup`, `commandGroups`, `suggestCommands`.
+- 08f1af8: `basalt help <command>` (or `basalt <command> --help`) prints a command's usage line, description and flags without running it. `CommandDefinition` gains optional `usage` (what follows the name: `'<id> [--force] [--yes]'`) and `flags` (`{ '--yes': 'Skip the confirmation' }`). The framework's commands — `routes`, `dev`, `upgrade`, `publish`, `tenant:*`, `queue:*`, `db:status`, `prisma:sync`, `ai:fix|plan|make`, `audit:verify`, `generate:docs`, `schedule:run`, `mail:preview` — move their usage out of the description into these fields, so `basalt list` shows one short line per command. New export: `renderCommandHelp`.
+
+### Patch Changes
+
+- Updated dependencies [08f1af8]
+  - @basaltkit/http@3.0.1
+
 ## 1.9.0
 
 ### Minor Changes
