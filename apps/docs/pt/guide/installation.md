@@ -711,7 +711,7 @@ recebes sempre o scaffolder mais recente, seja qual for a versão do lançador.
 | `TargetNotEmptyError` — "Target directory … already exists and is not empty" | 1 | O destino tem ficheiros. Escolhe outro nome ou `--dir=` |
 | `Cancelled.` (`WizardCancelledError`) | 130 | Ctrl+C, ou responder que não a "Create project?". Nada é escrito |
 | `FileExistsError` — "Refusing to overwrite existing files" | 1 | Um alvo de `make:*` já existe. Repete com `--force` |
-| `Unknown command "…". Run "basalt list" to see what is available.` | 1 | Gralha, ou o plugin que regista o comando não está no `buildApp` |
+| `Unknown command "…". Run "basalt list" to see what is available.` | 1 | Gralha (é sugerido um nome próximo: `Did you mean …?`), ou o plugin que regista o comando não está no `buildApp`. `basalt list <grupo>` filtra a lista (`basalt list tenant`) |
 | `No entry file found. Looked for src/dev.ts, src/main.ts, …` | 1 | `basalt dev` num projeto com outro ponto de entrada — passa `--entry=<file>` |
 | `Unknown command "update"` (+ uma dica do create-basalt) | 1 | O `bin/basalt.ts` é anterior aos comandos de projeto — corre `npx create-basalt@latest update` uma vez; corrige um ficheiro não modificado |
 | `No package.json in …` / `… does not look like a Basalt app` | 1 | Um comando de projeto fora de uma app — entra na pasta ou passa `--cwd=<dir>`. Para criar um projeto chamado `update`: `npm create basalt -- --name=update` |
