@@ -136,7 +136,7 @@ describe('runCli', () => {
     })
     const io = memoryIo()
     expect(await runCli({ app, argv: ['list'], io })).toBe(0)
-    expect(io.lines.join('\n').match(/^seed /gm)).toHaveLength(1)
+    expect(io.lines.join('\n').match(/^ {2}seed /gm)).toHaveLength(1)
     expect(io.errors).toEqual(['"seed" is registered 2 times: the first, "A", runs; ignored: (no description). Drop or rename the duplicate.'])
   })
 
@@ -144,6 +144,60 @@ describe('runCli', () => {
     const io = memoryIo()
     await runCli({ app: createApp(), argv: ['list'], io })
     expect(io.errors).toEqual([])
+  })
+
+  const grouped = () =>
+    createApp({
+      plugins: [
+        commandsPlugin([
+          defineCommand({ name: 'tenant:migrate', description: 'Migrate tenants', handle: () => {} }),
+          defineCommand({ name: 'tenant:create', description: 'Create a tenant', handle: () => {} }),
+          defineCommand({ name: 'ai:plan', description: 'Plan a feature', handle: () => {} }),
+          defineCommand({ name: 'greet', description: 'Greets', handle: () => {} }),
+        ]),
+      ],
+    })
+
+  it('list groups commands by prefix: ungrouped first, groups sorted, registration order inside', async () => {
+    const io = memoryIo()
+    expect(await runCli({ app: grouped(), argv: ['list'], io })).toBe(0)
+    const lines = io.lines.filter((line) => line !== '')
+    const at = (text: string) => lines.findIndex((line) => line.trim().startsWith(text))
+    expect(lines[0]).toMatch(/^Usage: basalt <command>/)
+    expect(at('greet')).toBeLessThan(at('ai'))
+    expect(lines).toContain('ai')
+    expect(lines).toContain('tenant')
+    expect(at('ai')).toBeLessThan(at('tenant'))
+    expect(at('schedule')).toBeLessThan(at('tenant'))
+    expect(at('tenant:migrate')).toBeLessThan(at('tenant:create'))
+    expect(lines.find((line) => line.includes('tenant:create'))).toMatch(/^ {2}tenant:create +Create a tenant$/)
+  })
+
+  it('list <group> and a bare group name show only that group', async () => {
+    for (const argv of [['list', 'tenant'], ['tenant']]) {
+      const io = memoryIo()
+      expect(await runCli({ app: grouped(), argv, io })).toBe(0)
+      const body = io.lines.slice(2)
+      expect(body).toEqual(['tenant', '  tenant:migrate  Migrate tenants', '  tenant:create   Create a tenant'])
+    }
+  })
+
+  it('list <unknown group> names the groups there are', async () => {
+    const io = memoryIo()
+    expect(await runCli({ app: grouped(), argv: ['list', 'nope'], io })).toBe(1)
+    expect(io.errors).toEqual(['No "nope" commands. Groups: ai, schedule, tenant.'])
+  })
+
+  it('suggests close names for a typo, or the same action in a group', async () => {
+    let io = memoryIo()
+    expect(await runCli({ app: grouped(), argv: ['tenant:migrat'], io })).toBe(1)
+    expect(io.errors[0]).toBe('Unknown command "tenant:migrat". Did you mean tenant:migrate? Run "basalt list" to see what is available.')
+    io = memoryIo()
+    await runCli({ app: grouped(), argv: ['migrate'], io })
+    expect(io.errors[0]).toContain('Did you mean tenant:migrate?')
+    io = memoryIo()
+    await runCli({ app: grouped(), argv: ['zzzzzz'], io })
+    expect(io.errors[0]).toBe('Unknown command "zzzzzz". Run "basalt list" to see what is available.')
   })
 
   it('routes command renders the http:routes metadata bucket', async () => {
