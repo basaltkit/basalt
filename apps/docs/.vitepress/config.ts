@@ -70,6 +70,13 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
 
+  // reference/api is typedoc output (gitignored) from `docs:api`, for local
+  // exploration only. It stays on disk after a `docs:build:full`, and a plain
+  // `docs:build` used to render it too: ~2,800 pages, 4.8 GB of dist, and a
+  // Pages upload slow enough to outlive its token ("Expired JWT").
+  // `docs:build:full` sets DOCS_API=1 to include it.
+  srcExclude: process.env.DOCS_API === '1' ? [] : ['reference/api/**'],
+
   // The generated typedoc API reference embeds example URLs (localhost OTLP
   // endpoints, etc.) as default values; those aren't navigable doc links, so
   // ignore localhost/127.0.0.1 while keeping dead-link checking everywhere else.

@@ -8,7 +8,7 @@
     "docs:preview": "vitepress preview",
     "docs:api": "node scripts/gen-typedoc.mjs && typedoc --options typedoc.json && node scripts/sanitize-api.mjs",
     "docs:packages": "node scripts/gen-packages.mjs",
-    "docs:build:full": "pnpm docs:api && pnpm docs:packages && vitepress build"
+    "docs:build:full": "pnpm docs:api && pnpm docs:packages && DOCS_API=1 vitepress build"
   },
   "devDependencies": {
     "typedoc": "^0.28.20",
