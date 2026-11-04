@@ -21,7 +21,9 @@ Because the READMEs *are* the API reference, a package whose public options,
 error codes or hooks change must have its README updated in the same change —
 see the [Ecosystem overview](/reference/packages). The legacy `docs:api` /
 `docs:build:full` scripts still exist for one-off local typedoc exploration;
-they are not part of the deployed build.
+they are not part of the deployed build. `docs:build` skips `reference/api/`
+even when an earlier `docs:api` left it on disk (it is ~2,800 pages and would
+take `dist` from ~140 MB to ~5 GB).
 :::
 
 ## Search — Algolia DocSearch (optional)
@@ -51,6 +53,11 @@ pnpm --filter docs docs:build
 # 4. deploy the built folder
 ! npx wrangler pages deploy apps/docs/.vitepress/dist --project-name=basaltkit-docs
 ```
+
+If the upload fails with `Expired JWT` (`POST /pages/assets/upload -> 403`), it
+took longer than the upload token lives. Check the size first —
+`du -sh apps/docs/.vitepress/dist` should be ~150 MB, not GB — rebuild, and
+re-run the deploy: files already uploaded are skipped by hash.
 
 The docs are served at `https://basaltkit-docs.pages.dev`. (Recent `wrangler`
 versions no longer auto-create the project on first deploy — hence step 3.)
