@@ -23,7 +23,7 @@ see the [Ecosystem overview](/reference/packages). The legacy `docs:api` /
 `docs:build:full` scripts still exist for one-off local typedoc exploration;
 they are not part of the deployed build. `docs:build` skips `reference/api/`
 even when an earlier `docs:api` left it on disk (it is ~2,800 pages and would
-take `dist` from ~140 MB to ~5 GB).
+take `dist` from ~120 MB to ~5 GB).
 :::
 
 ## Search — Algolia DocSearch (optional)
@@ -56,7 +56,7 @@ pnpm --filter docs docs:build
 
 If the upload fails with `Expired JWT` (`POST /pages/assets/upload -> 403`), it
 took longer than the upload token lives. Check the size first —
-`du -sh apps/docs/.vitepress/dist` should be ~150 MB, not GB — rebuild, and
+`du -sh apps/docs/.vitepress/dist` should be ~120 MB, not GB — rebuild, and
 re-run the deploy: files already uploaded are skipped by hash.
 
 The docs are served at `https://basaltkit-docs.pages.dev`. (Recent `wrangler`
