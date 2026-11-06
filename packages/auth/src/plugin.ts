@@ -11,6 +11,7 @@ import {
 } from './auth.js'
 import { assertSessionOptions, publicUser } from './auth.js'
 import type { PublicUser } from './stores.js'
+import { TokenClaimsRejectedError, type VerifyClaimsFn } from './token-claims.js'
 
 declare module '@basaltkit/core' {
   interface RequestContext {
@@ -114,6 +115,15 @@ export interface AuthPluginOptions extends Omit<AuthOptions, 'hooks'> {
    * requires MFA on a single route (step-up). Default: off.
    */
   requireMfa?: boolean | ((user: PublicUser, context: RequestContext) => boolean | Promise<boolean>)
+  /**
+   * Checks the claims of every bearer access token on the request it
+   * authenticates, after the signature, expiry and token version passed and
+   * before the user is looked up. `false` refuses the request (a throw fails it):
+   * 401 `AUTH_TOKEN_CLAIMS_REJECTED`. Pair it with `tokenClaims`;
+   * `tenantBoundTokens()` gives both for a tenant binding. Sessions and API
+   * keys are not tokens and are not passed here. Default: none.
+   */
+  verifyClaims?: VerifyClaimsFn
 }
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -160,7 +170,7 @@ const csrfRejected = new WeakSet<RequestContext>()
 export const isCsrfRejected = (context: RequestContext): boolean => csrfRejected.has(context)
 
 export function authPlugin(pluginOptions: AuthPluginOptions) {
-  const { csrf, requireMfa, ...options } = pluginOptions
+  const { csrf, requireMfa, verifyClaims, ...options } = pluginOptions
   const trustedOrigins = new Set(
     (csrf ? (csrf.trustedOrigins ?? []) : []).map((o) => originOf(o)).filter((o): o is string => o !== null),
   )
@@ -196,6 +206,9 @@ export function authPlugin(pluginOptions: AuthPluginOptions) {
         // `mk_`-prefixed bearers are API keys — left to apiKeysPlugin.
         if (bearer && !bearer.startsWith('mk_')) {
           const claims = await auth.verifyAccessToken(bearer)
+          // Before the lookup: a token from another plane must not resolve
+          // whatever user happens to share its `sub` there.
+          if (verifyClaims && (await verifyClaims(claims, context)) !== true) throw new TokenClaimsRejectedError()
           const user = await auth.users.findById(claims.sub)
           if (user) {
             context.user = publicUser(user)

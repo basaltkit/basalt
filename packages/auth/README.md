@@ -212,6 +212,20 @@ await auth.revoke(renewed.refreshToken) // logout: invalidates the token family
 
 A request with no credentials stays anonymous (no error); an explicit invalid token returns 401.
 
+### Custom token claims and tenant-bound tokens
+
+`tokenClaims` adds your own claims to every access token (login, MFA completion, social login, every refresh — re-derived on each refresh); `verifyClaims` (plugin) checks them on each bearer request, before the user lookup — `false` answers `401 AUTH_TOKEN_CLAIMS_REJECTED`. Reserved names (`sub`, `tv`, `amr`, `iat`, `exp`, `nbf`, `iss`, `aud`, `jti`) fail the sign-in with `AUTH_TOKEN_CLAIM_RESERVED`.
+
+With schema-per-tenant and one secret, a token is otherwise kept out of another tenant only because its `sub` is missing there. `tenantBoundTokens()` binds it to its plane: tokens carry `tid` (the `ctx().tenant` id, `null` on the central plane) and are refused wherever the resolved tenant differs. Auth reads `ctx().tenant` structurally — no dependency on `@basaltkit/tenancy`; register `tenancyPlugin` first.
+
+```ts
+import { authPlugin, tenantBoundTokens } from '@basaltkit/auth'
+
+authPlugin({ users, secret, ...tenantBoundTokens() })
+// or with claims of your own:
+authPlugin({ users, secret, ...tenantBoundTokens({ tokenClaims: (user) => ({ org: orgOf(user) }) }) })
+```
+
 ### Password recovery
 
 The flow has two steps. The module generates a **single-use token** (valid for 1 hour by default) and emits a hook — your application sends the email with the link:
@@ -614,6 +628,8 @@ Options (`AuthOptions` / `AuthPluginOptions` — the plugin accepts the same min
 | `mfaEncryptionKey` | `string \| Buffer` | No | — | Shorthand for a one-key ring (`id: 'default'`, ≥ 32 bytes). |
 | `mfaIssuer` | `string` | No | `'Basalt'` | Name shown in the authenticator app. |
 | `registerPolicy` | `RegisterPolicy` (`({ email, tenantId? }) => boolean \| Promise<boolean>`) | No | — (open) | Who may create a NEW account through `POST /auth/register` (refusal = same `202`, `auth:register_refused`) and the create branch of `socialLogin` (refusal = `RegistrationClosedError`). Logins into existing accounts and `register()` are never gated. `@basaltkit/teams`' `teamsInviteGate(teams)` = invite-only on tenant hosts. |
+| `tokenClaims` | `(user, { reason, amr?, request? }) => Record<string, unknown> \| Promise<…>` | No | — | Extra access-token claims on every sign-in and refresh (re-derived). Reserved names throw `ReservedTokenClaimError`. |
+| `verifyClaims` | `(claims, context) => boolean \| Promise<boolean>` | No | — | Plugin only. Checks a bearer token's claims before the user lookup; `false` → `401 AUTH_TOKEN_CLAIMS_REJECTED`. `tenantBoundTokens()` supplies it with `tokenClaims`. |
 | `hooks` | `HookBus` | No | — | Only on the `Auth` class; the plugin injects it. |
 
 `Auth` class methods:

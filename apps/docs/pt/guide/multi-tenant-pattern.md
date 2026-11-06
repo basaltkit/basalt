@@ -321,6 +321,21 @@ central e não encontra nada num host de tenant. Duas das três apps auditadas
 tinham exactamente isto, com testes a provar que um cookie central é 401 num
 tenant e vice-versa.
 
+Os access tokens bearer são a exceção. São assinados com o único `secret` e
+verificados sem consulta, por isso a única coisa que mantém o token de A fora de
+B é o seu `sub` não existir no `auth_users` de B. Um id que existe nos dois —
+uma importação de dados, uma linha escrita à mão, ids de uma sequência — faz do
+token de A um `200` em B, e o `can:` resolve-lhe os roles de B. Liga os tokens
+ao seu plano:
+
+```ts
+authPlugin({ users, secret, ...tenantBoundTokens() })
+```
+
+Cada access token passa a levar `tid` (o id do tenant, `null` no apex) e é um
+`401 AUTH_TOKEN_CLAIMS_REJECTED` em qualquer outro sítio — ver
+[Ligar os tokens ao tenant](/pt/guide/auth#tenant-bound-tokens).
+
 A terceira tinha escrito um modelo `PlatformOperator` com o seu próprio hashing
 scrypt, a sua própria tabela de sessões, o seu cookie, CSRF, lockout e TOTP
 cifrado. Funcionava. Era também uma segunda base de código crítica para a
@@ -426,8 +441,8 @@ conta por desenho, ligada por um id no registo do tenant, não a mesma linha.
 ## Regra 9 — Fora de um pedido, o tenant é explícito
 
 ```ts
-await tenancy.run(tenantId, () => search.reindex('matters'))  // um tenant
-await tenancy.forEach((tenant) => sendReminders())             // todos os tenants, em contexto
+await tenancy.run(tenantId, () => search.reindex('matters'), { serving: true })  // um tenant
+await tenancy.forEach((tenant) => sendReminders())                              // todos os tenants, em contexto
 ```
 
 Tudo o que tem âmbito de tenant e corre num ciclo só pode *tocar nesse tenant*.
@@ -443,8 +458,15 @@ recebem `--tenant` e fazem o mesmo. Nada abre o seu próprio
 `new TenantClient(url)` fora do pool do plugin: contorna o tecto de ligações, o
 hook `destroy` e todos os listeners de `tenancy:switched`.
 
-Um ciclo sobre tenants salta os que não estão `ready`. Uma verificação de
-suspensão que só dispara quando existe um id de pedido protege a superfície
+**Fora de um pedido, entra num tenant só se ele estiver a servir.** Só o
+enricher HTTP verifica o estado do tenant; `tenancy.run(id, fn)` entra num
+tenant suspenso, a ser apagado ou em provisionamento tão facilmente como num
+pronto, porque o provisionamento precisa disso. Um refresh por cookie, um job,
+um comando ou um retry que age *pelo* tenant passa `{ serving: true }` e recebe
+os erros do enricher (503 `TENANT_NOT_READY`, 403 `TENANT_SUSPENDED`) — ver
+[Entrar só num tenant que está a servir](/pt/guide/tenancy#run-serving). Um
+ciclo sobre tenants salta os que não estão `ready` (`isTenantReady(tenant)`).
+Uma verificação de suspensão que só dispara quando existe um id de pedido protege a superfície
 HTTP e deixa todos os jobs em segundo plano a retransmitir dados de um cliente
 suspenso.
 
@@ -453,7 +475,8 @@ suspenso.
 Uma app multi-tenant sem estes testes é uma app multi-tenant cujo isolamento é
 uma crença. Cada um leva dez linhas com `@basaltkit/testing`.
 
-1. Um token emitido no tenant A, apresentado no host do tenant B → 401.
+1. Um token emitido no tenant A, apresentado no host do tenant B → 401 — também
+   quando B tem um utilizador com o mesmo id (só o `tenantBoundTokens()` faz passar este).
 2. O mesmo e-mail registado em A e em B → duas contas, dois ids.
 3. Um host que não resolve para tenant nenhum → 404.
 4. Uma sessão central num host de tenant → 401. Uma sessão de tenant no apex → 401.
@@ -483,13 +506,14 @@ consola de plataforma.
 - [ ] `tenancyPlugin` antes do `authPlugin` / `apiKeysPlugin` (os enrichers deles responderiam primeiro)
 - [ ] `/auth/register` é só por convite em hosts de tenant (`registerPolicy: teamsInviteGate(…)`) ou `register: 'closed'` (404)
 - [ ] um `authPlugin`; sem modelo de operador, sem segunda tabela de sessões
+- [ ] `authPlugin({ ...tenantBoundTokens() })` — os access tokens levam `tid` e são recusados noutro plano
 - [ ] utilizadores criados pelo `AUTH`, nunca inseridos com hash feito à mão (`register(…, { emailVerified: true })` quando o fluxo já provou o endereço)
 - [ ] a política de MFA responde pelos roles de plataforma
 - [ ] roles de tenant semeados sob o id do tenant no `onProvision`; roles de plataforma sob `GLOBAL_SCOPE` (importado) pelo store central
 - [ ] `can:` nas rotas; verificações por nome de role justificadas num comentário
 - [ ] comando CLI `platform:admin <email>`; sem rota de bootstrap, sem password de bootstrap em env
 - [ ] primeiro owner criado dentro de `tenancy.run` no provisionamento
-- [ ] trabalho em segundo plano usa `tenancy.run` / `forEach`, salta tenants não prontos, não abre clientes ad-hoc
+- [ ] trabalho em segundo plano usa `tenancy.run(id, fn, { serving: true })` / `forEach`, salta tenants não prontos, não abre clientes ad-hoc
 - [ ] os sete testes de isolamento
 
 ## O que este padrão não decide
