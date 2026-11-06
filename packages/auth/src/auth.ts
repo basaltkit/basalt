@@ -3,6 +3,7 @@ import { BasaltError, isProductionEnvironment, parseDuration, tryCtx, type Durat
 import { ScryptPasswordHasher, type PasswordHasher } from './hashing.js'
 import { LoginThrottle, type ThrottleStore } from './throttle.js'
 import { signJwt, verifyJwt, type JwtClaims } from './jwt.js'
+import { checkCustomClaims, type TokenClaimsFn, type TokenClaimsReason } from './token-claims.js'
 import { generateTotpSecret, matchTotpStep, otpauthUri } from './totp.js'
 import { SecretBox, SecretBoxKeyError, type SecretBoxKey, type SecretBoxLegacyOptions } from './secret-box.js'
 import {
@@ -503,6 +504,16 @@ export interface AuthOptions {
   mfaEncryptionKey?: string | Buffer
   /** Issuer name shown in authenticator apps. Default 'Basalt'. */
   mfaIssuer?: string
+  /**
+   * Extra claims for every access token: login, MFA completion (login /
+   * social login with a code), social login and every refresh — re-derived on
+   * each refresh, so a rotated token keeps them. Reserved names
+   * ({@link RESERVED_TOKEN_CLAIMS}: `sub`, `tv`, `amr`, `exp`, `iat`, …) throw
+   * `AUTH_TOKEN_CLAIM_RESERVED`. Check them on the request path with
+   * `authPlugin({ verifyClaims })`; `tenantBoundTokens()` is the ready-made
+   * tenant binding. Default: none (tokens carry only `sub`, `tv`, `amr`).
+   */
+  tokenClaims?: TokenClaimsFn
 }
 
 export const publicUser = (user: AuthUser): PublicUser => ({
@@ -537,6 +548,7 @@ export class Auth {
   private readonly tokenVersions: TokenVersionStore | undefined
   private readonly enumerationSafeRegister: boolean
   private readonly registerPolicy: RegisterPolicy | undefined
+  private readonly tokenClaims: TokenClaimsFn | undefined
 
   constructor(options: AuthOptions) {
     this.users = options.users
@@ -590,6 +602,7 @@ export class Auth {
     this.tokenVersions = options.tokenVersions
     this.enumerationSafeRegister = options.enumerationSafeRegister ?? true
     this.registerPolicy = options.registerPolicy
+    this.tokenClaims = options.tokenClaims
   }
 
   /**
@@ -790,7 +803,8 @@ export class Auth {
     created: boolean,
     amr: string[],
   ): Promise<{ user: PublicUser; tokens: TokenPair; created: boolean; amr: string[] }> {
-    const tokens = await this.issueTokens(user.id, undefined, amr)
+    const claims = await this.customClaims(user, 'social', amr)
+    const tokens = await this.issueTokens(user.id, undefined, amr, claims)
     await this.hooks?.emit('auth:login', { user: publicUser(user) })
     return { user: publicUser(user), tokens, created, amr }
   }
@@ -950,9 +964,11 @@ export class Auth {
       amr.push('mfa')
     }
 
+    // Before the throttle is reset: a throwing tokenClaims fails the login closed.
+    const claims = await this.customClaims(user, 'login', amr)
     await this.throttle?.reset(key)
     if (ipKey) await this.ipThrottle?.release(ipKey)
-    const tokens = await this.issueTokens(user.id, undefined, amr)
+    const tokens = await this.issueTokens(user.id, undefined, amr, claims)
     await this.hooks?.emit('auth:login', { user: publicUser(user) })
     return { user: publicUser(user), tokens, amr }
   }
@@ -969,17 +985,22 @@ export class Auth {
     if (record.usedAt !== undefined) return this.reuseDetected(record.userId, record.familyId)
     if (Date.now() >= record.expiresAt) throw new RefreshInvalidError()
     // A deleted account must not keep minting tokens from a leftover refresh token.
-    if (!(await this.users.findById(record.userId))) {
+    const user = await this.users.findById(record.userId)
+    if (!user) {
       await this.refreshTokens.revokeFamily(record.familyId)
       throw new RefreshInvalidError()
     }
+    const amr = amrOfFamily(record.familyId)
+    // Re-derived before the token is consumed: a throwing tokenClaims leaves
+    // the refresh token usable rather than burning the client's session.
+    const claims = await this.customClaims(user, 'refresh', amr)
 
     // Compare-and-swap: `false` means another caller consumed this exact token
     // between our read and this write — the very race reuse detection exists for.
     if ((await this.refreshTokens.markUsed(hashed)) === false) {
       return this.reuseDetected(record.userId, record.familyId)
     }
-    const pair = await this.issueTokens(record.userId, record.familyId, amrOfFamily(record.familyId))
+    const pair = await this.issueTokens(record.userId, record.familyId, amr, claims)
     // The consumed token is the witness that the family is still alive:
     // revokeFamily/revokeAllForUser delete every row of it. If a concurrent
     // revocation (a reuse loser, a logout, a logout-everywhere) ran between our
@@ -1394,7 +1415,24 @@ export class Auth {
     return user
   }
 
-  private async issueTokens(userId: string, family?: string, amr?: string[]): Promise<TokenPair> {
+  /** The app's {@link AuthOptions.tokenClaims} for this sign-in, validated. */
+  private async customClaims(user: AuthUser, reason: TokenClaimsReason, amr: string[] | undefined): Promise<Record<string, unknown>> {
+    if (!this.tokenClaims) return {}
+    const request = tryCtx()
+    const claims = await this.tokenClaims(publicUser(user), {
+      reason,
+      ...(amr && isAmr(amr) ? { amr: [...amr] } : {}),
+      ...(request !== undefined ? { request } : {}),
+    })
+    return checkCustomClaims(claims)
+  }
+
+  private async issueTokens(
+    userId: string,
+    family?: string,
+    amr?: string[],
+    claims: Record<string, unknown> = {},
+  ): Promise<TokenPair> {
     // A new family records the login's authentication methods in its id, so
     // every rotation carries them forward without a store schema change.
     const familyId = family ?? (amr && isAmr(amr) ? `${randomUUID()}.${amr.join('+')}` : randomUUID())
@@ -1409,7 +1447,7 @@ export class Auth {
     const tv = this.tokenVersions ? await this.tokenVersions.get(userId) : undefined
     return {
       accessToken: signJwt(
-        { sub: userId, ...(tv !== undefined ? { tv } : {}), ...(amr && isAmr(amr) ? { amr } : {}) },
+        { ...claims, sub: userId, ...(tv !== undefined ? { tv } : {}), ...(amr && isAmr(amr) ? { amr } : {}) },
         { secret: this.secret, expiresIn: this.accessTtl },
       ),
       refreshToken,

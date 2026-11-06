@@ -110,6 +110,17 @@ export {
 } from './secret-box.js'
 export { authPlugin, AUTH, CsrfRejectedError, type AuthPluginOptions, type CsrfOptions } from './plugin.js'
 export {
+  tenantBoundTokens,
+  RESERVED_TOKEN_CLAIMS,
+  ReservedTokenClaimError,
+  TokenClaimsRejectedError,
+  type TenantBoundTokensOptions,
+  type TokenClaimsContext,
+  type TokenClaimsFn,
+  type TokenClaimsReason,
+  type VerifyClaimsFn,
+} from './token-claims.js'
+export {
   ApiKeys,
   ApiKeyExpirationError,
   ApiKeyOptionsError,
