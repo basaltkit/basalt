@@ -825,6 +825,29 @@ await tenancy.forEach(async (tenant) => {
 }, { concurrency: 5 })
 ```
 
+### Enter only a serving tenant {#run-serving}
+
+Only the HTTP enricher checks a tenant's `status`. `run()` enters whatever it is
+given — a provisioning, suspended or deleting tenant included — because
+provisioning and maintenance must be able to. Code that acts **for** a tenant
+outside a request (a refresh by cookie, a job, a command, a webhook retry) asks
+for the check:
+
+```ts
+await tenancy.run(job.tenantId, () => sendInvoices(), { serving: true })
+```
+
+`{ serving: true }` runs `assertTenantServing` before the context is entered and
+before any hook fires, with the enricher's errors: `TenantNotReadyError` (503)
+for `provisioning` / `failed` / `deleting`, `TenantSuspendedError` (403) for
+`suspended`, `TenantStatusUnknownError` (500) for a status tenancy does not
+know. Given an id, the status is the one just loaded from the source; given a
+`Tenant` object, its own `status` is checked — pass the id when the object may
+be stale. The default stays `false`.
+
+The rule: **outside a request, enter a tenant only if it is serving** — unless
+the work *is* the lifecycle (provisioning, `onDeprovision`, a migration).
+
 React to context switches anywhere with the hook:
 
 ```ts
@@ -1139,8 +1162,8 @@ the lookup fails — the claim stands and `add()` throws `DOMAIN_TAKEN`.
 | `TenancyNotResolvedError` | `TENANCY_NOT_RESOLVED` | 404 | `required: true` and no resolver produced a ref that loaded a tenant |
 | `CentralOnlyRouteError` | `NOT_FOUND` | 404 | A tenant resolved on a route declared `meta: { tenant: 'never' }`; the body is the plain "route not found" one |
 | `TenantNotFoundError` | `TENANT_NOT_FOUND` | 500 | `tenancy.run('unknown-id', …)`, or `forEach()` on a `TenantSource` without `list()` |
-| `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | A request resolved to a tenant whose status is `provisioning`, `failed` or `deleting`. 503, not 404: the tenant exists and the client may retry |
-| `TenantSuspendedError` | `TENANT_SUSPENDED` | 403 | A request resolved to a tenant whose status is `suspended`. Retrying will not help |
+| `TenantNotReadyError` | `TENANT_NOT_READY` | **503** | A request (or `run(…, { serving: true })`, see [Enter only a serving tenant](#run-serving)) resolved to a tenant whose status is `provisioning`, `failed` or `deleting`. 503, not 404: the tenant exists and the client may retry |
+| `TenantSuspendedError` | `TENANT_SUSPENDED` | 403 | A request resolved to a tenant whose status is `suspended` (or `run(…, { serving: true })` was given one). Retrying will not help |
 | `TenantStatusUnknownError` | `TENANT_STATUS_UNKNOWN` | 500 | A request resolved to a tenant whose status tenancy does not recognise (`active`, a typo). Store `ready` or no status for a serving tenant |
 | `TenantCreateUnsupportedError` | `TENANT_CREATE_UNSUPPORTED` | 500 | `tenancy.create()` on a source implementing neither `create()` nor `save()` — e.g. one backed by a static config file |
 | `TenantAlreadyExistsError` | `TENANT_ALREADY_EXISTS` | 409 | `tenancy.create()` (or a source's `create()`) for an id that already exists. Nothing is written. A `failed`/`provisioning` tenant is retried with `tenancy.provision(id)`; an intentional update is `source.save()` |

@@ -479,6 +479,78 @@ driver argon2id pode ser trocado através do contrato `PasswordHasher`
 tem tecto: um hash que declare mais do que N=2^20, r=32, p=16 (ou 512 MiB) nunca
 verifica, e uma linha adulterada não consegue prender o CPU em cada tentativa de login.
 
+## Claims personalizadas no token {#token-claims}
+
+Um access token leva `sub`, e `tv` / `amr` quando se aplicam. `tokenClaims`
+acrescenta claims tuas a **todos** os access tokens que o `Auth` assina — login,
+conclusão do MFA (login ou login social com código), login social / SSO, e cada
+refresh — e `verifyClaims` (no `authPlugin`) verifica-as em cada pedido que um
+bearer token autentica:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  // (user, { reason: 'login' | 'social' | 'refresh', amr?, request? }) => claims
+  tokenClaims: async (user) => ({ org: await orgOf(user.id) }),
+  // (claims, context) => boolean — false → 401 AUTH_TOKEN_CLAIMS_REJECTED
+  verifyClaims: (claims, context) => claims.org === context.org?.id,
+})
+```
+
+- **O refresh volta a derivá-las.** `tokenClaims` é chamada de novo em cada
+  refresh (`reason: 'refresh'`, com o `amr` do login), por isso um token rodado
+  leva as mesmas claims enquanto os dados de entrada forem os mesmos — e o valor
+  atual quando mudaram. A chamada acontece antes de o refresh token ser
+  consumido: um erro faz falhar o refresh mas deixa o token utilizável.
+- **Os nomes reservados são recusados.** Devolver `sub`, `tv`, `amr`, `iat`,
+  `exp`, `nbf`, `iss`, `aud` ou `jti` (`RESERVED_TOKEN_CLAIMS`) faz falhar a
+  entrada com `500 AUTH_TOKEN_CLAIM_RESERVED` — uma claim personalizada nunca
+  sobrepõe o sujeito, a expiração ou os dados de revogação. Uma `tokenClaims`
+  que lança também faz falhar a entrada (fail closed).
+- **`verifyClaims` corre antes da procura do utilizador**, depois de passarem a
+  assinatura, a expiração e a versão do token. `false` responde
+  `401 AUTH_TOKEN_CLAIMS_REJECTED` (`TokenClaimsRejectedError`), seja qual for o
+  utilizador que o `sub` encontraria. Só vê access tokens bearer: sessões e API
+  keys não têm claims.
+- **As claims são legíveis pelo cliente.** Um JWT é assinado, não cifrado — põe
+  lá identificadores, nunca segredos.
+
+Ambas são, por omissão, nada: sem elas, os tokens e a verificação ficam
+exatamente como antes.
+
+### Ligar os tokens ao tenant {#tenant-bound-tokens}
+
+Com schema-per-tenant e um único segredo de assinatura, a única coisa que impede
+um token emitido no tenant A de entrar no tenant B é o seu `sub` não existir no
+`auth_users` de B. Quando existe — uma importação de dados, uma linha escrita à
+mão, ids de uma sequência — o token de A recebe `200` nas rotas de B e o `can:`
+resolve os papéis **de B** para esse id. `tenantBoundTokens()` fecha essa
+brecha:
+
+```ts
+import { authPlugin, tenantBoundTokens } from '@basaltkit/auth'
+
+plugins: [
+  tenancyPlugin({ /* … */ }),          // primeiro: o tenant tem de estar resolvido
+  authPlugin({ users, secret, ...tenantBoundTokens() }),
+]
+```
+
+- todos os access tokens levam `tid` — o id do tenant onde foram emitidos
+  (`ctx().tenant.id`), ou `null` no plano central;
+- um bearer token só é aceite onde `tid` é igual ao tenant resolvido para o
+  pedido. Noutro tenant, no apex, ou sem `tid` (emitido antes de a ligação estar
+  ativa) é `401 AUTH_TOKEN_CLAIMS_REJECTED`.
+
+Devolve `{ tokenClaims, verifyClaims }` e compõe com as tuas:
+`tenantBoundTokens({ claim: 'tenant', tokenClaims, verifyClaims })` (a tua
+verificação corre depois de a do tenant passar). O auth lê `ctx().tenant`
+estruturalmente e não depende de `@basaltkit/tenancy`. Ativá-lo recusa os access
+tokens já em circulação (não têm `tid`); os clientes recuperam no refresh
+seguinte, que já sai ligado. Tokens emitidos fora de um pedido (um script, um
+job) ficam com o tenant do `tenancy.run` à volta.
+
 ## Proteger rotas e ler o utilizador
 
 `authPlugin` regista um **enricher** (lê `Authorization: Bearer <jwt>`, o cookie
@@ -1506,6 +1578,7 @@ plugin fornece:
 | `throttleStore` | `ThrottleStore` | em memória, por processo | Onde os throttles **por omissão** guardam os contadores — `RedisThrottleStore` para um só orçamento entre réplicas. Ver [Entre réplicas](#across-replicas-a-shared-throttlestore) |
 | `requireMfa` (plugin) | `boolean \| (user, context) => boolean \| Promise<boolean>` | — (desligado) | Exige uma entrada com MFA em todas as rotas autenticadas exceto as `meta.mfa: false` — ver [Exigir MFA por política](#requiring-mfa-by-policy) |
 | `csrf` (plugin) | `{ trustedOrigins?: string[] } \| false` | ligado | Verificação CSRF da sessão por cookie em métodos não seguros — ver [Sessões por cookie e CSRF](#cookie-sessions-and-csrf) |
+| `verifyClaims` (plugin) | `(claims, context) => boolean \| Promise<boolean>` | — (nenhuma) | Verifica as claims de um bearer token antes da procura do utilizador; `false` → `401 AUTH_TOKEN_CLAIMS_REJECTED`. `tenantBoundTokens()` fornece-a com `tokenClaims` — ver [Ligar os tokens ao tenant](#tenant-bound-tokens) |
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Orçamento por IP que apanha *password spraying* (uma tentativa em muitas contas), que um contador por email não vê. Só se aplica quando quem chama passa o ip do cliente — o `authRoutes()` passa |
 | `enumerationSafeRegister` | `boolean` | `true` | Impede que o `POST /auth/register` revele que um email já tem conta. `false` repõe o `409 AUTH_EMAIL_TAKEN` |
 | `registerPolicy` | `({ email, tenantId? }) => boolean \| Promise<boolean>` | — (aberto) | Quem pode criar uma conta **nova** pelo `POST /auth/register` e por um primeiro login social / SSO. Ver [Política de registo](#registration-policy) |
@@ -1515,6 +1588,7 @@ plugin fornece:
 | `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy?: { v1Keys?, plaintext? } }` | — (texto simples) | Cifra os segredos TOTP em repouso (AES-256-GCM, chaves HKDF com id, ligadas ao utilizador); valores que não sejam envelopes são recusados salvo adesão em `legacy`. Ver [Cifrar os segredos TOTP em repouso](#mfa-encryption) |
 | `mfaEncryptionKey` | `string \| Buffer` | — (texto simples) | Atalho para `mfaEncryption: { keys: [{ id: 'default', key }] }` (≥ 32 bytes). Não lê os envelopes `v1:` antigos — migra com `mfaEncryption.legacy` |
 | `mfaIssuer` | `string` | `'Basalt'` | Nome do emissor mostrado na app autenticadora |
+| `tokenClaims` | `(user, { reason, amr?, request? }) => Record<string, unknown> \| Promise<…>` | — (nenhuma) | Claims extra em todos os access tokens (login, MFA, social, cada refresh — derivadas de novo). Nomes reservados → `AUTH_TOKEN_CLAIM_RESERVED`. Ver [Claims personalizadas no token](#token-claims) |
 
 `new LoginThrottle(options)`:
 
@@ -1597,6 +1671,8 @@ autenticar os utilizadores.
 | `MfaNotEnrolledError` | `AUTH_MFA_NOT_ENROLLED` | 400 | Ativar/desativar MFA sem nenhuma inscrição em curso |
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` numa conta com MFA ativo — desativa-o primeiro com um código |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | Uma rota `meta.auth` recebeu um pedido cross-site, só com cookie, que altera estado |
+| `TokenClaimsRejectedError` | `AUTH_TOKEN_CLAIMS_REJECTED` | 401 | `verifyClaims` recusou um access token válido — com `tenantBoundTokens()`, um token emitido noutro tenant, no outro plano, ou antes da ligação |
+| `ReservedTokenClaimError` | `AUTH_TOKEN_CLAIM_RESERVED` | 500 | `tokenClaims` devolveu `sub`, `tv`, `amr`, `iat`, `exp`, `nbf`, `iss`, `aud` ou `jti` |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | O orçamento de logins falhados por email ou por IP esgotou-se; traz `retryAfterMs` |
 | `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | O teu `UserSource` não tem `update()` — obrigatório para verificação e reposição, e para o `register(…, { emailVerified: true })` (recusado antes de escrever o que quer que seja) |
 | `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, ou uma `registerPolicy` recusou o primeiro login social / SSO de um endereço |

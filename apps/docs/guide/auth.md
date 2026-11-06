@@ -475,6 +475,76 @@ argon2id driver can be swapped in via the `PasswordHasher` contract
 capped: a hash declaring more than N=2^20, r=32, p=16 (or 512 MiB) never verifies,
 and a tampered row cannot pin the CPU on every login attempt.
 
+## Custom token claims {#token-claims}
+
+An access token carries `sub`, and `tv` / `amr` when they apply. `tokenClaims`
+adds claims of your own to **every** access token `Auth` signs — login, MFA
+completion (login or social login with a code), social / SSO login, and every
+refresh — and `verifyClaims` (on `authPlugin`) checks them on each request a
+bearer token authenticates:
+
+```ts
+authPlugin({
+  users,
+  secret: process.env.AUTH_SECRET!,
+  // (user, { reason: 'login' | 'social' | 'refresh', amr?, request? }) => claims
+  tokenClaims: async (user) => ({ org: await orgOf(user.id) }),
+  // (claims, context) => boolean — false → 401 AUTH_TOKEN_CLAIMS_REJECTED
+  verifyClaims: (claims, context) => claims.org === context.org?.id,
+})
+```
+
+- **Refresh re-derives them.** `tokenClaims` is called again on each refresh
+  (`reason: 'refresh'`, with the login's `amr`), so a rotated token carries the
+  same claims for as long as the inputs are the same — and the current value
+  when they changed. The call happens before the refresh token is consumed: a
+  throw fails the refresh but leaves the token usable.
+- **Reserved names are refused.** Returning `sub`, `tv`, `amr`, `iat`, `exp`,
+  `nbf`, `iss`, `aud` or `jti` (`RESERVED_TOKEN_CLAIMS`) fails the sign-in with
+  `500 AUTH_TOKEN_CLAIM_RESERVED` — a custom claim never overwrites the subject,
+  the expiry or the revocation data. A throwing `tokenClaims` fails the sign-in
+  too (fail closed).
+- **`verifyClaims` runs before the user lookup**, after the signature, expiry
+  and token version passed. `false` answers `401 AUTH_TOKEN_CLAIMS_REJECTED`
+  (`TokenClaimsRejectedError`) whatever user the `sub` would have found. It sees
+  bearer access tokens only: sessions and API keys carry no claims.
+- **Claims are readable by the client.** A JWT is signed, not encrypted — put
+  identifiers in it, never secrets.
+
+Both default to nothing: without them, tokens and verification are exactly as
+before.
+
+### Binding tokens to the tenant {#tenant-bound-tokens}
+
+With schema-per-tenant and one signing secret, the only thing that keeps a
+token issued on tenant A out of tenant B is that its `sub` does not exist in
+B's `auth_users`. When it does — a data import, a hand-written row, ids from a
+sequence — A's token gets `200` on B's routes and `can:` resolves **B's** roles
+for that id. `tenantBoundTokens()` closes that gap:
+
+```ts
+import { authPlugin, tenantBoundTokens } from '@basaltkit/auth'
+
+plugins: [
+  tenancyPlugin({ /* … */ }),          // first: the tenant must be resolved
+  authPlugin({ users, secret, ...tenantBoundTokens() }),
+]
+```
+
+- every access token carries `tid` — the id of the tenant it was issued on
+  (`ctx().tenant.id`), or `null` on the central plane;
+- a bearer token is accepted only where `tid` equals the tenant resolved for the
+  request. On another tenant, on the apex, or without `tid` (issued before the
+  binding was turned on) it is `401 AUTH_TOKEN_CLAIMS_REJECTED`.
+
+It returns `{ tokenClaims, verifyClaims }` and composes with your own:
+`tenantBoundTokens({ claim: 'tenant', tokenClaims, verifyClaims })` (your check
+runs once the tenant check passed). Auth reads `ctx().tenant` structurally and
+does not depend on `@basaltkit/tenancy`. Turning it on refuses the access tokens
+already in circulation (they have no `tid`); clients recover with their next
+refresh, which is bound. Tokens minted outside a request (a script, a job) take
+the tenant of the surrounding `tenancy.run`.
+
 ## Guarding routes and reading the user
 
 `authPlugin` registers an **enricher** (reads `Authorization: Bearer <jwt>`, the
@@ -1493,6 +1563,7 @@ the plugin supplies:
 | `throttleStore` | `ThrottleStore` | in-memory, per process | Where the **default** throttles keep their counters — `RedisThrottleStore` for one budget across replicas. See [Across replicas](#across-replicas-a-shared-throttlestore) |
 | `requireMfa` (plugin) | `boolean \| (user, context) => boolean \| Promise<boolean>` | — (off) | Require a sign-in with MFA on every authenticated route except `meta.mfa: false` ones — see [Requiring MFA by policy](#requiring-mfa-by-policy) |
 | `csrf` (plugin) | `{ trustedOrigins?: string[] } \| false` | on | Cookie-session CSRF check on unsafe methods — see [Cookie sessions and CSRF](#cookie-sessions-and-csrf) |
+| `verifyClaims` (plugin) | `(claims, context) => boolean \| Promise<boolean>` | — (none) | Checks a bearer token's claims before the user lookup; `false` → `401 AUTH_TOKEN_CLAIMS_REJECTED`. `tenantBoundTokens()` supplies it with `tokenClaims` — see [Binding tokens to the tenant](#tenant-bound-tokens) |
 | `ipLoginThrottle` | `LoginThrottle \| false` | `new LoginThrottle({ maxAttempts: 50, windowMs: 900_000 })` | Per-IP budget that catches password *spraying* (one attempt across many accounts), which a per-email counter misses. Only applies when the caller passes the client ip — `authRoutes()` does |
 | `enumerationSafeRegister` | `boolean` | `true` | Keeps `POST /auth/register` from revealing that an email already has an account. `false` restores `409 AUTH_EMAIL_TAKEN` |
 | `registerPolicy` | `({ email, tenantId? }) => boolean \| Promise<boolean>` | — (open) | Who may create a **new** account through `POST /auth/register` and a first social / SSO login. See [Registration policy](#registration-policy) |
@@ -1502,6 +1573,7 @@ the plugin supplies:
 | `mfaEncryption` | `{ keys: SecretBoxKey[]; legacy?: { v1Keys?, plaintext? } }` | — (plaintext) | Encrypts TOTP secrets at rest (AES-256-GCM, HKDF keys with ids, bound to the user); non-envelope values are refused unless `legacy` opts in. See [Encrypting TOTP secrets at rest](#mfa-encryption) |
 | `mfaEncryptionKey` | `string \| Buffer` | — (plaintext) | Shorthand for `mfaEncryption: { keys: [{ id: 'default', key }] }` (≥ 32 bytes). Does not read the old `v1:` envelopes — migrate with `mfaEncryption.legacy` |
 | `mfaIssuer` | `string` | `'Basalt'` | Issuer name shown in the authenticator app |
+| `tokenClaims` | `(user, { reason, amr?, request? }) => Record<string, unknown> \| Promise<…>` | — (none) | Extra claims on every access token (login, MFA, social, each refresh — re-derived). Reserved names → `AUTH_TOKEN_CLAIM_RESERVED`. See [Custom token claims](#token-claims) |
 
 `new LoginThrottle(options)`:
 
@@ -1583,6 +1655,8 @@ users in.
 | `MfaNotEnrolledError` | `AUTH_MFA_NOT_ENROLLED` | 400 | Activating/disabling MFA with no enrollment in progress |
 | `MfaAlreadyEnabledError` | `AUTH_MFA_ALREADY_ENABLED` | 409 | `enrollMfa` on an account whose MFA is on — disable it with a code first |
 | `CsrfRejectedError` | `AUTH_CSRF_REJECTED` | 403 | A `meta.auth` route got a cross-site, cookie-only state-changing request |
+| `TokenClaimsRejectedError` | `AUTH_TOKEN_CLAIMS_REJECTED` | 401 | `verifyClaims` refused a valid access token — with `tenantBoundTokens()`, a token issued on another tenant, on the other plane, or before the binding |
+| `ReservedTokenClaimError` | `AUTH_TOKEN_CLAIM_RESERVED` | 500 | `tokenClaims` returned `sub`, `tv`, `amr`, `iat`, `exp`, `nbf`, `iss`, `aud` or `jti` |
 | `AccountLockedError` | `AUTH_LOCKED` | 429 | The per-email or per-IP failed-login budget is spent; carries `retryAfterMs` |
 | `UserUpdateUnsupportedError` | `AUTH_UPDATE_UNSUPPORTED` | 500 | Your `UserSource` has no `update()` — required for verification and reset, and for `register(…, { emailVerified: true })` (refused before anything is written) |
 | `RegistrationClosedError` | `AUTH_REGISTRATION_CLOSED` | 404 | `authRoutes({ register: 'closed' })`, or a `registerPolicy` refused the first social / SSO login of an address |

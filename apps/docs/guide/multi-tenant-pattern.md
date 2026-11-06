@@ -313,6 +313,20 @@ central table and finds nothing on a tenant host. Two of the three apps we
 audited had exactly this, with tests proving a central cookie is a 401 on a
 tenant and vice versa.
 
+Bearer access tokens are the exception. They are signed with the one `secret`
+and verified without a lookup, so the only thing that keeps A's token out of B
+is that its `sub` is missing from B's `auth_users`. An id that exists in both —
+a data import, a hand-written row, ids from a sequence — makes A's token a `200`
+on B, and `can:` resolves B's roles for it. Bind tokens to their plane:
+
+```ts
+authPlugin({ users, secret, ...tenantBoundTokens() })
+```
+
+Every access token then carries `tid` (the tenant id, `null` on the apex) and is
+a `401 AUTH_TOKEN_CLAIMS_REJECTED` anywhere else — see
+[Binding tokens to the tenant](/guide/auth#tenant-bound-tokens).
+
 The third had written a `PlatformOperator` model with its own scrypt hashing,
 its own session table, its own cookie, CSRF, lockout and encrypted TOTP. It
 worked. It was also a second security-critical codebase, tested less than the
@@ -416,8 +430,8 @@ by design, linked by an id in the tenant record, not the same row.
 ## Rule 9 — Outside a request, the tenant is explicit
 
 ```ts
-await tenancy.run(tenantId, () => search.reindex('matters'))  // one tenant
-await tenancy.forEach((tenant) => sendReminders())             // every tenant, in context
+await tenancy.run(tenantId, () => search.reindex('matters'), { serving: true })  // one tenant
+await tenancy.forEach((tenant) => sendReminders())                              // every tenant, in context
 ```
 
 Anything tenant-scoped done in a loop must *only touch that tenant*. A
@@ -433,16 +447,24 @@ commands take `--tenant` and do the same. Nothing opens its own
 `new TenantClient(url)` outside the plugin's pool: it bypasses the connection
 ceiling, the `destroy` hook and every `tenancy:switched` listener.
 
-A loop over tenants skips the ones that are not `ready`. A suspension check that
-only fires when a request id exists protects the HTTP surface and leaves every
-background job relaying data for a suspended customer.
+**Outside a request, enter a tenant only if it is serving.** Only the HTTP
+enricher checks the tenant's status; `tenancy.run(id, fn)` enters a suspended,
+deleting or provisioning tenant as readily as a ready one, because provisioning
+needs to. A refresh by cookie, a job, a command or a retry that acts *for* the
+tenant passes `{ serving: true }` and gets the enricher's errors (503
+`TENANT_NOT_READY`, 403 `TENANT_SUSPENDED`) instead — see
+[Enter only a serving tenant](/guide/tenancy#run-serving). A loop over tenants
+skips the ones that are not `ready` (`isTenantReady(tenant)`). A suspension
+check that only fires when a request id exists protects the HTTP surface and
+leaves every background job relaying data for a suspended customer.
 
 ## Rule 10 — The isolation tests
 
 A multi-tenant app without these tests is a multi-tenant app whose isolation is
 a belief. Each one takes ten lines with `@basaltkit/testing`.
 
-1. A token issued on tenant A, presented on tenant B's host → 401.
+1. A token issued on tenant A, presented on tenant B's host → 401 — also when
+   B holds a user with the same id (only `tenantBoundTokens()` makes that one pass).
 2. The same e-mail registered on A and on B → two accounts, two ids.
 3. A host that resolves to no tenant → 404.
 4. A central session on a tenant host → 401. A tenant session on the apex → 401.
@@ -472,13 +494,14 @@ one that adds the platform console.
 - [ ] `tenancyPlugin` listed before `authPlugin` / `apiKeysPlugin` (their enrichers would answer first)
 - [ ] `/auth/register` is invite-only on tenant hosts (`registerPolicy: teamsInviteGate(…)`) or `register: 'closed'` (404)
 - [ ] one `authPlugin`; no operator model, no second session table
+- [ ] `authPlugin({ ...tenantBoundTokens() })` — access tokens carry `tid` and are refused on another plane
 - [ ] users created through `AUTH`, never inserted with a hand-made hash (`register(…, { emailVerified: true })` when the flow already proved the address)
 - [ ] MFA policy answers for platform roles
 - [ ] tenant roles seeded under the tenant id in `onProvision`; platform roles under `GLOBAL_SCOPE` (imported) via the central store
 - [ ] `can:` on routes; role-name checks justified in a comment
 - [ ] `platform:admin <email>` CLI command; no bootstrap route, no bootstrap env password
 - [ ] first owner created inside `tenancy.run` at provisioning
-- [ ] background work uses `tenancy.run` / `forEach`, skips non-ready tenants, opens no ad-hoc clients
+- [ ] background work uses `tenancy.run(id, fn, { serving: true })` / `forEach`, skips non-ready tenants, opens no ad-hoc clients
 - [ ] the seven isolation tests
 
 ## What this pattern does not decide
