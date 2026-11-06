@@ -148,6 +148,8 @@ await tenancy.forEach(
 
 `run()` accepts either the `Tenant` object or the `id` (which is loaded from the source; if it doesn't exist, it throws `TenantNotFoundError`). Either way the id must pass the tenant-id grammar — `run({ id: '../x' }, …)` throws `InvalidTenantIdError` (400) instead of making `../x` the context tenant.
 
+`run()` does not check the tenant's `status` by default (provisioning and maintenance must enter a tenant that is not ready). Outside a request, code that acts *for* a tenant — a refresh by cookie, a job, a command — should only enter a serving one: `tenancy.run(id, fn, { serving: true })` throws the HTTP enricher's errors (`TenantNotReadyError` 503, `TenantSuspendedError` 403, `TenantStatusUnknownError` 500) before entering the context or firing any hook.
+
 ### Fail-closed scoping — `tenantScoped()` and friends
 
 Identifying the tenant is only half the job; every query still has to *use* it.
@@ -356,7 +358,7 @@ misalign — prefer the object.
 | `provision(tenantOrId)` | `Promise<Tenant>` | Runs `onProvision` for a tenant left `provisioning` by `provision: 'deferred'`, then flips it to `ready`. |
 | `destroy(id, { force? })` | `Promise<void>` | Marks the tenant `deleting`, runs `onDeprovision` in its context and removes the record. `force` removes it even if the teardown threw. |
 | `resolve(request)` | `Promise<Tenant \| null>` | Runs the resolvers over `{ headers?, params?, url? }` — authoritative first, fallbacks only if none named a tenant. Throws `TenantResolutionConflictError` under `onConflict: 'error'`. |
-| `run(tenantOrId, fn)` | `Promise<T>` | Runs `fn` with `ctx().tenant` set; emits `tenancy:switched` (`via: 'run'`) on entry and `tenancy:exited` when `fn` settles (also on throw). Throws `InvalidTenantIdError` for an id outside the grammar. |
+| `run(tenantOrId, fn, { serving? })` | `Promise<T>` | `serving: true` first refuses a tenant that cannot serve (`assertTenantServing`). Runs `fn` with `ctx().tenant` set; emits `tenancy:switched` (`via: 'run'`) on entry and `tenancy:exited` when `fn` settles (also on throw). Throws `InvalidTenantIdError` for an id outside the grammar. |
 | `forEach(fn, { concurrency? })` | `Promise<void>` | Runs `fn` for each tenant (requires `source.list`); default concurrency 5. |
 
 ### Resolvers

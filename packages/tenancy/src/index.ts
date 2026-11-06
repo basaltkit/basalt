@@ -143,6 +143,15 @@ export interface TenancyOptions {
   onConflict?: ResolverConflictPolicy
 }
 
+/** Options of {@link Tenancy.run}. */
+export interface TenantRunOptions {
+  /**
+   * Refuse a tenant whose status cannot serve (anything but `ready` or no
+   * status), with the error the HTTP enricher throws. Default `false`.
+   */
+  serving?: boolean
+}
+
 export class Tenancy {
   private readonly source: TenantSource
   private readonly resolvers: TenantResolver[]
@@ -489,13 +498,25 @@ export class Tenancy {
    * (`InvalidTenantIdError`, 400): it becomes a namespace segment in every
    * tenant-scoped package, so a hand-built `{ id: '../x' }` must never become
    * the context tenant.
+   *
+   * `{ serving: true }` refuses a tenant that cannot serve — the same check,
+   * and the same errors, as the HTTP enricher ({@link assertTenantServing}:
+   * `TenantNotReadyError` 503 for provisioning / failed / deleting,
+   * `TenantSuspendedError` 403, `TenantStatusUnknownError` 500) — before the
+   * context is entered and before any hook fires. Use it for everything that
+   * acts for a tenant outside a request (a refresh by cookie, a job, a
+   * command): only the enricher checks otherwise. Given an id, the status is
+   * the one just loaded; given a tenant object, its own `status` is checked
+   * (pass the id when the object may be stale). Default `false`, so
+   * provisioning and maintenance can still enter a tenant that is not ready.
    */
-  async run<T>(tenantOrId: Tenant | string, fn: () => T | Promise<T>): Promise<T> {
+  async run<T>(tenantOrId: Tenant | string, fn: () => T | Promise<T>, options: TenantRunOptions = {}): Promise<T> {
     const id = typeof tenantOrId === 'string' ? tenantOrId : tenantOrId?.id
     assertValidTenantId(id, this.validateTenantId)
     const tenant =
       typeof tenantOrId === 'string' ? await this.source.find(tenantOrId) : tenantOrId
     if (!tenant) throw new TenantNotFoundError(tenantOrId as string)
+    if (options.serving === true) assertTenantServing(tenant)
 
     return runWithContext({ ...tryCtx(), tenant }, async () => {
       let failed = false
