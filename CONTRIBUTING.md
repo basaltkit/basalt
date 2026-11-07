@@ -60,6 +60,27 @@ Two levels of database integration:
 
 `docker compose up -d` also brings up Redis and MinIO for running a real app.
 
+## Before adding a feature to the framework
+
+Gaps found while building an app (logged as `BK-xxx` in that app) are worked
+around in the app first. One moves into Basalt only when all three answers hold:
+
+1. **Is the problem generic?** It happens, or can happen, in other apps — not
+   only in the one where it was found.
+2. **Does the solution belong in the framework?** Or is it the app's own
+   responsibility (its policy, its data, its deployment)?
+3. **Does the API protect by default?** Or does it depend on the developer
+   remembering to turn an option on?
+
+The third question decides security features. An opt-in that a developer must
+remember is documentation, not protection: when the safe behaviour cannot be
+the default without a breaking change, record it for the next major instead of
+shipping the option as the fix. Example: `tenancy.run(id, fn, { serving: true })`
+(BK-018) is a sound rule behind an opt-in, so the serving check becomes the
+default in the next major of `@basaltkit/tenancy`; `tenantBoundTokens()`
+(BK-017) was worth shipping as an opt-in because the app that needs it turns it
+on once, at the composition root, not at every call site.
+
 ## Workflow
 
 1. **Branch** from `main`.
