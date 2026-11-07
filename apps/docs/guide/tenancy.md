@@ -843,10 +843,32 @@ for `provisioning` / `failed` / `deleting`, `TenantSuspendedError` (403) for
 `suspended`, `TenantStatusUnknownError` (500) for a status tenancy does not
 know. Given an id, the status is the one just loaded from the source; given a
 `Tenant` object, its own `status` is checked — pass the id when the object may
-be stale. The default stays `false`.
+be stale.
 
 The rule: **outside a request, enter a tenant only if it is serving** — unless
 the work *is* the lifecycle (provisioning, `onDeprovision`, a migration).
+
+#### Make it the default {#serving-by-default}
+
+A flag at every call site protects only the calls that remember it. Turn the
+check on once, at the composition root, and every `run()` gets it:
+
+```ts
+tenancyPlugin({ source, resolvers, servingByDefault: true })
+```
+
+Now `tenancy.run(id, fn)` refuses a tenant that is not serving, and so does the
+`'tenancy:run'` signal that queue workers and webhook deliveries use. Code that
+must enter such a tenant says so with `{ serving: false }`. The framework's own
+lifecycle paths already do: `provision()`, `destroy()`, `forEach()` and the
+`tenant:migrate`, `tenant:seed` and `tenant:run` commands enter every tenant
+whatever its status. Your own lifecycle code (a migration loop, a restore)
+passes `{ serving: false }` too. `forEach()` hands you suspended tenants as
+well, so check `tenant.status` inside it when the work is *for* the tenant.
+
+`servingByDefault` is `false` in 4.x, so turning it on is your call. It becomes
+the default in the next major of `@basaltkit/tenancy`, when `{ serving: false }`
+is the only way into a tenant that is not serving.
 
 React to context switches anywhere with the hook:
 
@@ -859,7 +881,8 @@ app.hooks.on('tenancy:switched', ({ tenant }) => {
 A package that must enter a tenant from background code, without depending on
 `@basaltkit/tenancy`, reads the same function from the `'tenancy:run'` metadata
 signal (type `TenantRunner`): same id check, same `TenantNotFoundError`, same
-`tenancy:switched`/`tenancy:exited` pair, no `status` check. It runs from the
+`tenancy:switched`/`tenancy:exited` pair, and the `status` check only under
+[`servingByDefault`](#serving-by-default). It runs from the
 caller's context, so enter from `runWithContext({}, ...)` when nothing ambient
 may leak in. `@basaltkit/webhooks` uses it for the endpoint lookup of off-request
 dispatches — see [Webhooks → Schema-per-tenant](/guide/webhooks#schema-per-tenant).
@@ -1084,6 +1107,7 @@ scoped connection URL; pass `migrate` to override it.
 | `source` | `TenantSource` | — (required) | Where tenant records are loaded from — `MemoryTenantSource` in dev, `tenancy-sqlite`/`tenancy-prisma` (or your own table) in production |
 | `resolvers` | `TenantResolver[]` | — (required) | Authoritative resolvers (subdomain, domain, route, `authoritative(fn)`) first — an unknown tenant they name resolves to none; fallbacks (header) only when no authoritative resolver named anything. Within each group the first ref that loads a tenant wins |
 | `onConflict` | `'precedence' \| 'error'` | `'precedence'` | `'error'` runs every resolver and answers `400 TENANCY_CONFLICT` when two load different tenants |
+| `servingByDefault` | `boolean` | `false` | Every `tenancy.run()` (and the `'tenancy:run'` signal) refuses a tenant that is not serving unless the caller passes `{ serving: false }`. Lifecycle paths stay open. See [Make it the default](#serving-by-default) |
 | `required` | `boolean \| { except: (string \| RegExp)[] }` | `false` | Reject a request that resolved no tenant with `404 TENANCY_NOT_RESOLVED`, instead of running it tenant-less. `{ except }` exempts paths (health checks, landing pages) while still guarding the rest |
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:migrate`, run inside each tenant's context |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:seed`, run inside each tenant's context |

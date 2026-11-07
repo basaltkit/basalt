@@ -464,8 +464,10 @@ tenant suspenso, a ser apagado ou em provisionamento tão facilmente como num
 pronto, porque o provisionamento precisa disso. Um refresh por cookie, um job,
 um comando ou um retry que age *pelo* tenant passa `{ serving: true }` e recebe
 os erros do enricher (503 `TENANT_NOT_READY`, 403 `TENANT_SUSPENDED`) — ver
-[Entrar só num tenant que está a servir](/pt/guide/tenancy#run-serving). Um
-ciclo sobre tenants salta os que não estão `ready` (`isTenantReady(tenant)`).
+[Entrar só num tenant que está a servir](/pt/guide/tenancy#run-serving). Melhor:
+liga `tenancyPlugin({ servingByDefault: true })` uma vez, e todos os `run()`
+verificam a menos que passem `{ serving: false }` — ver
+[Torná-lo o padrão](/pt/guide/tenancy#serving-by-default). Um ciclo sobre tenants salta os que não estão `ready` (`isTenantReady(tenant)`).
 Uma verificação de suspensão que só dispara quando existe um id de pedido protege a superfície
 HTTP e deixa todos os jobs em segundo plano a retransmitir dados de um cliente
 suspenso.
@@ -513,7 +515,7 @@ consola de plataforma.
 - [ ] `can:` nas rotas; verificações por nome de role justificadas num comentário
 - [ ] comando CLI `platform:admin <email>`; sem rota de bootstrap, sem password de bootstrap em env
 - [ ] primeiro owner criado dentro de `tenancy.run` no provisionamento
-- [ ] trabalho em segundo plano usa `tenancy.run(id, fn, { serving: true })` / `forEach`, salta tenants não prontos, não abre clientes ad-hoc
+- [ ] trabalho em segundo plano usa `tenancy.run(id, fn, { serving: true })` (ou `servingByDefault: true` no plugin) / `forEach`, salta tenants não prontos, não abre clientes ad-hoc
 - [ ] os sete testes de isolamento
 
 ## O que este padrão não decide

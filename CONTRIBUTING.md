@@ -75,11 +75,13 @@ around in the app first. One moves into Basalt only when all three answers hold:
 The third question decides security features. An opt-in that a developer must
 remember is documentation, not protection: when the safe behaviour cannot be
 the default without a breaking change, record it for the next major instead of
-shipping the option as the fix. Example: `tenancy.run(id, fn, { serving: true })`
-(BK-018) is a sound rule behind an opt-in, so the serving check becomes the
-default in the next major of `@basaltkit/tenancy`; `tenantBoundTokens()`
-(BK-017) was worth shipping as an opt-in because the app that needs it turns it
-on once, at the composition root, not at every call site.
+shipping the option as the fix. An opt-in can still ship in a minor when the
+app turns it on once, at the composition root, not at every call site. Examples:
+`tenantBoundTokens()` (BK-017) is set once in the auth wiring. BK-018 first
+shipped as `tenancy.run(id, fn, { serving: true })`, a flag every call site had
+to remember. It became `tenancyPlugin({ servingByDefault: true })`, set once,
+with `{ serving: false }` as the explicit way in for lifecycle code. The check
+becomes the default in the next major of `@basaltkit/tenancy`.
 
 ## Workflow
 

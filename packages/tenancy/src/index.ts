@@ -141,13 +141,18 @@ export interface TenancyOptions {
   validateTenantId?: (id: string) => boolean
   /** How `resolve()` treats resolvers that name different tenants. Default `'precedence'`. */
   onConflict?: ResolverConflictPolicy
+  /** See {@link TenancyPluginOptions.servingByDefault}. Default `false`. */
+  servingByDefault?: boolean
 }
 
 /** Options of {@link Tenancy.run}. */
 export interface TenantRunOptions {
   /**
    * Refuse a tenant whose status cannot serve (anything but `ready` or no
-   * status), with the error the HTTP enricher throws. Default `false`.
+   * status), with the error the HTTP enricher throws. Defaults to the
+   * Tenancy's `servingByDefault` (itself `false` unless turned on). Pass
+   * `false` to enter a tenant that is not serving on purpose — lifecycle and
+   * maintenance code.
    */
   serving?: boolean
 }
@@ -162,6 +167,7 @@ export class Tenancy {
   private readonly canonicalDomain: ((tenant: Tenant) => string | undefined) | undefined
   private readonly validateTenantId: (id: string) => boolean
   private readonly resolution: { onConflict?: ResolverConflictPolicy }
+  private readonly servingByDefault: boolean
 
   /**
    * `new Tenancy({ source, resolvers, ... })` — see {@link TenancyOptions}.
@@ -218,6 +224,7 @@ export class Tenancy {
     this.canonicalDomain = options.canonicalDomain
     this.validateTenantId = options.validateTenantId ?? isValidTenantId
     this.resolution = options.onConflict !== undefined ? { onConflict: options.onConflict } : {}
+    this.servingByDefault = options.servingByDefault === true
   }
 
   /** The tenant of the active context, if any. */
@@ -329,7 +336,8 @@ export class Tenancy {
     if (!this.onProvision) return tenant
 
     try {
-      await this.run(tenant, () => this.onProvision!(tenant))
+      // The tenant is not ready yet: lifecycle code enters it on purpose.
+      await this.run(tenant, () => this.onProvision!(tenant), { serving: false })
     } catch (error) {
       // Marked, not deleted: the record is the only record that this tenant was
       // attempted at all, and the resolver now answers 503 instead of letting
@@ -379,7 +387,7 @@ export class Tenancy {
 
     if (this.onDeprovision) {
       try {
-        await this.run(marked, () => this.onDeprovision!(marked))
+        await this.run(marked, () => this.onDeprovision!(marked), { serving: false })
       } catch (error) {
         if (!options.force) throw error
       }
@@ -507,8 +515,14 @@ export class Tenancy {
    * acts for a tenant outside a request (a refresh by cookie, a job, a
    * command): only the enricher checks otherwise. Given an id, the status is
    * the one just loaded; given a tenant object, its own `status` is checked
-   * (pass the id when the object may be stale). Default `false`, so
-   * provisioning and maintenance can still enter a tenant that is not ready.
+   * (pass the id when the object may be stale).
+   *
+   * The default is the Tenancy's `servingByDefault`: `false` unless the app
+   * turns it on (`tenancyPlugin({ servingByDefault: true })`), in which case
+   * every `run()` checks and `{ serving: false }` is the explicit way in for
+   * code that must enter a tenant that is not ready. The framework's own
+   * lifecycle paths — `provision()`, `destroy()`, `forEach()` and the
+   * `tenant:*` commands — always pass `{ serving: false }`.
    */
   async run<T>(tenantOrId: Tenant | string, fn: () => T | Promise<T>, options: TenantRunOptions = {}): Promise<T> {
     const id = typeof tenantOrId === 'string' ? tenantOrId : tenantOrId?.id
@@ -516,7 +530,7 @@ export class Tenancy {
     const tenant =
       typeof tenantOrId === 'string' ? await this.source.find(tenantOrId) : tenantOrId
     if (!tenant) throw new TenantNotFoundError(tenantOrId as string)
-    if (options.serving === true) assertTenantServing(tenant)
+    if (options.serving ?? this.servingByDefault) assertTenantServing(tenant)
 
     return runWithContext({ ...tryCtx(), tenant }, async () => {
       let failed = false
@@ -537,7 +551,11 @@ export class Tenancy {
     })
   }
 
-  /** Runs `fn` once per tenant, with bounded concurrency — bulk maintenance. */
+  /**
+   * Runs `fn` once per tenant, with bounded concurrency — bulk maintenance.
+   * Enters every tenant whatever its status, also under `servingByDefault`:
+   * check `tenant.status` inside `fn` to skip the ones that are not serving.
+   */
   async forEach(
     fn: (tenant: Tenant) => void | Promise<void>,
     options: { concurrency?: number } = {},
@@ -551,7 +569,7 @@ export class Tenancy {
     const workers = Array.from({ length: Math.min(concurrency, tenants.length) }, async () => {
       while (index < tenants.length) {
         const tenant = tenants[index++] as Tenant
-        await this.run(tenant, () => fn(tenant))
+        await this.run(tenant, () => fn(tenant), { serving: false })
       }
     })
     await Promise.all(workers)
@@ -648,6 +666,23 @@ export interface TenancyPluginOptions {
   resolvers: TenantResolver[]
   /** See {@link ResolverConflictPolicy}. Default `'precedence'`. */
   onConflict?: ResolverConflictPolicy
+  /**
+   * Make `tenancy.run()` refuse a tenant that cannot serve unless the caller
+   * passes `{ serving: false }`. Default `false` (the 4.x behaviour); it
+   * becomes the default in the next major.
+   *
+   * Only the HTTP enricher checks a tenant's status otherwise, so code that
+   * acts for a tenant outside a request — a refresh by cookie, a queue job, a
+   * scheduled task, a webhook delivery through `'tenancy:run'` — enters a
+   * suspended, provisioning or deleting tenant. Turned on here, once, every
+   * `run()` gets the enricher's check and errors (`TenantNotReadyError` 503,
+   * `TenantSuspendedError` 403, `TenantStatusUnknownError` 500).
+   *
+   * The framework's lifecycle paths stay open: `provision()`, `destroy()`,
+   * `forEach()` and the `tenant:*` commands enter with `{ serving: false }`.
+   * Your own lifecycle code (a migration loop, a restore) does the same.
+   */
+  servingByDefault?: boolean
   /**
    * Reject requests without a tenant (404 `TENANCY_NOT_RESOLVED`). Default: false.
    *
@@ -806,7 +841,9 @@ export interface TenancyPluginOptions {
  * - emits `'tenancy:switched'` (`via: 'run'`) on the way in and
  *   `'tenancy:exited'` on the way out, so per-tenant resources (prismaPlugin's
  *   pooled client) are taken and given back;
- * - does NOT check the tenant's `status` (a suspended tenant is entered);
+ * - checks the tenant's `status` only under `servingByDefault: true` (then a
+ *   suspended, provisioning or deleting tenant is refused with the enricher's
+ *   errors); otherwise a suspended tenant is entered;
  * - runs from the caller's current context — call it from
  *   `runWithContext({}, ...)` when the caller's ambient state must not leak in.
  *
@@ -831,6 +868,7 @@ export function tenancyPlugin(options: TenancyPluginOptions) {
             ...(options.canonicalDomain !== undefined ? { canonicalDomain: options.canonicalDomain } : {}),
             ...(options.validateTenantId !== undefined ? { validateTenantId: options.validateTenantId } : {}),
             ...(options.onConflict !== undefined ? { onConflict: options.onConflict } : {}),
+            ...(options.servingByDefault !== undefined ? { servingByDefault: options.servingByDefault } : {}),
           }),
       )
       registerTenantCommands(container, options)
@@ -1098,7 +1136,7 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
         io.error(`Tenant "${only}" not found.`)
         return 1
       }
-      await tenancy().run(tenant, () => hook(tenant))
+      await tenancy().run(tenant, () => hook(tenant), { serving: false })
       io.log(`Ran ${label} for "${only}".`)
       return
     }
@@ -1149,7 +1187,8 @@ function registerTenantCommands(container: Container, options: TenancyPluginOpti
         io.error(`Unknown command "${sub}". (tenant:run resolves plugin-registered commands.)`)
         return 1
       }
-      return tenancy().run(tenant, () => target.handle({ container: c, io, args: rest, flags }))
+      // An operator naming a tenant explicitly: enter it whatever its status.
+      return tenancy().run(tenant, () => target.handle({ container: c, io, args: rest, flags }), { serving: false })
     },
   })
 }

@@ -453,7 +453,10 @@ deleting or provisioning tenant as readily as a ready one, because provisioning
 needs to. A refresh by cookie, a job, a command or a retry that acts *for* the
 tenant passes `{ serving: true }` and gets the enricher's errors (503
 `TENANT_NOT_READY`, 403 `TENANT_SUSPENDED`) instead — see
-[Enter only a serving tenant](/guide/tenancy#run-serving). A loop over tenants
+[Enter only a serving tenant](/guide/tenancy#run-serving). Better: turn on
+`tenancyPlugin({ servingByDefault: true })` once, and every `run()` checks unless
+it passes `{ serving: false }` — see
+[Make it the default](/guide/tenancy#serving-by-default). A loop over tenants
 skips the ones that are not `ready` (`isTenantReady(tenant)`). A suspension
 check that only fires when a request id exists protects the HTTP surface and
 leaves every background job relaying data for a suspended customer.
@@ -501,7 +504,7 @@ one that adds the platform console.
 - [ ] `can:` on routes; role-name checks justified in a comment
 - [ ] `platform:admin <email>` CLI command; no bootstrap route, no bootstrap env password
 - [ ] first owner created inside `tenancy.run` at provisioning
-- [ ] background work uses `tenancy.run(id, fn, { serving: true })` / `forEach`, skips non-ready tenants, opens no ad-hoc clients
+- [ ] background work uses `tenancy.run(id, fn, { serving: true })` (or `servingByDefault: true` on the plugin) / `forEach`, skips non-ready tenants, opens no ad-hoc clients
 - [ ] the seven isolation tests
 
 ## What this pattern does not decide
