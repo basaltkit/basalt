@@ -1,8 +1,33 @@
 // use prisma-8
 
-// The central plane of the harness: one model, in `public` of its own database
+// The central plane of the harness, in `public` of its own database
 // (basalt_prisma8). Tenant contracts are generated from this file at test time,
 // wrapped in `namespace tenant_<id> { … }` (tests/support/tenants.ts).
+
+// Row-level tenancy and RLS (tests/rls.test.ts, tests/middleware.test.ts): one
+// shared table, every row carries its tenant. Declared first so `Project` stays the
+// last model (writeTenantContract appends evolution fields to the last model).
+model Note {
+  id       String    @id
+  tenantId String
+  body     String
+  tags     NoteTag[]
+
+  @@index([tenantId])
+}
+
+// A relation, for include/join behaviour under middleware and RLS (tests/prepared-includes.test.ts).
+model NoteTag {
+  id       String @id
+  tenantId String
+  label    String
+  noteId   String
+  note     Note   @relation(fields: [noteId], references: [id])
+
+  @@index([tenantId])
+  @@index([noteId])
+}
+
 model Project {
   id        String            @id
   tenantId  String
