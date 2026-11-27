@@ -278,6 +278,28 @@ All options for these plugins are documented in the [`@basaltkit/http`](../http/
 
 > On distributed edge runtimes, remember that in-memory stores (rate limit, metrics) live per instance — use shared stores (e.g. Redis/KV) when you need global values.
 
+### Server timeouts
+
+Basalt never starts a listener for you. On Node, the server from
+`@hono/node-server` keeps Node's defaults: 300 s to receive a whole request,
+60 s for its headers. `@basaltkit/fastify` uses 30 s. To match it, set the
+limits on the server `serve()` returns:
+
+```ts
+import type { Server } from 'node:http'
+import { serve } from '@hono/node-server'
+
+// An HTTP/1 Server unless you pass `createServer` (HTTP/2 has no requestTimeout).
+const server = serve({ fetch: app.container.get(HONO).fetch, port: 3000 }) as Server
+server.requestTimeout = 30_000 // the whole request, body included
+server.headersTimeout = 10_000
+```
+
+Raise `requestTimeout` if you accept large `upload()` bodies over slow links.
+On Bun, Deno or an edge runtime, the runtime or platform sets these limits. See
+[Server timeouts](https://basaltkit-docs.pages.dev/guide/production#server-timeouts) in
+the production guide.
+
 ### Testing without opening ports
 
 Since Hono speaks `fetch`, testing means calling `hono.fetch` with a normal `Request` — that's how this package's own tests work:

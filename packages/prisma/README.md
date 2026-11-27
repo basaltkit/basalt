@@ -383,7 +383,7 @@ route({ method: 'GET', url: '/users', meta: { tenant: false }, handler: async ()
 })
 ```
 
-Note the trade-off: without `client`, a tenant route reached with no tenant throws `DB_UNAVAILABLE`; with it, that route would quietly query the **central** database instead. Pair it with `required: true` on `tenancyPlugin` and mark only genuinely central routes with `meta: { tenant: false }` — see [Serving central and tenant routes from one app](https://basaltkit.dev/guide/database-per-tenant#serving-central-and-tenant-routes-from-one-app).
+Note the trade-off: without `client`, a tenant route reached with no tenant throws `DB_UNAVAILABLE`; with it, that route would quietly query the **central** database instead. Pair it with `required: true` on `tenancyPlugin` and mark only genuinely central routes with `meta: { tenant: false }` — see [Serving central and tenant routes from one app](https://basaltkit-docs.pages.dev/guide/database-per-tenant#serving-central-and-tenant-routes-from-one-app).
 
 ### `db()` — the current context's client
 
@@ -547,7 +547,7 @@ Prisma client extension (`prisma.$extends(...)`) that scopes every query to the 
 
 ### `describeDbError(error, options?)`
 
-`describeDbError(error: unknown, options?: { url?: string; role?: string }): { code, cause, fix } | undefined` — maps a database failure to what it means and the one-line fix: `DB_PERMISSION_DENIED` (`42501`, also inside `P2010`; `P1010`), `DB_NOT_EMPTY_BASELINE` (`P3005`), `DB_UNREACHABLE` (`P1001`/`P1002`/`P1000`/`P1003`, `ECONNREFUSED`, …) and `DB_NOT_MIGRATED` (`P2021`, `42P01`). Reads Prisma errors, driver errors, Prisma CLI stderr and plain strings; returns `undefined` for anything else; credentials are redacted. `tenant:migrate` prints its fix under a failing tenant. See the [Database operations](https://basaltkit.dev/guide/database-operations) guide.
+`describeDbError(error: unknown, options?: { url?: string; role?: string }): { code, cause, fix } | undefined` — maps a database failure to what it means and the one-line fix: `DB_PERMISSION_DENIED` (`42501`, also inside `P2010`; `P1010`), `DB_NOT_EMPTY_BASELINE` (`P3005`), `DB_UNREACHABLE` (`P1001`/`P1002`/`P1000`/`P1003`, `ECONNREFUSED`, …) and `DB_NOT_MIGRATED` (`P2021`, `42P01`). Reads Prisma errors, driver errors, Prisma CLI stderr and plain strings; returns `undefined` for anything else; credentials are redacted. `tenant:migrate` prints its fix under a failing tenant. See the [Database operations](https://basaltkit-docs.pages.dev/guide/database-operations) guide.
 
 ### `dbStatusCommand(config?)`
 

@@ -459,6 +459,44 @@ Num único servidor Linux (PM2 ou Docker Compose atrás de Apache ou Caddy), o
 [Deploy para um servidor](/pt/guide/deploy).
 :::
 
+## Timeouts do servidor
+
+Um cliente que abre uma ligação e envia o pedido um byte de cada vez
+(slowloris) prende um socket durante todo o tempo que o servidor espera. Os
+valores por defeito:
+
+| Adaptador | Quem abre o servidor | Tempo para receber o pedido inteiro |
+|---|---|---|
+| `@basaltkit/fastify` | o plugin (`server.listen()`) | **30 s** (`requestTimeout: 30_000`; o default do próprio Fastify é desligado) |
+| `@basaltkit/express` | o teu código (`app.listen()`) | default do Node: **300 s**, headers 60 s |
+| `@basaltkit/hono` | o teu código (`serve()` de `@hono/node-server`) | default do Node: **300 s**, headers 60 s |
+
+O Node 18+ já limita os dois, por isso o Express e o Hono não ficam
+desprotegidos, apenas mais tolerantes. Para lhes dar o orçamento do Fastify,
+define-o no servidor que o `listen()` ou o `serve()` devolve:
+
+```ts
+// Express
+const server = app.container.get(EXPRESS).listen(env.PORT, env.HOST)
+
+// Hono em Node (`serve()` devolve um `Server` HTTP/1, a menos que passes `createServer`)
+import type { Server } from 'node:http'
+import { serve } from '@hono/node-server'
+const server = serve({ fetch: app.container.get(HONO).fetch, port: env.PORT, hostname: env.HOST }) as Server
+
+// Em ambos: o pedido inteiro em 30 s, os headers em 10 s
+server.requestTimeout = 30_000
+server.headersTimeout = 10_000
+```
+
+O orçamento cobre o **corpo inteiro do pedido**. Se a tua app recebe corpos
+`upload()` grandes de ligações lentas, sobe o `requestTimeout` até cobrir o
+upload mais lento que aceitas (no Fastify:
+`fastifyPlugin({ fastify: { requestTimeout } })`) e mantém o `headersTimeout`
+curto. Atrás de um reverse proxy (nginx, um load balancer), os timeouts do
+proxy aplicam-se primeiro. Mantém o orçamento da app igual ou maior do que o do
+proxy, para que seja o proxy, e não a app, a cortar os clientes lentos.
+
 ## Encerramento gracioso
 
 `app.shutdown()` corre o `shutdown` de cada plugin na ordem inversa do boot
