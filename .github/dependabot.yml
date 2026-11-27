@@ -6,6 +6,15 @@ updates:
       interval: weekly
     open-pull-requests-limit: 10
     groups:
+      # Listed first so it wins over the type groups below: Prisma's CLI is a
+      # devDependency and its ORM packages are production ones, and on the
+      # Prisma 8 RC line they must move together. Split across the two type
+      # groups, #573 took @prisma/orm-postgres to rc.25 under a CLI at rc.27
+      # and `prisma contract emit` failed in apps/prisma8-integration.
+      prisma:
+        patterns:
+          - prisma
+          - '@prisma/*'
       dev-dependencies:
         dependency-type: development
       production-dependencies:
