@@ -20,8 +20,8 @@
   },
   "devDependencies": {
     "@types/autocannon": "^7.12.0",
-    "@types/node": "^26.6.5",
-    "autocannon": "^8.0.0",
+    "@types/node": "^26.6.6",
+    "autocannon": "^9.0.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
