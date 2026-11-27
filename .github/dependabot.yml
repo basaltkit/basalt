@@ -16,6 +16,16 @@ updates:
       # (a grouped bump to 7 breaks `pnpm docs:api`).
       - dependency-name: typescript
         update-types: ['version-update:semver-major']
+      # Prisma 8 is a deliberate migration (no `prisma generate`; the ORM reads
+      # an emitted contract instead). Dependabot treats its release candidates
+      # as the latest version and moved every `^7` range to `^8.0.0-rc.*`,
+      # breaking pg-integration and the create-basalt --prisma scaffold. Only
+      # apps/prisma8-integration tracks the RC, and it pins an exact 8.x, so
+      # RC-to-RC bumps there are not majors and still arrive.
+      - dependency-name: prisma
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@prisma/*'
+        update-types: ['version-update:semver-major']
     labels:
       - dependencies
 
