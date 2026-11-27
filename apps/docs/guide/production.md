@@ -455,6 +455,42 @@ For a single Linux server (PM2 or Docker Compose behind Apache or Caddy),
 [Deploying to a server](/guide/deploy).
 :::
 
+## Server timeouts
+
+A client that opens a connection and then sends its request a byte at a time
+(slowloris) ties up a socket for as long as the server waits. The defaults:
+
+| Adapter | Who opens the server | Time to receive a whole request |
+|---|---|---|
+| `@basaltkit/fastify` | the plugin (`server.listen()`) | **30 s** (`requestTimeout: 30_000`; Fastify's own default is off) |
+| `@basaltkit/express` | your code (`app.listen()`) | Node's default: **300 s**, headers 60 s |
+| `@basaltkit/hono` | your code (`serve()` from `@hono/node-server`) | Node's default: **300 s**, headers 60 s |
+
+Node 18+ already caps both, so Express and Hono are not unprotected, only more
+lenient. To give them Fastify's budget, set it on the server `listen()` or
+`serve()` returns:
+
+```ts
+// Express
+const server = app.container.get(EXPRESS).listen(env.PORT, env.HOST)
+
+// Hono on Node (`serve()` returns an HTTP/1 `Server` unless you pass `createServer`)
+import type { Server } from 'node:http'
+import { serve } from '@hono/node-server'
+const server = serve({ fetch: app.container.get(HONO).fetch, port: env.PORT, hostname: env.HOST }) as Server
+
+// Either: the whole request within 30 s, its headers within 10 s
+server.requestTimeout = 30_000
+server.headersTimeout = 10_000
+```
+
+The budget covers the **whole request body**. If your app takes large
+`upload()` bodies from slow connections, raise `requestTimeout` to cover the
+slowest upload you accept (on Fastify: `fastifyPlugin({ fastify: { requestTimeout } })`)
+and keep `headersTimeout` short. Behind a reverse proxy (nginx, a load
+balancer), the proxy's own timeouts apply first. Keep the app's budget equal to
+or longer than the proxy's, so the proxy, not the app, cuts slow clients.
+
 ## Graceful shutdown
 
 `app.shutdown()` runs every plugin's `shutdown` in reverse boot order (closing

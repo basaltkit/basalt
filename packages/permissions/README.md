@@ -190,7 +190,7 @@ if (f.kind === 'none') return { rows: [], total: 0 }
 const where = f.kind === 'unrestricted' ? filter : { AND: [f.where, filter] }
 ```
 
-`listFilter` fails closed: no filter for exactly `resource:action` throws `MissingPolicyFilterError` (`PERMISSION_FILTER_MISSING`), with no RBAC fallback; `superAdmin` answers `unrestricted`, as in `can()`. `unrestricted` never bypasses tenant isolation — the tenant is your data layer's. See [Policies decide one object, not a list](https://basaltkit.dev/guide/authorization#policies-decide-one-object-not-a-list).
+`listFilter` fails closed: no filter for exactly `resource:action` throws `MissingPolicyFilterError` (`PERMISSION_FILTER_MISSING`), with no RBAC fallback; `superAdmin` answers `unrestricted`, as in `can()`. `unrestricted` never bypasses tenant isolation — the tenant is your data layer's. See [Policies decide one object, not a list](https://basaltkit-docs.pages.dev/guide/authorization#policies-decide-one-object-not-a-list).
 
 ### Super admin
 

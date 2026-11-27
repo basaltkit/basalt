@@ -283,6 +283,22 @@ app.container.get(EXPRESS).listen(3000)
 
 All the options for these plugins are documented in the [`@basaltkit/http`](../http/README.md) README.
 
+### Server timeouts
+
+Basalt never calls `listen()` for you, so the server keeps Node's defaults: 300 s
+to receive a whole request, 60 s for its headers. `@basaltkit/fastify` uses
+30 s. To match it, set the limits on the server `listen()` returns:
+
+```ts
+const server = app.container.get(EXPRESS).listen(3000)
+server.requestTimeout = 30_000 // the whole request, body included
+server.headersTimeout = 10_000
+```
+
+Raise `requestTimeout` if you accept large `upload()` bodies over slow links.
+See [Server timeouts](https://basaltkit-docs.pages.dev/guide/production#server-timeouts)
+in the production guide.
+
 ### Bring your own Express app
 
 If you already have an Express app with your own middleware, pass it to the plugin:
