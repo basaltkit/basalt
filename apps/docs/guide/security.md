@@ -1094,6 +1094,10 @@ security plugin turns the build red instead of shipping.
 ## Supply chain
 
 CI runs `pnpm audit` (high severity), **CodeQL** SAST, and **Dependabot** keeps
-dependencies and Actions current. Releases publish to npm with **provenance**
-(`NPM_CONFIG_PROVENANCE`) via changesets — no manual tokens or OTP in the
-pipeline.
+dependencies and Actions current. Releases publish to npm via changesets with
+**provenance** requested (`PNPM_CONFIG_PROVENANCE`; pnpm 11 ignores the
+`NPM_CONFIG_` prefix), with no manual tokens or OTP in the pipeline. After a
+publish, the release job checks that npm shows a provenance attestation for
+every version it published, and fails if one is missing. Versions published
+before this check landed carry no attestation (issue #409). Verify a version
+with `npm view <pkg>@<version> dist.attestations` or `npm audit signatures`.
