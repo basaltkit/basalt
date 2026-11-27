@@ -1131,6 +1131,11 @@ o security plugin ponha o build vermelho em vez de ir para produção.
 ## Cadeia de fornecimento
 
 O CI corre `pnpm audit` (severidade alta), **CodeQL** SAST, e o **Dependabot**
-mantém dependências e Actions atualizadas. Os releases publicam no npm com
-**provenance** (`NPM_CONFIG_PROVENANCE`) via changesets — sem tokens manuais ou
-OTP no pipeline.
+mantém dependências e Actions atualizadas. Os releases publicam no npm via
+changesets com **provenance** pedida (`PNPM_CONFIG_PROVENANCE`; o pnpm 11 ignora
+o prefixo `NPM_CONFIG_`), sem tokens manuais ou OTP no pipeline. Depois de
+publicar, o job de release confirma que o npm mostra uma attestation de
+provenance para cada versão publicada, e falha se faltar alguma. As versões
+publicadas antes desta verificação não têm attestation (issue #409). Para
+verificar uma versão: `npm view <pkg>@<versão> dist.attestations` ou
+`npm audit signatures`.
