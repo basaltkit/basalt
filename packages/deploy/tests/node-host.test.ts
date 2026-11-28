@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { DeployContext } from '../src/context.js'
-import { checkSchema } from '../src/env-check.js'
+import { ask } from '../src/config.js'
+import { answerProblem, checkSchema } from '../src/env-check.js'
+import { answerQuestions } from '../src/env-step.js'
 import { nodeHost, withOwnNode, type Output } from '../src/host.js'
 import { acmeConfig } from './fake-host.js'
 
@@ -59,6 +61,33 @@ describe('the real host', () => {
     } finally {
       delete process.env['LEAK_FROM_SHELL']
     }
+  })
+
+  it('checks each answer against the schema while it can still be asked again (only that key counts)', async () => {
+    await writeFile(join(dir, 'answers.mjs'), `
+      const report = []
+      if (!process.env.DATABASE_URL) report.push('DATABASE_URL: Required')
+      const token = process.env.TWILIO_AUTH_TOKEN ?? ''
+      if (token.length !== 32) report.push('TWILIO_AUTH_TOKEN: String must contain exactly 32 character(s)')
+      if (report.length) { const e = new Error('invalid'); e.name = 'EnvValidationError'; e.report = report; throw e }
+      export const env = {}
+    `)
+    const base = ctxFor('answers.mjs')
+    // DATABASE_URL is missing too: not this answer's problem.
+    expect(await answerProblem(base, 'TWILIO_AUTH_TOKEN', 'x'.repeat(31), new Map())).toBe('String must contain exactly 32 character(s)')
+    expect(await answerProblem(base, 'TWILIO_AUTH_TOKEN', 'x'.repeat(32), new Map())).toBeUndefined()
+    expect(await answerProblem(ctxFor('missing.mjs'), 'TWILIO_AUTH_TOKEN', 'x', new Map())).toBeUndefined()
+
+    const warnings: string[] = []
+    const typed = ['x'.repeat(31), 'y'.repeat(32)]
+    const real = nodeHost({ ...quiet, warn: (line) => warnings.push(line) })
+    const host = Object.assign(Object.create(real) as typeof real, { prompt: async () => typed.shift(), env: {} })
+    const ctx: DeployContext = { ...base, host, config: acmeConfig({ env: { schema: 'answers.mjs', ask: { TWILIO_AUTH_TOKEN: ask.secret('Twilio auth token') } } }) }
+    const plan = { questions: ['TWILIO_AUTH_TOKEN'], changes: [], values: new Map<string, string>() } as never as Parameters<typeof answerQuestions>[1]
+    expect(await answerQuestions(ctx, plan)).toEqual([])
+    expect(plan.changes).toEqual([expect.objectContaining({ key: 'TWILIO_AUTH_TOKEN', value: 'y'.repeat(32) })])
+    expect(warnings).toEqual(['TWILIO_AUTH_TOKEN: String must contain exactly 32 character(s) — try again'])
+    expect(warnings.join('')).not.toContain('x'.repeat(31))
   })
 
   it('reports a schema module that does not load', async () => {

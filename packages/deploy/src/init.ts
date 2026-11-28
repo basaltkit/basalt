@@ -48,7 +48,11 @@ export interface ProjectFacts {
   buildScript: string | undefined
   web: string | undefined
   compose: ComposeFact | undefined
-  server: { vhosts: string[]; busyPorts: number[] } | undefined
+  /**
+   * With `--server`: the Apache vhosts serving the domain, the ports taken
+   * (3000–3099), and the loopback port those vhosts already proxy to.
+   */
+  server: { vhosts: string[]; busyPorts: number[]; proxyPort?: number } | undefined
   /** `/readyz` when the app declares one (readiness: database and dependencies), else `/health`. */
   health: '/readyz' | '/health'
 }
@@ -283,17 +287,28 @@ async function detectCompose(host: Host, dir: string, file: string, app: string)
   return { file, images, upstream, env }
 }
 
-async function detectServer(host: Host, domain: string): Promise<{ vhosts: string[]; busyPorts: number[] }> {
+async function detectServer(host: Host, domain: string): Promise<NonNullable<ProjectFacts['server']>> {
   const vhosts: string[] = []
+  const proxied = new Set<number>()
   for (const name of (await host.list('/etc/apache2/sites-available').catch(() => [])).sort()) {
     if (!name.endsWith('.conf')) continue
     const text = await host.readFile(`/etc/apache2/sites-available/${name}`)
     const served = [...(text ?? '').matchAll(/^\s*Server(?:Name|Alias)\s+(.+)$/gim)].flatMap((m) => (m[1] as string).trim().split(/\s+/))
-    if (served.some((h) => h === domain || h === `*.${domain}`)) vhosts.push(name)
+    if (!served.some((h) => h === domain || h === `*.${domain}`)) continue
+    vhosts.push(name)
+    for (const m of (text ?? '').matchAll(/^\s*ProxyPass(?:Reverse)?\s+\S+\s+(?:https?|ws):\/\/(?:127\.0\.0\.1|localhost):(\d+)/gim)) proxied.add(Number(m[1]))
   }
   const ss = await host.exec('ss', ['-ltnH'], {})
   const busyPorts = [...new Set([...ss.stdout.matchAll(/:(\d+)\s/g)].map((m) => Number(m[1])).filter((p) => p >= 3000 && p < 3100))].sort((a, b) => a - b)
-  return { vhosts, busyPorts }
+  // One port across the vhosts is the app's; several (an API and a share
+  // service) is not a guess init makes.
+  return { vhosts, busyPorts, ...(proxied.size === 1 ? { proxyPort: [...proxied][0] as number } : {}) }
+}
+
+/** The first port from 3000 that nothing listens on (3000–3099, as `ss` saw it). */
+function firstFreePort(busy: number[]): number | undefined {
+  for (let port = 3000; port < 3100; port++) if (!busy.includes(port)) return port
+  return undefined
 }
 
 function parseJson(text: string | undefined): unknown {
@@ -383,8 +398,20 @@ export function renderConfig(facts: ProjectFacts, answers: InitAnswers): string 
     lines.push('  }),')
   } else {
     helpers.add('pm2')
-    const avoid = facts.server?.busyPorts ?? []
-    lines.push(`  runtime: pm2(${avoid.length ? `{ avoid: [${avoid.join(', ')}] }` : ''}),${avoid.length ? '   // ports already taken on this server' : ''}`)
+    const server = facts.server
+    const avoid = server?.busyPorts ?? []
+    // Behind Apache the vhost names the port, and it is written before the
+    // first deploy: an `auto` port picked then may not be the one it says.
+    // So pin it: the one the vhost already proxies to, else one free now.
+    const pinned = answers.proxy === 'apache' && server ? (server.proxyPort ?? firstFreePort(avoid)) : undefined
+    if (pinned !== undefined) {
+      const note = server?.proxyPort !== undefined
+        ? `the port ${server.vhosts.join(', ')} proxies to`
+        : `free on this server now: your vhost proxies to 127.0.0.1:${pinned}`
+      lines.push(`  runtime: pm2({ port: ${pinned} }),   // ${note}`)
+    } else {
+      lines.push(`  runtime: pm2(${avoid.length ? `{ avoid: [${avoid.join(', ')}] }` : ''}),${avoid.length ? '   // ports already taken on this server' : ''}`)
+    }
   }
 
   if (answers.proxy === 'caddy') {

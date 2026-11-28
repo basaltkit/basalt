@@ -118,6 +118,15 @@ describe('reading the project', () => {
       .on(({ command }) => (command === 'ss' ? ok('LISTEN 0 511 *:3000 *:*\nLISTEN 0 4096 127.0.0.1:3001 0.0.0.0:*\nLISTEN 0 4096 0.0.0.0:22 0.0.0.0:*\n') : undefined))
     expect((await detectProject(host, DIR, { server: 'acme.example.ao' })).server).toEqual({ vhosts: ['acme.conf'], busyPorts: [3000, 3001] })
   })
+
+  it('--server: the loopback port the domain\'s vhosts already proxy to (one port only)', async () => {
+    const vhost = (port: number, extra = '') => `<VirtualHost *:443>\n  ServerName acme.example.ao\n  ProxyPass /api http://127.0.0.1:${port}/api\n  ProxyPassReverse /api http://127.0.0.1:${port}/api\n${extra}`
+    const ss = ({ command }: { command: string }) => (command === 'ss' ? ok('LISTEN 0 511 *:3000 *:*\n') : undefined)
+    const one = scaffold().put('/etc/apache2/sites-available/acme.conf', vhost(3007)).on(ss)
+    expect((await detectProject(one, DIR, { server: 'acme.example.ao' })).server).toEqual({ vhosts: ['acme.conf'], busyPorts: [3000], proxyPort: 3007 })
+    const two = scaffold().put('/etc/apache2/sites-available/acme.conf', vhost(3007, '  ProxyPass /share http://localhost:3010/\n')).on(ss)
+    expect((await detectProject(two, DIR, { server: 'acme.example.ao' })).server?.proxyPort).toBeUndefined()
+  })
 })
 
 describe('the file', () => {
@@ -137,6 +146,20 @@ describe('the file', () => {
     expect(source).toContain(`health: { path: '/health' }`)
     expect(source).not.toContain('tenants:')
     expect(source).not.toContain('branch:')
+  })
+
+  it('pm2 behind Apache with --server: the port is pinned before anyone writes the vhost', async () => {
+    const facts = await detectProject(scaffold(), DIR)
+    const render = (server: NonNullable<typeof facts.server>, proxy: 'apache' | 'caddy' = 'apache') =>
+      renderConfig({ ...facts, server }, { domain: 'acme.example.ao', tenants: 'none', branch: 'main', proxy })
+    // The vhost already proxies somewhere: that is the app's port.
+    expect(render({ vhosts: ['acme.conf'], busyPorts: [3000, 3002], proxyPort: 3007 }))
+      .toContain('runtime: pm2({ port: 3007 }),   // the port acme.conf proxies to')
+    // No vhost yet: the first port free now, said so the vhost can be written against it.
+    expect(render({ vhosts: [], busyPorts: [3000, 3001, 3002] }))
+      .toContain('runtime: pm2({ port: 3003 }),   // free on this server now: your vhost proxies to 127.0.0.1:3003')
+    // Caddy writes its own site with the port the deploy picks: auto, minus the taken ones.
+    expect(render({ vhosts: [], busyPorts: [3000] }, 'caddy')).toContain('runtime: pm2({ avoid: [3000] }),')
   })
 
   it('a compose app (Globex\'s shape): images, upstream, its migration script, tenants, branch, server vhosts', async () => {

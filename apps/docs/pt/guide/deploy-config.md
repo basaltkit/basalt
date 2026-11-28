@@ -163,6 +163,12 @@ faz quando uma chave falta ou está vazia. A resposta fica guardada.
 Com `optional: true` a resposta pode ficar vazia: a aplicação corre sem esse
 valor (por exemplo, o correio vai para o log).
 
+Quando o `env.schema` aponta para o `src/env.ts` da aplicação, cada resposta é
+verificada contra ele assim que é escrita, e volta a ser perguntada (até três
+vezes) se o schema a recusar: um token com um carácter a menos é apanhado na
+pergunta, e não no validate. Só contam os problemas dessa chave. O aviso repete
+a regra do schema, nunca o valor.
+
 ### `derive` {#env-derive}
 
 ```ts
@@ -346,6 +352,12 @@ Como a aplicação corre. Obrigatório: `pm2()` ou `compose()`.
 | `script` | `'start'` | O script do package.json que o processo corre |
 | `port` | `'auto'` | `'auto'` mantém o `PORT` do `.env`, senão escolhe a primeira porta livre a partir de 3000 |
 | `avoid` | `[]` | Portas que o `'auto'` nunca escolhe |
+
+Atrás do Apache, é o vhost que diz a porta, e escreves-o antes do primeiro
+deploy. Por isso o `basalt-deploy init --domain=<host> --server`, corrido no servidor, fixa uma: a porta
+para onde o vhost do domínio já faz proxy, ou então a primeira porta livre no
+servidor nesse momento. Escreve essa porta em `pm2({ port })` e indica-a num
+comentário.
 | `loadEnv` | `true` | Entrega à aplicação o seu `env.file`; vê abaixo |
 
 O processo recebe sempre `NODE_ENV`, `PORT` e `HOST` do pm2. Com `loadEnv`
