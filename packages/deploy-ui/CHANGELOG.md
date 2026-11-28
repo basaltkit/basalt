@@ -1,5 +1,12 @@
 # @basaltkit/deploy-ui
 
+## 0.5.3
+
+### Patch Changes
+
+- Updated dependencies [624d4f8]
+  - @basaltkit/deploy@0.12.0
+
 ## 0.5.2
 
 ### Patch Changes
