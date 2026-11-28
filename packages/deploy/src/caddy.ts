@@ -26,14 +26,14 @@ export function renderSite(ctx: DeployContext, port: number): string {
   const hosts = ctx.config.tenants === 'subdomain' ? `${domain}, *.${domain}` : domain
   const prefix = proxy.apiPrefix.replace(/\/$/, '')
   const tls = proxy.onDemandTls ? '\n\ttls {\n\t\ton_demand\n\t}\n' : ''
-  return `# Written by basalt-deploy install for "${app}". Deploys compare this file with
-# what install would write and print the difference; they never rewrite it.
-# To change it: edit deploy.config.ts, run ${INSTALL_COMMAND}
-# as the app user, then the root command it prints.
-
-${hosts} {${tls}
-\tencode gzip
-
+  // apiPrefix '': the whole host is the API — no web root, every path to the app.
+  const body = prefix === ''
+    ? `
+\t# The whole host is the API (apiPrefix ''): every path reaches the app as is; the Host is kept — the tenant is read from it.
+\treverse_proxy 127.0.0.1:${port} {
+\t\tflush_interval -1
+\t}`
+    : `
 \t# The API: ${prefix}/x reaches the app as /x; the Host is kept — the tenant is read from it.
 \thandle ${prefix}/* {
 \t\turi strip_prefix ${prefix}
@@ -46,7 +46,15 @@ ${hosts} {${tls}
 \t\troot * ${join(ctx.dir, proxy.webRoot)}
 \t\ttry_files {path} /index.html
 \t\tfile_server
-\t}
+\t}`
+  return `# Written by basalt-deploy install for "${app}". Deploys compare this file with
+# what install would write and print the difference; they never rewrite it.
+# To change it: edit deploy.config.ts, run ${INSTALL_COMMAND}
+# as the app user, then the root command it prints.
+
+${hosts} {${tls}
+\tencode gzip
+${body}
 }
 ${proxy.extra ? `\n${proxy.extra.trim()}\n` : ''}`
 }

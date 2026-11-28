@@ -10,7 +10,7 @@ import type { InstallPlan, PlanProxy } from './protocol.js'
 import { acquireLock } from './lock.js'
 import { covers } from './checks.js'
 import { aptInstall, fixCommand, packageStatus, systemPackageProblems } from './system.js'
-import { API_PREFIX, ASK_PATH, assertRootOwnedDir, caddyExtraProblem, CERT_NAME, CHECKOUT_PATH, envLocationProblem, isConfigRoot, isWebRoot, untrustedAncestor, USER_NAME, vhostFileProblem } from './trust.js'
+import { ASK_PATH, isApiPrefix, assertRootOwnedDir, caddyExtraProblem, CERT_NAME, CHECKOUT_PATH, envLocationProblem, isConfigRoot, isWebRoot, untrustedAncestor, USER_NAME, vhostFileProblem } from './trust.js'
 
 /**
  * `install` in two halves (RFC 0006 §11.4), so that root never runs code the
@@ -155,7 +155,7 @@ export function parseInstallPlan(text: string, source: string): InstallPlan {
     // Unmanaged, root writes no site: the two fields go nowhere, but they stay strings.
     const managed = proxy['managed'] !== false
     if (managed ? !isWebRoot(proxy['webRoot']) : typeof proxy['webRoot'] !== 'string') problems.push('proxy.webRoot must be a directory inside the checkout (no dot directories, not the checkout itself)')
-    if (managed ? typeof proxy['apiPrefix'] !== 'string' || !API_PREFIX.test(proxy['apiPrefix']) : typeof proxy['apiPrefix'] !== 'string') problems.push('proxy.apiPrefix must be a URL path such as /api')
+    if (managed ? !isApiPrefix(proxy['apiPrefix']) : typeof proxy['apiPrefix'] !== 'string') problems.push("proxy.apiPrefix must be a URL path such as /api, or '' (the whole host is the API)")
     if (proxy['root'] !== undefined && !isConfigRoot(proxy['root'])) problems.push('proxy.root must be an absolute directory')
     if (kind === 'apache') {
       const vhost = vhostFileProblem(app ?? '', proxy['vhost'])
@@ -317,9 +317,9 @@ export async function install(host: Host, plan: InstallPlan, user: string | unde
 function summary(host: Host, plan: InstallPlan, user: string, stateDir: string, ctx: DeployContext): void {
   const names = [plan.domain, ...(plan.tenants === 'subdomain' ? [`*.${plan.domain}`] : [])].join(', ')
   const site = plan.proxy.kind === 'apache' && plan.proxy.managed
-    ? `Apache ${vhostPaths(ctx).available} for ${names} → 127.0.0.1:${plan.port}, ${join(plan.dir, plan.proxy.webRoot)} served, certificate ${plan.proxy.certName ?? plan.domain}`
+    ? `Apache ${vhostPaths(ctx).available} for ${names} → 127.0.0.1:${plan.port}, ${plan.proxy.apiPrefix === '' ? 'API only (no web root)' : `${join(plan.dir, plan.proxy.webRoot)} served`}, certificate ${plan.proxy.certName ?? plan.domain}`
     : plan.proxy.kind === 'caddy' && plan.proxy.managed
-      ? `Caddy ${caddyPaths(ctx).site} for ${names} → 127.0.0.1:${plan.port}, ${join(plan.dir, plan.proxy.webRoot)} served`
+      ? `Caddy ${caddyPaths(ctx).site} for ${names} → 127.0.0.1:${plan.port}, ${plan.proxy.apiPrefix === '' ? 'API only (no web root)' : `${join(plan.dir, plan.proxy.webRoot)} served`}`
       : 'no proxy site'
   host.out.info(`install for "${plan.app}" (plan by @basaltkit/deploy ${plan.tool}), for ${user}, checkout ${plan.dir}:`)
   host.out.info(`  state ${stateDir} · ${site}${plan.envFiles.length ? ` · env ${plan.envFiles.join(', ')}` : ''}${plan.system?.packages.length ? ` · system packages ${plan.system.packages.join(', ')}` : ''}`)

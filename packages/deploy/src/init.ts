@@ -414,18 +414,23 @@ export function renderConfig(facts: ProjectFacts, answers: InitAnswers): string 
     }
   }
 
+  // No frontend in the project: the domain is the API's own host. A web root
+  // with nothing built into it would only answer 404 at '/' and keep the API
+  // under /api — '' sends the whole host to the app.
+  const apiOnly = facts.web === undefined
+  const apiOnlyNote = '   // no web in this project: the whole host is the API'
   if (answers.proxy === 'caddy') {
     helpers.add('caddy')
     // One certificate per tenant host, issued only for hosts the app vouches for.
     lines.push(answers.tenants === 'subdomain'
-      ? `  proxy: caddy({ onDemandTls: { ask: '/tls/allowed' } }),   // GET /tls/allowed?domain=<host> must answer 200 for the app's hosts only`
-      : '  proxy: caddy(),')
+      ? `  proxy: caddy({ ${apiOnly ? "apiPrefix: '', " : ''}onDemandTls: { ask: '/tls/allowed' } }),   // GET /tls/allowed?domain=<host> must answer 200 for the app's hosts only`
+      : apiOnly ? `  proxy: caddy({ apiPrefix: '' }),${apiOnlyNote}` : '  proxy: caddy(),')
   }
   if (answers.proxy === 'apache') {
     helpers.add('apache')
     const vhosts = facts.server?.vhosts ?? []
     if (vhosts.length) lines.push(`  proxy: apache({ managed: false, vhosts: [${vhosts.map(quote).join(', ')}] }),   // the vhosts this server already has`)
-    else lines.push('  proxy: apache(),')
+    else lines.push(apiOnly ? `  proxy: apache({ apiPrefix: '' }),${apiOnlyNote}` : '  proxy: apache(),')
   }
   lines.push(`  health: { path: ${quote(facts.health)} },`)
 

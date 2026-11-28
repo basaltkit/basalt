@@ -148,6 +148,17 @@ describe('the file', () => {
     expect(source).not.toContain('branch:')
   })
 
+  it("a project without a web gets apiPrefix '' (the whole host is the API); one with a web keeps /api", async () => {
+    const facts = await detectProject(scaffold(), DIR)
+    const answers = { domain: 'api.acme.example.ao', tenants: 'none', branch: 'main' } as const
+    expect(facts.web).toBeUndefined()
+    expect(renderConfig(facts, { ...answers, proxy: 'caddy' })).toContain(`proxy: caddy({ apiPrefix: '' }),   // no web in this project: the whole host is the API`)
+    expect(renderConfig(facts, { ...answers, proxy: 'apache' })).toContain(`proxy: apache({ apiPrefix: '' }),`)
+    const withWeb = { ...facts, web: 'web' }
+    expect(renderConfig(withWeb, { ...answers, proxy: 'caddy' })).toContain('  proxy: caddy(),')
+    expect(renderConfig(withWeb, { ...answers, proxy: 'apache' })).toContain('  proxy: apache(),')
+  })
+
   it('pm2 behind Apache with --server: the port is pinned before anyone writes the vhost', async () => {
     const facts = await detectProject(scaffold(), DIR)
     const render = (server: NonNullable<typeof facts.server>, proxy: 'apache' | 'caddy' = 'apache') =>
@@ -215,7 +226,8 @@ describe('the command', () => {
     expect(await init(scaffold(), DIR, flags({ domain: 'a.example.ao', proxy: 'nginx' }), new Set())).toBe(1)
     const host = scaffold()
     expect(await init(host, DIR, flags({ domain: 'a.example.ao', proxy: 'caddy', tenants: 'subdomain' }), new Set())).toBe(0)
-    expect(host.file(`${DIR}/deploy.config.ts`)).toContain(`proxy: caddy({ onDemandTls: { ask: '/tls/allowed' } })`)
+    // The scaffold has no web: the whole host is the API.
+    expect(host.file(`${DIR}/deploy.config.ts`)).toContain(`proxy: caddy({ apiPrefix: '', onDemandTls: { ask: '/tls/allowed' } })`)
   })
 
   it('with a terminal it asks, with defaults', async () => {
