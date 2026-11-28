@@ -78,8 +78,15 @@ describe('injectPrismaFields', () => {
     expect(content).toMatch(/tenantId\s+String/)
     expect(content).toMatch(/birthDate\s+DateTime/)
     expect(content).toContain('@@index([tenantId])')
+    expect(content).toContain('@@unique([tenantId, id])')
     // reserved 'name' not duplicated
     expect(content.match(/name\s+String/g)?.length).toBe(1)
+  })
+
+  it('adds @@unique([tenantId, id]) only once', () => {
+    const withUnique = model.replace(/\n\}\s*$/, '\n  @@unique([ tenantId, id ])\n}\n')
+    const { content } = injectPrismaFields(withUnique, [{ name: 'birthDate', type: 'DateTime' }], true)
+    expect(content.match(/@@unique/g)?.length).toBe(1)
   })
 })
 

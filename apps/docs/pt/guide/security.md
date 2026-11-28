@@ -872,6 +872,41 @@ await db.$queryRaw`
 // com tenancyExtension({ onRawInTenant: 'allow' })
 ```
 
+#### Chaves estrangeiras compostas {#composite-foreign-keys}
+
+Uma chave estrangeira composta põe o `tenantId` na própria ligação, por isso a
+base de dados recusa uma linha que aponte para uma linha de outro tenant:
+
+```prisma
+model Project {
+  id       String @id @default(cuid())
+  tenantId String
+  tasks    Task[]
+
+  @@unique([tenantId, id]) // o alvo da chave composta
+}
+
+model Task {
+  id        String   @id @default(cuid())
+  tenantId  String
+  projectId String?
+  project   Project? @relation(fields: [tenantId, projectId], references: [tenantId, id])
+}
+```
+
+`db.task.create({ data: { projectId: <projeto de outro tenant> } })` falha então
+na chave estrangeira, e o mesmo acontece a um update que mova uma task para um
+projeto desses. Uma relação opcional continua a funcionar: com `projectId` a
+null, a chave não é verificada. Evita `onDelete: SetNull` nestas relações,
+porque poria também o `tenantId` a null (o Prisma avisa). Usa `Restrict` ou
+`Cascade`.
+
+O `make:resource --prisma` acrescenta `@@unique([tenantId, id])` aos models que
+gera, e o `basalt ai:doctor` assinala uma relação entre dois models com tenant
+cuja chave estrangeira deixa o `tenantId` de fora (`tenant-fk-not-composite`).
+Com schema ou base de dados por tenant não há tabela partilhada para atravessar,
+por isso a regra não se aplica.
+
 **Defesa em profundidade — ativa RLS no Postgres.** O scoping aplicacional é uma
 camada; junta uma imposta pela base de dados, para que nem um predicado esquecido
 vaze — incluindo o `include` por chave estrangeira acima, que a extensão não vê.
