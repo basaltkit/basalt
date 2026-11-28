@@ -90,11 +90,30 @@ jobs:
         run: |
           node --input-type=module <<'EOF'
           import { execFileSync } from 'node:child_process';
-          const published = JSON.parse(process.env.PUBLISHED);
+          // changesets/action fills publishedPackages by parsing the publish
+          // output, and it does not read @changesets/cli 3's "Successfully
+          // published:" list: the first release with this step got `published`
+          // true and an empty list. The tags `changeset publish` just created
+          // on this commit name every version it put out, so they are the
+          // fallback (name@version, split at the last @).
+          let published = []
+          try { published = JSON.parse(process.env.PUBLISHED || '[]') } catch { published = [] }
+          if (published.length === 0) {
+            published = execFileSync('git', ['tag', '--points-at', 'HEAD'], { encoding: 'utf8' })
+              .split('\n').map((tag) => tag.trim()).filter(Boolean)
+              .map((tag) => ({ name: tag.slice(0, tag.lastIndexOf('@')), version: tag.slice(tag.lastIndexOf('@') + 1) }))
+              .filter(({ name, version }) => name && /^\d+\.\d+\.\d+/.test(version))
+          }
+          if (published.length === 0) {
+            console.log('::error::changesets says it published, but neither publishedPackages nor the tags on HEAD name a version')
+            process.exit(1)
+          }
           const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
           const attested = (spec) => {
             try {
-              const out = execFileSync('npm', ['view', spec, 'dist.attestations.provenance', '--json'], { encoding: 'utf8' });
+              // stderr ignored: a version the registry does not serve yet is an
+              // E404, retried below, not a log full of npm errors.
+              const out = execFileSync('npm', ['view', spec, 'dist.attestations.provenance', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
               return out.trim() !== '';
             } catch {
               return false;
