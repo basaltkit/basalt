@@ -36,6 +36,12 @@ export function isWebRoot(value: unknown): value is string {
 
 /** `/api`, `/api/v1/`: URL path segments, no dot segments, nothing a config file would parse. */
 export const API_PREFIX = /^(\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+\/?$/
+/**
+ * A managed proxy's `apiPrefix`: a URL path (`/api`, the API under it and the
+ * web at `/`), or `''`, the whole host is the API (no web root served): an API
+ * on a host of its own, its frontend elsewhere or none at all.
+ */
+export const isApiPrefix = (value: unknown): value is string => value === '' || (typeof value === 'string' && API_PREFIX.test(value))
 
 /** An on-demand TLS `ask` path on the app. */
 export const ASK_PATH = /^(\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/

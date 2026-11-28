@@ -404,7 +404,7 @@ What sits in front of the app: `apache()`, `caddy()` or `none()` (the default).
 | Option | Default | What it does |
 |---|---|---|
 | `webRoot` | `'web/dist'` | Directory served at `/`, relative to the checkout |
-| `apiPrefix` | `'/api'` | Path prefix proxied to the app (stripped) |
+| `apiPrefix` | `'/api'` | Path prefix proxied to the app (stripped). `''`: the whole host is the API, no web root served ([API on its own host](#api-only-host)) |
 | `vhost` | `<app>.conf` | File name under `sites-available/`; `<app>.conf` or starting with `<app>-` |
 | `certName` | the domain | Let's Encrypt certificate name (`/etc/letsencrypt/live/<name>/`) |
 | `root` | `/etc/apache2` | Apache's configuration directory |
@@ -423,12 +423,25 @@ checkout and port. Run `basalt-deploy vhost > acme.conf` in the checkout. It
 prints the vhost `install` would write, for this checkout's path and the app's
 port (`--port=<n>` to choose another), and you edit it from there.
 
+### An API on its own host {#api-only-host}
+
+When the domain serves only the API (`api.example.com`, with the frontend on
+another host or no frontend at all), set `apiPrefix: ''` on `caddy()` or
+`apache()`. Every path then reaches the app as is: no `DocumentRoot`, no
+`file_server`, nothing of the checkout served as a file. `build.web` cannot be
+set with it, since that web would never be served. `basalt-deploy init` writes
+`apiPrefix: ''` when the project has no web directory.
+
+```ts
+proxy: caddy({ apiPrefix: '' }),   // https://api.example.com/v1/... → the app's /v1/...
+```
+
 ### `caddy(options)` {#caddy}
 
 | Option | Default | What it does |
 |---|---|---|
 | `webRoot` | `'web/dist'` | Directory served at `/` |
-| `apiPrefix` | `'/api'` | Path prefix proxied to the app (stripped) |
+| `apiPrefix` | `'/api'` | Path prefix proxied to the app (stripped). `''`: the whole host is the API, no web root served ([API on its own host](#api-only-host)) |
 | `onDemandTls` | — | `{ ask: '/tls/allowed' }`: a certificate per host, issued only when `GET <ask>?domain=<host>` answers 200. Required for `tenants: 'subdomain'`. |
 | `extra` | — | Caddyfile text appended to the site file as is (no `import`) |
 | `managed` | `true` | `false`: the site file is the app's own, checked and never written |

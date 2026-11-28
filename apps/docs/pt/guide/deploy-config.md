@@ -413,7 +413,7 @@ O que fica à frente da aplicação: `apache()`, `caddy()` ou `none()` (por omis
 | Opção | Por omissão | O que faz |
 |---|---|---|
 | `webRoot` | `'web/dist'` | Pasta servida em `/`, relativa ao checkout |
-| `apiPrefix` | `'/api'` | Prefixo de caminho encaminhado para a aplicação (removido) |
+| `apiPrefix` | `'/api'` | Prefixo de caminho encaminhado para a aplicação (removido). `''`: o host inteiro é a API, sem raiz web servida ([API num host só dela](#api-only-host)) |
 | `vhost` | `<app>.conf` | Nome do ficheiro em `sites-available/`; `<app>.conf` ou a começar por `<app>-` |
 | `certName` | o domínio | Nome do certificado Let's Encrypt (`/etc/letsencrypt/live/<nome>/`) |
 | `root` | `/etc/apache2` | A pasta de configuração do Apache |
@@ -432,12 +432,26 @@ e a porta dela. Corre `basalt-deploy vhost > acme.conf` no checkout. Mostra o
 vhost que o `install` escreveria, com o caminho deste checkout e a porta da
 aplicação (`--port=<n>` para escolher outra), e editas a partir daí.
 
+### Uma API num host só dela {#api-only-host}
+
+Quando o domínio serve só a API (`api.example.com`, com o frontend noutro host
+ou sem frontend nenhum), define `apiPrefix: ''` no `caddy()` ou no `apache()`.
+Todos os caminhos chegam então à aplicação tal como estão: sem `DocumentRoot`,
+sem `file_server`, nada do checkout servido como ficheiro. O `build.web` não
+pode estar definido com ele, porque esse web nunca seria servido. O
+`basalt-deploy init` escreve `apiPrefix: ''` quando o projeto não tem diretório
+web.
+
+```ts
+proxy: caddy({ apiPrefix: '' }),   // https://api.example.com/v1/... → /v1/... da aplicação
+```
+
 ### `caddy(options)` {#caddy}
 
 | Opção | Por omissão | O que faz |
 |---|---|---|
 | `webRoot` | `'web/dist'` | Pasta servida em `/` |
-| `apiPrefix` | `'/api'` | Prefixo de caminho encaminhado para a aplicação (removido) |
+| `apiPrefix` | `'/api'` | Prefixo de caminho encaminhado para a aplicação (removido). `''`: o host inteiro é a API, sem raiz web servida ([API num host só dela](#api-only-host)) |
 | `onDemandTls` | — | `{ ask: '/tls/allowed' }`: um certificado por host, emitido só quando `GET <ask>?domain=<host>` responde 200. Obrigatório com `tenants: 'subdomain'`. |
 | `extra` | — | Texto de Caddyfile acrescentado tal e qual ao ficheiro do site (sem `import`) |
 | `managed` | `true` | `false`: o ficheiro do site é da própria aplicação, verificado e nunca escrito |

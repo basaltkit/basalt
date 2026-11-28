@@ -30,6 +30,8 @@ export function renderVhost(ctx: DeployContext, port: number): string {
   const alias = ctx.config.tenants === 'subdomain' ? `  ServerAlias *.${domain}\n` : ''
   const webRoot = join(ctx.dir, proxy.webRoot)
   const prefix = proxy.apiPrefix.replace(/\/$/, '')
+  // apiPrefix '': the whole host is the API — no web root at all.
+  const apiOnly = prefix === ''
   const cert = `/etc/letsencrypt/live/${proxy.certName ?? domain}`
   // Apache checks a link against the options of the directory that holds it:
   // a parent the app user can write (/home/<user>) could hold a link swapped
@@ -56,7 +58,15 @@ ${alias}  RewriteEngine On
 <IfModule mod_ssl.c>
 <VirtualHost *:443>
   ServerName ${domain}
-${alias}
+${alias}${apiOnly ? `
+  # The whole host is the API (apiPrefix ''): no DocumentRoot, nothing of the
+  # checkout is served as a file. Every path reaches the app as is; the Host
+  # header is kept — the tenant is read from it.
+  ProxyPreserveHost On
+  RequestHeader set X-Forwarded-Proto "https"
+  ProxyPass / http://127.0.0.1:${port}/ upgrade=websocket
+  ProxyPassReverse / http://127.0.0.1:${port}/
+` : `
   DocumentRoot ${webRoot}
   # The checkout is the app user's: a link it plants is followed only to a
   # file it owns too (never to /, nor to another site's files), and no
@@ -78,7 +88,7 @@ ${parents}  <Directory ${ctx.dir}>
   RequestHeader set X-Forwarded-Proto "https"
   ProxyPass ${prefix}/ http://127.0.0.1:${port}/ upgrade=websocket
   ProxyPassReverse ${prefix}/ http://127.0.0.1:${port}/
-
+`}
   SSLEngine on
   SSLCertificateFile ${cert}/fullchain.pem
   SSLCertificateKeyFile ${cert}/privkey.pem
