@@ -133,15 +133,31 @@ export async function planSystem(host: Host, dir: string, user: string): Promise
     actions.push({ what: `Node ${major} (NodeSource; engines.node ${pkg.engines?.node ?? 'unset'})`, commands: [sh(`curl -fsSL https://deb.nodesource.com/setup_${major}.x | bash -`), [...APT, 'install', '-y', '-qq', 'nodejs']] })
   }
 
-  if (pkg.packageManager?.startsWith('pnpm@')) {
-    // The lockfile's own pnpm when it records one (C11), else packageManager's.
-    const lockfile = await readCheckoutFile(host, join(dir, 'pnpm-lock.yaml'), LOCKFILE_BYTES)
-    const version = (lockfile && lockedPnpm(lockfile)) ?? pkg.packageManager.slice('pnpm@'.length).split('+')[0] as string
+  // Phase 2 runs `pnpm install` whatever package.json says, so a pnpm must be
+  // there: the lockfile's own when it records one (C11), else packageManager's.
+  const lockfile = await readCheckoutFile(host, join(dir, 'pnpm-lock.yaml'), LOCKFILE_BYTES)
+  const declared = pkg.packageManager?.startsWith('pnpm@') ? pkg.packageManager.slice('pnpm@'.length).split('+')[0] as string : undefined
+  const version = (lockfile && lockedPnpm(lockfile)) ?? declared
+  const current = (await host.exec('pnpm', ['--version'], OUTSIDE)).stdout.trim()
+  if (version !== undefined) {
     if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new DeployError(`the pnpm version the project records ("${version}") is not a version`)
     // The app user picks the version root installs globally: never one older than the floor.
     if (below(minimumVersion(version) as number[], MIN_PNPM)) throw new DeployError(`the project records pnpm ${version}; bootstrap installs pnpm ${MIN_PNPM.join('.')} or newer globally, as root — update packageManager and the lockfile`)
-    const current = (await host.exec('pnpm', ['--version'], OUTSIDE)).stdout.trim()
     if (current !== version) actions.push({ what: `pnpm ${version}${current ? ` (this server has ${current})` : ''}`, commands: [['npm', 'install', '-g', `pnpm@${version}`]] })
+  } else {
+    // Nothing says which pnpm: say so now, in the dry run too, rather than
+    // plan nothing and die at `pnpm install` (exit 127) in phase 2.
+    const usable = minimumVersion(current)
+    if (!usable || below(usable, MIN_PNPM)) {
+      throw new DeployError(
+        `package.json has no "packageManager": "pnpm@<version>" and pnpm-lock.yaml records no pnpm, so bootstrap cannot tell which pnpm to install` +
+          (current ? ` (this server has pnpm ${current}, older than ${MIN_PNPM.join('.')})` : ' (and this server has none)') +
+          '; phase 2 runs pnpm install. Run `corepack use pnpm@<version>` in the project (it writes packageManager), commit, and run bootstrap again',
+        [],
+        undefined,
+        'run `corepack use pnpm@<version>` in the project (it writes packageManager), commit, and run bootstrap again',
+      )
+    }
   }
 
   const owner = (await host.exec('stat', ['-c', '%U', dir], OUTSIDE)).stdout.trim()

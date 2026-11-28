@@ -321,8 +321,12 @@ export interface SeaweedfsService<E extends object = EnvShape> {
   image: string
   /** Host port on 127.0.0.1 for the S3 API; `auto` keeps the running container's, else the `.env` endpoint's, else the first free from 8333. */
   port: number | 'auto'
-  /** The access key a new store gets. @default the app */
-  accessKey: string
+  /**
+   * The access key a new store gets. @default a random 20-character key,
+   * generated with the store (it used to be the app's name, which then
+   * looked like a secret wherever the name appeared).
+   */
+  accessKey?: string
   buckets: Bucket[]
   /** The `.env` keys that receive the endpoint and the credentials. */
   keys: S3Keys<E>
@@ -668,7 +672,7 @@ export function dockerInfra<E extends object = EnvShape>(app: string, options: N
   }
   if (options.seaweedfs !== false && options.seaweedfs !== undefined) {
     infra.seaweedfs = {
-      image: SEAWEEDFS_IMAGE, port: 'auto', accessKey: app, buckets: [],
+      image: SEAWEEDFS_IMAGE, port: 'auto', buckets: [],
       keys: { ...DEFAULT_S3_KEYS } as S3Keys<E>,
       ...options.seaweedfs,
     }

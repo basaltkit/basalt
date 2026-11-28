@@ -73,7 +73,9 @@ describe('dedicated infra', () => {
     expect(await applyInfra(ctx, plan)).toEqual([])
     expect(await maintainServices(ctx, plan, new Map())).toEqual(['buckets: acme-documents, acme-backups'])
 
-    const secrets = Object.values(plan.secrets).filter((v) => v !== 'acme')
+    // The S3 access key is an identifier (it is in every signed request's
+    // Authorization header); the four others are the secrets.
+    const secrets = Object.values(plan.secrets).filter((v) => v !== plan.secrets['BASALT_S3_ACCESS_KEY'])
     expect(secrets).toHaveLength(4)
     const compose = host.file(`${ctx.stateDir}/infra.compose.yml`) ?? ''
     expect(compose).toContain("ports: ['127.0.0.1:")

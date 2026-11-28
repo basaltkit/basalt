@@ -97,6 +97,33 @@ describe('bootstrap, for real', () => {
     expect(host.calls.some((c) => c.command === 'npm')).toBe(false)
   })
 
+  it('without packageManager: a pnpm already there is used; none at all is said up front, in the dry run too', async () => {
+    const noPm = () => {
+      const host = server(JSON.stringify(plan()))
+      host.put(`${DIR}/package.json`, JSON.stringify({ engines: { node: '>=22.5.0' } }))
+      return host
+    }
+    // pnpm 11 on the server: nothing to install, nothing to say.
+    const present = noPm()
+    expect(await bootstrap(present, DIR, options, '0.5.0')).toBe(0)
+    expect(present.calls.some((c) => c.command === 'npm')).toBe(false)
+    // No pnpm: it used to plan nothing and die at `pnpm install` with exit 127.
+    for (const dryRun of [true, false]) {
+      const missing = noPm()
+      missing.handlers.unshift(({ command }) => (command === 'pnpm' ? fail('', 127) : undefined))
+      await expect(bootstrap(missing, DIR, { ...options, dryRun }, '0.5.0')).rejects.toThrow(
+        /no "packageManager": "pnpm@<version>" and pnpm-lock.yaml records no pnpm.*\(and this server has none\).*corepack use pnpm@<version>/,
+      )
+      expect(missing.calls.some((c) => c.command === 'setsid')).toBe(false)
+    }
+    // A pnpm the lockfile records is installed even without packageManager.
+    const locked = noPm()
+    locked.put(`${DIR}/pnpm-lock.yaml`, "lockfileVersion: '9.0'\npackageManagerDependencies:\n  pnpm:\n    specifier: 11.8.0\n    version: 11.8.0\n")
+    locked.handlers.unshift(({ command }) => (command === 'pnpm' ? fail('', 127) : command === 'npm' ? ok() : undefined))
+    expect(await bootstrap(locked, DIR, options, '0.5.0')).toBe(0)
+    expect(locked.calls.find((c) => c.command === 'npm')?.args).toEqual(['install', '-g', 'pnpm@11.8.0'])
+  })
+
   it('reads the deploy version the lockfile records', () => {
     expect(lockedDeployVersion("  '@basaltkit/deploy@0.5.0':\n")).toBe('0.5.0')
     expect(lockedDeployVersion('  /@basaltkit/deploy@1.2.3-rc.1:\n')).toBe('1.2.3-rc.1')

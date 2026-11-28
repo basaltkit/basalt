@@ -157,10 +157,28 @@ export class Redactor {
   private sorted: Array<[string, string]> | undefined
   /** Keys whose value is too short to be matched. */
   readonly short = new Set<string>()
+  /** Values known to be public: never learnt, whatever key holds them. */
+  private readonly allowed = new Set<string>()
 
-  /** `short` when the value is too short to match; `added` or `known` otherwise. */
-  add(key: string, value: string): 'added' | 'known' | 'short' | 'empty' {
+  /**
+   * Marks a value as public: the app's name, which the container, the
+   * database user and the state path all carry. A key that happens to hold
+   * it (an S3 access key that defaulted to the app name, `BASALT_PG_USER`)
+   * would otherwise make every line that names the app unreadable. Forgets
+   * the value if it was learnt before the config was known.
+   */
+  allow(value: string): void {
+    if (value === '') return
+    this.allowed.add(value)
+    for (const form of [value, encodeURIComponent(value)]) {
+      if (this.needles.delete(form)) this.sorted = undefined
+    }
+  }
+
+  /** `short` when the value is too short to match; `public` when {@link allow}ed; `added` or `known` otherwise. */
+  add(key: string, value: string): 'added' | 'known' | 'short' | 'empty' | 'public' {
     if (value === '') return 'empty'
+    if (this.allowed.has(value)) return 'public'
     if (value.length < MIN_REDACTED_LENGTH) {
       if (this.short.has(key)) return 'known'
       this.short.add(key)

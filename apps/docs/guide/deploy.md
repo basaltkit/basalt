@@ -83,6 +83,18 @@ generate) and `install-plan`. Last, it adds swap and a firewall where needed and
 runs `install`. When a step fails, bootstrap stops there. Running it again
 redoes nothing that is already done.
 
+The pnpm comes from `pnpm-lock.yaml` when the lockfile records one, else from
+`package.json`'s `packageManager`. With neither, bootstrap uses a pnpm 9 or
+newer the server already has. If there is none, it stops before doing anything
+(in `--dry-run` too) and asks you to run `corepack use pnpm@<version>` in the
+project and commit.
+
+`sudo -H npx` needs a **system** Node: sudo does not see a Node that nvm, fnm,
+volta or asdf installed for one user, and stops with `npx: command not found`.
+On such a server, install Node from NodeSource once, as an administrator. Your
+nvm Node keeps running the app. `install-plan` warns about this before it
+prints the root command. See [`node` under nvm](#node-path).
+
 ::: warning The docker group is root on the machine
 A container can mount `/`, so membership in `docker` is root in practice.
 `bootstrap` says so. The trust boundary protects against mistakes and a
@@ -437,6 +449,14 @@ ssh acme-prod 'bash -lc "command -v node"'
 From `@basaltkit/deploy` 0.5.1 on, the deploy also puts that directory first on
 `PATH` for everything it starts (`pnpm`, the app's scripts). Enable the pnpm
 your `packageManager` declares in that Node with `corepack enable`.
+
+That covers the app user's commands. Root's commands (`bootstrap`, `install`)
+run through `sudo -H npx`, which needs a system Node next to nvm's:
+
+```sh
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
 
 ### Status {#ui-status}
 

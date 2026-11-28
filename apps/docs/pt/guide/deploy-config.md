@@ -230,7 +230,7 @@ publicada, em `127.0.0.1`.
 |---|---|---|
 | `image` | `'chrislusf/seaweedfs:4.48'` | Fixa: uma atualização é uma decisão |
 | `port` | `'auto'` | Como no Postgres, a partir de 8333 |
-| `accessKey` | a aplicação | A access key que um armazenamento novo recebe |
+| `accessKey` | aleatória, 20 caracteres | A access key que um armazenamento novo recebe. Um armazenamento que já existe mantém a sua |
 | `buckets` | `[]` | Criados e mantidos; vê [Buckets](#buckets) |
 | `keys` | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` | As chaves do `.env` que recebem o endpoint e as credenciais |
 | `container` | `<app>-seaweedfs` | Adotar um contentor com outro nome |

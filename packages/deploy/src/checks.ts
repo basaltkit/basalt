@@ -1,6 +1,7 @@
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DeployContext, Finding } from './context.js'
+import type { Host } from './host.js'
 
 /** Whether a certificate name (`*.example.com` or exact) covers `host`. Wildcards cover one label only. */
 export function covers(name: string, host: string): boolean {
@@ -104,6 +105,34 @@ export async function toolingFindings(ctx: DeployContext): Promise<Finding[]> {
     if (docker.code !== 0) findings.push({ id: 'C9', level: 'error', message: 'docker compose is not available to this user' })
   }
   return findings
+}
+
+/** Where nvm, fnm, volta and asdf put a user's own `node`: invisible to root and to `sudo`'s secure_path. */
+const USER_NODE = /^\/(home|root)\/|\/\.(nvm|fnm|volta|asdf)\/|\/\.local\/share\/fnm\//
+
+/** The places a system `node` lives (NodeSource and distro packages, a manual install). */
+const SYSTEM_NODES = ['/usr/bin/node', '/usr/local/bin/node']
+
+/**
+ * Why root's commands (`bootstrap`, `install`) would not start here, if they
+ * would not: they run as `sudo -H npx …`, and `sudo` resolves `npx` on its
+ * secure_path, so a `node` that only nvm (or fnm, volta, asdf) installed for
+ * this user is not there. Said when the user is about to need root — the
+ * app's own runs are fine on nvm's node.
+ */
+export async function rootNodeProblem(host: Host): Promise<string | undefined> {
+  const found = (await host.exec('sh', ['-c', 'command -v node'], OUTSIDE)).stdout.trim()
+  if (!found || !USER_NODE.test(found)) return undefined
+  for (const path of SYSTEM_NODES) {
+    const stat = await host.stat(path)
+    if (stat?.kind === 'file' || stat?.kind === 'symlink') return undefined
+  }
+  return (
+    `node here is ${found}, a per-user install (nvm, fnm, volta or asdf): root's command runs \`sudo -H npx …\`, ` +
+    'and sudo does not see it ("npx: command not found"). Install a system Node first, once, as an administrator: ' +
+    'curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs ' +
+    '(your nvm node keeps running the app)'
+  )
 }
 
 /** The pnpm version the lockfile records for `packageManager` (`packageManagerDependencies`), if any. */

@@ -227,7 +227,7 @@ on `127.0.0.1`.
 |---|---|---|
 | `image` | `'chrislusf/seaweedfs:4.48'` | Pinned: an upgrade is a decision |
 | `port` | `'auto'` | As for Postgres, from 8333 |
-| `accessKey` | the app | The access key a new store gets |
+| `accessKey` | random, 20 characters | The access key a new store gets. An existing store keeps its own |
 | `buckets` | `[]` | Created and kept; see [Buckets](#buckets) |
 | `keys` | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` | The `.env` keys that receive the endpoint and the credentials |
 | `container` | `<app>-seaweedfs` | Adopt a container under another name |
