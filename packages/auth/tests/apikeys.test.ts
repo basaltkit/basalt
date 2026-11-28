@@ -17,8 +17,8 @@ describe('ApiKeys service', () => {
   it('rejects expired keys and hides them from listings', async () => {
     let now = 1_000
     const api = new ApiKeys({ now: () => now })
-    const expired = await api.issue({ name: 'expired', expiresAt: 2_000, userId: 'u1' })
-    const permanent = await api.issue({ name: 'permanent', userId: 'u1' })
+    const expired = await api.issue({ scopes: ['*'], name: 'expired', expiresAt: 2_000, userId: 'u1' })
+    const permanent = await api.issue({ scopes: ['*'], name: 'permanent', userId: 'u1' })
 
     now = 2_000
     expect(await api.verify(expired.key)).toBeNull()
@@ -27,8 +27,8 @@ describe('ApiKeys service', () => {
 
   it('rejects expiration dates that are not in the future', async () => {
     const api = new ApiKeys({ now: () => 1_000 })
-    await expect(api.issue({ name: 'invalid', expiresAt: 1_000 })).rejects.toThrow('expiration')
-    await expect(api.issue({ name: 'invalid', expiresAt: Number.NaN })).rejects.toThrow('expiration')
+    await expect(api.issue({ scopes: ['*'], name: 'invalid', expiresAt: 1_000 })).rejects.toThrow('expiration')
+    await expect(api.issue({ scopes: ['*'], name: 'invalid', expiresAt: Number.NaN })).rejects.toThrow('expiration')
   })
 
   it('issues a key shown once, then verifies and touches it', async () => {
@@ -49,7 +49,7 @@ describe('ApiKeys service', () => {
     expect(await api.verify('not-a-key')).toBeNull()
     expect(await api.verify('mk_live_deadbeef')).toBeNull()
 
-    const { record, key } = await api.issue({ name: 'temp', userId: 'u1' })
+    const { record, key } = await api.issue({ scopes: ['*'], name: 'temp', userId: 'u1' })
     expect(await api.verify(key)).not.toBeNull()
     await api.revoke(record.id)
     expect(await api.verify(key)).toBeNull()
@@ -57,9 +57,9 @@ describe('ApiKeys service', () => {
 
   it('lists only active keys within the filter', async () => {
     const api = new ApiKeys()
-    const a = await api.issue({ name: 'a', userId: 'u1' })
-    await api.issue({ name: 'b', userId: 'u2' })
-    const c = await api.issue({ name: 'c', userId: 'u1' })
+    const a = await api.issue({ scopes: ['*'], name: 'a', userId: 'u1' })
+    await api.issue({ scopes: ['*'], name: 'b', userId: 'u2' })
+    const c = await api.issue({ scopes: ['*'], name: 'c', userId: 'u1' })
     await api.revoke(c.record.id)
 
     const forU1 = await api.list({ userId: 'u1' })
@@ -149,5 +149,21 @@ describe('API key HTTP flow', () => {
     expect(res.json().error?.code ?? res.json().code).toBe('AUTH_SCOPE_REQUIRED')
 
     await app.shutdown()
+  })
+})
+
+describe('scopes are chosen, never defaulted (#581)', () => {
+  it("issue() without scopes is refused; ['*'] and [] are explicit choices", async () => {
+    const api = new ApiKeys()
+    await expect(api.issue({ name: 'forgot' } as never)).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining("scopes is required: name what the key may do (['reports:read']), or ['*']"),
+    })
+    expect((await api.issue({ name: 'full', scopes: ['*'] })).record.scopes).toEqual(['*'])
+    expect((await api.issue({ name: 'none', scopes: [] })).record.scopes).toEqual([])
+    const narrow = ['reports:read']
+    const issued = await api.issue({ name: 'narrow', scopes: narrow })
+    narrow.push('admin:*')
+    expect(issued.record.scopes).toEqual(['reports:read'])
   })
 })

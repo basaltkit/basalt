@@ -158,7 +158,7 @@ pipeline). O conjunto completo de regras:
 | `fastify-logger-off` | warning | observability | O `fastifyPlugin` está registado sem configuração de `logger` |
 | `missing-security-plugin` | warning | security | Não há `securityPlugin` — as respostas seguem sem headers seguros |
 | `tenant-scoping-missing` | warning | tenancy | Uma app tenant-scoped tem models Prisma sem `tenantId` (os models dos próprios `-prisma` do framework, como o `AuthUser`, são globais por desenho e ficam de fora) |
-| `tenant-fk-not-composite` | warning | tenancy | Uma relação entre dois models com tenant tem uma chave estrangeira sem `tenantId`, por isso a base de dados aceita uma ligação a uma linha de outro tenant e um `include` lê-a. Correção: uma [chave estrangeira composta](/pt/guide/security#composite-foreign-keys) |
+| `tenant-fk-not-composite` | error | tenancy | Uma relação entre dois models com tenant tem uma chave estrangeira sem `tenantId`, por isso a base de dados aceita uma ligação a uma linha de outro tenant e um `include` lê-a. Correção: uma [chave estrangeira composta](/pt/guide/security#composite-foreign-keys) |
 | `platform-route-accepts-tenant` | warning | tenancy | Uma rota junta `tenant: false` a `can: 'platform:…'`, por isso continua a correr em hosts de tenant — declara `tenant: 'never'` |
 | `in-memory-security-store` | warning | security | O estado de segurança é guardado num store em memória |
 | `framework-schema-drift` | warning | database | Um model do framework no `schema.prisma` não tem colunas que o schema do pacote `-prisma` instalado tem (correção: `basalt prisma:sync`) |

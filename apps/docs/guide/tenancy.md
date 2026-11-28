@@ -827,17 +827,17 @@ await tenancy.forEach(async (tenant) => {
 
 ### Enter only a serving tenant {#run-serving}
 
-Only the HTTP enricher checks a tenant's `status`. `run()` enters whatever it is
-given — a provisioning, suspended or deleting tenant included — because
-provisioning and maintenance must be able to. Code that acts **for** a tenant
-outside a request (a refresh by cookie, a job, a command, a webhook retry) asks
-for the check:
+Since `@basaltkit/tenancy` 4.4, `run()` checks a tenant's `status` the way the
+HTTP enricher does: code that acts **for** a tenant outside a request (a refresh
+by cookie, a job, a command, a webhook retry) cannot enter a provisioning,
+suspended or deleting one by accident.
 
 ```ts
-await tenancy.run(job.tenantId, () => sendInvoices(), { serving: true })
+await tenancy.run(job.tenantId, () => sendInvoices())                     // refuses a tenant that is not serving
+await tenancy.run(tenant.id, () => restoreBackup(), { serving: false })   // lifecycle code, on purpose
 ```
 
-`{ serving: true }` runs `assertTenantServing` before the context is entered and
+The check runs `assertTenantServing` before the context is entered and
 before any hook fires, with the enricher's errors: `TenantNotReadyError` (503)
 for `provisioning` / `failed` / `deleting`, `TenantSuspendedError` (403) for
 `suspended`, `TenantStatusUnknownError` (500) for a status tenancy does not
@@ -848,27 +848,23 @@ be stale.
 The rule: **outside a request, enter a tenant only if it is serving** — unless
 the work *is* the lifecycle (provisioning, `onDeprovision`, a migration).
 
-#### Make it the default {#serving-by-default}
+#### The default, and the way in {#serving-by-default}
 
-A flag at every call site protects only the calls that remember it. Turn the
-check on once, at the composition root, and every `run()` gets it:
-
-```ts
-tenancyPlugin({ source, resolvers, servingByDefault: true })
-```
-
-Now `tenancy.run(id, fn)` refuses a tenant that is not serving, and so does the
-`'tenancy:run'` signal that queue workers and webhook deliveries use. Code that
-must enter such a tenant says so with `{ serving: false }`. The framework's own
+The check is on by default (`servingByDefault: true`). It covers
+`tenancy.run(id, fn)` and the `'tenancy:run'` signal that queue workers and
+webhook deliveries use, so a delivery for a suspended tenant fails, and is
+retried, instead of going out. Code that must enter such a tenant says so with
+`{ serving: false }`. The framework's own
 lifecycle paths already do: `provision()`, `destroy()`, `forEach()` and the
 `tenant:migrate`, `tenant:seed` and `tenant:run` commands enter every tenant
 whatever its status. Your own lifecycle code (a migration loop, a restore)
 passes `{ serving: false }` too. `forEach()` hands you suspended tenants as
 well, so check `tenant.status` inside it when the work is *for* the tenant.
 
-`servingByDefault` is `false` in 4.x, so turning it on is your call. It becomes
-the default in the next major of `@basaltkit/tenancy`, when `{ serving: false }`
-is the only way into a tenant that is not serving.
+Until 4.3 the default was `false` and the check was opt-in (#563). An app that
+still needs the unchecked `run()` everywhere turns it off once,
+`tenancyPlugin({ servingByDefault: false })`, but `{ serving: false }` on the
+few lifecycle calls is the better fix.
 
 React to context switches anywhere with the hook:
 
@@ -881,8 +877,8 @@ app.hooks.on('tenancy:switched', ({ tenant }) => {
 A package that must enter a tenant from background code, without depending on
 `@basaltkit/tenancy`, reads the same function from the `'tenancy:run'` metadata
 signal (type `TenantRunner`): same id check, same `TenantNotFoundError`, same
-`tenancy:switched`/`tenancy:exited` pair, and the `status` check only under
-[`servingByDefault`](#serving-by-default). It runs from the
+`tenancy:switched`/`tenancy:exited` pair, and the same `status` check (unless
+[`servingByDefault: false`](#serving-by-default)). It runs from the
 caller's context, so enter from `runWithContext({}, ...)` when nothing ambient
 may leak in. `@basaltkit/webhooks` uses it for the endpoint lookup of off-request
 dispatches — see [Webhooks → Schema-per-tenant](/guide/webhooks#schema-per-tenant).
@@ -1107,7 +1103,7 @@ scoped connection URL; pass `migrate` to override it.
 | `source` | `TenantSource` | — (required) | Where tenant records are loaded from — `MemoryTenantSource` in dev, `tenancy-sqlite`/`tenancy-prisma` (or your own table) in production |
 | `resolvers` | `TenantResolver[]` | — (required) | Authoritative resolvers (subdomain, domain, route, `authoritative(fn)`) first — an unknown tenant they name resolves to none; fallbacks (header) only when no authoritative resolver named anything. Within each group the first ref that loads a tenant wins |
 | `onConflict` | `'precedence' \| 'error'` | `'precedence'` | `'error'` runs every resolver and answers `400 TENANCY_CONFLICT` when two load different tenants |
-| `servingByDefault` | `boolean` | `false` | Every `tenancy.run()` (and the `'tenancy:run'` signal) refuses a tenant that is not serving unless the caller passes `{ serving: false }`. Lifecycle paths stay open. See [Make it the default](#serving-by-default) |
+| `servingByDefault` | `boolean` | `true` (since 4.4) | Every `tenancy.run()` (and the `'tenancy:run'` signal) refuses a tenant that is not serving unless the caller passes `{ serving: false }`. Lifecycle paths stay open. `false` brings back the unchecked `run()` of 4.3. See [The default, and the way in](#serving-by-default) |
 | `required` | `boolean \| { except: (string \| RegExp)[] }` | `false` | Reject a request that resolved no tenant with `404 TENANCY_NOT_RESOLVED`, instead of running it tenant-less. `{ except }` exempts paths (health checks, landing pages) while still guarding the rest |
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:migrate`, run inside each tenant's context |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Per-tenant work for `basalt tenant:seed`, run inside each tenant's context |

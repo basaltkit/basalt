@@ -150,7 +150,7 @@ describe('ApiKeys touchEveryMs (BK-083 b)', () => {
     let now = 1_000_000
     const { store, count } = counting()
     const keys = new ApiKeys({ store, now: () => now })
-    const { key } = await keys.issue({ name: 'erp' })
+    const { key } = await keys.issue({ scopes: ['*'], name: 'erp' })
     for (let i = 0; i < 50; i++) {
       expect(await keys.verify(key)).not.toBeNull()
       now += 1_000
@@ -166,7 +166,7 @@ describe('ApiKeys touchEveryMs (BK-083 b)', () => {
   it('touchEveryMs: 0 restores a write per verification', async () => {
     const { store, count } = counting()
     const keys = new ApiKeys({ store, touchEveryMs: 0 })
-    const { key } = await keys.issue({ name: 'erp' })
+    const { key } = await keys.issue({ scopes: ['*'], name: 'erp' })
     await keys.verify(key)
     await keys.verify(key)
     await keys.verify(key)

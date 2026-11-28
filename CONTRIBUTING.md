@@ -80,8 +80,8 @@ app turns it on once, at the composition root, not at every call site. Examples:
 `tenantBoundTokens()` (BK-017) is set once in the auth wiring. BK-018 first
 shipped as `tenancy.run(id, fn, { serving: true })`, a flag every call site had
 to remember. It became `tenancyPlugin({ servingByDefault: true })`, set once,
-with `{ serving: false }` as the explicit way in for lifecycle code. The check
-becomes the default in the next major of `@basaltkit/tenancy`.
+with `{ serving: false }` as the explicit way in for lifecycle code. In 4.4 the
+check became the default (#563).
 
 ## Workflow
 

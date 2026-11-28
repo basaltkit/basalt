@@ -58,9 +58,18 @@ describe('tenancy.run({ serving: true })', () => {
     expect(switched).toEqual(['acme'])
   })
 
-  it.each(refusals)('without the option (default) still enters a %s tenant — the old behaviour', async (status) => {
-    const { tenancy } = setup([{ id: 'acme', name: 'Acme', status: status as TenantStatus }])
-    await expect(tenancy.run('acme', () => tryCtx()?.tenant?.id)).resolves.toBe('acme')
+  // #563: the check is the default; `{ serving: false }` is the explicit way in.
+  it.each(refusals)('without the option (default) refuses a %s tenant; { serving: false } still enters it', async (status) => {
+    const { tenancy, switched } = setup([{ id: 'acme', name: 'Acme', status: status as TenantStatus }])
+    await expect(tenancy.run('acme', () => tryCtx()?.tenant?.id)).rejects.toThrow()
+    expect(switched).toEqual([])
     await expect(tenancy.run('acme', () => tryCtx()?.tenant?.id, { serving: false })).resolves.toBe('acme')
+  })
+
+  it.each(refusals)('servingByDefault: false brings back the unchecked run() for a %s tenant', async (status) => {
+    const source = new MemoryTenantSource()
+    source.add({ id: 'acme', name: 'Acme', status: status as TenantStatus })
+    const tenancy = new Tenancy({ source, resolvers: [], hooks: new HookBus(), servingByDefault: false })
+    await expect(tenancy.run('acme', () => tryCtx()?.tenant?.id)).resolves.toBe('acme')
   })
 })

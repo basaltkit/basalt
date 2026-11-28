@@ -41,9 +41,9 @@ describe('allowlist validation', () => {
     const entries = Array.from({ length: API_KEY_ALLOWED_IPS_MAX + 1 }, (_, i) => `192.0.2.${i}`)
     expect(() => normalizeAllowedIps(entries)).toThrow()
     const keys = new ApiKeys()
-    await expect(keys.issue({ name: 'x', allowedIps: entries })).rejects.toBeInstanceOf(ApiKeyInputError)
-    await expect(keys.issue({ name: 'x', allowedIps: ['10.0.0.5/8'] })).rejects.toThrow(/not a network address/)
-    expect((await keys.issue({ name: 'x', allowedIps: entries.slice(0, API_KEY_ALLOWED_IPS_MAX) })).record.allowedIps).toHaveLength(
+    await expect(keys.issue({ scopes: ['*'], name: 'x', allowedIps: entries })).rejects.toBeInstanceOf(ApiKeyInputError)
+    await expect(keys.issue({ scopes: ['*'], name: 'x', allowedIps: ['10.0.0.5/8'] })).rejects.toThrow(/not a network address/)
+    expect((await keys.issue({ scopes: ['*'], name: 'x', allowedIps: entries.slice(0, API_KEY_ALLOWED_IPS_MAX) })).record.allowedIps).toHaveLength(
       API_KEY_ALLOWED_IPS_MAX,
     )
   })
@@ -79,7 +79,7 @@ describe('allowlist check', () => {
   it('authenticate: ip_not_allowed carries the record and never touches lastUsedAt', async () => {
     const store = new MemoryApiKeyStore()
     const keys = new ApiKeys({ store, touchEveryMs: 0 })
-    const { record, key } = await keys.issue({ name: 'x', allowedIps: ['10.0.0.0/8'] })
+    const { record, key } = await keys.issue({ scopes: ['*'], name: 'x', allowedIps: ['10.0.0.0/8'] })
     const refused = await keys.authenticate(key, { ip: '192.0.2.1' })
     expect(refused).toMatchObject({ ok: false, reason: 'ip_not_allowed', record: { id: record.id } })
     expect((await store.findById(record.id))?.lastUsedAt).toBeUndefined()

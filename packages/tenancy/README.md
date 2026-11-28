@@ -148,9 +148,9 @@ await tenancy.forEach(
 
 `run()` accepts either the `Tenant` object or the `id` (which is loaded from the source; if it doesn't exist, it throws `TenantNotFoundError`). Either way the id must pass the tenant-id grammar — `run({ id: '../x' }, …)` throws `InvalidTenantIdError` (400) instead of making `../x` the context tenant.
 
-`run()` does not check the tenant's `status` by default (provisioning and maintenance must enter a tenant that is not ready). Outside a request, code that acts *for* a tenant — a refresh by cookie, a job, a command — should only enter a serving one: `tenancy.run(id, fn, { serving: true })` throws the HTTP enricher's errors (`TenantNotReadyError` 503, `TenantSuspendedError` 403, `TenantStatusUnknownError` 500) before entering the context or firing any hook.
+`run()` checks the tenant's `status` by default (since 4.4, #563), like the HTTP enricher: a refresh by cookie, a job or a command that acts *for* a tenant cannot enter a provisioning, suspended or deleting one. It throws the enricher's errors (`TenantNotReadyError` 503, `TenantSuspendedError` 403, `TenantStatusUnknownError` 500) before entering the context or firing any hook. The same goes for the `'tenancy:run'` signal queue workers and webhook deliveries use.
 
-Better, turn the check on once for the whole app: `tenancyPlugin({ servingByDefault: true })` makes every `run()` (and the `'tenancy:run'` signal queue workers and webhook deliveries use) refuse a tenant that is not serving, unless the caller passes `{ serving: false }`. The lifecycle paths — `provision()`, `destroy()`, `forEach()` and the `tenant:*` commands — already pass it. Default `false` in 4.x; it becomes the default in the next major.
+Lifecycle code enters on purpose with `tenancy.run(id, fn, { serving: false })`. The framework's own paths (`provision()`, `destroy()`, `forEach()` and the `tenant:*` commands) already do. `tenancyPlugin({ servingByDefault: false })` brings back the unchecked `run()` of 4.0–4.3.
 
 ### Fail-closed scoping — `tenantScoped()` and friends
 
@@ -253,7 +253,7 @@ it inside `<id>`'s context — e.g. `basalt tenant:run acme queue:retry`.
 | `source` | `TenantSource` | Yes | — | Where tenants are loaded from. |
 | `resolvers` | `TenantResolver[]` | Yes | — | Authoritative resolvers (subdomain, domain, route, `authoritative(fn)`) first — an unknown tenant they name resolves to none; fallbacks (header) only when no authoritative resolver named anything. Within each group, the first that loads a tenant wins. |
 | `onConflict` | `'precedence' \| 'error'` | No | `'precedence'` | `'error'` runs every resolver and answers `400 TENANCY_CONFLICT` when two load different tenants. |
-| `servingByDefault` | `boolean` | No | `false` | Every `tenancy.run()` and the `'tenancy:run'` signal refuse a tenant that is not serving unless the caller passes `{ serving: false }`. Lifecycle paths stay open. |
+| `servingByDefault` | `boolean` | No | `true` (since 4.4) | Every `tenancy.run()` and the `'tenancy:run'` signal refuse a tenant that is not serving unless the caller passes `{ serving: false }`. Lifecycle paths stay open. `false` brings back the unchecked `run()` of 4.3. |
 | `required` | `boolean \| { except: (string \| RegExp)[] }` | No | `false` | `true` → a request with no tenant gets a 404 `TENANCY_NOT_RESOLVED`. `{ except: ['/health'] }` exempts those paths (matched without the query string) and guards everything else. |
 | `onMigrate` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant migration work for `basalt tenant:migrate`. The framework iterates tenants and enters each context; you do the DB-specific part. Without it the command errors. |
 | `onSeed` | `(tenant: Tenant) => void \| Promise<void>` | No | — | Per-tenant seeding for `basalt tenant:seed`, same contract. |
@@ -361,7 +361,7 @@ misalign — prefer the object.
 | `provision(tenantOrId)` | `Promise<Tenant>` | Runs `onProvision` for a tenant left `provisioning` by `provision: 'deferred'`, then flips it to `ready`. |
 | `destroy(id, { force? })` | `Promise<void>` | Marks the tenant `deleting`, runs `onDeprovision` in its context and removes the record. `force` removes it even if the teardown threw. |
 | `resolve(request)` | `Promise<Tenant \| null>` | Runs the resolvers over `{ headers?, params?, url? }` — authoritative first, fallbacks only if none named a tenant. Throws `TenantResolutionConflictError` under `onConflict: 'error'`. |
-| `run(tenantOrId, fn, { serving? })` | `Promise<T>` | `serving: true` first refuses a tenant that cannot serve (`assertTenantServing`); omitted, it follows `servingByDefault`. Runs `fn` with `ctx().tenant` set; emits `tenancy:switched` (`via: 'run'`) on entry and `tenancy:exited` when `fn` settles (also on throw). Throws `InvalidTenantIdError` for an id outside the grammar. |
+| `run(tenantOrId, fn, { serving? })` | `Promise<T>` | Refuses a tenant that cannot serve (`assertTenantServing`) unless `serving: false`; omitted, it follows `servingByDefault` (`true`). Runs `fn` with `ctx().tenant` set; emits `tenancy:switched` (`via: 'run'`) on entry and `tenancy:exited` when `fn` settles (also on throw). Throws `InvalidTenantIdError` for an id outside the grammar. |
 | `forEach(fn, { concurrency? })` | `Promise<void>` | Runs `fn` for each tenant (requires `source.list`); default concurrency 5. |
 
 ### Resolvers

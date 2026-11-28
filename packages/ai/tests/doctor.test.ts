@@ -316,7 +316,7 @@ describe('tenant-fk-not-composite (#582)', () => {
         project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
       }
     `)
-    expect(found?.severity).toBe('warning')
+    expect(found?.severity).toBe('error')
     expect(found?.detected).toBe(
       'relations whose foreign key does not include tenantId: Task.project → Project (projectId)',
     )

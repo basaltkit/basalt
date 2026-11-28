@@ -447,16 +447,13 @@ commands take `--tenant` and do the same. Nothing opens its own
 `new TenantClient(url)` outside the plugin's pool: it bypasses the connection
 ceiling, the `destroy` hook and every `tenancy:switched` listener.
 
-**Outside a request, enter a tenant only if it is serving.** Only the HTTP
-enricher checks the tenant's status; `tenancy.run(id, fn)` enters a suspended,
-deleting or provisioning tenant as readily as a ready one, because provisioning
-needs to. A refresh by cookie, a job, a command or a retry that acts *for* the
-tenant passes `{ serving: true }` and gets the enricher's errors (503
-`TENANT_NOT_READY`, 403 `TENANT_SUSPENDED`) instead — see
-[Enter only a serving tenant](/guide/tenancy#run-serving). Better: turn on
-`tenancyPlugin({ servingByDefault: true })` once, and every `run()` checks unless
-it passes `{ serving: false }` — see
-[Make it the default](/guide/tenancy#serving-by-default). A loop over tenants
+**Outside a request, enter a tenant only if it is serving.** Since tenancy 4.4,
+`tenancy.run(id, fn)` does that by default: a refresh by cookie, a job, a command
+or a retry that acts *for* the tenant gets the enricher's errors (503
+`TENANT_NOT_READY`, 403 `TENANT_SUSPENDED`) for a tenant that is not ready — see
+[Enter only a serving tenant](/guide/tenancy#run-serving). Lifecycle code
+(provisioning, a migration loop, a restore) enters with `{ serving: false }` —
+see [The default, and the way in](/guide/tenancy#serving-by-default). A loop over tenants
 skips the ones that are not `ready` (`isTenantReady(tenant)`). A suspension
 check that only fires when a request id exists protects the HTTP surface and
 leaves every background job relaying data for a suspended customer.
@@ -504,7 +501,7 @@ one that adds the platform console.
 - [ ] `can:` on routes; role-name checks justified in a comment
 - [ ] `platform:admin <email>` CLI command; no bootstrap route, no bootstrap env password
 - [ ] first owner created inside `tenancy.run` at provisioning
-- [ ] background work uses `tenancy.run(id, fn, { serving: true })` (or `servingByDefault: true` on the plugin) / `forEach`, skips non-ready tenants, opens no ad-hoc clients
+- [ ] background work uses `tenancy.run(id, fn)` (it refuses a tenant that is not serving; only lifecycle code passes `{ serving: false }`) / `forEach`, skips non-ready tenants, opens no ad-hoc clients
 - [ ] the seven isolation tests
 
 ## What this pattern does not decide

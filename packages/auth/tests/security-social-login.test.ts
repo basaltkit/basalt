@@ -137,11 +137,11 @@ describe('adoption also revokes the credentials that live outside Auth (F16 bypa
       const auth = app.container.get(AUTH)
       const keys = app.container.get(API_KEYS)
       const pre = await auth.register('victim3@gmail.test', 'attacker-pass')
-      const { key } = await keys.issue({ name: 'backdoor', userId: pre.id })
+      const { key } = await keys.issue({ scopes: ['*'], name: 'backdoor', userId: pre.id })
       await passkeys.add({ id: 'attacker-cred', userId: pre.id, publicKey: 'pk', counter: 0, createdAt: 0 })
       // An unrelated user's key is untouched.
       const other = await auth.register('other@gmail.test', 'password123')
-      const { key: otherKey } = await keys.issue({ name: 'ok', userId: other.id })
+      const { key: otherKey } = await keys.issue({ scopes: ['*'], name: 'ok', userId: other.id })
 
       const r = await auth.socialLogin('victim3@gmail.test', { emailVerified: true })
       expect(r.user.id).toBe(pre.id)

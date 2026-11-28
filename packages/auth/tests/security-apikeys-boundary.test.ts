@@ -92,7 +92,7 @@ const mintKey = async (h: Harness, access: string, tenant: string, body: Record<
     method: 'POST',
     url: '/apikeys',
     headers: { authorization: `Bearer ${access}`, 'x-tenant-id': tenant },
-    payload: body,
+    payload: { scopes: ['*'], ...body },
   })
   expect(res.status).toBe(201)
   return res.body as { id: string; key: string; tenantId?: string; scopes: string[] }
