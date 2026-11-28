@@ -2,6 +2,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { definedEntries, type DeployConfig, type Question } from './config.js'
 import type { DeployContext, Finding } from './context.js'
 import { applyEnvChanges, envValues, formatValue, parseEnv, UnwritableValueError, type EnvChange, type EnvDocument } from './dotenv.js'
+import { answerProblem } from './env-check.js'
 import type { PromptDescriptor } from './protocol.js'
 
 /**
@@ -93,11 +94,19 @@ export async function answerQuestions(ctx: DeployContext, plan: EnvPlan, options
       if (value === '' && !question.optional) { ctx.host.out.warn(`${key} is required`); continue }
       try {
         formatValue(value, key)
-        answer = value
       } catch (error) {
         if (!(error instanceof UnwritableValueError)) throw error
         ctx.host.out.warn(error.message)
+        continue
       }
+      // An optional question left empty is the app's own choice to run without it.
+      const problem = value === '' ? undefined : await answerProblem(ctx, key, value, plan.values)
+      if (problem !== undefined) {
+        // The schema's message names the rule, never the value (a secret stays unechoed).
+        ctx.host.out.warn(`${key}: ${problem} — try again`)
+        continue
+      }
+      answer = value
     }
     if (answer === undefined) {
       if (!question.optional) { missing.push(key); continue }

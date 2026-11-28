@@ -65,6 +65,27 @@ export async function checkSchema(ctx: DeployContext, values: Map<string, string
   }
 }
 
+/**
+ * What the app's own schema says about one answer, while it can still be
+ * asked again: a 31-character token the schema wants at 32 used to pass the
+ * question and fail only at validate, after everything else was answered.
+ * Only the issues of `key` count (the other keys may not be set yet), and a
+ * schema that cannot be loaded says nothing here: validate reports it.
+ */
+export async function answerProblem(ctx: DeployContext, key: string, value: string, values: Map<string, string>): Promise<string | undefined> {
+  const schema = ctx.config.env.schema
+  if (!schema) return undefined
+  const result = await checkSchema(ctx, new Map([...values, [key, value]]))
+  const prefix = `${schema}: `
+  for (const finding of result.findings) {
+    if (!finding.message.startsWith(prefix)) continue
+    const issue = finding.message.slice(prefix.length)
+    if (issue.startsWith(`${key}: `)) return issue.slice(key.length + 2)
+    if (issue.startsWith(`${key}.`)) return issue.slice(key.length + 1)
+  }
+  return undefined
+}
+
 const FALSY = new Set(['0', 'false', 'no', 'off'])
 
 /**

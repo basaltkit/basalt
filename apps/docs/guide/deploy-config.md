@@ -160,6 +160,12 @@ when a key is absent or empty. The answer is then kept.
 `optional: true` lets the answer be empty: the app then runs without that value
 (for example, mail sent to the log).
 
+When `env.schema` points at the app's `src/env.ts`, each answer is checked
+against it as soon as it is typed, and asked again (up to three times) if the
+schema refuses it: a token one character short is caught at the question, not
+at validate. Only the issues of that key count. The warning repeats the
+schema's rule, never the value.
+
 ### `derive` {#env-derive}
 
 ```ts
@@ -340,6 +346,11 @@ How the app runs. Required: `pm2()` or `compose()`.
 | `script` | `'start'` | The package.json script the process runs |
 | `port` | `'auto'` | `'auto'` keeps the `.env`'s `PORT`, else picks the first free port from 3000 |
 | `avoid` | `[]` | Ports `'auto'` never picks |
+
+Behind Apache, the vhost names the port, and you write it before the first
+deploy. So `basalt-deploy init --domain=<host> --server`, run on the server, pins one: the port the
+domain's vhost already proxies to, or else the first port free on the server
+right now. It writes that port into `pm2({ port })` and names it in a comment.
 | `loadEnv` | `true` | Gives the app its `env.file`; see below |
 
 The process always gets `NODE_ENV`, `PORT` and `HOST` from pm2. With `loadEnv`
