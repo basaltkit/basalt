@@ -306,7 +306,8 @@ export function apiKeyRoutes(): BasaltRoute[] {
       meta: { auth: true, apiKey: false },
       body: z.object({
         name: z.string().min(1).max(100),
-        scopes: z.array(z.string().min(1)).optional(),
+        // Required (#581): a key's power is chosen, never defaulted to '*'.
+        scopes: z.array(z.string().min(1)),
         expiresAt: z.number().int().positive().optional(),
         allowedIps: z.array(z.string()).optional(),
         meta: meta.optional(),

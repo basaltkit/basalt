@@ -141,7 +141,7 @@ export interface TenancyOptions {
   validateTenantId?: (id: string) => boolean
   /** How `resolve()` treats resolvers that name different tenants. Default `'precedence'`. */
   onConflict?: ResolverConflictPolicy
-  /** See {@link TenancyPluginOptions.servingByDefault}. Default `false`. */
+  /** See {@link TenancyPluginOptions.servingByDefault}. Default `true`. */
   servingByDefault?: boolean
 }
 
@@ -150,7 +150,7 @@ export interface TenantRunOptions {
   /**
    * Refuse a tenant whose status cannot serve (anything but `ready` or no
    * status), with the error the HTTP enricher throws. Defaults to the
-   * Tenancy's `servingByDefault` (itself `false` unless turned on). Pass
+   * Tenancy's `servingByDefault` (`true` unless turned off). Pass
    * `false` to enter a tenant that is not serving on purpose — lifecycle and
    * maintenance code.
    */
@@ -224,7 +224,9 @@ export class Tenancy {
     this.canonicalDomain = options.canonicalDomain
     this.validateTenantId = options.validateTenantId ?? isValidTenantId
     this.resolution = options.onConflict !== undefined ? { onConflict: options.onConflict } : {}
-    this.servingByDefault = options.servingByDefault === true
+    // On unless turned off (#563): a security rule behind an opt-in protects
+    // only whoever remembers it.
+    this.servingByDefault = options.servingByDefault !== false
   }
 
   /** The tenant of the active context, if any. */
@@ -517,10 +519,10 @@ export class Tenancy {
    * the one just loaded; given a tenant object, its own `status` is checked
    * (pass the id when the object may be stale).
    *
-   * The default is the Tenancy's `servingByDefault`: `false` unless the app
-   * turns it on (`tenancyPlugin({ servingByDefault: true })`), in which case
-   * every `run()` checks and `{ serving: false }` is the explicit way in for
-   * code that must enter a tenant that is not ready. The framework's own
+   * The default is the Tenancy's `servingByDefault`, `true`: every `run()`
+   * checks, and `{ serving: false }` is the explicit way in for code that
+   * must enter a tenant that is not ready (an app that needs the old,
+   * unchecked default turns it off with `tenancyPlugin({ servingByDefault: false })`). The framework's own
    * lifecycle paths — `provision()`, `destroy()`, `forEach()` and the
    * `tenant:*` commands — always pass `{ serving: false }`.
    */
@@ -668,10 +670,10 @@ export interface TenancyPluginOptions {
   onConflict?: ResolverConflictPolicy
   /**
    * Make `tenancy.run()` refuse a tenant that cannot serve unless the caller
-   * passes `{ serving: false }`. Default `false` (the 4.x behaviour); it
-   * becomes the default in the next major.
+   * passes `{ serving: false }`. Default `true` since 4.4 (#563); `false`
+   * brings back the unchecked `run()` of 4.0–4.3.
    *
-   * Only the HTTP enricher checks a tenant's status otherwise, so code that
+   * Without it only the HTTP enricher checks a tenant's status, so code that
    * acts for a tenant outside a request — a refresh by cookie, a queue job, a
    * scheduled task, a webhook delivery through `'tenancy:run'` — enters a
    * suspended, provisioning or deleting tenant. Turned on here, once, every
@@ -841,9 +843,9 @@ export interface TenancyPluginOptions {
  * - emits `'tenancy:switched'` (`via: 'run'`) on the way in and
  *   `'tenancy:exited'` on the way out, so per-tenant resources (prismaPlugin's
  *   pooled client) are taken and given back;
- * - checks the tenant's `status` only under `servingByDefault: true` (then a
+ * - checks the tenant's `status` (unless `servingByDefault: false`): a
  *   suspended, provisioning or deleting tenant is refused with the enricher's
- *   errors); otherwise a suspended tenant is entered;
+ *   errors;
  * - runs from the caller's current context — call it from
  *   `runWithContext({}, ...)` when the caller's ambient state must not leak in.
  *

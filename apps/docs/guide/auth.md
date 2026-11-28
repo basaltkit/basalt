@@ -1241,6 +1241,11 @@ await apiKeys.issue({
 })
 ```
 
+`scopes` is required (since `@basaltkit/auth` 5.2, #581), in code and in the
+body of `POST /apikeys`: a key without it used to get `['*']`, every permission
+its owner has. Write `scopes: ['*']` when that is what the key is for. An empty
+array is a valid choice, a key that reaches only routes that ask for no scope.
+
 ::: warning Register both plugins
 A bearer prefixed with `mk_` is ignored by `authPlugin` and handled by
 `apiKeysPlugin`. If keys "don't work", you're likely missing `apiKeysPlugin()`.

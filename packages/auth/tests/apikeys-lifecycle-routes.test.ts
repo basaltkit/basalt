@@ -39,7 +39,8 @@ async function setup(adapter: (typeof availableAdapters)[number], store: ApiKeyS
   }
   const ana = await session('ana@example.com')
   const mint = async (headers: Record<string, string>, body: Record<string, unknown> = { name: 'ci' }) => {
-    const res = await h.call({ method: 'POST', url: '/apikeys', headers, payload: body })
+    // scopes is required (#581); these tests are about the lifecycle, not the scopes.
+    const res = await h.call({ method: 'POST', url: '/apikeys', headers, payload: { scopes: ['*'], ...body } })
     expect(res.status).toBe(201)
     return res.body as { id: string; key: string }
   }
@@ -64,6 +65,14 @@ describe.each(availableAdapters)('%s: API key lifecycle routes (BK-083)', (adapt
     expect(cleared.body.expiresAt).toBeUndefined()
     expect(cleared.body.allowedIps).toBeUndefined()
     expect(cleared.body.meta).toBeUndefined()
+  })
+
+  it('POST without scopes is a 400: a key is never full-power by omission (#581)', async () => {
+    const { h, ana } = await setup(adapter)
+    const res = await h.call({ method: 'POST', url: '/apikeys', headers: ana, payload: { name: 'ci' } })
+    expect(res.status).toBe(400)
+    const list = await h.call({ method: 'GET', url: '/apikeys', headers: ana })
+    expect(list.body).toEqual([])
   })
 
   it('PATCH refuses invalid input with a stable code', async () => {
@@ -186,7 +195,7 @@ describe.each(availableAdapters)('%s: API key lifecycle routes (BK-083)', (adapt
       method: 'POST',
       url: '/apikeys',
       headers: ana,
-      payload: { name: 'ci', allowedIps: ['192.0.2.0/24'], meta: { ticket: 'OPS-9' }, serviceId: 'sneaky' },
+      payload: { name: 'ci', scopes: ['*'], allowedIps: ['192.0.2.0/24'], meta: { ticket: 'OPS-9' }, serviceId: 'sneaky' },
     })
     expect(res.status).toBe(201)
     expect(res.body).toMatchObject({ allowedIps: ['192.0.2.0/24'], meta: { ticket: 'OPS-9' } })
@@ -196,7 +205,7 @@ describe.each(availableAdapters)('%s: API key lifecycle routes (BK-083)', (adapt
 
   it('a programmatic service key is invisible to the self-service routes', async () => {
     const { h, ana, store } = await setup(adapter)
-    const { record } = await new ApiKeys({ store }).issue({ name: 'erp', serviceId: 'erp-sync' })
+    const { record } = await new ApiKeys({ store }).issue({ scopes: ['*'], name: 'erp', serviceId: 'erp-sync' })
     const list = await h.call({ method: 'GET', url: '/apikeys', headers: ana })
     expect(list.body).toEqual([])
     const res = await h.call({ method: 'POST', url: `/apikeys/${record.id}/rotate`, headers: ana })

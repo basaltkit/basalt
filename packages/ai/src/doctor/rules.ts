@@ -212,7 +212,9 @@ export const DEFAULT_RULES: DoctorRule[] = [
       return {
         id: 'tenant-fk-not-composite',
         title: 'Foreign keys between tenant-scoped models leave tenantId out',
-        severity: 'warning',
+        // An error, not a warning (#582): it is a cross-tenant read path, and
+        // the database-level fix costs nothing at run time.
+        severity: 'error',
         category: 'tenancy',
         detected: `relations whose foreign key does not include tenantId: ${links.join('; ')}`,
         recommended:

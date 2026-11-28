@@ -37,8 +37,8 @@ export class ApiKeyNotFoundError extends BasaltError {
 
 /**
  * Invalid input to an API key operation: a bad `allowedIps` entry, `meta` over
- * its limits, `userId` together with `serviceId`, a malformed `serviceId` or
- * `scopes`, or a rotation `graceMs` out of range.
+ * its limits, `userId` together with `serviceId`, a malformed `serviceId`,
+ * missing or malformed `scopes`, or a rotation `graceMs` out of range.
  */
 export class ApiKeyInputError extends BasaltError {
   readonly status = 400
@@ -167,7 +167,12 @@ export const scopesSatisfy = (granted: readonly string[], required: readonly str
 
 export interface IssueApiKeyInput {
   name: string
-  scopes?: string[] | undefined
+  /**
+   * What the key may do, e.g. `['reports:read']`. Required (#581): a key
+   * issued without it used to get `['*']`, every permission its owner has,
+   * by omission. Write `['*']` when that is what the key is for.
+   */
+  scopes: string[]
   tenantId?: string
   /** The user the key acts as. Mutually exclusive with `serviceId`. */
   userId?: string
@@ -287,7 +292,12 @@ export class ApiKeys {
         throw new ApiKeyInputError('serviceId must be 1-128 printable characters without spaces.')
       }
     }
-    if (input.scopes !== undefined) assertScopes(input.scopes)
+    if ((input.scopes as string[] | undefined) === undefined) {
+      throw new ApiKeyInputError(
+        "scopes is required: name what the key may do (['reports:read']), or ['*'] for a key with every permission its owner has.",
+      )
+    }
+    assertScopes(input.scopes)
     const allowedIps = input.allowedIps !== undefined ? allowedIpsOf(input.allowedIps) : []
     const meta = input.meta !== undefined ? normalizeMeta(input.meta) : {}
     const { key, hash, prefix } = mintSecret()
@@ -296,7 +306,7 @@ export class ApiKeys {
       name: input.name,
       prefix,
       hash,
-      scopes: input.scopes ?? ['*'],
+      scopes: [...input.scopes],
       createdAt: this.now(),
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.tenantId !== undefined ? { tenantId: input.tenantId } : {}),

@@ -843,17 +843,17 @@ await tenancy.forEach(async (tenant) => {
 
 ### Entrar só num tenant que está a servir {#run-serving}
 
-Só o enricher HTTP verifica o `status` de um tenant. `run()` entra no que lhe
-dão — incluindo um tenant em provisionamento, suspenso ou a ser apagado —
-porque o provisionamento e a manutenção têm de o poder fazer. Código que age
-**por** um tenant fora de um pedido (um refresh por cookie, um job, um comando,
-um retry de webhook) pede a verificação:
+Desde o `@basaltkit/tenancy` 4.4, o `run()` verifica o `status` de um tenant
+como o enricher HTTP: código que age **por** um tenant fora de um pedido (um
+refresh por cookie, um job, um comando, um retry de webhook) não entra por
+engano num tenant em provisionamento, suspenso ou a ser apagado.
 
 ```ts
-await tenancy.run(job.tenantId, () => sendInvoices(), { serving: true })
+await tenancy.run(job.tenantId, () => sendInvoices())                     // recusa um tenant que não está a servir
+await tenancy.run(tenant.id, () => restoreBackup(), { serving: false })   // código de ciclo de vida, de propósito
 ```
 
-`{ serving: true }` corre `assertTenantServing` antes de entrar no contexto e
+A verificação corre `assertTenantServing` antes de entrar no contexto e
 antes de qualquer hook, com os erros do enricher: `TenantNotReadyError` (503)
 para `provisioning` / `failed` / `deleting`, `TenantSuspendedError` (403) para
 `suspended`, `TenantStatusUnknownError` (500) para um estado que o tenancy não
@@ -865,18 +865,13 @@ A regra: **fora de um pedido, entra num tenant só se ele estiver a servir** —
 a menos que o trabalho *seja* o ciclo de vida (provisionamento, `onDeprovision`,
 uma migração).
 
-#### Torná-lo o padrão {#serving-by-default}
+#### O padrão, e a forma de entrar {#serving-by-default}
 
-Uma flag em cada chamada só protege as chamadas que se lembram dela. Liga a
-verificação uma vez, na raiz da composição, e todos os `run()` passam a tê-la:
-
-```ts
-tenancyPlugin({ source, resolvers, servingByDefault: true })
-```
-
-Agora `tenancy.run(id, fn)` recusa um tenant que não está a servir, e o mesmo
-faz o sinal `'tenancy:run'` que os workers de filas e as entregas de webhooks
-usam. O código que tem de entrar num tenant assim di-lo com `{ serving: false }`.
+A verificação está ligada por omissão (`servingByDefault: true`). Cobre o
+`tenancy.run(id, fn)` e o sinal `'tenancy:run'` que os workers de filas e as
+entregas de webhooks usam, por isso uma entrega para um tenant suspenso falha, e
+é repetida, em vez de sair. O código que tem de entrar num tenant assim di-lo
+com `{ serving: false }`.
 Os caminhos de ciclo de vida do próprio framework já o fazem: `provision()`,
 `destroy()`, `forEach()` e os comandos `tenant:migrate`, `tenant:seed` e
 `tenant:run` entram em todos os tenants, seja qual for o estado. O teu próprio
@@ -884,9 +879,10 @@ código de ciclo de vida (um ciclo de migração, um restauro) também passa
 `{ serving: false }`. O `forEach()` entrega-te também os tenants suspensos, por
 isso verifica `tenant.status` lá dentro quando o trabalho é *pelo* tenant.
 
-Em 4.x o `servingByDefault` é `false`, por isso ligá-lo é decisão tua. Passa a
-ser o padrão no próximo major do `@basaltkit/tenancy`, quando `{ serving: false }`
-for a única forma de entrar num tenant que não está a servir.
+Até à 4.3 o padrão era `false` e a verificação era opcional (#563). Uma
+aplicação que ainda precise do `run()` sem verificação em todo o lado desliga-a
+uma vez, `tenancyPlugin({ servingByDefault: false })`, mas `{ serving: false }`
+nas poucas chamadas de ciclo de vida é a melhor correção.
 
 Reage a mudanças de contexto em qualquer lugar com o hook:
 
@@ -900,7 +896,7 @@ Um package que tem de entrar num tenant a partir de código em segundo plano, se
 depender de `@basaltkit/tenancy`, lê a mesma função do sinal de metadata
 `'tenancy:run'` (tipo `TenantRunner`): a mesma validação do id, o mesmo
 `TenantNotFoundError`, o mesmo par `tenancy:switched`/`tenancy:exited`, e a
-verificação de `status` só com [`servingByDefault`](#serving-by-default). Corre a partir do contexto de quem chama, por isso entra
+mesma verificação de `status` (a menos que [`servingByDefault: false`](#serving-by-default)). Corre a partir do contexto de quem chama, por isso entra
 a partir de `runWithContext({}, ...)` quando nada do ambiente pode passar. O
 `@basaltkit/webhooks` usa-o para a pesquisa de endpoints dos dispatches fora do
 pedido — ver [Webhooks → Schema por tenant](/pt/guide/webhooks#schema-por-tenant).
@@ -1130,7 +1126,7 @@ de cada tenant; passa `migrate` para o sobrepor.
 | `source` | `TenantSource` | — (obrigatório) | De onde são carregados os registos dos tenants — `MemoryTenantSource` em dev, `tenancy-sqlite`/`tenancy-prisma` (ou a tua própria tabela) em produção |
 | `resolvers` | `TenantResolver[]` | — (obrigatório) | Primeiro os autoritativos (subdomínio, domínio, rota, `authoritative(fn)`) — um tenant desconhecido que nomeiem resolve para nenhum; os de recurso (header) só quando nenhum autoritativo nomeou nada. Em cada grupo vence a primeira referência que carrega um tenant |
 | `onConflict` | `'precedence' \| 'error'` | `'precedence'` | `'error'` corre todos os resolvers e responde `400 TENANCY_CONFLICT` quando dois carregam tenants diferentes |
-| `servingByDefault` | `boolean` | `false` | Todos os `tenancy.run()` (e o sinal `'tenancy:run'`) recusam um tenant que não está a servir, a menos que quem chama passe `{ serving: false }`. Os caminhos de ciclo de vida continuam abertos. Ver [Torná-lo o padrão](#serving-by-default) |
+| `servingByDefault` | `boolean` | `true` (desde a 4.4) | Todos os `tenancy.run()` (e o sinal `'tenancy:run'`) recusam um tenant que não está a servir, a menos que quem chama passe `{ serving: false }`. Os caminhos de ciclo de vida continuam abertos. `false` repõe o `run()` sem verificação da 4.3. Ver [O padrão, e a forma de entrar](#serving-by-default) |
 | `required` | `boolean \| { except: (string \| RegExp)[] }` | `false` | Rejeita um pedido que não resolveu nenhum tenant com `404 TENANCY_NOT_RESOLVED`, em vez de o correr sem tenant. `{ except }` isenta caminhos (health checks, landing pages) e continua a proteger o resto |
 | `onMigrate` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:migrate`, corrido dentro do contexto de cada tenant |
 | `onSeed` | `(tenant) => void \| Promise<void>` | — | Trabalho por tenant para o `basalt tenant:seed`, corrido dentro do contexto de cada tenant |

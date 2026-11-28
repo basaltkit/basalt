@@ -48,7 +48,7 @@ describe('SqliteApiKeyStore migration (BK-083 lifecycle)', () => {
   it('end to end: ApiKeys.rotate on SQLite keeps the old secret only for the grace window', async () => {
     let now = 1_000_000
     const keys = new ApiKeys({ store: new SqliteApiKeyStore(openAuthDatabase()), now: () => now })
-    const { record, key: oldKey } = await keys.issue({ name: 'ci', tenantId: 't1' })
+    const { record, key: oldKey } = await keys.issue({ scopes: ['*'], name: 'ci', tenantId: 't1' })
     const { key: newKey } = await keys.rotate(record.id, { graceMs: 60_000 })
     expect((await keys.verify(oldKey))?.id).toBe(record.id)
     expect((await keys.verify(newKey))?.id).toBe(record.id)

@@ -1247,6 +1247,11 @@ const { record, key } = await apiKeys.issue({ name: 'CI pipeline', scopes: ['rep
 // key = 'mk_live_…' → mostra uma vez, nunca guardes; record tem prefix/scopes mas não o hash
 ```
 
+O `scopes` é obrigatório (desde o `@basaltkit/auth` 5.2, #581), no código e no
+body do `POST /apikeys`: uma chave sem ele recebia `['*']`, todas as permissões
+do dono. Escreve `scopes: ['*']` quando é para isso que a chave serve. Um array
+vazio é uma escolha válida: uma chave que só chega a rotas que não pedem scope.
+
 ::: warning Aviso
 Regista ambos os plugins. Um bearer com prefixo `mk_` é ignorado pelo `authPlugin` e
 tratado pelo `apiKeysPlugin`. Se as chaves "não funcionam", provavelmente falta-te o

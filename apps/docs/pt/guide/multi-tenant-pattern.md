@@ -459,15 +459,14 @@ recebem `--tenant` e fazem o mesmo. Nada abre o seu próprio
 hook `destroy` e todos os listeners de `tenancy:switched`.
 
 **Fora de um pedido, entra num tenant só se ele estiver a servir.** Só o
-enricher HTTP verifica o estado do tenant; `tenancy.run(id, fn)` entra num
-tenant suspenso, a ser apagado ou em provisionamento tão facilmente como num
-pronto, porque o provisionamento precisa disso. Um refresh por cookie, um job,
-um comando ou um retry que age *pelo* tenant passa `{ serving: true }` e recebe
-os erros do enricher (503 `TENANT_NOT_READY`, 403 `TENANT_SUSPENDED`) — ver
-[Entrar só num tenant que está a servir](/pt/guide/tenancy#run-serving). Melhor:
-liga `tenancyPlugin({ servingByDefault: true })` uma vez, e todos os `run()`
-verificam a menos que passem `{ serving: false }` — ver
-[Torná-lo o padrão](/pt/guide/tenancy#serving-by-default). Um ciclo sobre tenants salta os que não estão `ready` (`isTenantReady(tenant)`).
+enricher HTTP verificava o estado do tenant; desde o tenancy 4.4,
+`tenancy.run(id, fn)` também o faz por omissão: um refresh por cookie, um job,
+um comando ou um retry que age *pelo* tenant recebe os erros do enricher (503
+`TENANT_NOT_READY`, 403 `TENANT_SUSPENDED`) para um tenant que não está pronto —
+ver [Entrar só num tenant que está a servir](/pt/guide/tenancy#run-serving). O
+código de ciclo de vida (provisionamento, um ciclo de migração, um restauro)
+entra com `{ serving: false }` — ver
+[O padrão, e a forma de entrar](/pt/guide/tenancy#serving-by-default). Um ciclo sobre tenants salta os que não estão `ready` (`isTenantReady(tenant)`).
 Uma verificação de suspensão que só dispara quando existe um id de pedido protege a superfície
 HTTP e deixa todos os jobs em segundo plano a retransmitir dados de um cliente
 suspenso.
@@ -515,7 +514,7 @@ consola de plataforma.
 - [ ] `can:` nas rotas; verificações por nome de role justificadas num comentário
 - [ ] comando CLI `platform:admin <email>`; sem rota de bootstrap, sem password de bootstrap em env
 - [ ] primeiro owner criado dentro de `tenancy.run` no provisionamento
-- [ ] trabalho em segundo plano usa `tenancy.run(id, fn, { serving: true })` (ou `servingByDefault: true` no plugin) / `forEach`, salta tenants não prontos, não abre clientes ad-hoc
+- [ ] trabalho em segundo plano usa `tenancy.run(id, fn)` (recusa um tenant que não está a servir; só o código de ciclo de vida passa `{ serving: false }`) / `forEach`, salta tenants que não estão prontos, não abre clientes ad hoc
 - [ ] os sete testes de isolamento
 
 ## O que este padrão não decide

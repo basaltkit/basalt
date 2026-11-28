@@ -60,7 +60,8 @@ document.getElementById('create').addEventListener('submit', async (e) => {
   const expiration = String(f.get('expiresAt') || '');
   const expiresAt = expiration ? new Date(expiration).getTime() : undefined;
   if (expiration && !Number.isFinite(expiresAt)) { showError('Choose a valid expiration date.'); return; }
-  const body = JSON.stringify({ name: f.get('name'), ...(scopes.length ? { scopes } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) });
+  if (!scopes.length) { showError('Name at least one scope, or * for a key with every permission you have.'); return; }
+  const body = JSON.stringify({ name: f.get('name'), scopes, ...(expiresAt !== undefined ? { expiresAt } : {}) });
   try {
     const created = await fetch(API + '/apikeys', { ...opts, method: 'POST', body }).then(json);
     document.getElementById('error').style.display = 'none';
@@ -137,7 +138,7 @@ export function apiKeysPageHtml(options: ApiKeysPageOptions = {}): string {
 <div class="card">
   <form id="create">
     <label>Name<input name="name" placeholder="CI pipeline" required /></label>
-    <label>Scopes (comma-separated)<input name="scopes" placeholder="read, write" /></label>
+    <label>Scopes (comma-separated; * for every permission you have)<input name="scopes" placeholder="reports:read, invoices:write" required /></label>
     <label>Expires (optional)<input name="expiresAt" type="datetime-local" /></label>
     <button class="primary" type="submit">Create key</button>
   </form>

@@ -76,7 +76,7 @@ Runs a rules engine over the project. Built-in rules include:
 | `prisma-lazy-boot` | warning | server never `$connect()`s, so a wrong DB fails silently on first request |
 | `fastify-logger-off` | warning | Fastify's logger is off, so 500s never print in the terminal |
 | `tenant-scoping-missing` | warning | tenancy is on but some models lack `tenantId` |
-| `tenant-fk-not-composite` | warning | a relation between tenant-scoped models has a foreign key without `tenantId` (use a composite key) |
+| `tenant-fk-not-composite` | error | a relation between tenant-scoped models has a foreign key without `tenantId` (use a composite key) |
 | `memory-sources-in-use` | info | non-durable `Memory*Source` still wired |
 | `redis-localhost-default` | info | `REDIS_URL` defaults to localhost with a queue/subscriptions backend |
 
