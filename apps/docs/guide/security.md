@@ -840,6 +840,40 @@ await db.$queryRaw`
 // with tenancyExtension({ onRawInTenant: 'allow' })
 ```
 
+#### Composite foreign keys
+
+A composite foreign key puts `tenantId` in the link itself, so the database
+refuses a row that points at another tenant's row:
+
+```prisma
+model Project {
+  id       String @id @default(cuid())
+  tenantId String
+  tasks    Task[]
+
+  @@unique([tenantId, id]) // the target of the composite key
+}
+
+model Task {
+  id        String   @id @default(cuid())
+  tenantId  String
+  projectId String?
+  project   Project? @relation(fields: [tenantId, projectId], references: [tenantId, id])
+}
+```
+
+`db.task.create({ data: { projectId: <another tenant's project> } })` then fails
+on the foreign key, and so does an update that moves a task to such a project.
+An optional relation still works: with `projectId` null the key is not checked.
+Avoid `onDelete: SetNull` on these relations, because it would set `tenantId`
+to null as well (Prisma warns about it). Use `Restrict` or `Cascade`.
+
+`make:resource --prisma` adds `@@unique([tenantId, id])` to the models it
+generates, and `basalt ai:doctor` reports a relation between two tenant-scoped
+models whose foreign key leaves `tenantId` out (`tenant-fk-not-composite`).
+With schema- or database-per-tenant there is no shared table to cross, so the
+rule does not apply.
+
 **Defense in depth — enable Postgres RLS.** Application-layer scoping is one
 layer; add a database-enforced one so even a forgotten predicate can't leak —
 including the foreign-key `include` above, which the extension cannot see.

@@ -187,6 +187,50 @@ export const DEFAULT_RULES: DoctorRule[] = [
     },
   }),
 
+  defineRule({
+    id: 'tenant-fk-not-composite',
+    category: 'tenancy',
+    check(ctx) {
+      if (!ctx.stack.tenancy || !ctx.prisma) return null
+      const scoped = new Map(
+        ctx.prisma.models
+          .filter((model) => model.tenantScoped && !isFrameworkGlobalModel(model))
+          .map((model) => [model.name, model]),
+      )
+      const links: string[] = []
+      for (const model of scoped.values()) {
+        for (const column of model.columns ?? []) {
+          // The owning side of a relation to another tenant-scoped model whose
+          // foreign key leaves tenantId out: the database accepts a link to a
+          // row of any tenant, and an `include` then follows it.
+          if (!column.relation || !scoped.has(column.type)) continue
+          if (column.relation.fields.includes('tenantId')) continue
+          links.push(`${model.name}.${column.name} → ${column.type} (${column.relation.fields.join(', ')})`)
+        }
+      }
+      if (links.length === 0) return null
+      return {
+        id: 'tenant-fk-not-composite',
+        title: 'Foreign keys between tenant-scoped models leave tenantId out',
+        severity: 'warning',
+        category: 'tenancy',
+        detected: `relations whose foreign key does not include tenantId: ${links.join('; ')}`,
+        recommended:
+          'make each foreign key composite, (tenantId, <fk>) → (tenantId, id), so the database refuses a link to another tenant',
+        reason:
+          'The tenancy extension scopes the queried model, but a foreign-key scalar written in `data` ' +
+          '(`{ projectId: body.projectId }`) is not checked, and an `include` follows whatever key is ' +
+          'stored. With a single-column foreign key, a row can point at another tenant\'s row and ' +
+          'read it back through the include. A composite key makes the database refuse that link. ' +
+          'Postgres RLS (`tenancyExtension({ rls: true })`) is the other guard.',
+        fix:
+          'project Project @relation(fields: [tenantId, projectId], references: [tenantId, id])  ' +
+          '// + @@unique([tenantId, id]) on the referenced model; avoid onDelete: SetNull (it would null tenantId too)',
+        docs: '/guide/security#composite-foreign-keys',
+      }
+    },
+  }),
+
   // ── database ──────────────────────────────────────────────────────────────
   defineRule({
     id: 'schema-not-migrated',

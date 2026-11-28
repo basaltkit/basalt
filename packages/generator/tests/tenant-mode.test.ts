@@ -26,6 +26,8 @@ describe('tenant isolation modes', () => {
     const model = file(generateResource('Invoice', { tenant: 'column', prisma: true }), '.prisma')
     expect(model).toMatch(/tenantId\s+String/)
     expect(model).toContain('@@index([tenantId])')
+    // The target of composite foreign keys (#582).
+    expect(model).toContain('@@unique([tenantId, id])')
   })
 
   for (const mode of ['schema', 'database'] as const) {
@@ -35,7 +37,7 @@ describe('tenant isolation modes', () => {
       it('emits no tenantId column and no tenant filter', () => {
         const files = generateResource('Invoice', options)
         const model = file(files, '.prisma')
-        expect(model).not.toMatch(/tenantId\s+String|@@index/)
+        expect(model).not.toMatch(/tenantId\s+String|@@index|@@unique/)
         expect(model).toContain(`TENANT schema.prisma (${mode}-per-tenant`)
         const repo = file(files, '.repository.ts')
         expect(repo).not.toMatch(/tenantId:|tenantId }/)

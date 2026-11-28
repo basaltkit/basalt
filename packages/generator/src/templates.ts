@@ -756,7 +756,11 @@ export function prismaModelFile(n: Names, options: GeneratorOptions = {}): Gener
   const soft = options.softDelete ? '\n  deletedAt DateTime?' : ''
   const mode = tenantMode(options)
   const tenantColumn = mode === 'column' ? '\n  tenantId  String' : ''
-  const tenantIndex = mode === 'column' ? '\n\n  @@index([tenantId])' : ''
+  // `@@unique([tenantId, id])` is what another tenant-scoped model's composite
+  // foreign key, `(tenantId, <fk>) → (tenantId, id)`, references: with it the
+  // database refuses a link to another tenant's row (ai:doctor's
+  // tenant-fk-not-composite rule asks for that key).
+  const tenantIndex = mode === 'column' ? '\n\n  @@index([tenantId])\n  @@unique([tenantId, id])' : ''
   const header =
     mode === 'schema' || mode === 'database'
       ? `// Add this model to the TENANT schema.prisma (${mode}-per-tenant: no tenantId column —

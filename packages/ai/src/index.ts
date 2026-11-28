@@ -50,6 +50,7 @@ export {
   type MigrationsInfo,
   type PrismaInfo,
   type PrismaColumn,
+  type PrismaRelation,
   type PrismaModel,
   type ProjectContext,
   type ProjectReader,

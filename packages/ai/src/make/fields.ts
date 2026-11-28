@@ -128,7 +128,12 @@ export function injectPrismaFields(
   if (extras.length === 0) return { content, injected: false }
 
   let out = content.replace(nameAnchor, (line) => `${line}\n${extras.join('\n')}`)
-  if (tenantScoped) out = out.replace(/\n\}\s*$/, `\n\n  @@index([tenantId])\n}\n`)
+  if (tenantScoped) {
+    // The unique pair is the target of composite foreign keys (see the
+    // generator's prismaModelFile); added once, whatever produced the model.
+    const unique = /@@unique\(\[\s*tenantId\s*,\s*id\s*\]\)/.test(out) ? '' : '\n  @@unique([tenantId, id])'
+    out = out.replace(/\n\}\s*$/, `\n\n  @@index([tenantId])${unique}\n}\n`)
+  }
   // Drop the generator's base `name` column when the entity supplies its own
   // fields and none is literally `name` (avoids a spurious empty column).
   if (removeName) out = out.replace(/^[ \t]*name[ \t]+String\b.*\n/m, '')

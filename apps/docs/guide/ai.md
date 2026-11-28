@@ -158,6 +158,7 @@ The complete rule set:
 | `fastify-logger-off` | warning | observability | `fastifyPlugin` is registered with no `logger` config |
 | `missing-security-plugin` | warning | security | No `securityPlugin` — responses ship without secure headers |
 | `tenant-scoping-missing` | warning | tenancy | A tenant-scoped app has Prisma models without a `tenantId` (the framework's own `-prisma` models, such as `AuthUser`, are global by design and skipped) |
+| `tenant-fk-not-composite` | warning | tenancy | A relation between two tenant-scoped models has a foreign key without `tenantId`, so the database accepts a link to another tenant's row and an `include` reads it back. Fix: a [composite foreign key](/guide/security#composite-foreign-keys) |
 | `platform-route-accepts-tenant` | warning | tenancy | A route pairs `tenant: false` with `can: 'platform:…'`, so it still runs on tenant hosts — declare `tenant: 'never'` |
 | `in-memory-security-store` | warning | security | Security state is kept in an in-memory store |
 | `framework-schema-drift` | warning | database | A framework model in `schema.prisma` lacks columns the installed `-prisma` package's schema has (fix: `basalt prisma:sync`) |

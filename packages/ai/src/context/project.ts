@@ -99,6 +99,17 @@ export interface PrismaColumn {
   type: string
   optional: boolean
   list: boolean
+  /**
+   * The owning side of a relation (`@relation(fields: [...], references: [...])`):
+   * the foreign-key scalars on this model and the columns they point at.
+   */
+  relation?: PrismaRelation
+}
+
+/** The `fields` / `references` lists of a `@relation(...)` attribute. */
+export interface PrismaRelation {
+  fields: string[]
+  references: string[]
 }
 
 export interface PrismaModel {
@@ -672,13 +683,33 @@ function parseModels(schema: string): PrismaModel[] {
       const [field, rawType] = line.trim().split(/\s+/)
       if (!field || field.startsWith('@') || field.startsWith('//')) continue
       const type = (rawType ?? '').replace(/[?[\]]/g, '')
-      columns.push({ name: field, type, optional: rawType?.endsWith('?') === true, list: rawType?.endsWith('[]') === true })
+      const relation = relationOf(line)
+      columns.push({
+        name: field,
+        type,
+        optional: rawType?.endsWith('?') === true,
+        list: rawType?.endsWith('[]') === true,
+        ...(relation ? { relation } : {}),
+      })
     }
     const fields = columns.map((c) => c.name)
     const table = /@@map\(\s*"([^"]+)"\s*\)/.exec(body)?.[1]
     models.push({ name, fields, columns, tenantScoped: fields.includes('tenantId'), ...(table ? { table } : {}) })
   }
   return models
+}
+
+/** The `fields` / `references` of a field's `@relation(...)`, when it has both (the owning side). */
+function relationOf(line: string): PrismaRelation | undefined {
+  const attribute = /@relation\(([^)]*)\)/.exec(line)?.[1]
+  if (attribute === undefined) return undefined
+  const list = (key: string): string[] | undefined => {
+    const inner = new RegExp(`\\b${key}\\s*:\\s*\\[([^\\]]*)\\]`).exec(attribute)?.[1]
+    return inner === undefined ? undefined : inner.split(',').map((name) => name.trim()).filter(Boolean)
+  }
+  const fields = list('fields')
+  const references = list('references')
+  return fields && references ? { fields, references } : undefined
 }
 
 /** Drops `//` comments — only at a line start or after whitespace, so `"postgres://…"` survives. */

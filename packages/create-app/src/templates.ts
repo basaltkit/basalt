@@ -988,7 +988,7 @@ model Project {
   id        String   @id @default(uuid())${options.tenancy ? '\n  tenantId  String' : ''}
   name      String
   createdAt DateTime @default(now())
-${options.tenancy ? '\n  @@index([tenantId])' : ''}
+${options.tenancy ? '\n  @@index([tenantId])\n  @@unique([tenantId, id])' : ''}
   @@map("projects")
 }
 `

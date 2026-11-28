@@ -294,3 +294,112 @@ describe('platform-route-accepts-tenant (BK-043)', () => {
     }
   })
 })
+
+describe('tenant-fk-not-composite (#582)', () => {
+  const run = (schema: string, files: Record<string, string> = brokenFiles) =>
+    runDoctor(detectProject('/proj', memoryReader({ ...files, 'prisma/schema.prisma': schema }))).find(
+      (d) => d.id === 'tenant-fk-not-composite',
+    )
+  const head = 'datasource db { provider = "postgresql" url = env("DATABASE_URL") }'
+
+  it('flags a single-column foreign key between two tenant-scoped models', () => {
+    const found = run(`${head}
+      model Project {
+        id       String @id
+        tenantId String
+        tasks    Task[]
+      }
+      model Task {
+        id        String  @id
+        tenantId  String
+        projectId String
+        project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+      }
+    `)
+    expect(found?.severity).toBe('warning')
+    expect(found?.detected).toBe(
+      'relations whose foreign key does not include tenantId: Task.project → Project (projectId)',
+    )
+    expect(found?.docs).toBe('/guide/security#composite-foreign-keys')
+  })
+
+  it('accepts a composite key, optional or named, and lists every other offender', () => {
+    const found = run(`${head}
+      model Project {
+        id       String @id
+        tenantId String
+        @@unique([tenantId, id])
+      }
+      model Task {
+        id        String   @id
+        tenantId  String
+        projectId String?
+        project   Project? @relation("TaskProject", fields: [tenantId, projectId], references: [tenantId, id])
+        parentId  String?
+        parent    Task?    @relation("Subtasks", fields: [parentId], references: [id])
+        children  Task[]   @relation("Subtasks")
+      }
+    `)
+    expect(found?.detected).toBe('relations whose foreign key does not include tenantId: Task.parent → Task (parentId)')
+  })
+
+  it('ignores links to untenanted models and the framework identity models', () => {
+    expect(
+      run(`${head}
+        model Tenant { id String @id }
+        model AuthUser { id String @id email String @unique @@map("auth_users") }
+        model Invoice {
+          id       String   @id
+          tenantId String
+          tenant   Tenant   @relation(fields: [tenantId], references: [id])
+          ownerId  String
+          owner    AuthUser @relation(fields: [ownerId], references: [id])
+        }
+      `),
+    ).toBeUndefined()
+  })
+
+  it('stays quiet without tenancy, and with schema-per-tenant models (no tenantId)', () => {
+    const fk = `${head}
+      model Project { id String @id tenantId String }
+      model Task {
+        id        String  @id
+        tenantId  String
+        projectId String
+        project   Project @relation(fields: [projectId], references: [id])
+      }
+    `
+    const noTenancy = { ...brokenFiles, 'src/app.ts': 'export const app = createApp({ plugins: [fastifyPlugin({ routes: [] })] })' }
+    expect(run(fk, noTenancy)).toBeUndefined()
+    expect(
+      run(`${head}
+        model Project { id String @id }
+        model Task {
+          id        String  @id
+          projectId String
+          project   Project @relation(fields: [projectId], references: [id])
+        }
+      `),
+    ).toBeUndefined()
+  })
+
+  it('exposes the relation on the parsed column', () => {
+    const ctx = detectProject(
+      '/proj',
+      memoryReader({
+        ...brokenFiles,
+        'prisma/schema.prisma': `${head}
+          model Task {
+            id        String  @id
+            tenantId  String
+            projectId String
+            project   Project @relation(fields: [ tenantId , projectId ], references: [tenantId, id])
+          }
+        `,
+      }),
+    )
+    const project = ctx.prisma?.models[0]?.columns?.find((c) => c.name === 'project')
+    expect(project?.relation).toEqual({ fields: ['tenantId', 'projectId'], references: ['tenantId', 'id'] })
+    expect(ctx.prisma?.models[0]?.columns?.find((c) => c.name === 'projectId')?.relation).toBeUndefined()
+  })
+})
