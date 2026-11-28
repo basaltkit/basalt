@@ -1,5 +1,24 @@
 # @basaltkit/deploy
 
+## 0.11.0
+
+### Minor Changes
+
+- dc3c0c8: Three gaps found on a first real server:
+  
+  - **A new SeaweedFS store gets a random access key** (20 hex characters) instead of the app's name. The name was then learnt as a secret, and `--json` output redacted it everywhere: in the container, the database user, the state path, which made a failure unreadable. An existing store keeps its key. `seaweedfs.accessKey` still sets one explicitly.
+  - **The redactor never hides the app's name.** A secret-named key that holds it (`S3_ACCESS_KEY` from older stores, `BASALT_PG_USER`) is no longer redacted. This includes a value learnt from the `.env` before the config was known.
+  - **`bootstrap` without `packageManager`.** Phase 2 always runs `pnpm install`, but bootstrap only installed pnpm when `packageManager` named it: it planned nothing and died at `pnpm install` with exit 127. It now takes the lockfile's pnpm, else `packageManager`'s, else a pnpm ≥ 9 already on the server. With none of those, it stops up front, in `--dry-run` too, and says to run `corepack use pnpm@<version>`.
+  - **`install-plan` warns when root's command cannot start**: when `node` is a per-user install (nvm, fnm, volta, asdf) and there is no system Node, `sudo -H npx` fails with `npx: command not found`. The warning gives the NodeSource commands.
+- 959edc9: Two more gaps from a first real server:
+  
+  - **Answers are checked against the app's schema at the question.** With `env.schema` set, each `ask` answer runs through the app's `src/env.ts` as soon as it is typed. If the schema refuses it, the question is asked again (up to three tries). Only that key's issues count, and the warning repeats the schema's rule, never the value. A 31-character token the schema wants at 32 used to pass the question and fail only at validate.
+  - **`init --server` pins the pm2 port behind Apache.** The vhost names the port and is written before the first deploy, so an `auto` port picked at deploy time might not be the one it says. `init` now writes `pm2({ port })`: the loopback port the domain's existing vhost proxies to, or else the first port free on the server now. A comment names it. Caddy keeps `auto` with `avoid`, since it writes its own site.
+- da1faab: The last two gaps from a first real server:
+  
+  - **`install` handles a missing TLS certificate before it writes the Apache vhost.** The managed vhost names `/etc/letsencrypt/live/<certName or domain>`. Without that certificate, `apachectl configtest` failed and install put everything back and stopped. Install now checks first. If the certificate is missing, it offers to get one from Let's Encrypt, after asking: it installs certbot and the Apache plugin when needed, then runs `certbot certonly --apache`, which never edits a vhost. A "no", or no terminal, stops with the commands to run by hand. Tenants on subdomains need a wildcard, which only a DNS challenge issues, so install says how and runs nothing.
+  - **New `basalt-deploy vhost [--port=<n>]`.** It prints the vhost `install` would write, for this checkout's path and the app's port, on stdout. It is the starting point for `apache({ managed: false })`, replacing a vhost copied from an example with someone else's `/var/www/…` path and port. It does not speak `--json`, since its output is the file itself.
+
 ## 0.10.1
 
 ### Patch Changes
