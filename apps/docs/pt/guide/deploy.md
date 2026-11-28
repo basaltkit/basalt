@@ -85,6 +85,19 @@ consegue gerar) e `install-plan`. Por fim, acrescenta swap e uma firewall onde
 for preciso e corre o `install`. Quando um passo falha, o bootstrap para aí.
 Corrê-lo de novo não repete nada do que já está feito.
 
+O pnpm vem do `pnpm-lock.yaml` quando o lockfile regista um, senão do
+`packageManager` do `package.json`. Sem nenhum dos dois, o bootstrap usa um
+pnpm 9 ou mais recente que o servidor já tenha. Se não houver nenhum, para antes
+de fazer o que quer que seja (também com `--dry-run`) e pede-te que corras
+`corepack use pnpm@<versão>` no projeto e faças commit.
+
+O `sudo -H npx` precisa de um Node **do sistema**: o sudo não vê um Node que o
+nvm, o fnm, o volta ou o asdf instalaram para um utilizador, e para com
+`npx: command not found`. Num servidor assim, instala uma vez o Node da
+NodeSource, como administrador. O Node do nvm continua a correr a aplicação. O
+`install-plan` avisa disto antes de mostrar o comando de root. Vê
+[O `node` com nvm](#node-path).
+
 ::: warning O grupo docker é root na máquina
 Um contentor pode montar `/`, por isso pertencer ao grupo `docker` equivale, na
 prática, a ser root. O `bootstrap` di-lo. A fronteira de confiança protege
@@ -450,6 +463,15 @@ A partir do `@basaltkit/deploy` 0.5.1, o deploy também põe esse diretório em
 primeiro lugar no `PATH` de tudo o que lança (`pnpm`, os scripts da aplicação).
 Ativa o pnpm que o teu `packageManager` declara nesse Node com
 `corepack enable`.
+
+Isto cobre os comandos do utilizador da aplicação. Os comandos de root
+(`bootstrap`, `install`) correm através de `sudo -H npx`, que precisa de um Node
+do sistema ao lado do do nvm:
+
+```sh
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
 
 ### Status {#ui-status}
 

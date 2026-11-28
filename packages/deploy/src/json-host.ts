@@ -117,6 +117,8 @@ export function jsonHost(base: Host, writer: EventWriter, redactor: Redactor, op
     learn(pairs, given) { warnShort(learnSecrets(redactor, pairs, given ?? config)) },
     watchEnv(next, dir) {
       config = next
+      // The app's name is everywhere in the output and never a secret.
+      redactor.allow(next.app)
       envFiles.add(resolve(dir, next.env.file ?? '.env'))
       for (const mirror of next.env.mirror ?? []) envFiles.add(resolve(dir, mirror))
     },

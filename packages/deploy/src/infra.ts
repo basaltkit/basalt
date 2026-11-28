@@ -195,13 +195,13 @@ export async function planInfra(ctx: DeployContext, values: Map<string, string>)
     let secretKey = running?.env.get('AWS_SECRET_ACCESS_KEY')
     let source: ServicePlan['source'] = 'container'
     if ((!accessKey || !secretKey) && values.get(sw.keys.secretKey)) {
-      accessKey = values.get(sw.keys.accessKey) || sw.accessKey
+      accessKey = values.get(sw.keys.accessKey) || sw.accessKey || ctx.host.randomHex(10)
       secretKey = values.get(sw.keys.secretKey) as string
       source = 'env'
     }
     // Not kept in the data (unlike Postgres): an old volume opens with new
     // credentials, and the objects stay readable — verified, RFC 0010 §2.
-    if (!accessKey || !secretKey) { accessKey = sw.accessKey; secretKey = ctx.host.randomHex(24); source = 'generated' }
+    if (!accessKey || !secretKey) { accessKey = sw.accessKey ?? ctx.host.randomHex(10); secretKey = ctx.host.randomHex(24); source = 'generated' }
     let endpointPort: number | undefined
     try {
       const endpoint = values.get(sw.keys.endpoint)

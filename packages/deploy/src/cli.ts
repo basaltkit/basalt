@@ -9,6 +9,7 @@ import { jsonHost, type JsonSession } from './json-host.js'
 import { isErrorCode, RUN_ID, type ErrorCode, type EventBody } from './protocol.js'
 import { attach, cancel, createRunLog, newRunId, pruneRunLogs } from './runs.js'
 import { check } from './check.js'
+import { rootNodeProblem } from './checks.js'
 import { init } from './init.js'
 import { applyOverrides, DeployConfigError, parseOverrides, validateConfig, type DeployConfig } from './config.js'
 import { DeployAbortedError, DeployError, detectPackageManager, INSTALL_COMMAND, resolveStateDir, rootInstallCommand, type DeployContext } from './context.js'
@@ -165,6 +166,8 @@ async function writeInstallPlan(host: Host, ctx: DeployContext, cwd: string, out
   host.out.ok(`install plan written to ${path} (data only: root validates it, never runs your code)`)
   host.out.info(`root will: give ${ctx.stateDir.startsWith('/var/lib/basalt/') ? ctx.stateDir : `/var/lib/basalt/${plan.app}`} to you (0700)${plan.envFiles.length ? `, give ${plan.envFiles.join(', ')} to you (0600)` : ''}${plan.proxy.kind !== 'none' && plan.proxy.managed ? `, write the ${plan.proxy.kind} site for ${plan.domain} → 127.0.0.1:${plan.port}` : ''}`)
   const user = host.env['USER'] && USER_NAME.test(host.env['USER']) ? host.env['USER'] : '<this user>'
+  const rootNode = await rootNodeProblem(host)
+  if (rootNode) host.out.warn(rootNode)
   host.out.info('then, as an administrator (a pinned copy root owns, never this checkout\'s):')
   host.out.info(`  ${rootInstallCommand(VERSION, path, user)}`)
   host.out.result?.('install-plan', { plan, path, rootCommand: rootInstallCommand(VERSION, path, user) })

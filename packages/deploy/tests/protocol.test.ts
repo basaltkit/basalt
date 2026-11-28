@@ -184,6 +184,16 @@ describe('the redactor', () => {
     expect(new Redactor().apply('anything at all')).toEqual({ text: 'anything at all', hit: false })
   })
 
+  it("never hides the app's name, even when a secret-named key holds it, learnt before or after", () => {
+    const r = new Redactor()
+    expect(r.add('S3_ACCESS_KEY', 'larconnect-web')).toBe('added')
+    r.allow('larconnect-web')
+    expect(r.add('BASALT_PG_USER', 'larconnect-web')).toBe('public')
+    expect(r.add('S3_SECRET_KEY', 'a-real-secret-value')).toBe('added')
+    expect(r.apply('container larconnect-web-postgres for larconnect-web: a-real-secret-value').text)
+      .toBe('container larconnect-web-postgres for larconnect-web: [redacted:S3_SECRET_KEY]')
+  })
+
   it('knows secret keys by config and by name; finds passwords in URLs', () => {
     const config = { env: { generate: { SESSION: { kind: 'secret', bytes: 32 } }, ask: { SMTP: { secret: true }, NAME: { secret: false } } } } as unknown as Parameters<typeof isSecretKey>[1]
     expect(['SESSION', 'SMTP', 'API_TOKEN', 'DATABASE_URL', 'BASALT_S3_SECRET_KEY', 'PGPASSWORD'].every((k) => isSecretKey(k, config))).toBe(true)
@@ -364,6 +374,16 @@ describe('the JSON host', () => {
     expect(json.host.pid()).toBe(4100)
     expect(json.host.randomHex(2)).toBe('aaa1')
     expect(base.randomHex(2)).toBe('aaa2')
+  })
+
+  it("watchEnv makes the app's name public, even if a .env read earlier taught it as a secret", () => {
+    const redactor = new Redactor()
+    const { w } = writer()
+    const json = jsonHost(new FakeHost(), w, redactor)
+    json.learn([['S3_ACCESS_KEY', 'larconnect-web']])
+    expect(redactor.apply('larconnect-web-postgres').text).toBe('[redacted:S3_ACCESS_KEY]-postgres')
+    json.watchEnv({ app: 'larconnect-web', env: {} } as never, '/srv/larconnect')
+    expect(redactor.apply('larconnect-web-postgres').text).toBe('larconnect-web-postgres')
   })
 
 })

@@ -100,10 +100,20 @@ describe('the dedicated SeaweedFS', () => {
   it('a new store gets generated credentials and its own signing key', async () => {
     const plan = await planInfra(context(clean(), config()), new Map())
     expect(plan.services).toEqual([expect.objectContaining({ service: 'seaweedfs', container: 'acme-seaweedfs', action: 'create', port: 8333, source: 'generated' })])
-    expect(plan.secrets['BASALT_S3_ACCESS_KEY']).toBe('acme')
+    // A random access key, never the app's name: the name is in every line of
+    // the output, and a key holding it got redacted wherever the app was named.
+    const accessKey = plan.secrets['BASALT_S3_ACCESS_KEY']
+    expect(accessKey).toMatch(/^[0-9a-f]{20}$/)
+    expect(accessKey).not.toBe('acme')
     expect(plan.secrets['BASALT_S3_SECRET_KEY']).toMatch(/^[0-9a-f]{48}$/)
     expect(plan.secrets['BASALT_S3_SIGNING_KEY']).toMatch(/^[0-9a-f]{64}$/)
-    expect(Object.fromEntries(plan.env.map((c) => [c.key, c.kind === 'set' ? c.value : '']))).toMatchObject({ S3_ENDPOINT: 'http://127.0.0.1:8333', S3_ACCESS_KEY: 'acme' })
+    expect(Object.fromEntries(plan.env.map((c) => [c.key, c.kind === 'set' ? c.value : '']))).toMatchObject({ S3_ENDPOINT: 'http://127.0.0.1:8333', S3_ACCESS_KEY: accessKey })
+  })
+
+  it('an access key set in the config is the one a new store gets', async () => {
+    const custom = acmeConfig({ infra: dockerInfra('acme', { postgres: false, redis: false, seaweedfs: { buckets: ['acme-documents'], accessKey: 'acme-uploads' } }) })
+    const plan = await planInfra(context(clean(), custom), new Map())
+    expect(plan.secrets['BASALT_S3_ACCESS_KEY']).toBe('acme-uploads')
   })
 
   it('an old volume without its container is no error: the credentials are not in the data (unlike Postgres)', async () => {

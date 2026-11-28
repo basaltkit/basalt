@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { backupDatabase, backupPlaceFindings, restoreCommand } from '../src/backup.js'
-import { toolingFindings } from '../src/checks.js'
+import { rootNodeProblem, toolingFindings } from '../src/checks.js'
 import { compose, dockerInfra } from '../src/config.js'
 import { clearHold, readHold } from '../src/state.js'
 import type { InfraPlan } from '../src/infra.js'
@@ -123,5 +123,26 @@ describe('where the dumps go, before install', () => {
     await clearHold(ctx)
     expect(await readHold(ctx)).toBeUndefined()
     expect(host.files.has(`${DIR}/.basalt/hold.json`)).toBe(false)
+  })
+})
+
+describe('rootNodeProblem: root\'s sudo npx and a per-user node', () => {
+  const at = (path: string) => new FakeHost().on(({ command, args }) => (command === 'sh' && args[1] === 'command -v node' ? ok(`${path}\n`) : undefined))
+
+  it('says how to get a system node when node is only nvm\'s (sudo would not find npx)', async () => {
+    const problem = await rootNodeProblem(at('/home/ubuntu/.nvm/versions/node/v22.11.0/bin/node'))
+    expect(problem).toContain('/home/ubuntu/.nvm/versions/node/v22.11.0/bin/node, a per-user install')
+    expect(problem).toContain('npx: command not found')
+    expect(problem).toContain('https://deb.nodesource.com/setup_24.x')
+  })
+
+  it('stays quiet with a system node, alongside nvm or alone, and when there is no node at all', async () => {
+    const both = at('/home/ubuntu/.nvm/versions/node/v22.11.0/bin/node')
+    both.put('/usr/bin/node', '')
+    expect(await rootNodeProblem(both)).toBeUndefined()
+    expect(await rootNodeProblem(at('/usr/bin/node'))).toBeUndefined()
+    expect(await rootNodeProblem(at('/opt/volta/bin/node'))).toBeUndefined()
+    expect(await rootNodeProblem(new FakeHost())).toBeUndefined()
+    expect(await rootNodeProblem(at('/srv/x/.volta/bin/node'))).toContain('per-user install')
   })
 })
