@@ -427,6 +427,11 @@ cada deploy verifica que:
 - cada ficheiro está ligado em `sites-enabled` (C2);
 - cada `ProxyPass` para `127.0.0.1` aponta para a porta da aplicação (C1).
 
+Para começar um vhost destes, não copies o de outra aplicação: indica o checkout
+e a porta dela. Corre `basalt-deploy vhost > acme.conf` no checkout. Mostra o
+vhost que o `install` escreveria, com o caminho deste checkout e a porta da
+aplicação (`--port=<n>` para escolher outra), e editas a partir daí.
+
 ### `caddy(options)` {#caddy}
 
 | Opção | Por omissão | O que faz |

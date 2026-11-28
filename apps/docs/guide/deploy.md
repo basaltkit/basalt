@@ -125,9 +125,15 @@ will do before it writes anything.
 
 `run` fetches the code itself, so store the git credentials once, as the app
 user: `git config credential.helper store && git fetch`, or a read-only deploy
-key. With Apache the TLS certificate is yours to issue
-(`certbot --dns-cloudflare -d <domain> -d '*.<domain>'`). With `caddy()`, Caddy
-issues it. Then deploy:
+key. With a managed Apache vhost, `install` checks the certificate the vhost
+names (`/etc/letsencrypt/live/<certName or domain>`) before it writes the vhost.
+When the certificate is missing, `install` offers to get one from Let's Encrypt:
+it installs certbot if needed and runs `certbot certonly --apache`, which never
+edits your vhosts. It asks first, and the domain must already point at the
+server. Without a terminal, or if you answer no, it stops and prints the
+commands. Tenants on subdomains need a wildcard, which only a DNS challenge
+issues (`certbot --dns-cloudflare -d <domain> -d '*.<domain>'`), so issue that
+one yourself. With `caddy()`, Caddy issues it. Then deploy:
 
 ```sh
 sudo -u deploy -H sh -c 'cd /srv/acme && node node_modules/@basaltkit/deploy/dist/bin.js run'
