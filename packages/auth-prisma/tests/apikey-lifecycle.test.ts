@@ -105,7 +105,7 @@ describe('PrismaApiKeyStore 3.0 schema (BK-083)', () => {
   it('end to end: ApiKeys.rotate keeps the old secret only for the grace window', async () => {
     let now = 1_000_000
     const keys = new ApiKeys({ store: new PrismaApiKeyStore(makeFakeClient()), now: () => now })
-    const { record, key: oldKey } = await keys.issue({ name: 'ci' })
+    const { record, key: oldKey } = await keys.issue({ scopes: ['*'], name: 'ci' })
     const { key: newKey } = await keys.rotate(record.id, { graceMs: 1_000 })
     expect((await keys.verify(oldKey))?.id).toBe(record.id)
     now += 1_000
