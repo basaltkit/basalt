@@ -108,7 +108,9 @@ export async function toolingFindings(ctx: DeployContext): Promise<Finding[]> {
 }
 
 /** Where nvm, fnm, volta and asdf put a user's own `node`: invisible to root and to `sudo`'s secure_path. */
-const USER_NODE = /^\/(home|root)\/|\/\.(nvm|fnm|volta|asdf)\/|\/\.local\/share\/fnm\//
+const HOME_PREFIX = /^\/(?:home|root)\//
+const MANAGER_DIR = /\/\.(?:nvm|fnm|volta|asdf)\/|\/\.local\/share\/fnm\//
+const isUserNode = (path: string) => HOME_PREFIX.test(path) || MANAGER_DIR.test(path)
 
 /** The places a system `node` lives (NodeSource and distro packages, a manual install). */
 const SYSTEM_NODES = ['/usr/bin/node', '/usr/local/bin/node']
@@ -122,7 +124,7 @@ const SYSTEM_NODES = ['/usr/bin/node', '/usr/local/bin/node']
  */
 export async function rootNodeProblem(host: Host): Promise<string | undefined> {
   const found = (await host.exec('sh', ['-c', 'command -v node'], OUTSIDE)).stdout.trim()
-  if (!found || !USER_NODE.test(found)) return undefined
+  if (!found || !isUserNode(found)) return undefined
   for (const path of SYSTEM_NODES) {
     const stat = await host.stat(path)
     if (stat?.kind === 'file' || stat?.kind === 'symlink') return undefined
