@@ -418,6 +418,11 @@ checks that:
 - each file is linked in `sites-enabled` (C2);
 - every `ProxyPass` to `127.0.0.1` targets the app's port (C1).
 
+To start such a vhost, don't copy one from another app: it names that app's
+checkout and port. Run `basalt-deploy vhost > acme.conf` in the checkout. It
+prints the vhost `install` would write, for this checkout's path and the app's
+port (`--port=<n>` to choose another), and you edit it from there.
+
 ### `caddy(options)` {#caddy}
 
 | Option | Default | What it does |

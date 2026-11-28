@@ -130,9 +130,16 @@ que vai fazer antes de escrever o que quer que seja.
 O `run` vai buscar o código ele próprio, por isso guarda as credenciais do git
 uma vez, como utilizador da aplicação:
 `git config credential.helper store && git fetch`, ou uma deploy key só de
-leitura. Com o Apache, és tu que emites o certificado TLS
-(`certbot --dns-cloudflare -d <domain> -d '*.<domain>'`). Com `caddy()`, é o
-Caddy que o emite. Depois, faz o deploy:
+leitura. Com um vhost Apache gerido, o `install` verifica o certificado que o
+vhost indica (`/etc/letsencrypt/live/<certName ou domínio>`) antes de escrever o
+vhost. Quando o certificado falta, o `install` oferece-se para pedir um ao
+Let's Encrypt: instala o certbot se for preciso e corre
+`certbot certonly --apache`, que nunca mexe nos teus vhosts. Pergunta primeiro,
+e o domínio já tem de apontar para o servidor. Sem terminal, ou se responderes
+que não, para e mostra os comandos. Os tenants em subdomínios precisam de um
+wildcard, que só um desafio DNS emite
+(`certbot --dns-cloudflare -d <domain> -d '*.<domain>'`), por isso esse emites
+tu. Com `caddy()`, é o Caddy que o emite. Depois, faz o deploy:
 
 ```sh
 sudo -u deploy -H sh -c 'cd /srv/acme && node node_modules/@basaltkit/deploy/dist/bin.js run'

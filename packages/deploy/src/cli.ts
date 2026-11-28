@@ -10,8 +10,11 @@ import { isErrorCode, RUN_ID, type ErrorCode, type EventBody } from './protocol.
 import { attach, cancel, createRunLog, newRunId, pruneRunLogs } from './runs.js'
 import { check } from './check.js'
 import { rootNodeProblem } from './checks.js'
+import { renderVhost } from './apache.js'
+import { readEnv } from './env-step.js'
 import { init } from './init.js'
-import { applyOverrides, DeployConfigError, parseOverrides, validateConfig, type DeployConfig } from './config.js'
+import { resolvePort } from './pm2.js'
+import { applyOverrides, DeployConfigError, parseOverrides, validateConfig, vhostName, type DeployConfig } from './config.js'
 import { DeployAbortedError, DeployError, detectPackageManager, INSTALL_COMMAND, resolveStateDir, rootInstallCommand, type DeployContext } from './context.js'
 import { buildInstallPlan, install, readInstallPlan } from './install-plan.js'
 import { untrustedToolPaths, USER_NAME } from './trust.js'
@@ -39,6 +42,8 @@ As the app user, in the checkout (node node_modules/@basaltkit/deploy/dist/bin.j
   install-plan [--out=<file>|-]
                      what install needs, as data (default <state dir>/install-plan.json);
                      prints the root command for install
+  vhost [--port=<n>] the Apache vhost install would write, for this checkout and the app's
+                     port (stdout): a starting point for apache({ managed: false })
   attach <runId> --json [--from-seq=<n>] [--follow]
                      the events of a run (run/env/rollback --json), from any seq
   cancel <runId> [--first-only]
@@ -128,7 +133,7 @@ function parse(argv: string[]): Flags {
   return { command, args, values, switches }
 }
 
-const COMMANDS = ['init', 'check', 'plan', 'run', 'env', 'rollback', 'status', 'commits', 'install-plan', 'install', 'bootstrap', 'attach', 'cancel', 'ui']
+const COMMANDS = ['init', 'check', 'plan', 'run', 'env', 'rollback', 'status', 'commits', 'install-plan', 'vhost', 'install', 'bootstrap', 'attach', 'cancel', 'ui']
 /** The commands that take the deploy lock, and so write a run log under --json. */
 const LOCKED = new Set(['run', 'env', 'rollback'])
 
@@ -171,6 +176,29 @@ async function writeInstallPlan(host: Host, ctx: DeployContext, cwd: string, out
   host.out.info('then, as an administrator (a pinned copy root owns, never this checkout\'s):')
   host.out.info(`  ${rootInstallCommand(VERSION, path, user)}`)
   host.out.result?.('install-plan', { plan, path, rootCommand: rootInstallCommand(VERSION, path, user) })
+  return 0
+}
+
+/**
+ * `vhost`: the Apache vhost install would write, rendered for this checkout's
+ * path and the app's port, on stdout. For an app that keeps its own vhost
+ * (`managed: false`): a vhost copied from an example names someone else's
+ * checkout (/var/www/…) and port, and the preflight then reports the mismatch
+ * only at the first deploy.
+ */
+async function printVhost(ctx: DeployContext, given: string | undefined): Promise<number> {
+  if (ctx.config.proxy?.kind !== 'apache') {
+    throw usage(`vhost renders an Apache vhost; this config's proxy is ${ctx.config.proxy?.kind ?? 'none'}`)
+  }
+  let port: number
+  if (given !== undefined) {
+    port = Number(given)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw usage(`--port=${given} is not a port`)
+  } else {
+    port = await resolvePort(ctx, envValues(await readEnv(ctx)))
+  }
+  process.stdout.write(renderVhost(ctx, port))
+  ctx.host.out.info(`rendered for ${ctx.dir}, port ${port}, ${ctx.config.domain}: save it as /etc/apache2/sites-available/${vhostName(ctx.config) ?? `${ctx.config.app}.conf`}, then a2ensite and reload`)
   return 0
 }
 
@@ -403,8 +431,8 @@ function checkFlags(flags: Flags, json: boolean, env: Host['env']): void {
   const version = flags.values.get('json')
   if (version !== undefined && version !== '1') throw new DeployError(`--json=${version}: this basalt-deploy ${VERSION} speaks protocol 1`, [], 'protocol-version')
   const { command } = flags
-  if (command === 'init' || command === 'install' || command === 'bootstrap' || command === 'ui') {
-    const why = command === 'init' ? 'it writes code into the checkout' : command === 'ui' ? 'it only prints how to start the local UI, which runs on the operator\'s machine' : 'root\'s confirmations are the control, never a pipe'
+  if (command === 'init' || command === 'install' || command === 'bootstrap' || command === 'ui' || command === 'vhost') {
+    const why = command === 'init' ? 'it writes code into the checkout' : command === 'ui' ? 'it only prints how to start the local UI, which runs on the operator\'s machine' : command === 'vhost' ? 'its output is the vhost file itself' : 'root\'s confirmations are the control, never a pipe'
     throw new DeployError(`${command} does not speak --json: ${why}`, [], 'unsupported')
   }
   if (flags.switches.has('help') || !command || !COMMANDS.includes(command)) throw usage(command && !flags.switches.has('help') ? `unknown command "${command}"` : 'a command is needed', 'basalt-deploy --help lists them')
@@ -547,6 +575,7 @@ async function session(flags: Flags, host: Host, cwd: string, reporter: Reporter
       case 'status': return await status(ctx)
       case 'commits': return await commitsCommand(ctx, commitsRequest(flags))
       case 'install-plan': return await writeInstallPlan(host, ctx, cwd, flags.values.get('out'))
+      case 'vhost': return await printVhost(ctx, flags.values.get('port'))
       case 'attach': {
         const runId = flags.args[0] as string
         const exit = await attach(host, ctx.stateDir, runId, {

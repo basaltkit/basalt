@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path'
 import { vhostName, type ApacheProxy } from './config.js'
 import { DeployError, INSTALL_COMMAND, type DeployContext, type Finding } from './context.js'
 import { lineDiff } from './diff.js'
+import { APT } from './system.js'
 
 /**
  * The Apache target (RFC 0006 §11.3): the vhost is written ONLY by `install`,
@@ -196,9 +197,54 @@ export async function apachePreflight(ctx: DeployContext, port: number): Promise
   return findings
 }
 
+/**
+ * Root only. The certificate the vhost names, before the vhost is written: a
+ * vhost pointing at a missing `/etc/letsencrypt/live/<name>` fails
+ * `apachectl configtest`, and install then puts every file back and stops.
+ * When it is missing, install offers to get one from Let's Encrypt (HTTP-01
+ * through the Apache plugin, `certonly`: certbot never edits the vhost), and
+ * installs certbot first if it is not there, all after asking. A wildcard
+ * (tenants on subdomains) needs a DNS challenge, which install cannot answer.
+ * It says how, and stops.
+ */
+export async function ensureCertificate(ctx: DeployContext): Promise<void> {
+  const { host } = ctx
+  const { domain } = ctx.config
+  const name = apacheOf(ctx).certName ?? domain
+  const live = `/etc/letsencrypt/live/${name}`
+  if ((await host.stat(join(live, 'fullchain.pem'))) !== undefined) return
+  if (ctx.config.tenants === 'subdomain') {
+    throw new DeployError(
+      `no TLS certificate at ${live}, and tenants on subdomains need a wildcard (*.${domain}), which Let's Encrypt issues only over DNS. ` +
+        `Get it with your DNS provider's certbot plugin, or by hand: certbot certonly --manual --preferred-challenges dns --cert-name ${name} -d ${domain} -d '*.${domain}'. Then run install again`,
+    )
+  }
+  const certbot = (await host.exec('sh', ['-c', 'command -v certbot'])).code === 0
+  const steps: string[][] = [
+    ...(certbot ? [] : [[...APT, 'install', '-y', '-qq', 'certbot', 'python3-certbot-apache']]),
+    ['certbot', 'certonly', '--apache', '--non-interactive', '--agree-tos', '--register-unsafely-without-email', '--cert-name', name, '-d', domain],
+  ]
+  const byHand = steps.map((step) => step.join(' ')).join(' && ')
+  host.out.info(`no TLS certificate for ${domain} at ${live}: the vhost would not load without one.`)
+  host.out.info(`install can get one from Let's Encrypt (${domain} must already point at this server, and port 80 be open):`)
+  for (const step of steps) host.out.info(`  + ${step.join(' ')}`)
+  if (!(await host.confirm(`Get a certificate for ${domain} from Let's Encrypt (you accept its terms, https://letsencrypt.org/repository/)?`))) {
+    throw new DeployError(`no TLS certificate at ${live}: get one, then run install again:\n  ${byHand}`)
+  }
+  for (const step of steps) {
+    const result = await host.exec(step[0] as string, step.slice(1))
+    if (result.code !== 0) {
+      const tail = (result.stderr || result.stdout).trim().split('\n').slice(-4).join('\n')
+      throw new DeployError(`${step.slice(0, 2).join(' ')} failed (exit ${result.code}); nothing was written:\n${tail}`)
+    }
+  }
+  host.out.ok(`certificate for ${domain} in ${live} (certbot renews it on its own timer)`)
+}
+
 /** Root only. Writes the vhost (after showing the diff and asking), links it, configtest, reload. */
 export async function apacheInstall(ctx: DeployContext, port: number, backupDir: string): Promise<void> {
   const { host } = ctx
+  await ensureCertificate(ctx)
   const paths = vhostPaths(ctx)
   const wanted = renderVhost(ctx, port)
   const stamp = host.now().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '')

@@ -27,6 +27,7 @@ function rootServer(): FakeHost {
   for (const dir of ['/', '/etc', '/var', '/var/lib', '/srv', '/etc/apache2', '/etc/apache2/sites-available', '/etc/apache2/sites-enabled', '/etc/caddy']) host.dir(dir, 0o755, ROOT)
   host.dir(DIR, 0o755, USER)
   host.put('/etc/sudoers', 'root ALL=(ALL) ALL\n', 0o440, ROOT)
+  host.put('/etc/letsencrypt/live/acme.example.com/fullchain.pem', '', 0o644, ROOT)
   return host
     .on(({ command, args }) => (command === 'id' ? ok(args[0] === '-nG' ? 'ubuntu\n' : '1000\n') : undefined))
     .on(({ command }) => (['a2enmod', 'apachectl', 'systemctl', 'caddy'].includes(command) ? ok() : undefined))
@@ -379,7 +380,7 @@ describe('install (root\'s half)', () => {
   })
 
   it('renders only validated fields into the vhost', async () => {
-    const host = rootServer()
+    const host = rootServer().put('/etc/letsencrypt/live/acme.example.com-0001/fullchain.pem', '', 0o644, ROOT)
     await install(host, plan({ proxy: { kind: 'apache', managed: true, vhost: 'acme.conf', webRoot: 'web/dist', apiPrefix: '/api', certName: 'acme.example.com-0001' } }), 'ubuntu')
     const vhost = host.file('/etc/apache2/sites-available/acme.conf') ?? ''
     expect(vhost).toContain(`DocumentRoot ${DIR}/web/dist`)

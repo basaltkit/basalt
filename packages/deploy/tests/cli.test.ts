@@ -136,3 +136,47 @@ describe('context', () => {
     expect(await resolveStateDir(host, config, '/app')).toBe('/var/lib/basalt/acme')
   })
 })
+
+describe('vhost (#4 of the first-server gaps)', () => {
+  const APACHE = `export default {
+  app: 'acme', domain: 'acme.example.com', env: {},
+  runtime: { kind: 'pm2', script: 'start', port: 3007, avoid: [] },
+  proxy: { kind: 'apache', managed: false, webRoot: 'web/dist', apiPrefix: '/api', vhosts: ['acme.conf'] },
+}
+`
+  beforeAll(async () => { await writeFile(join(dir, 'apache.mjs'), APACHE) })
+
+  it('prints the vhost for this checkout and the app\'s port on stdout; the note goes to the terminal', async () => {
+    const out = stdout()
+    try {
+      const host = new FakeHost()
+      expect(await main(['vhost', '--config=apache.mjs'], host, dir)).toBe(0)
+      const printed = out.mock.calls.map((c) => String(c[0])).join('')
+      expect(printed).toContain(`DocumentRoot ${dir}/web/dist`)
+      expect(printed).toContain('ProxyPass /api/ http://127.0.0.1:3007/ upgrade=websocket')
+      expect(printed).not.toContain('/var/www')
+      expect(host.transcript).toContain(`rendered for ${dir}, port 3007, acme.example.com: save it as /etc/apache2/sites-available/acme.conf`)
+      out.mockClear()
+      expect(await main(['vhost', '--port=3011', '--config=apache.mjs'], new FakeHost(), dir)).toBe(0)
+      expect(out.mock.calls.map((c) => String(c[0])).join('')).toContain('http://127.0.0.1:3011/')
+    } finally {
+      out.mockRestore()
+    }
+  })
+
+  it('refuses a config without Apache, a bad --port, and --json', async () => {
+    const host = new FakeHost()
+    expect(await main(['vhost', '--config=deploy.config.mjs'], host, dir)).toBe(1)
+    expect(host.transcript).toContain("vhost renders an Apache vhost; this config's proxy is none")
+    const bad = new FakeHost()
+    expect(await main(['vhost', '--port=http', '--config=apache.mjs'], bad, dir)).toBe(1)
+    expect(bad.transcript).toContain('--port=http is not a port')
+    const out = stdout()
+    try {
+      expect(await main(['vhost', '--json', '--config=apache.mjs'], new FakeHost(), dir)).not.toBe(0)
+      expect(out.mock.calls.map((c) => String(c[0])).join('')).toContain('vhost does not speak --json')
+    } finally {
+      out.mockRestore()
+    }
+  })
+})

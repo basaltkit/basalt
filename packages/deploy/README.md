@@ -552,7 +552,9 @@ They run in the checkout as the deploy user with the `.env` values, the image
 variables, `DEPLOY_SHA` and `DEPLOY_APP`. They run on every deploy: idempotent.
 
 **Apache you write yourself:** `apache({ managed: false, vhosts: ['myapp.conf'] })`
-checks C2 and C1 on each vhost on every deploy and never writes them.
+checks C2 and C1 on each vhost on every deploy and never writes them. Start one
+with `basalt-deploy vhost > myapp.conf`: the managed vhost, rendered for this
+checkout and the app's port.
 
 ## What runs by default
 

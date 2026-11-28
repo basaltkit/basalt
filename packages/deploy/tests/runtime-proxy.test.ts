@@ -101,7 +101,8 @@ describe('pm2', () => {
 })
 
 describe('apache', () => {
-  const vhostHost = () => new FakeHost()
+  // The certificate the vhost names is already there (ensureCertificate has its own tests).
+  const vhostHost = () => new FakeHost().put('/etc/letsencrypt/live/acme.example.com/fullchain.pem', '')
 
   it('renders a vhost that proxies the API prefix to the app port and serves the tenants wildcard', () => {
     const text = renderVhost(context(new FakeHost()), 3002)
@@ -163,6 +164,57 @@ describe('apache', () => {
     expect(host.file(AVAILABLE)).toBe(renderVhost(ctx, 3002))
     expect(await host.readlink(ENABLED)).toBe('../sites-available/acme.conf')
     expect(host.commands('systemctl')).toEqual(['systemctl reload apache2'])
+  })
+
+  describe('the certificate the vhost names (#3 of the first-server gaps)', () => {
+    const single = (host: FakeHost) => ({ ...context(host), config: acmeConfig({ tenants: 'none' }) })
+    const certbotSteps = (host: FakeHost) => host.calls.filter((c) => c.command === 'certbot' || c.args.includes('certbot')).map((c) => [c.command, ...c.args].join(' '))
+
+    it('missing: installs certbot if needed, gets one (certonly, the Apache plugin) after a yes, then writes the vhost', async () => {
+      const host = new FakeHost()
+        .on(({ command, args }) => (command === 'sh' && args[1] === 'command -v certbot' ? fail('', 1) : undefined))
+        .on(({ command }) => (['env', 'certbot', 'a2enmod', 'apachectl', 'systemctl'].includes(command) ? ok() : undefined))
+      host.confirmations = [true]
+      await apacheInstall(single(host), 3002, '/backups')
+      expect(certbotSteps(host)).toEqual([
+        'env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot python3-certbot-apache',
+        'certbot certonly --apache --non-interactive --agree-tos --register-unsafely-without-email --cert-name acme.example.com -d acme.example.com',
+      ])
+      expect(host.transcript).toContain("acme.example.com must already point at this server, and port 80 be open")
+      expect(host.file(AVAILABLE)).toBeDefined()
+    })
+
+    it('a no (or no terminal) stops before anything is written, with the commands to run by hand', async () => {
+      const host = new FakeHost().on(({ command, args }) => (command === 'sh' && args[1] === 'command -v certbot' ? ok('/usr/bin/certbot') : undefined))
+      await expect(apacheInstall(single(host), 3002, '/backups')).rejects.toThrow(
+        /no TLS certificate at \/etc\/letsencrypt\/live\/acme\.example\.com: get one, then run install again:\n  certbot certonly --apache/,
+      )
+      expect(certbotSteps(host)).toEqual([])
+      expect(host.file(AVAILABLE)).toBeUndefined()
+    })
+
+    it('certbot failing leaves no vhost behind, and says why', async () => {
+      const host = new FakeHost()
+        .on(({ command, args }) => (command === 'sh' && args[1] === 'command -v certbot' ? ok('/usr/bin/certbot') : undefined))
+        .on(({ command }) => (command === 'certbot' ? fail('Challenge failed for domain acme.example.com', 1) : undefined))
+      host.confirmations = [true]
+      await expect(apacheInstall(single(host), 3002, '/backups')).rejects.toThrow(/certbot certonly failed \(exit 1\); nothing was written:\nChallenge failed/)
+      expect(host.file(AVAILABLE)).toBeUndefined()
+    })
+
+    it('tenants on subdomains: a wildcard needs DNS, so it says how and runs nothing', async () => {
+      const host = new FakeHost()
+      await expect(apacheInstall(context(host), 3002, '/backups')).rejects.toThrow(/wildcard \(\*\.acme\.example\.com\).*--preferred-challenges dns/)
+      expect(host.calls.some((c) => c.command === 'certbot')).toBe(false)
+    })
+
+    it('a certName other than the domain is the directory looked at', async () => {
+      const host = new FakeHost().put('/etc/letsencrypt/live/acme-wild/fullchain.pem', '').on(({ command }) => (['a2enmod', 'apachectl', 'systemctl'].includes(command) ? ok() : undefined))
+      const base = context(host)
+      const ctx = { ...base, config: { ...base.config, proxy: { ...(base.config.proxy as object), certName: 'acme-wild' } } } as typeof base
+      await apacheInstall(ctx, 3002, '/backups')
+      expect(host.file(AVAILABLE)).toContain('/etc/letsencrypt/live/acme-wild/fullchain.pem')
+    })
   })
 
   it('install never overwrites a changed vhost without a yes', async () => {
